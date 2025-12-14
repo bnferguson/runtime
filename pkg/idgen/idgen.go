@@ -71,3 +71,13 @@ func Gen(prefix string) string {
 func GenNS(ns string) string {
 	return Gen(ns + "-")
 }
+
+// GenAdminToken generates a cryptographically secure admin token.
+// Uses 32 bytes of randomness encoded as base58 for URL-safe, compact representation.
+func GenAdminToken() string {
+	var token [32]byte
+	if _, err := rand.Read(token[:]); err != nil {
+		panic(fmt.Sprintf("failed to generate admin token: %v", err))
+	}
+	return base58.Encode(token[:])
+}

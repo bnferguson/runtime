@@ -198,6 +198,10 @@ kinds:
               type: string
               doc: The source of the variable (config or manual). Defaults to config for backward compatibility.
 
+    admin_token:
+      type: string
+      doc: Cryptographically random token for authenticating admin API calls. Generated per-version and exposed to the app via ADMIN_TOKEN env var.
+
   deployment:
     app_name:
       type: string

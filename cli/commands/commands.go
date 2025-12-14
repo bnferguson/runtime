@@ -89,6 +89,9 @@ func RegisterAll(d *mflags.Dispatcher) {
 	// Auth commands
 	d.Dispatch("auth generate", Infer("auth generate", "Generate authentication config file", AuthGenerate))
 
+	// Admin commansd
+	d.Dispatch("admin", Infer("admin", "Call an admin method on an application", Admin))
+
 	// Debug commands (unstable, may change without notice)
 	d.Dispatch("debug", Section("debug", "Debug and troubleshooting commands", `
 Use these commands to help diagnose issues with the miren runtime.

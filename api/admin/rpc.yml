@@ -1,0 +1,111 @@
+types:
+  - type: AdminCallResult
+    doc: Result of an admin method call
+    fields:
+      - name: result
+        type: string
+        index: 0
+        doc: JSON-encoded result from the app's admin endpoint
+      - name: error
+        type: string
+        index: 1
+        doc: Error message if the call failed
+      - name: error_code
+        type: int32
+        index: 2
+        doc: JSON-RPC error code if applicable
+
+  - type: AdminMethod
+    doc: Information about an available admin method
+    fields:
+      - name: name
+        type: string
+        index: 0
+        doc: Method name
+      - name: description
+        type: string
+        index: 1
+        doc: Method description (if provided)
+      - name: params
+        type: list
+        element: AdminMethodParam
+        index: 2
+        doc: Method parameters
+      - name: category
+        type: string
+        index: 3
+        doc: Method category for grouping
+
+  - type: AdminMethodParam
+    doc: Parameter information for an admin method
+    fields:
+      - name: name
+        type: string
+        index: 0
+        doc: Parameter name
+      - name: param_type
+        type: string
+        index: 1
+        doc: Parameter type (string, number, boolean, etc.)
+      - name: required
+        type: bool
+        index: 2
+        doc: Whether the parameter is required
+
+interfaces:
+  - name: Admin
+    doc: Admin interface invocation service
+    methods:
+      - name: Invoke
+        index: 0
+        doc: Invoke an admin method on an app
+        parameters:
+          - name: app
+            type: string
+            doc: Application name
+          - name: method
+            type: string
+            doc: JSON-RPC method name to invoke
+          - name: params
+            type: string
+            doc: JSON-encoded parameters object
+        results:
+          - name: result
+            type: AdminCallResult
+            doc: The result of the admin call
+
+      - name: ListMethods
+        index: 1
+        doc: List available admin methods for an app
+        parameters:
+          - name: app
+            type: string
+            doc: Application name
+        results:
+          - name: methods
+            type: list
+            element: AdminMethod
+            doc: Available admin methods
+          - name: error
+            type: string
+            doc: Error message if discovery failed
+
+      - name: DescribeMethods
+        index: 2
+        doc: Describe specific admin methods by name
+        parameters:
+          - name: app
+            type: string
+            doc: Application name
+          - name: methods
+            type: list
+            element: string
+            doc: Method names to describe
+        results:
+          - name: methods
+            type: list
+            element: AdminMethod
+            doc: Described admin methods
+          - name: error
+            type: string
+            doc: Error message if discovery failed

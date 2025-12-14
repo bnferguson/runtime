@@ -540,6 +540,7 @@ func (b *Builder) nextVersion(ctx context.Context, name string) (
 	av.Version = ver
 	av.ImageUrl = "cluster.local:5000/" + name + ":" + art
 	av.Config = currentCfg
+	av.AdminToken = idgen.GenAdminToken()
 
 	return &appRec, &av, art, nil
 }

@@ -23,7 +23,6 @@ import (
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/slogfmt"
 	"miren.dev/runtime/pkg/testutils"
-	"miren.dev/runtime/servers/httpingress"
 )
 
 func TestServerConfig(t *testing.T) (string, error) {
@@ -66,16 +65,17 @@ func TestServer(t *testing.T) error {
 	tempDir := t.TempDir()
 
 	co := coordinate.NewCoordinator(log, coordinate.CoordinatorConfig{
-		Address:       optsAddress,
-		EtcdEndpoints: []string{"http://etcd:2379"},
-		Prefix:        "/" + testDeps.Namespace,
-		Resolver:      res,
-		TempDir:       tempDir,
-		DataPath:      filepath.Join(tempDir, "coordinator"),
-		Mem:           testDeps.Mem,
-		Cpu:           testDeps.CPU,
-		Logs:          testDeps.Logs,
-		NoAuth:        true,
+		Address:            optsAddress,
+		EtcdEndpoints:      []string{"http://etcd:2379"},
+		Prefix:             "/" + testDeps.Namespace,
+		Resolver:           res,
+		TempDir:            tempDir,
+		DataPath:           filepath.Join(tempDir, "coordinator"),
+		Mem:                testDeps.Mem,
+		Cpu:                testDeps.CPU,
+		Logs:               testDeps.Logs,
+		NoAuth:             true,
+		HTTPRequestTimeout: 60 * time.Second,
 	})
 
 	t.Log("Starting coordinator")
@@ -124,12 +124,8 @@ func TestServer(t *testing.T) error {
 		return ipa.Watch(ctx, eac)
 	})
 
-	aa := co.Activator()
-
-	ingressConfig := httpingress.IngressConfig{
-		RequestTimeout: 60 * time.Second, // Default timeout for tests
-	}
-	hs := httpingress.NewServer(ctx, log, ingressConfig, client, aa, nil, nil)
+	// Get httpingress from coordinator (created there for admin server)
+	hs := co.HttpIngress()
 
 	rcfg, err := co.RunnerConfig(optsRunnerAddress)
 	if err != nil {

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"miren.dev/runtime/api/admin/admin_v1alpha"
 	appclient "miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/build/build_v1alpha"
@@ -46,12 +47,14 @@ import (
 	"miren.dev/runtime/pkg/entity/schema"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/sysstats"
+	"miren.dev/runtime/servers/admin"
 	"miren.dev/runtime/servers/app"
 	"miren.dev/runtime/servers/build"
 	debugsrv "miren.dev/runtime/servers/debug"
 	"miren.dev/runtime/servers/deployment"
 	"miren.dev/runtime/servers/entityserver"
 	execproxy "miren.dev/runtime/servers/exec_proxy"
+	"miren.dev/runtime/servers/httpingress"
 	"miren.dev/runtime/servers/logs"
 	"miren.dev/runtime/version"
 )
@@ -84,6 +87,9 @@ type CoordinatorConfig struct {
 
 	// BuildKit is the persistent BuildKit component for container image builds
 	BuildKit *buildkit.Component
+
+	// HTTPRequestTimeout is the timeout for HTTP requests to app sandboxes
+	HTTPRequestTimeout time.Duration
 }
 
 // CloudAuthConfig contains cloud authentication settings
@@ -121,6 +127,7 @@ type Coordinator struct {
 	cm             *controller.ControllerManager
 	certController *certctrl.Controller
 	artifactGC     *artifactctrl.GCController
+	hs             *httpingress.Server
 
 	authority *caauth.Authority
 
@@ -138,6 +145,10 @@ func (c *Coordinator) Activator() activator.AppActivator {
 
 func (c *Coordinator) SandboxPoolManager() *sandboxpool.Manager {
 	return c.spm
+}
+
+func (c *Coordinator) HttpIngress() *httpingress.Server {
+	return c.hs
 }
 
 // Stop stops the coordinator and all managed controllers
@@ -706,6 +717,15 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		return err
 	}
 	server.ExposeValue("dev.miren.runtime/debug-netdb", debug_v1alpha.AdaptNetDB(c.debugServer))
+
+	// Create httpingress server for internal HTTP requests
+	ingressConfig := httpingress.IngressConfig{
+		RequestTimeout: c.HTTPRequestTimeout,
+	}
+	c.hs = httpingress.NewServer(ctx, c.Log, ingressConfig, loopback, aa, c.HTTP, c.LogWriter)
+
+	adminServer := admin.NewServer(c.Log, ec, c.hs, c.LogWriter)
+	server.ExposeValue("dev.miren.runtime/admin", admin_v1alpha.AdaptAdmin(adminServer))
 
 	c.Log.Info("started RPC server")
 

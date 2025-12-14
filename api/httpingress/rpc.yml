@@ -1,0 +1,77 @@
+types:
+  - type: HttpHeader
+    doc: A single HTTP header key-value pair
+    fields:
+      - name: key
+        type: string
+        index: 0
+      - name: value
+        type: string
+        index: 1
+
+  - type: InternalHttpRequest
+    doc: An HTTP request to be proxied to an app sandbox
+    fields:
+      - name: method
+        type: string
+        index: 0
+        doc: HTTP method (GET, POST, PUT, DELETE, etc.)
+      - name: path
+        type: string
+        index: 1
+        doc: Request path (e.g., "/.well-known/miren/admin")
+      - name: headers
+        type: list
+        element: HttpHeader
+        index: 2
+        doc: HTTP headers to include in the request
+      - name: body
+        type: '[]byte'
+        index: 3
+        doc: Request body (empty for GET requests)
+      - name: app_id
+        type: string
+        index: 4
+        doc: Direct app entity ID (bypasses hostname lookup)
+      - name: service
+        type: string
+        index: 5
+        doc: Service type (e.g., "web")
+      - name: timeout_ms
+        type: int32
+        index: 6
+        doc: Request timeout in milliseconds (0 = use default)
+
+  - type: InternalHttpResponse
+    doc: An HTTP response from an app sandbox
+    fields:
+      - name: status_code
+        type: int32
+        index: 0
+        doc: HTTP status code
+      - name: headers
+        type: list
+        element: HttpHeader
+        index: 1
+        doc: Response headers
+      - name: body
+        type: '[]byte'
+        index: 2
+        doc: Response body
+      - name: error
+        type: string
+        index: 3
+        doc: Error message if the request failed before reaching the app
+
+interfaces:
+  - name: InternalHttp
+    methods:
+      - name: DoRequest
+        index: 0
+        doc: Make an HTTP request to an app sandbox
+        parameters:
+          - name: request
+            type: InternalHttpRequest
+        results:
+          - name: response
+            type: InternalHttpResponse

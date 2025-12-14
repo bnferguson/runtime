@@ -270,6 +270,11 @@ func (l *Launcher) buildSandboxSpec(
 		Directory: startDir,
 	}
 
+	// Add ADMIN_TOKEN if present for admin API authentication
+	if ver.AdminToken != "" {
+		appCont.Env = append(appCont.Env, "ADMIN_TOKEN="+ver.AdminToken)
+	}
+
 	// Determine port configuration from service config, falling back to global config, then defaults
 	port := int64(0)
 	portName := ""
@@ -525,7 +530,7 @@ func envVarsEqual(env1, env2 []string) bool {
 func filterSystemEnvVars(envVars []string) []string {
 	filtered := []string{}
 	for _, e := range envVars {
-		// Skip MIREN_VERSION, MIREN_APP, MIREN_INSTANCE_NUM, and PORT - these are set automatically
+		// Skip MIREN_VERSION, MIREN_APP, MIREN_INSTANCE_NUM, PORT, and ADMIN_TOKEN - these are set automatically
 		if strings.HasPrefix(e, "MIREN_VERSION=") {
 			continue
 		}
@@ -536,6 +541,9 @@ func filterSystemEnvVars(envVars []string) []string {
 			continue
 		}
 		if strings.HasPrefix(e, "PORT=") {
+			continue
+		}
+		if strings.HasPrefix(e, "ADMIN_TOKEN=") {
 			continue
 		}
 		filtered = append(filtered, e)

@@ -51,7 +51,6 @@ import (
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/serverconfig"
 	"miren.dev/runtime/pkg/units"
-	"miren.dev/runtime/servers/httpingress"
 	"miren.dev/runtime/version"
 )
 
@@ -557,23 +556,24 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 
 	// Create coordinator
 	co := coordinate.NewCoordinator(ctx.Log, coordinate.CoordinatorConfig{
-		Address:         srvaddr,
-		EtcdEndpoints:   cfg.Etcd.Endpoints,
-		Prefix:          cfg.Etcd.GetPrefix(),
-		DataPath:        cfg.Server.GetDataPath(),
-		AdditionalNames: cfg.TLS.AdditionalNames,
-		AdditionalIPs:   additionalIps,
-		AcmeEmail:       cfg.TLS.GetAcmeEmail(),
-		AcmeDNSProvider: cfg.TLS.GetAcmeDNSProvider(),
-		Resolver:        res,
-		TempDir:         os.TempDir(),
-		CloudAuth:       cloudAuthConfig,
-		Mem:             mem,
-		Cpu:             cpu,
-		HTTP:            httpMetrics,
-		Logs:            logs,
-		LogWriter:       logWriter,
-		BuildKit:        buildkitComponent,
+		Address:            srvaddr,
+		EtcdEndpoints:      cfg.Etcd.Endpoints,
+		Prefix:             cfg.Etcd.GetPrefix(),
+		DataPath:           cfg.Server.GetDataPath(),
+		AdditionalNames:    cfg.TLS.AdditionalNames,
+		AdditionalIPs:      additionalIps,
+		AcmeEmail:          cfg.TLS.GetAcmeEmail(),
+		AcmeDNSProvider:    cfg.TLS.GetAcmeDNSProvider(),
+		Resolver:           res,
+		TempDir:            os.TempDir(),
+		CloudAuth:          cloudAuthConfig,
+		Mem:                mem,
+		Cpu:                cpu,
+		HTTP:               httpMetrics,
+		Logs:               logs,
+		LogWriter:          logWriter,
+		BuildKit:           buildkitComponent,
+		HTTPRequestTimeout: cfg.Server.HTTPRequestTimeoutDuration(),
 	})
 
 	err = co.Start(sub)
@@ -667,19 +667,12 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		return ipa.Watch(sub, eac)
 	})
 
-	aa := co.Activator()
-
 	// Create SandboxPoolManager to reconcile pool entities
 	// The SandboxPoolManager runs internally in the coordinator
 	_ = co.SandboxPoolManager()
 
-	// HttpRequestTimeout is already validated by cfg.Validate() to be >= 1
-	// No need for additional checks here
-
-	ingressConfig := httpingress.IngressConfig{
-		RequestTimeout: cfg.Server.HTTPRequestTimeoutDuration(),
-	}
-	hs := httpingress.NewServer(ctx, ctx.Log, ingressConfig, client, aa, httpMetrics, logWriter)
+	// Get httpingress from coordinator (created there for admin server)
+	hs := co.HttpIngress()
 
 	// Initialize remaining ServerState components
 	ctx.ServerState.InitNetServ(ctx.Log, eac)
