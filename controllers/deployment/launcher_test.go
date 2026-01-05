@@ -1256,3 +1256,33 @@ func TestPortNameAndType(t *testing.T) {
 	assert.Equal(t, "http", webPort.Name, "web service should default to port name http")
 	assert.Equal(t, "http", webPort.Type, "web service should default to port type http")
 }
+
+// TestNoActiveVersionSkipsReconcile tests that the launcher returns early
+// without creating pools when an app has no active version set.
+// This behavior is critical for app deletion - we clear ActiveVersion first
+// to prevent the launcher from recreating pools during the deletion window.
+func TestNoActiveVersionSkipsReconcile(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create app with no ActiveVersion
+	app := &core_v1alpha.App{
+		Project: entity.Id("project-1"),
+	}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	// Create launcher and reconcile
+	launcher := NewLauncher(log, server.EAC)
+
+	err = launcher.Reconcile(ctx, app, nil)
+	require.NoError(t, err)
+
+	// Verify no pools were created
+	pools := listAllPools(t, ctx, server)
+	assert.Empty(t, pools, "should not create any pools when ActiveVersion is empty")
+}

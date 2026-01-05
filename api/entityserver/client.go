@@ -304,6 +304,15 @@ func (c *Client) Delete(ctx context.Context, id entity.Id) error {
 	return nil
 }
 
+// Patch updates specific attributes on an entity without replacing the entire entity.
+// Pass revision 0 to skip optimistic concurrency control, or a specific revision to
+// ensure the entity hasn't been modified since it was read.
+func (c *Client) Patch(ctx context.Context, id entity.Id, revision int64, attrs ...entity.Attr) error {
+	allAttrs := append([]entity.Attr{entity.Ref(entity.DBId, id)}, attrs...)
+	_, err := c.eac.Patch(ctx, allAttrs, revision)
+	return err
+}
+
 func (c *Client) GetAttributesByTag(ctx context.Context, tag string) (*entityserver_v1alpha.EntityAccessClientGetAttributesByTagResults, error) {
 	return c.eac.GetAttributesByTag(ctx, tag)
 }
