@@ -3,6 +3,7 @@ package version
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -35,6 +36,18 @@ func GetInfo() Info {
 	}
 
 	return info
+}
+
+// Branch returns the branch name if the binary was built from a branch (e.g. "main:abc123").
+// Returns the tag name for tagged releases (e.g. "v0.2.0"), and empty for unknown versions.
+func Branch() string {
+	if branch, _, ok := strings.Cut(Version, ":"); ok {
+		return branch
+	}
+	if Version != "unknown" {
+		return Version
+	}
+	return ""
 }
 
 // String returns the version info as a formatted string

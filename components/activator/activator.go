@@ -188,6 +188,7 @@ func NewLocalActivator(ctx context.Context, log *slog.Logger, eac *entityserver_
 	}
 
 	go la.watchSandboxes(ctx)
+	go la.watchPools(ctx)
 	go la.syncLastActivity(ctx)
 
 	return la
@@ -280,6 +281,21 @@ var ErrPoolTimeout = fmt.Errorf("timeout waiting for sandbox from pool")
 // The background watcher (watchSandboxes) handles discovering new sandboxes and notifying waiters.
 func (a *localActivator) waitForSandbox(ctx context.Context, ver *core_v1alpha.AppVersion, service string, incrementPool bool) (*Lease, error) {
 	key := verKey{ver.ID.String(), service}
+
+	// Track the count of sandboxes we knew about BEFORE requesting new capacity.
+	// This lets us distinguish between:
+	// 1. Old DEAD sandboxes from previous scale-down cycles (should be ignored)
+	// 2. New sandboxes created for THIS request that died (real boot failure)
+	var sandboxCountBeforeIncrement int
+	if incrementPool {
+		a.mu.RLock()
+		if versionRef, ok := a.versions[key]; ok {
+			if ps, poolOk := a.poolSandboxes[versionRef.poolID]; poolOk {
+				sandboxCountBeforeIncrement = len(ps.sandboxes)
+			}
+		}
+		a.mu.RUnlock()
+	}
 
 	var pool *compute_v1alpha.SandboxPool
 	if incrementPool {
@@ -396,12 +412,12 @@ func (a *localActivator) waitForSandbox(ctx context.Context, ver *core_v1alpha.A
 		versionRef, ok := a.versions[key]
 		hasPendingOrRunning := false
 		var sandboxStatuses []string
-		var hasSandboxes bool
+		var currentSandboxCount int
 		if ok {
 			// Look up the pool's sandboxes
 			ps, poolOk := a.poolSandboxes[versionRef.poolID]
-			if poolOk && len(ps.sandboxes) > 0 {
-				hasSandboxes = true
+			if poolOk {
+				currentSandboxCount = len(ps.sandboxes)
 				for _, s := range ps.sandboxes {
 					sandboxStatuses = append(sandboxStatuses, fmt.Sprintf("%s:%s", s.sandbox.ID, s.sandbox.Status))
 					if s.sandbox.Status == compute_v1alpha.RUNNING || s.sandbox.Status == compute_v1alpha.PENDING {
@@ -421,16 +437,31 @@ func (a *localActivator) waitForSandbox(ctx context.Context, ver *core_v1alpha.A
 			"tracked", ok,
 			"count", len(sandboxStatuses),
 			"sandboxes", sandboxStatuses,
-			"has_pending_or_running", hasPendingOrRunning)
+			"has_pending_or_running", hasPendingOrRunning,
+			"increment_pool", incrementPool,
+			"sandbox_count_before", sandboxCountBeforeIncrement)
 
-		if !hasPendingOrRunning && hasSandboxes {
+		// Only fail fast if:
+		// 1. We have sandboxes tracked but none are RUNNING or PENDING, AND
+		// 2. Either we didn't just request new capacity (incrementPool=false), OR
+		//    we DID request capacity AND a new sandbox was created and then died
+		//
+		// This prevents false "died during boot" errors when:
+		// - We just incremented the pool and are waiting for the reconciler to create a sandbox
+		// - Old DEAD sandboxes from previous scale-down cycles are still in tracking
+		hasNewSandboxesSinceIncrement := currentSandboxCount > sandboxCountBeforeIncrement
+		shouldFailFast := !hasPendingOrRunning && currentSandboxCount > 0 &&
+			(!incrementPool || hasNewSandboxesSinceIncrement)
+
+		if shouldFailFast {
 			// We have sandboxes tracked but none are RUNNING or PENDING
-			// This means they all failed - fail fast
+			// AND either we weren't scaling up, or a new sandbox was created and died
 			a.log.Error("all sandboxes failed while waiting",
 				"app", ver.App,
 				"version", ver.Version,
 				"service", service,
-				"sandboxes", sandboxStatuses)
+				"sandboxes", sandboxStatuses,
+				"new_sandboxes_created", hasNewSandboxesSinceIncrement)
 			return nil, fmt.Errorf("%w: all sandboxes died during boot", ErrSandboxDiedEarly)
 		}
 
@@ -1578,5 +1609,78 @@ func (a *localActivator) removeSandboxFromTracking(sandboxID entity.Id) {
 				return
 			}
 		}
+	}
+}
+
+// removePoolFromTracking removes a pool and all related cache entries.
+// This should be called when a pool entity is deleted from the store.
+func (a *localActivator) removePoolFromTracking(poolID entity.Id) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// Remove poolSandboxes entry
+	if _, ok := a.poolSandboxes[poolID]; ok {
+		delete(a.poolSandboxes, poolID)
+		a.log.Info("removed poolSandboxes entry for deleted pool", "pool", poolID)
+	}
+
+	// Remove all versions entries that point to this pool
+	for key, versionRef := range a.versions {
+		if versionRef.poolID == poolID {
+			delete(a.versions, key)
+			a.log.Info("removed stale version->pool mapping for deleted pool",
+				"version", key.ver,
+				"service", key.service,
+				"pool", poolID)
+		}
+	}
+
+	// Remove all pools entries that reference this pool
+	for key, state := range a.pools {
+		if state.pool != nil && state.pool.ID == poolID {
+			delete(a.pools, key)
+			a.log.Info("removed stale pool state for deleted pool",
+				"version", key.ver,
+				"service", key.service,
+				"pool", poolID)
+		}
+	}
+}
+
+// watchPools watches for pool entity deletions and cleans up stale cache entries.
+func (a *localActivator) watchPools(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			a.log.Info("pool watch context cancelled")
+			return
+		default:
+		}
+
+		a.log.Info("starting pool deletion watch")
+
+		_, err := a.eac.WatchIndex(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool), stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
+			if op.IsDelete() {
+				// Pool was deleted - clean up all related cache entries
+				if op.HasEntityId() {
+					poolID := entity.Id(op.EntityId())
+					a.log.Info("pool deleted, cleaning up cache", "pool", poolID)
+					a.removePoolFromTracking(poolID)
+				}
+			}
+			return nil
+		}))
+
+		if ctx.Err() != nil {
+			a.log.Info("pool watch stopped due to context cancellation")
+			return
+		}
+		if err != nil {
+			a.log.Error("pool watch ended with error, will restart", "error", err)
+			time.Sleep(5 * time.Second)
+			continue
+		}
+		a.log.Warn("pool watch ended without error, will restart")
+		time.Sleep(5 * time.Second)
 	}
 }

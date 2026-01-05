@@ -15,9 +15,7 @@ func RegisterAll(d *mflags.Dispatcher) {
 	d.Dispatch("doctor", Infer("doctor", "Diagnose miren environment and connectivity", Doctor))
 	d.Dispatch("doctor config", Infer("doctor config", "Check configuration files", DoctorConfig))
 	d.Dispatch("doctor server", Infer("doctor server", "Check server health and connectivity", DoctorServer))
-	d.Dispatch("doctor apps", Infer("doctor apps", "Check apps and their routes", DoctorApps))
 	d.Dispatch("doctor auth", Infer("doctor auth", "Check authentication and user information", DoctorAuth))
-	d.Dispatch("doctor all", Infer("doctor all", "Run all diagnostic checks", DoctorAll))
 
 	// App lifecycle commands
 	d.Dispatch("init", Infer("init", "Initialize a new application", Init))

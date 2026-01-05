@@ -1726,3 +1726,528 @@ func TestConcurrentPoolIncrement(t *testing.T) {
 	assert.Equal(t, int64(2), finalPool.DesiredInstances,
 		"With OCC enforcement, should get exactly one increment despite %d concurrent calls", numGoroutines)
 }
+
+// TestWatchPoolsCleansUpCacheOnDeletion verifies that the watchPools background goroutine
+// automatically cleans up all activator caches when a pool entity is deleted.
+// This prevents stale pool references from causing "pool has reached maximum size" errors.
+// Run with: ./hack/dev-exec go test -v -run TestWatchPoolsCleansUpCacheOnDeletion ./components/activator
+func TestWatchPoolsCleansUpCacheOnDeletion(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Use in-memory server with realistic WatchIndex implementation
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create app entity (Project is optional)
+	app := &core_v1alpha.App{}
+	appID, err := server.Client.Create(ctx, "test-app-watch", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	// Create app version
+	testVer := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+						ScaleDownDelay:      "15m",
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", testVer)
+	require.NoError(t, err)
+	testVer.ID = verID
+
+	// Pre-create a pool in the entity store
+	pool := &compute_v1alpha.SandboxPool{
+		Service: "web",
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Version: testVer.ID,
+			Container: []compute_v1alpha.SandboxSpecContainer{
+				{
+					Name:  "app",
+					Image: "test:latest",
+					Port: []compute_v1alpha.SandboxSpecContainerPort{
+						{Port: 3000, Name: "http", Type: "http"},
+					},
+				},
+			},
+		},
+		ReferencedByVersions: []entity.Id{testVer.ID},
+		DesiredInstances:     5,
+	}
+	poolID, err := server.Client.Create(ctx, "test-pool", pool)
+	require.NoError(t, err)
+	pool.ID = poolID
+
+	// Create activator - this will start watchPools in background
+	activator := NewLocalActivator(ctx, testutils.TestLogger(t), server.EAC).(*localActivator)
+
+	// Verify pool was recovered and cached
+	key := verKey{testVer.ID.String(), "web"}
+	activator.mu.RLock()
+	_, poolsExists := activator.pools[key]
+	_, versionsExists := activator.versions[key]
+	_, poolSandboxesExists := activator.poolSandboxes[pool.ID]
+	activator.mu.RUnlock()
+
+	require.True(t, poolsExists, "Pool should be cached in pools map after recovery")
+	require.True(t, versionsExists, "Version->pool mapping should exist after recovery")
+	require.True(t, poolSandboxesExists, "poolSandboxes entry should exist after recovery")
+
+	// Wait for the pool watch to be established before deleting
+	// This ensures the watch will see the delete event
+	watchCtx, watchCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer watchCancel()
+	err = server.Store.WaitForIndexWatcher(watchCtx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool))
+	require.NoError(t, err, "pool watch should be established")
+
+	// Delete the pool from entity store
+	_, err = server.EAC.Delete(ctx, pool.ID.String())
+	require.NoError(t, err)
+
+	// Wait for watchPools to process the deletion
+	// The watch should detect the deletion and clean up all caches
+	require.Eventually(t, func() bool {
+		activator.mu.RLock()
+		defer activator.mu.RUnlock()
+		_, poolsExists := activator.pools[key]
+		_, versionsExists := activator.versions[key]
+		_, poolSandboxesExists := activator.poolSandboxes[pool.ID]
+		return !poolsExists && !versionsExists && !poolSandboxesExists
+	}, 5*time.Second, 50*time.Millisecond, "watchPools should clean up all caches after pool deletion")
+
+	// Verify all caches are cleaned up
+	activator.mu.RLock()
+	_, poolsStillExists := activator.pools[key]
+	_, versionsStillExists := activator.versions[key]
+	_, poolSandboxesStillExists := activator.poolSandboxes[pool.ID]
+	activator.mu.RUnlock()
+
+	assert.False(t, poolsStillExists, "pools cache should be cleaned up")
+	assert.False(t, versionsStillExists, "versions cache should be cleaned up")
+	assert.False(t, poolSandboxesStillExists, "poolSandboxes cache should be cleaned up")
+}
+
+// TestActivatorDoesNotFailFastOnStaleDeadSandboxWhenScalingUp verifies that when
+// requesting new capacity (incrementPool=true), the activator does NOT fail fast
+// just because there are old DEAD sandboxes in tracking from previous scale-down cycles.
+//
+// This reproduces a bug where:
+// 1. App was idle, scaled to 0
+// 2. User request arrives after idle period
+// 3. Activator increments DesiredInstances and waits for new sandbox
+// 4. Fail-fast check sees old DEAD sandbox from previous scale-down
+// 5. BUG: Immediately returns ErrSandboxDiedEarly before new sandbox is created
+// 6. User sees "failed to boot" error, but refresh works because sandbox was created
+//
+// The fix tracks whether new sandboxes were created after incrementing the pool,
+// and only fails fast if a NEW sandbox was created and then died (real boot failure).
+func TestActivatorDoesNotFailFastOnStaleDeadSandboxWhenScalingUp(t *testing.T) {
+	ctx := context.Background()
+
+	// Create in-memory entity server
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create app entity
+	app := &core_v1alpha.App{}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	testVer := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+						ScaleDownDelay:      "15m",
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", testVer)
+	require.NoError(t, err)
+	testVer.ID = verID
+
+	log := testutils.TestLogger(t)
+
+	// Pre-create a pool in the entity store (simulating DeploymentLauncher behavior)
+	launcherPool := &compute_v1alpha.SandboxPool{
+		Service: "web",
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Version: testVer.ID,
+			Container: []compute_v1alpha.SandboxSpecContainer{
+				{
+					Name:  "app",
+					Image: "test:latest",
+					Port: []compute_v1alpha.SandboxSpecContainerPort{
+						{Port: 3000, Name: "http", Type: "http"},
+					},
+				},
+			},
+		},
+		ReferencedByVersions: []entity.Id{testVer.ID},
+		DesiredInstances:     0, // Scaled to 0 (idle)
+	}
+	poolID, err := server.Client.Create(ctx, "launcher-pool", launcherPool)
+	require.NoError(t, err)
+	launcherPool.ID = poolID
+
+	// Create activator with a stale DEAD sandbox from previous scale-down
+	// This simulates the state when:
+	// 1. A sandbox was running, became idle
+	// 2. Scale-down monitor decremented DesiredInstances
+	// 3. Pool reconciler marked sandbox as STOPPED, then DEAD
+	// 4. The DEAD sandbox is still tracked in activator's poolSandboxes
+	ent := entity.Blank()
+	ent.SetID("stale-dead-sandbox")
+
+	strategy := concurrency.NewStrategy(&testVer.Config.Services[0].ServiceConcurrency)
+	tracker := strategy.InitializeTracker()
+
+	staleDEADSandbox := &sandbox{
+		sandbox: &compute_v1alpha.Sandbox{
+			ID:     entity.Id("stale-dead-sandbox"),
+			Status: compute_v1alpha.DEAD, // From previous scale-down
+		},
+		ent:         ent,
+		lastRenewal: time.Now().Add(-10 * time.Minute), // Old
+		url:         "http://10.0.0.1:3000",
+		tracker:     tracker,
+	}
+
+	activator := &localActivator{
+		log:             log,
+		eac:             server.EAC,
+		versions:        make(map[verKey]*versionPoolRef),
+		poolSandboxes:   make(map[entity.Id]*poolSandboxes),
+		pools:           make(map[verKey]*poolState),
+		newSandboxChans: make(map[verKey][]chan struct{}),
+	}
+
+	// Set up version->pool mapping with the stale DEAD sandbox
+	key := verKey{testVer.ID.String(), "web"}
+	activator.versions[key] = &versionPoolRef{
+		ver:      testVer,
+		poolID:   poolID,
+		service:  "web",
+		strategy: strategy,
+	}
+	activator.poolSandboxes[poolID] = &poolSandboxes{
+		pool:      launcherPool,
+		sandboxes: []*sandbox{staleDEADSandbox}, // Has stale DEAD sandbox
+		service:   "web",
+		strategy:  strategy,
+	}
+
+	// Simulate a sandbox becoming RUNNING after pool increment
+	// This is what normally happens: pool manager creates new sandbox
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+
+		// Create a NEW RUNNING sandbox
+		newEnt := entity.Blank()
+		newEnt.SetID("new-running-sandbox")
+		newTracker := strategy.InitializeTracker()
+
+		newSandbox := &sandbox{
+			sandbox: &compute_v1alpha.Sandbox{
+				ID:     entity.Id("new-running-sandbox"),
+				Status: compute_v1alpha.RUNNING,
+			},
+			ent:         newEnt,
+			lastRenewal: time.Now(),
+			url:         "http://10.0.0.2:3000",
+			tracker:     newTracker,
+		}
+
+		activator.mu.Lock()
+		ps := activator.poolSandboxes[poolID]
+		ps.sandboxes = append(ps.sandboxes, newSandbox)
+
+		// Notify any waiters
+		if chans, ok := activator.newSandboxChans[key]; ok {
+			for _, ch := range chans {
+				select {
+				case ch <- struct{}{}:
+				default:
+				}
+			}
+		}
+		activator.mu.Unlock()
+
+		log.Info("new sandbox became RUNNING", "sandbox", newSandbox.sandbox.ID)
+	}()
+
+	// Try to acquire a lease
+	// WITHOUT THE FIX: This would immediately return ErrSandboxDiedEarly
+	// because the fail-fast check sees the stale DEAD sandbox
+	// WITH THE FIX: It waits for the new sandbox to be created
+	timeoutCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	lease, err := activator.AcquireLease(timeoutCtx, testVer, "web")
+	elapsed := time.Since(start)
+
+	// Should succeed after waiting for the new sandbox
+	require.NoError(t, err, "Should NOT fail fast with stale DEAD sandbox when incrementPool=true")
+	require.NotNil(t, lease)
+
+	// Verify we got the NEW sandbox, not the stale one
+	assert.Equal(t, entity.Id("new-running-sandbox"), lease.sandbox.ID)
+	assert.Equal(t, compute_v1alpha.RUNNING, lease.sandbox.Status)
+
+	// Verify we waited (should be ~100ms for sandbox to become ready)
+	assert.Greater(t, elapsed, 50*time.Millisecond, "Should have waited for new sandbox")
+	assert.Less(t, elapsed, 300*time.Millisecond, "Should not have timed out")
+}
+
+// TestActivatorFailsFastOnNewSandboxDeath verifies that when incrementPool=true
+// AND a new sandbox was actually created but then died, we DO fail fast.
+// This distinguishes real boot failures from stale sandbox tracking.
+func TestActivatorFailsFastOnNewSandboxDeath(t *testing.T) {
+	ctx := context.Background()
+
+	// Create in-memory entity server
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create app entity
+	app := &core_v1alpha.App{}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	testVer := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+						ScaleDownDelay:      "15m",
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", testVer)
+	require.NoError(t, err)
+	testVer.ID = verID
+
+	log := testutils.TestLogger(t)
+
+	// Pre-create a pool in the entity store
+	launcherPool := &compute_v1alpha.SandboxPool{
+		Service: "web",
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Version: testVer.ID,
+			Container: []compute_v1alpha.SandboxSpecContainer{
+				{
+					Name:  "app",
+					Image: "test:latest",
+					Port: []compute_v1alpha.SandboxSpecContainerPort{
+						{Port: 3000, Name: "http", Type: "http"},
+					},
+				},
+			},
+		},
+		ReferencedByVersions: []entity.Id{testVer.ID},
+		DesiredInstances:     0,
+	}
+	poolID, err := server.Client.Create(ctx, "launcher-pool", launcherPool)
+	require.NoError(t, err)
+	launcherPool.ID = poolID
+
+	// Start with one stale DEAD sandbox (from previous scale-down)
+	ent := entity.Blank()
+	ent.SetID("stale-dead-sandbox")
+
+	strategy := concurrency.NewStrategy(&testVer.Config.Services[0].ServiceConcurrency)
+	tracker := strategy.InitializeTracker()
+
+	staleDEADSandbox := &sandbox{
+		sandbox: &compute_v1alpha.Sandbox{
+			ID:     entity.Id("stale-dead-sandbox"),
+			Status: compute_v1alpha.DEAD,
+		},
+		ent:         ent,
+		lastRenewal: time.Now().Add(-10 * time.Minute),
+		url:         "http://10.0.0.1:3000",
+		tracker:     tracker,
+	}
+
+	activator := &localActivator{
+		log:             log,
+		eac:             server.EAC,
+		versions:        make(map[verKey]*versionPoolRef),
+		poolSandboxes:   make(map[entity.Id]*poolSandboxes),
+		pools:           make(map[verKey]*poolState),
+		newSandboxChans: make(map[verKey][]chan struct{}),
+	}
+
+	key := verKey{testVer.ID.String(), "web"}
+	activator.versions[key] = &versionPoolRef{
+		ver:      testVer,
+		poolID:   poolID,
+		service:  "web",
+		strategy: strategy,
+	}
+	activator.poolSandboxes[poolID] = &poolSandboxes{
+		pool:      launcherPool,
+		sandboxes: []*sandbox{staleDEADSandbox},
+		service:   "web",
+		strategy:  strategy,
+	}
+
+	// Simulate a NEW sandbox being created that crashes during boot
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+
+		// Create a NEW sandbox that goes PENDING -> DEAD (boot crash)
+		newEnt := entity.Blank()
+		newEnt.SetID("new-crashed-sandbox")
+		newTracker := strategy.InitializeTracker()
+
+		newSandbox := &sandbox{
+			sandbox: &compute_v1alpha.Sandbox{
+				ID:     entity.Id("new-crashed-sandbox"),
+				Status: compute_v1alpha.DEAD, // Crashed during boot!
+			},
+			ent:         newEnt,
+			lastRenewal: time.Now(),
+			url:         "",
+			tracker:     newTracker,
+		}
+
+		activator.mu.Lock()
+		ps := activator.poolSandboxes[poolID]
+		ps.sandboxes = append(ps.sandboxes, newSandbox)
+
+		// Notify waiters that a sandbox changed
+		if chans, ok := activator.newSandboxChans[key]; ok {
+			for _, ch := range chans {
+				select {
+				case ch <- struct{}{}:
+				default:
+				}
+			}
+		}
+		activator.mu.Unlock()
+
+		log.Info("new sandbox crashed during boot", "sandbox", newSandbox.sandbox.ID)
+	}()
+
+	// Try to acquire a lease
+	// This should fail fast because a NEW sandbox was created and died
+	timeoutCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	lease, err := activator.AcquireLease(timeoutCtx, testVer, "web")
+	elapsed := time.Since(start)
+
+	// Should fail with ErrSandboxDiedEarly because the NEW sandbox crashed
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrSandboxDiedEarly, "Should fail fast when NEW sandbox crashes")
+	require.Nil(t, lease)
+
+	// Should fail fast (< 200ms), not wait for full timeout
+	assert.Less(t, elapsed, 200*time.Millisecond, "Should fail fast on new sandbox death")
+}
+
+// TestRemovePoolFromTrackingCleansAllCaches verifies that removePoolFromTracking
+// correctly removes entries from all three cache maps.
+func TestRemovePoolFromTrackingCleansAllCaches(t *testing.T) {
+	log := testutils.TestLogger(t)
+
+	poolID := entity.Id("pool-1")
+	poolID2 := entity.Id("pool-2")
+
+	strategy := concurrency.NewStrategy(&core_v1alpha.ServiceConcurrency{
+		Mode:                "auto",
+		RequestsPerInstance: 10,
+		ScaleDownDelay:      "15m",
+	})
+
+	testVer := &core_v1alpha.AppVersion{
+		ID:       entity.Id("ver-1"),
+		App:      entity.Id("app-1"),
+		Version:  "v1",
+		ImageUrl: "test:latest",
+	}
+
+	testVer2 := &core_v1alpha.AppVersion{
+		ID:       entity.Id("ver-2"),
+		App:      entity.Id("app-1"),
+		Version:  "v2",
+		ImageUrl: "test:latest",
+	}
+
+	pool := &compute_v1alpha.SandboxPool{ID: poolID, Service: "web"}
+	pool2 := &compute_v1alpha.SandboxPool{ID: poolID2, Service: "web"}
+
+	activator := &localActivator{
+		log: log,
+		versions: map[verKey]*versionPoolRef{
+			{"ver-1", "web"}: {ver: testVer, poolID: poolID, service: "web", strategy: strategy},
+			{"ver-2", "web"}: {ver: testVer2, poolID: poolID2, service: "web", strategy: strategy},
+		},
+		pools: map[verKey]*poolState{
+			{"ver-1", "web"}: {pool: pool, revision: 1},
+			{"ver-2", "web"}: {pool: pool2, revision: 2},
+		},
+		poolSandboxes: map[entity.Id]*poolSandboxes{
+			poolID:  {pool: pool, sandboxes: []*sandbox{}, service: "web", strategy: strategy},
+			poolID2: {pool: pool2, sandboxes: []*sandbox{}, service: "web", strategy: strategy},
+		},
+	}
+
+	// Remove pool-1 from tracking
+	activator.removePoolFromTracking(poolID)
+
+	// Verify pool-1 entries are gone
+	activator.mu.RLock()
+	_, versionsExists := activator.versions[verKey{"ver-1", "web"}]
+	_, poolsExists := activator.pools[verKey{"ver-1", "web"}]
+	_, poolSandboxesExists := activator.poolSandboxes[poolID]
+
+	// Verify pool-2 entries are still there
+	_, versions2Exists := activator.versions[verKey{"ver-2", "web"}]
+	_, pools2Exists := activator.pools[verKey{"ver-2", "web"}]
+	_, poolSandboxes2Exists := activator.poolSandboxes[poolID2]
+	activator.mu.RUnlock()
+
+	assert.False(t, versionsExists, "pool-1 should be removed from versions")
+	assert.False(t, poolsExists, "pool-1 should be removed from pools")
+	assert.False(t, poolSandboxesExists, "pool-1 should be removed from poolSandboxes")
+
+	assert.True(t, versions2Exists, "pool-2 should still be in versions")
+	assert.True(t, pools2Exists, "pool-2 should still be in pools")
+	assert.True(t, poolSandboxes2Exists, "pool-2 should still be in poolSandboxes")
+}
