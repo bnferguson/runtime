@@ -2,6 +2,7 @@ package rpc_test
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net"
 	"os"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/etcdreg"
 	"miren.dev/runtime/pkg/rpc/example"
@@ -64,6 +66,17 @@ func (m *exampleMeter) SetTemp(ctx context.Context, call *example.SetTempSetTemp
 	m.temp = float32(args.Temp())
 	res.SetTemp(args.Temp())
 	return nil
+}
+
+// panicMeter is a Meter implementation that panics, used for testing panic handling
+type panicMeter struct{}
+
+func (m *panicMeter) ReadTemperature(ctx context.Context, call *example.MeterReadTemperature) error {
+	panic("test panic message")
+}
+
+func (m *panicMeter) GetSetter(ctx context.Context, call *example.MeterGetSetter) error {
+	panic("test panic message")
 }
 
 type exampleUpdate struct {
@@ -363,6 +376,35 @@ func TestRPC(t *testing.T) {
 		r.NoError(err)
 
 		r.Equal(int32(100), res3.Temp())
+	})
+
+	t.Run("propagates panic errors to client", func(t *testing.T) {
+		r := require.New(t)
+		ctx := t.Context()
+
+		s := example.AdaptMeter(&panicMeter{})
+
+		ss, err := rpc.NewState(ctx, rpc.WithSkipVerify, rpc.WithLogLevel(slog.LevelDebug))
+		r.NoError(err)
+
+		serv := ss.Server()
+
+		serv.ExposeValue("meter", s)
+
+		cs, err := rpc.NewState(ctx, rpc.WithSkipVerify)
+		r.NoError(err)
+
+		c, err := cs.Connect(ss.ListenAddr(), "meter")
+		r.NoError(err)
+
+		mc := &example.MeterClient{Client: c}
+
+		_, err = mc.ReadTemperature(context.Background(), "test")
+		r.Error(err)
+
+		var panicErr cond.ErrPanic
+		r.True(errors.As(err, &panicErr), "expected ErrPanic, got %T: %v", err, err)
+		r.Contains(panicErr.Message, "test panic message")
 	})
 }
 

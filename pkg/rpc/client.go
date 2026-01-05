@@ -577,7 +577,7 @@ request:
 			return cond.RemoteError(category, code, errs)
 		case "panic":
 			errs := hr.Trailer.Get("rpc-error")
-			return cond.RemoteError("panic", "panic", errs)
+			return cond.Panic(errs)
 		}
 
 		return err
