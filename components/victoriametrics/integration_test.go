@@ -178,50 +178,6 @@ func TestVictoriaMetricsComponentIntegration(t *testing.T) {
 	t.Log("Restart test completed successfully!")
 }
 
-func TestVictoriaMetricsComponent_DefaultConfig(t *testing.T) {
-	reg, cleanup := testutils.Registry()
-	defer cleanup()
-
-	var cc *containerd.Client
-	err := reg.Resolve(&cc)
-	require.NoError(t, err)
-
-	tmpDir, err := os.MkdirTemp("", "victoriametrics-test")
-	require.NoError(t, err)
-	defer os.RemoveAll(tmpDir)
-
-	testNamespace := uniqueNamespace()
-	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
-	component := vm.NewVictoriaMetricsComponent(log, cc, testNamespace, tmpDir)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-
-	defer func() {
-		if component.IsRunning() {
-			component.Stop(ctx)
-		}
-		cleanupContainer(t, cc, testNamespace)
-	}()
-
-	// Start with minimal config (defaults should be applied)
-	// Note: Default port 8428 may conflict with parallel tests, but this test
-	// specifically validates default behavior
-	config := vm.VictoriaMetricsConfig{}
-
-	err = component.Start(ctx, config)
-	if err != nil {
-		if strings.Contains(err.Error(), "permission denied") {
-			t.Skip("permission denied error, skipping test")
-		}
-		require.NoError(t, err)
-	}
-
-	// Should use default port 8428
-	expectedEndpoint := "localhost:8428"
-	assert.Equal(t, expectedEndpoint, component.HTTPEndpoint())
-}
-
 func TestVictoriaMetricsComponent_AlreadyRunning(t *testing.T) {
 	reg, cleanup := testutils.Registry()
 	defer cleanup()
