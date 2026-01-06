@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"runtime/debug"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -980,11 +981,14 @@ func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
 
 	defer func() {
 		if r := recover(); r != nil {
+			s.state.log.Error("panic in streaming RPC handler",
+				"panic", r,
+				"method", method,
+				"stack", string(debug.Stack()))
 			var sr streamRequest
 			sr.Kind = "panic"
 			sr.Error = fmt.Sprint(r)
 			cs.NoReply(sr, nil)
-			panic(r)
 		}
 	}()
 
@@ -1055,9 +1059,12 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 
 		defer func() {
 			if r := recover(); r != nil {
+				s.state.log.Error("panic in RPC handler",
+					"panic", r,
+					"method", method,
+					"stack", string(debug.Stack()))
 				w.Header().Add("rpc-status", "panic")
 				w.Header().Add("rpc-error", fmt.Sprint(r))
-				panic(r)
 			}
 		}()
 

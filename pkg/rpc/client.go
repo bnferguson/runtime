@@ -577,7 +577,7 @@ request:
 			return cond.RemoteError(category, code, errs)
 		case "panic":
 			errs := hr.Trailer.Get("rpc-error")
-			return cond.RemoteError("panic", "panic", errs)
+			return cond.Panic(errs)
 		}
 
 		return err
@@ -787,6 +787,9 @@ loop:
 			c.State.server.Deref(rs.OID)
 		case "error":
 			err = cond.RemoteError(rs.Category, rs.Code, rs.Error)
+			break loop
+		case "panic":
+			err = cond.Panic(rs.Error)
 			break loop
 		default:
 			c.State.log.Error("rpc.callstream: unknown control stream request", "kind", rs.Kind)

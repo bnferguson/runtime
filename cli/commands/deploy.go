@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"miren.dev/runtime/api/deployment/deployment_v1alpha"
 	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/deploygating"
 	"miren.dev/runtime/pkg/git"
 	"miren.dev/runtime/pkg/progress/upload"
@@ -366,6 +368,17 @@ func Deploy(ctx *Context, opts struct {
 				updateDeploymentOnError("Deploy cancelled by user")
 				return ctx.Err()
 			}
+
+			// Check if this was a server panic
+			var panicErr cond.ErrPanic
+			if errors.As(err, &panicErr) {
+				ctx.Printf("\n\n❌ Build failed due to a server panic.\n")
+				ctx.Printf("The server encountered a panic: %s\n", panicErr.Message)
+				ctx.Printf("Check the server logs for more details.\n")
+				updateDeploymentOnError(fmt.Sprintf("Server panic: %s", panicErr.Message))
+				return err
+			}
+
 			ctx.Printf("\n\nBuild failed with the following errors:\n")
 			printBuildErrors(ctx, buildErrors, nil)
 			updateDeploymentOnError(fmt.Sprintf("Build failed: %v", err))
@@ -473,6 +486,16 @@ func Deploy(ctx *Context, opts struct {
 				// The UI already printed the timeout message
 				updateDeploymentOnError("Buildkit startup timeout")
 				return fmt.Errorf("buildkit startup timeout")
+			}
+
+			// Check if this was a server panic
+			var panicErr cond.ErrPanic
+			if errors.As(err, &panicErr) {
+				ctx.Printf("\n\n❌ Build failed due to a server panic.\n")
+				ctx.Printf("The server encountered a panic: %s\n", panicErr.Message)
+				ctx.Printf("Check the server logs for more details.\n")
+				updateDeploymentOnError(fmt.Sprintf("Server panic: %s", panicErr.Message))
+				return err
 			}
 
 			ctx.Printf("\n\nBuild failed.\n")
