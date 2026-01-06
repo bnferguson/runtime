@@ -12,9 +12,6 @@ func DeployCancel(ctx *Context, opts struct {
 		DeploymentID string `positional-arg-name:"deployment-id" description:"ID of the deployment to cancel"`
 	} `positional-args:"yes" required:"yes"`
 }) error {
-	// Get current user ID from JWT claims (if authenticated)
-	callerUserId := ctx.GetCurrentUserID()
-
 	client, err := ctx.RPCClient("deployment")
 	if err != nil {
 		return err
@@ -23,7 +20,7 @@ func DeployCancel(ctx *Context, opts struct {
 
 	depClient := &deployment_v1alpha.DeploymentClient{Client: client}
 
-	result, err := depClient.CancelDeployment(ctx, opts.Args.DeploymentID, callerUserId)
+	result, err := depClient.CancelDeployment(ctx, opts.Args.DeploymentID, "")
 	if err != nil {
 		return err
 	}

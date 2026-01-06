@@ -15,8 +15,6 @@ import (
 	"golang.org/x/sys/unix"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/asm"
-	"miren.dev/runtime/pkg/auth"
-	"miren.dev/runtime/pkg/cloudauth"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/slogfmt"
 	"miren.dev/runtime/pkg/slogrus"
@@ -437,51 +435,4 @@ func (c *Context) wrapRPCError(err error) error {
 		return ErrAccessDenied
 	}
 	return err
-}
-
-// GetCurrentUserID returns the current user's ID from JWT claims if authenticated,
-// or an empty string if not authenticated or if authentication fails.
-func (c *Context) GetCurrentUserID() string {
-	if c.ClusterConfig == nil || c.ClusterConfig.Identity == "" || c.ClientConfig == nil {
-		return ""
-	}
-
-	identity, err := c.ClientConfig.GetIdentity(c.ClusterConfig.Identity)
-	if err != nil || identity == nil || identity.Type != "keypair" {
-		return ""
-	}
-
-	privateKeyPEM, err := c.ClientConfig.GetPrivateKeyPEM(identity)
-	if err != nil {
-		return ""
-	}
-
-	keyPair, err := cloudauth.LoadKeyPairFromPEM(privateKeyPEM)
-	if err != nil {
-		return ""
-	}
-
-	authServer := identity.Issuer
-	if authServer == "" {
-		authServer = c.ClusterConfig.Hostname
-	}
-	if !strings.HasPrefix(authServer, "http") {
-		if strings.Contains(authServer, "localhost") || strings.Contains(authServer, "127.0.0.1") {
-			authServer = "http://" + authServer
-		} else {
-			authServer = "https://" + authServer
-		}
-	}
-
-	token, err := clientconfig.AuthenticateWithKey(c, authServer, keyPair)
-	if err != nil {
-		return ""
-	}
-
-	claims, err := auth.ParseUnverifiedClaims(token)
-	if err != nil {
-		return ""
-	}
-
-	return claims.UserID
 }

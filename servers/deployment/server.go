@@ -598,10 +598,6 @@ func (d *DeploymentServer) CancelDeployment(ctx context.Context, req *deployment
 	}
 
 	deploymentId := args.DeploymentId()
-	callerUserId := ""
-	if args.HasCallerUserId() {
-		callerUserId = args.CallerUserId()
-	}
 
 	// Get the deployment by ID
 	deploymentResp, err := d.EAC.Get(ctx, deploymentId)
@@ -627,11 +623,7 @@ func (d *DeploymentServer) CancelDeployment(ctx context.Context, req *deployment
 
 	// Mark as cancelled
 	deployment.Status = "cancelled"
-	if callerUserId != "" {
-		deployment.ErrorMessage = fmt.Sprintf("Deployment cancelled by user %s", callerUserId)
-	} else {
-		deployment.ErrorMessage = "Deployment cancelled by user"
-	}
+	deployment.ErrorMessage = "Deployment cancelled by user"
 	deployment.CompletedAt = time.Now().Format(time.RFC3339)
 
 	// Update entity
@@ -652,8 +644,7 @@ func (d *DeploymentServer) CancelDeployment(ctx context.Context, req *deployment
 
 	d.Log.Info("Cancelled deployment",
 		"deployment_id", deploymentId,
-		"app", deployment.AppName,
-		"cancelled_by", callerUserId)
+		"app", deployment.AppName)
 
 	return nil
 }
