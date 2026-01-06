@@ -647,11 +647,12 @@ func TestCancelDeployment(t *testing.T) {
 		}
 	})
 
-	t.Run("cancel in-progress deployment as owner succeeds", func(t *testing.T) {
+	t.Run("cancel owned deployment as different user succeeds", func(t *testing.T) {
+		// Any user with cluster access can cancel any deployment (permissive model)
 		ownerId := "user-123"
 		ownerEmail := "owner@example.com"
+		differentUserId := "user-other"
 
-		// Create an in-progress deployment with an owner
 		deployment := &core_v1alpha.Deployment{
 			AppName:    "test-app-owned",
 			ClusterId:  "test-cluster",
@@ -669,8 +670,8 @@ func TestCancelDeployment(t *testing.T) {
 			t.Fatalf("Failed to create test deployment: %v", err)
 		}
 
-		// Cancel as owner (should succeed)
-		result, err := client.CancelDeployment(ctx, string(deploymentId), ownerId)
+		// Cancel as different user (should succeed - permissive model)
+		result, err := client.CancelDeployment(ctx, string(deploymentId), differentUserId)
 		if err != nil {
 			t.Fatalf("Unexpected RPC error: %v", err)
 		}
@@ -688,83 +689,6 @@ func TestCancelDeployment(t *testing.T) {
 		}
 		if getResult.Deployment().Status() != "cancelled" {
 			t.Errorf("Expected status 'cancelled', got '%s'", getResult.Deployment().Status())
-		}
-	})
-
-	t.Run("cancel owned deployment without caller id returns error", func(t *testing.T) {
-		ownerId := "user-456"
-		ownerEmail := "owner2@example.com"
-
-		// Create an in-progress deployment with an owner
-		deployment := &core_v1alpha.Deployment{
-			AppName:    "test-app-owned-2",
-			ClusterId:  "test-cluster",
-			AppVersion: "v1.0.0",
-			Status:     "in_progress",
-			Phase:      "building",
-			DeployedBy: core_v1alpha.DeployedBy{
-				UserId:    ownerId,
-				UserEmail: ownerEmail,
-				Timestamp: time.Now().Format(time.RFC3339),
-			},
-		}
-		deploymentId, err := inmem.Client.Create(ctx, "owned-deployment-2", deployment)
-		if err != nil {
-			t.Fatalf("Failed to create test deployment: %v", err)
-		}
-
-		// Try to cancel without providing caller ID (should fail - auth required)
-		result, err := client.CancelDeployment(ctx, string(deploymentId), "")
-		if err != nil {
-			t.Fatalf("Unexpected RPC error: %v", err)
-		}
-		if !result.HasError() || result.Error() == "" {
-			t.Fatal("Expected error when cancelling owned deployment without auth")
-		}
-		if !containsString(result.Error(), "authentication required to cancel") {
-			t.Errorf("Expected error containing 'authentication required to cancel', got '%s'", result.Error())
-		}
-		if !containsString(result.Error(), ownerEmail) {
-			t.Errorf("Expected error to mention owner email '%s', got '%s'", ownerEmail, result.Error())
-		}
-	})
-
-	t.Run("cancel owned deployment as different user returns error", func(t *testing.T) {
-		ownerId := "user-789"
-		ownerEmail := "owner3@example.com"
-		differentUserId := "user-other"
-
-		// Create an in-progress deployment with an owner
-		deployment := &core_v1alpha.Deployment{
-			AppName:    "test-app-owned-3",
-			ClusterId:  "test-cluster",
-			AppVersion: "v1.0.0",
-			Status:     "in_progress",
-			Phase:      "building",
-			DeployedBy: core_v1alpha.DeployedBy{
-				UserId:    ownerId,
-				UserEmail: ownerEmail,
-				Timestamp: time.Now().Format(time.RFC3339),
-			},
-		}
-		deploymentId, err := inmem.Client.Create(ctx, "owned-deployment-3", deployment)
-		if err != nil {
-			t.Fatalf("Failed to create test deployment: %v", err)
-		}
-
-		// Try to cancel as different user (should fail)
-		result, err := client.CancelDeployment(ctx, string(deploymentId), differentUserId)
-		if err != nil {
-			t.Fatalf("Unexpected RPC error: %v", err)
-		}
-		if !result.HasError() || result.Error() == "" {
-			t.Fatal("Expected error when cancelling deployment owned by different user")
-		}
-		if !containsString(result.Error(), "only the owner can cancel") {
-			t.Errorf("Expected error containing 'only the owner can cancel', got '%s'", result.Error())
-		}
-		if !containsString(result.Error(), ownerEmail) {
-			t.Errorf("Expected error to mention owner email '%s', got '%s'", ownerEmail, result.Error())
 		}
 	})
 

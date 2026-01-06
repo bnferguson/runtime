@@ -1,7 +1,7 @@
 package commands
 
 import (
-	"fmt"
+	"errors"
 
 	"miren.dev/runtime/api/deployment/deployment_v1alpha"
 )
@@ -29,7 +29,7 @@ func DeployCancel(ctx *Context, opts struct {
 	}
 
 	if result.Error() != "" {
-		return fmt.Errorf("%s", result.Error())
+		return errors.New(result.Error())
 	}
 
 	ctx.Printf("Cancelled deployment %s\n", opts.Args.DeploymentID)

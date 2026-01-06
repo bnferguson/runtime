@@ -2,6 +2,7 @@ package deployment
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -605,8 +606,12 @@ func (d *DeploymentServer) CancelDeployment(ctx context.Context, req *deployment
 	// Get the deployment by ID
 	deploymentResp, err := d.EAC.Get(ctx, deploymentId)
 	if err != nil {
-		d.Log.Error("Failed to get deployment", "deployment_id", deploymentId, "error", err)
-		results.SetError("deployment not found")
+		if errors.Is(err, cond.ErrNotFound{}) {
+			results.SetError("deployment not found")
+		} else {
+			d.Log.Error("Failed to get deployment", "deployment_id", deploymentId, "error", err)
+			results.SetError("failed to get deployment")
+		}
 		return nil
 	}
 
@@ -620,26 +625,13 @@ func (d *DeploymentServer) CancelDeployment(ctx context.Context, req *deployment
 		return nil
 	}
 
-	// Check ownership if deployment has an owner
-	ownerUserId := deployment.DeployedBy.UserId
-	if ownerUserId != "" {
-		// Deployment has an owner  - require matching user
-		if callerUserId == "" {
-			results.SetError(fmt.Sprintf("deployment owned by %s - authentication required to cancel",
-				deployment.DeployedBy.UserEmail))
-			return nil
-		}
-		if callerUserId != ownerUserId {
-			results.SetError(fmt.Sprintf("deployment owned by %s - only the owner can cancel",
-				deployment.DeployedBy.UserEmail))
-			return nil
-		}
-	}
-	// If no owner (unregistered cluster), allow anyone
-
 	// Mark as cancelled
 	deployment.Status = "cancelled"
-	deployment.ErrorMessage = "Deployment cancelled by user"
+	if callerUserId != "" {
+		deployment.ErrorMessage = fmt.Sprintf("Deployment cancelled by user %s", callerUserId)
+	} else {
+		deployment.ErrorMessage = "Deployment cancelled by user"
+	}
 	deployment.CompletedAt = time.Now().Format(time.RFC3339)
 
 	// Update entity
