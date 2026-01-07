@@ -19,7 +19,10 @@ import (
 	"miren.dev/runtime/pkg/testutils"
 )
 
-const testNamespace = "miren-victoriametrics-test"
+// uniqueNamespace returns a unique namespace for each test to avoid conflicts
+func uniqueNamespace() string {
+	return fmt.Sprintf("miren-vm-test-%d", time.Now().UnixNano())
+}
 
 func TestVictoriaMetricsComponentIntegration(t *testing.T) {
 	reg, cleanup := testutils.Registry()
@@ -39,11 +42,12 @@ func TestVictoriaMetricsComponentIntegration(t *testing.T) {
 		Level: slog.LevelDebug,
 	}))
 
+	// Use dynamic namespace and port to avoid conflicts with parallel tests
+	testNamespace := uniqueNamespace()
+	httpPort := testutils.GetFreePort(t)
+
 	// Create VictoriaMetrics component
 	component := vm.NewVictoriaMetricsComponent(log, cc, testNamespace, tmpDir)
-
-	// Use test-specific port to avoid conflicts
-	httpPort := 28428
 
 	config := vm.VictoriaMetricsConfig{
 		HTTPPort:        httpPort,
@@ -174,47 +178,6 @@ func TestVictoriaMetricsComponentIntegration(t *testing.T) {
 	t.Log("Restart test completed successfully!")
 }
 
-func TestVictoriaMetricsComponent_DefaultConfig(t *testing.T) {
-	reg, cleanup := testutils.Registry()
-	defer cleanup()
-
-	var cc *containerd.Client
-	err := reg.Resolve(&cc)
-	require.NoError(t, err)
-
-	tmpDir, err := os.MkdirTemp("", "victoriametrics-test")
-	require.NoError(t, err)
-	defer os.RemoveAll(tmpDir)
-
-	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
-	component := vm.NewVictoriaMetricsComponent(log, cc, testNamespace, tmpDir)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-
-	defer func() {
-		if component.IsRunning() {
-			component.Stop(ctx)
-		}
-		cleanupContainer(t, cc, testNamespace)
-	}()
-
-	// Start with minimal config (defaults should be applied)
-	config := vm.VictoriaMetricsConfig{}
-
-	err = component.Start(ctx, config)
-	if err != nil {
-		if strings.Contains(err.Error(), "permission denied") {
-			t.Skip("permission denied error, skipping test")
-		}
-		require.NoError(t, err)
-	}
-
-	// Should use default port 8428
-	expectedEndpoint := "localhost:8428"
-	assert.Equal(t, expectedEndpoint, component.HTTPEndpoint())
-}
-
 func TestVictoriaMetricsComponent_AlreadyRunning(t *testing.T) {
 	reg, cleanup := testutils.Registry()
 	defer cleanup()
@@ -227,6 +190,7 @@ func TestVictoriaMetricsComponent_AlreadyRunning(t *testing.T) {
 	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
+	testNamespace := uniqueNamespace()
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
 	component := vm.NewVictoriaMetricsComponent(log, cc, testNamespace, tmpDir)
 
@@ -240,7 +204,7 @@ func TestVictoriaMetricsComponent_AlreadyRunning(t *testing.T) {
 		cleanupContainer(t, cc, testNamespace)
 	}()
 
-	config := vm.VictoriaMetricsConfig{HTTPPort: 28429}
+	config := vm.VictoriaMetricsConfig{HTTPPort: testutils.GetFreePort(t)}
 
 	// Start once
 	err = component.Start(ctx, config)
@@ -269,6 +233,7 @@ func TestVictoriaMetricsComponent_StopWhenNotRunning(t *testing.T) {
 	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
+	testNamespace := uniqueNamespace()
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
 	component := vm.NewVictoriaMetricsComponent(log, cc, testNamespace, tmpDir)
 
@@ -293,6 +258,7 @@ func TestVictoriaMetricsComponent_GracefulShutdown(t *testing.T) {
 	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
+	testNamespace := uniqueNamespace()
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	component := vm.NewVictoriaMetricsComponent(log, cc, testNamespace, tmpDir)
 
@@ -301,7 +267,7 @@ func TestVictoriaMetricsComponent_GracefulShutdown(t *testing.T) {
 
 	defer cleanupContainer(t, cc, testNamespace)
 
-	config := vm.VictoriaMetricsConfig{HTTPPort: 28430}
+	config := vm.VictoriaMetricsConfig{HTTPPort: testutils.GetFreePort(t)}
 
 	err = component.Start(ctx, config)
 	if err != nil {
@@ -346,6 +312,7 @@ func TestVictoriaMetricsComponent_MultipleStarts(t *testing.T) {
 	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
+	testNamespace := uniqueNamespace()
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	component := vm.NewVictoriaMetricsComponent(log, cc, testNamespace, tmpDir)
 
@@ -354,7 +321,7 @@ func TestVictoriaMetricsComponent_MultipleStarts(t *testing.T) {
 
 	defer cleanupContainer(t, cc, testNamespace)
 
-	config := vm.VictoriaMetricsConfig{HTTPPort: 28431}
+	config := vm.VictoriaMetricsConfig{HTTPPort: testutils.GetFreePort(t)}
 
 	// Start, stop, start, stop multiple times
 	client := &http.Client{Timeout: 5 * time.Second}

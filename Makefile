@@ -83,6 +83,9 @@ dev-rebuild: ## Rebuild dev environment image
 test: ## Run all tests
 	iso run bash hack/test.sh ./...
 
+test-serial: ## Run all tests serially (no parallelism, for debugging test interference)
+	iso run bash hack/test.sh -p 1 ./...
+
 test-ci: ## Run all tests for CI
 	iso run DISABLE_NBD_TEST=1 bash hack/test.sh ./...
 

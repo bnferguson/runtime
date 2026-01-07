@@ -4,6 +4,7 @@ package observability_test
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"testing"
@@ -15,7 +16,14 @@ import (
 	"miren.dev/runtime/components/victorialogs"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/containerdx"
+	"miren.dev/runtime/pkg/testutils"
 )
+
+// uniqueNamespace generates a unique containerd namespace for test isolation.
+// Containerd namespaces have a 76 character limit.
+func uniqueNamespace() string {
+	return fmt.Sprintf("vl-test-%d", time.Now().UnixNano())
+}
 
 func TestVictoriaLogsIntegration(t *testing.T) {
 	if os.Getenv("SKIP_INTEGRATION_TEST") != "" {
@@ -38,11 +46,13 @@ func TestVictoriaLogsIntegration(t *testing.T) {
 		}))
 
 		tmpDir := t.TempDir()
+		namespace := uniqueNamespace()
+		httpPort := testutils.GetFreePort(t)
 
-		vlComponent := victorialogs.NewVictoriaLogsComponent(logger, cc, "miren-test", tmpDir)
+		vlComponent := victorialogs.NewVictoriaLogsComponent(logger, cc, namespace, tmpDir)
 
 		config := victorialogs.VictoriaLogsConfig{
-			HTTPPort:        9432,
+			HTTPPort:        httpPort,
 			RetentionPeriod: "1d",
 		}
 
@@ -156,11 +166,13 @@ func TestVictoriaLogsIntegration(t *testing.T) {
 
 		logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 		tmpDir := t.TempDir()
+		namespace := uniqueNamespace()
+		httpPort := testutils.GetFreePort(t)
 
-		vlComponent := victorialogs.NewVictoriaLogsComponent(logger, cc, "miren-test", tmpDir)
+		vlComponent := victorialogs.NewVictoriaLogsComponent(logger, cc, namespace, tmpDir)
 
 		config := victorialogs.VictoriaLogsConfig{
-			HTTPPort:        9433,
+			HTTPPort:        httpPort,
 			RetentionPeriod: "1d",
 		}
 
@@ -227,11 +239,13 @@ func TestVictoriaLogsIntegration(t *testing.T) {
 
 		logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 		tmpDir := t.TempDir()
+		namespace := uniqueNamespace()
+		httpPort := testutils.GetFreePort(t)
 
-		vlComponent := victorialogs.NewVictoriaLogsComponent(logger, cc, "miren-test", tmpDir)
+		vlComponent := victorialogs.NewVictoriaLogsComponent(logger, cc, namespace, tmpDir)
 
 		config := victorialogs.VictoriaLogsConfig{
-			HTTPPort:        9434,
+			HTTPPort:        httpPort,
 			RetentionPeriod: "1d",
 		}
 

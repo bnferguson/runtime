@@ -3,6 +3,7 @@ package rpc_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"miren.dev/runtime/pkg/rpc/example"
 	"miren.dev/runtime/pkg/rpc/stream"
 	"miren.dev/runtime/pkg/slogfmt"
+	"miren.dev/runtime/pkg/testutils"
 )
 
 //go:generate go run ./cmd/rpcgen -input example/rpc.yml -output example/rpc.go -pkg example
@@ -324,12 +326,17 @@ func TestRPC(t *testing.T) {
 		r := require.New(t)
 		ctx := t.Context()
 
+		// Use dynamic port to avoid conflicts with parallel tests.
+		// Both server instances must bind to the same port to test reconnection.
+		port := testutils.GetFreePort(t)
+		bindAddr := fmt.Sprintf("localhost:%d", port)
+
 		em := &exampleMeter{temp: 42}
 
 		s := example.AdaptMeter(em)
 
 		ss, err := rpc.NewState(ctx, rpc.WithSkipVerify,
-			rpc.WithBindAddr("localhost:12321"),
+			rpc.WithBindAddr(bindAddr),
 			rpc.WithLogLevel(slog.LevelDebug))
 		r.NoError(err)
 
@@ -359,7 +366,7 @@ func TestRPC(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 
 		ss, err = rpc.NewState(ctx, rpc.WithSkipVerify,
-			rpc.WithBindAddr("localhost:12321"),
+			rpc.WithBindAddr(bindAddr),
 			rpc.WithLogLevel(slog.LevelDebug))
 		r.NoError(err)
 

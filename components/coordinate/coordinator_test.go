@@ -2,6 +2,7 @@ package coordinate_test
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"testing"
@@ -35,10 +36,13 @@ func TestCoordinatorParse(t *testing.T) {
 	// Create temp directory for test data
 	tempDir := t.TempDir()
 
+	// Use dynamic port to avoid conflicts with parallel tests
+	port := testutils.GetFreePort(t)
+
 	// Setup coordinator config
 	coordCfg := coordinate.CoordinatorConfig{
-		Address:       "localhost:9991",          // Use test port
-		EtcdEndpoints: []string{"etcd:2379"},     // Default etcd port
+		Address:       fmt.Sprintf("localhost:%d", port),
+		EtcdEndpoints: []string{"etcd:2379"},
 		Prefix:        "/test/miren/" + t.Name(), // Unique prefix for this test
 		DataPath:      tempDir,                   // Use temp directory to prevent file leaks
 		NoAuth:        true,
