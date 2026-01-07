@@ -43,6 +43,7 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/network/network_v1alpha"
+	storage "miren.dev/runtime/api/storage/storage_v1alpha"
 )
 
 const (
@@ -2140,6 +2141,12 @@ func (c *SandboxController) stopSandbox(ctx context.Context, id entity.Id) error
 		c.Log.Info("container stopped", "id", id)
 	}
 
+	// Release disk leases owned by this sandbox
+	if err := c.releaseDiskLeases(ctx, id); err != nil {
+		c.Log.Error("failed to release disk leases", "id", id, "error", err)
+		// Continue with cleanup even if this fails
+	}
+
 	// Clean up temp directory
 	tmpDir := filepath.Join(c.Tempdir, "containerd", id.PathSafe())
 	_ = os.RemoveAll(tmpDir)
@@ -2167,6 +2174,56 @@ func (c *SandboxController) stopSandbox(ctx context.Context, id entity.Id) error
 	err = c.deleteEndpoints(ctx, id, sandboxIPs)
 	if err != nil {
 		c.Log.Error("failed to delete endpoints for sandbox", "id", id, "error", err)
+	}
+
+	return nil
+}
+
+// releaseDiskLeases releases all disk leases owned by the given sandbox.
+// This transitions leases to RELEASED status, which triggers the disk lease
+// controller to unmount the volumes and release the underlying resources.
+func (c *SandboxController) releaseDiskLeases(ctx context.Context, sandboxID entity.Id) error {
+	// Find all disk leases owned by this sandbox
+	listResp, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, storage.KindDiskLease))
+	if err != nil {
+		return fmt.Errorf("failed to list disk leases: %w", err)
+	}
+
+	for _, e := range listResp.Values() {
+		var lease storage.DiskLease
+		lease.Decode(e.Entity())
+
+		if lease.SandboxId != sandboxID {
+			continue
+		}
+
+		// Skip if already released
+		if lease.Status == storage.RELEASED {
+			continue
+		}
+
+		c.Log.Info("releasing disk lease",
+			"lease", lease.ID,
+			"disk", lease.DiskId,
+			"sandbox", sandboxID)
+
+		_, err := c.EAC.Patch(ctx, entity.New(
+			entity.DBId, lease.ID,
+			(&storage.DiskLease{
+				Status: storage.RELEASED,
+			}).Encode,
+		).Attrs(), 0)
+		if err != nil {
+			c.Log.Error("failed to release disk lease",
+				"lease", lease.ID,
+				"error", err)
+			// Continue releasing other leases
+			continue
+		}
+
+		c.Log.Info("disk lease released",
+			"lease", lease.ID,
+			"disk", lease.DiskId)
 	}
 
 	return nil
