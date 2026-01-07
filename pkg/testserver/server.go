@@ -126,8 +126,6 @@ func TestServer(t *testing.T) error {
 
 	aa := co.Activator()
 
-	_ = co.SandboxPoolManager()
-
 	ingressConfig := httpingress.IngressConfig{
 		RequestTimeout: 60 * time.Second, // Default timeout for tests
 	}

@@ -144,6 +144,12 @@ func NewSandboxController(cfg SandboxControllerConfig) (*SandboxController, erro
 	if cfg.Metrics == nil {
 		return nil, fmt.Errorf("sandbox: Metrics is required")
 	}
+	if cfg.LogsMaintainer == nil {
+		return nil, fmt.Errorf("sandbox: LogsMaintainer is required")
+	}
+	if cfg.LogWriter == nil {
+		return nil, fmt.Errorf("sandbox: LogWriter is required")
+	}
 
 	return &SandboxController{
 		Log:            cfg.Log.With("module", "sandbox"),
