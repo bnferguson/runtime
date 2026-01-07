@@ -236,6 +236,50 @@ func Deploy(ctx *Context, opts struct {
 	deploymentId := createResult.Deployment().Id()
 	ctx.Log.Info("Created deployment record", "deployment_id", deploymentId)
 
+	// Create a cancellable context for the build that can be cancelled externally
+	buildCtx, cancelBuild := context.WithCancel(ctx.Context)
+	defer cancelBuild()
+
+	// Track if we were cancelled externally (vs user pressing CTRL-C)
+	var externallyCancelled bool
+	var cancelMu sync.Mutex
+
+	// Start goroutine to poll for external cancellation
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-buildCtx.Done():
+				return
+			case <-ticker.C:
+				// Use a fresh context for polling to avoid issues with cancelled parent
+				pollCtx, pollCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				result, err := depClient.GetDeploymentById(pollCtx, deploymentId)
+				pollCancel()
+				if err != nil {
+					ctx.Log.Debug("Failed to poll deployment status", "error", err)
+					continue
+				}
+				if result.HasDeployment() && result.Deployment().Status() == "cancelled" {
+					cancelMu.Lock()
+					externallyCancelled = true
+					cancelMu.Unlock()
+					ctx.Log.Info("Deployment cancelled externally, stopping build")
+					cancelBuild()
+					return
+				}
+			}
+		}
+	}()
+
+	// Helper to check if we were externally cancelled
+	wasExternallyCancelled := func() bool {
+		cancelMu.Lock()
+		defer cancelMu.Unlock()
+		return externallyCancelled
+	}
+
 	// Parse environment variables to pass to build server
 	var envVars []*build_v1alpha.EnvironmentVariable
 	if len(opts.Env) > 0 || len(opts.Sensitive) > 0 {
@@ -373,23 +417,26 @@ func Deploy(ctx *Context, opts struct {
 			}
 
 			select {
-			case <-ctx.Done():
-				return ctx.Err()
+			case <-buildCtx.Done():
+				return buildCtx.Err()
 			case pw.Status() <- status:
 				// ok
 			}
 			return nil
 		}
 
-		cb = createBuildStatusCallback(ctx, nil, nil, nil, &buildErrors, nil, progressHandler)
+		cb = createBuildStatusCallback(buildCtx, nil, nil, nil, &buildErrors, nil, progressHandler)
 
-		results, err = bc.BuildFromTar(ctx, name, stream.ServeReader(ctx, r), cb, envVars)
+		results, err = bc.BuildFromTar(buildCtx, name, stream.ServeReader(buildCtx, r), cb, envVars)
 		if err != nil {
-			// Check if this was a context cancellation (user pressed CTRL-C)
-			if ctx.Err() != nil {
+			// Check if this was a context cancellation
+			if buildCtx.Err() != nil {
 				ctx.Printf("\n\n❌ Deploy cancelled.\n")
-				updateDeploymentOnError("Deploy cancelled by user")
-				return ctx.Err()
+				// Don't update deployment status - it's already cancelled
+				if !wasExternallyCancelled() {
+					updateDeploymentOnError("Deploy cancelled by user")
+				}
+				return buildCtx.Err()
 			}
 
 			// Check if this was a server panic
@@ -433,8 +480,8 @@ func Deploy(ctx *Context, opts struct {
 		})
 		r = progressReader
 
-		// Create a context that can be cancelled
-		deployCtx, cancelDeploy := context.WithCancel(ctx)
+		// Create a context that can be cancelled by UI (child of buildCtx for external cancellation)
+		deployCtx, cancelDeploy := context.WithCancel(buildCtx)
 		defer cancelDeploy()
 
 		model := initialModel(updateCh, transferCh, uploadProgressCh)
@@ -495,13 +542,16 @@ func Deploy(ctx *Context, opts struct {
 		if err != nil {
 			// Check if this was a user interruption (via UI flag or context cancellation)
 			dm, isDeploy := finalModel.(*deployInfo)
-			if (isDeploy && dm.interrupted) || ctx.Err() != nil {
+			if (isDeploy && dm.interrupted) || deployCtx.Err() != nil {
 				ctx.Printf("\n\n❌ Deploy cancelled.\n")
-				updateDeploymentOnError("Deploy cancelled by user")
+				// Don't update deployment status if externally cancelled - it's already cancelled
+				if !wasExternallyCancelled() {
+					updateDeploymentOnError("Deploy cancelled by user")
+				}
 				if deployCtx.Err() != nil {
 					return deployCtx.Err()
 				}
-				return ctx.Err()
+				return context.Canceled
 			}
 
 			// Check if this was a buildkit startup timeout (handled by UI)
