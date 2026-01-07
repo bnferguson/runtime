@@ -150,6 +150,9 @@ func NewSandboxController(cfg SandboxControllerConfig) (*SandboxController, erro
 	if cfg.LogWriter == nil {
 		return nil, fmt.Errorf("sandbox: LogWriter is required")
 	}
+	if cfg.Resolver == nil {
+		return nil, fmt.Errorf("sandbox: Resolver is required")
+	}
 
 	return &SandboxController{
 		Log:            cfg.Log.With("module", "sandbox"),
