@@ -75,6 +75,7 @@ func DefaultTLSConfig() TLSConfig {
 		AcmeEmail:       strPtr(""),
 		AdditionalIPs:   []string{},
 		AdditionalNames: []string{},
+		SelfSigned:      boolPtr(false),
 		StandardTLS:     boolPtr(true),
 	}
 }

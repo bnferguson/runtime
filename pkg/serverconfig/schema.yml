@@ -202,6 +202,15 @@ configs:
         env: MIREN_TLS_ACME_EMAIL
         toml: acme_email
 
+      self_signed:
+        type: bool
+        default: false
+        cli:
+          long: self-signed-tls
+          description: Use self-signed certificates for TLS (for development/testing only)
+        env: MIREN_TLS_SELF_SIGNED
+        toml: self_signed
+
   EtcdConfig:
     description: Etcd configuration
     fields:

@@ -34,6 +34,7 @@ type CLIFlags struct {
 	TLSConfigAcmeEmail                   *string  `long:"acme-email" description:"Email address for ACME account registration (recommended for account recovery and notifications)"`
 	TLSConfigAdditionalIPs               []string `long:"ips" description:"Additional IPs assigned to the server cert"`
 	TLSConfigAdditionalNames             []string `long:"dns-names" description:"Additional DNS names assigned to the server cert"`
+	TLSConfigSelfSigned                  *bool    `long:"self-signed-tls" description:"Use self-signed certificates for TLS (for development/testing only)"`
 	TLSConfigStandardTLS                 *bool    `long:"serve-tls" description:"Expose the http ingress on standard TLS ports"`
 	VictoriaLogsConfigAddress            *string  `long:"victorialogs-addr" description:"VictoriaLogs address (when not using embedded)"`
 	VictoriaLogsConfigHTTPPort           *int     `long:"victorialogs-http-port" description:"VictoriaLogs HTTP port in embedded mode"`

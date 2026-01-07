@@ -789,21 +789,29 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	}()
 
 	if cfg.TLS.GetStandardTLS() {
-		email := cfg.TLS.GetAcmeEmail()
-		dnsProvider := cfg.TLS.GetAcmeDNSProvider()
-		if dnsProvider != "" {
-			// Use DNS challenge via certificate controller
-			certProvider := co.CertificateProvider()
-			if certProvider == nil {
-				return fmt.Errorf("DNS provider configured (%s) but certificate controller failed to initialize", dnsProvider)
-			}
-			if err := autotls.ServeTLSWithController(sub, ctx.Log, certProvider, hs); err != nil {
-				ctx.Log.Error("failed to enable standard TLS with DNS challenge", "error", err)
+		if cfg.TLS.GetSelfSigned() {
+			// Use self-signed certificate (for development/testing)
+			if err := autotls.ServeTLSSelfSigned(sub, ctx.Log, hs); err != nil {
+				ctx.Log.Error("failed to enable self-signed TLS", "error", err)
+				return err
 			}
 		} else {
-			// Use HTTP challenge (default - autocert)
-			if err := autotls.ServeTLS(sub, ctx.Log, cfg.Server.GetDataPath(), email, hs); err != nil {
-				ctx.Log.Error("failed to enable standard TLS", "error", err)
+			email := cfg.TLS.GetAcmeEmail()
+			dnsProvider := cfg.TLS.GetAcmeDNSProvider()
+			if dnsProvider != "" {
+				// Use DNS challenge via certificate controller
+				certProvider := co.CertificateProvider()
+				if certProvider == nil {
+					return fmt.Errorf("DNS provider configured (%s) but certificate controller failed to initialize", dnsProvider)
+				}
+				if err := autotls.ServeTLSWithController(sub, ctx.Log, certProvider, hs); err != nil {
+					ctx.Log.Error("failed to enable standard TLS with DNS challenge", "error", err)
+				}
+			} else {
+				// Use HTTP challenge (default - autocert)
+				if err := autotls.ServeTLS(sub, ctx.Log, cfg.Server.GetDataPath(), email, hs); err != nil {
+					ctx.Log.Error("failed to enable standard TLS", "error", err)
+				}
 			}
 		}
 	} else {

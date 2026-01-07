@@ -317,6 +317,18 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 
 	}
 
+	// Apply MIREN_TLS_SELF_SIGNED
+	if val := os.Getenv("MIREN_TLS_SELF_SIGNED"); val != "" {
+
+		if b, err := strconv.ParseBool(val); err == nil {
+			cfg.TLS.SelfSigned = &b
+			log.Debug("applied env var", "key", "MIREN_TLS_SELF_SIGNED")
+		} else {
+			log.Warn("invalid MIREN_TLS_SELF_SIGNED value", "value", val, "error", err)
+		}
+
+	}
+
 	// Apply MIREN_TLS_STANDARD_TLS
 	if val := os.Getenv("MIREN_TLS_STANDARD_TLS"); val != "" {
 
