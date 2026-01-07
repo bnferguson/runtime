@@ -20,6 +20,7 @@ func RegisterAll(d *mflags.Dispatcher) {
 	// App lifecycle commands
 	d.Dispatch("init", Infer("init", "Initialize a new application", Init))
 	d.Dispatch("deploy", Infer("deploy", "Deploy an application", Deploy))
+	d.Dispatch("deploy cancel", Infer("deploy cancel", "Cancel an in-progress deployment", DeployCancel))
 	d.Dispatch("logs", Infer("logs", "Get logs for an application", Logs))
 
 	// App management commands

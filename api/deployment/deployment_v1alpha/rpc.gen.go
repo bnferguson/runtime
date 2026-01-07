@@ -1241,6 +1241,88 @@ func (v *DeploymentGetActiveDeploymentResults) UnmarshalJSON(data []byte) error 
 	return json.Unmarshal(data, &v.data)
 }
 
+type deploymentCancelDeploymentArgsData struct {
+	DeploymentId *string `cbor:"0,keyasint,omitempty" json:"deployment_id,omitempty"`
+	CallerUserId *string `cbor:"1,keyasint,omitempty" json:"caller_user_id,omitempty"`
+}
+
+type DeploymentCancelDeploymentArgs struct {
+	call rpc.Call
+	data deploymentCancelDeploymentArgsData
+}
+
+func (v *DeploymentCancelDeploymentArgs) HasDeploymentId() bool {
+	return v.data.DeploymentId != nil
+}
+
+func (v *DeploymentCancelDeploymentArgs) DeploymentId() string {
+	if v.data.DeploymentId == nil {
+		return ""
+	}
+	return *v.data.DeploymentId
+}
+
+func (v *DeploymentCancelDeploymentArgs) HasCallerUserId() bool {
+	return v.data.CallerUserId != nil
+}
+
+func (v *DeploymentCancelDeploymentArgs) CallerUserId() string {
+	if v.data.CallerUserId == nil {
+		return ""
+	}
+	return *v.data.CallerUserId
+}
+
+func (v *DeploymentCancelDeploymentArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *DeploymentCancelDeploymentArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *DeploymentCancelDeploymentArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *DeploymentCancelDeploymentArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type deploymentCancelDeploymentResultsData struct {
+	Success *bool   `cbor:"0,keyasint,omitempty" json:"success,omitempty"`
+	Error   *string `cbor:"1,keyasint,omitempty" json:"error,omitempty"`
+}
+
+type DeploymentCancelDeploymentResults struct {
+	call rpc.Call
+	data deploymentCancelDeploymentResultsData
+}
+
+func (v *DeploymentCancelDeploymentResults) SetSuccess(success bool) {
+	v.data.Success = &success
+}
+
+func (v *DeploymentCancelDeploymentResults) SetError(error string) {
+	v.data.Error = &error
+}
+
+func (v *DeploymentCancelDeploymentResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *DeploymentCancelDeploymentResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *DeploymentCancelDeploymentResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *DeploymentCancelDeploymentResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type DeploymentCreateDeployment struct {
 	rpc.Call
 	args    DeploymentCreateDeploymentArgs
@@ -1449,6 +1531,32 @@ func (t *DeploymentGetActiveDeployment) Results() *DeploymentGetActiveDeployment
 	return results
 }
 
+type DeploymentCancelDeployment struct {
+	rpc.Call
+	args    DeploymentCancelDeploymentArgs
+	results DeploymentCancelDeploymentResults
+}
+
+func (t *DeploymentCancelDeployment) Args() *DeploymentCancelDeploymentArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *DeploymentCancelDeployment) Results() *DeploymentCancelDeploymentResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type Deployment interface {
 	CreateDeployment(ctx context.Context, state *DeploymentCreateDeployment) error
 	UpdateDeploymentStatus(ctx context.Context, state *DeploymentUpdateDeploymentStatus) error
@@ -1458,6 +1566,7 @@ type Deployment interface {
 	ListDeployments(ctx context.Context, state *DeploymentListDeployments) error
 	GetDeploymentById(ctx context.Context, state *DeploymentGetDeploymentById) error
 	GetActiveDeployment(ctx context.Context, state *DeploymentGetActiveDeployment) error
+	CancelDeployment(ctx context.Context, state *DeploymentCancelDeployment) error
 }
 
 type reexportDeployment struct {
@@ -1493,6 +1602,10 @@ func (reexportDeployment) GetDeploymentById(ctx context.Context, state *Deployme
 }
 
 func (reexportDeployment) GetActiveDeployment(ctx context.Context, state *DeploymentGetActiveDeployment) error {
+	panic("not implemented")
+}
+
+func (reexportDeployment) CancelDeployment(ctx context.Context, state *DeploymentCancelDeployment) error {
 	panic("not implemented")
 }
 
@@ -1564,6 +1677,14 @@ func AdaptDeployment(t Deployment) *rpc.Interface {
 			Index:         7,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.GetActiveDeployment(ctx, &DeploymentGetActiveDeployment{Call: call})
+			},
+		},
+		{
+			Name:          "CancelDeployment",
+			InterfaceName: "Deployment",
+			Index:         8,
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.CancelDeployment(ctx, &DeploymentCancelDeployment{Call: call})
 			},
 		},
 	}
@@ -1832,4 +1953,46 @@ func (v DeploymentClient) GetActiveDeployment(ctx context.Context, app_name stri
 	}
 
 	return &DeploymentClientGetActiveDeploymentResults{client: v.Client, data: ret}, nil
+}
+
+type DeploymentClientCancelDeploymentResults struct {
+	client rpc.Client
+	data   deploymentCancelDeploymentResultsData
+}
+
+func (v *DeploymentClientCancelDeploymentResults) HasSuccess() bool {
+	return v.data.Success != nil
+}
+
+func (v *DeploymentClientCancelDeploymentResults) Success() bool {
+	if v.data.Success == nil {
+		return false
+	}
+	return *v.data.Success
+}
+
+func (v *DeploymentClientCancelDeploymentResults) HasError() bool {
+	return v.data.Error != nil
+}
+
+func (v *DeploymentClientCancelDeploymentResults) Error() string {
+	if v.data.Error == nil {
+		return ""
+	}
+	return *v.data.Error
+}
+
+func (v DeploymentClient) CancelDeployment(ctx context.Context, deployment_id string, caller_user_id string) (*DeploymentClientCancelDeploymentResults, error) {
+	args := DeploymentCancelDeploymentArgs{}
+	args.data.DeploymentId = &deployment_id
+	args.data.CallerUserId = &caller_user_id
+
+	var ret deploymentCancelDeploymentResultsData
+
+	err := v.Call(ctx, "CancelDeployment", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &DeploymentClientCancelDeploymentResults{client: v.Client, data: ret}, nil
 }

@@ -91,9 +91,9 @@ func AppHistory(ctx *Context, opts struct {
 			"STATUS", "CLUSTER", "VERSION", "DEPLOYED BY", "WHEN", "GIT SHA", "BRANCH", "COMMIT MESSAGE")
 		ctx.Printf("%s\n", strings.Repeat("-", 160))
 	} else {
-		ctx.Printf("%-12s %-25s %-25s %-15s\n",
-			"STATUS", "VERSION", "DEPLOYED BY", "WHEN")
-		ctx.Printf("%s\n", strings.Repeat("-", 80))
+		ctx.Printf("%-12s %-25s %-25s %-15s %s\n",
+			"STATUS", "VERSION", "DEPLOYED BY", "WHEN", "ID")
+		ctx.Printf("%s\n", strings.Repeat("-", 110))
 	}
 
 	// Status colors
@@ -102,6 +102,7 @@ func AppHistory(ctx *Context, opts struct {
 	failedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("9"))      // Red
 	rolledBackStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("11")) // Yellow
 	inProgressStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("14")) // Cyan
+	cancelledStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("11"))  // Yellow
 
 	for _, dep := range deployments {
 		// Format status with color and icons
@@ -118,6 +119,8 @@ func AppHistory(ctx *Context, opts struct {
 			styledStatus = rolledBackStyle.Render("↩ " + status)
 		case "in_progress":
 			styledStatus = inProgressStyle.Render("⟳ " + status)
+		case "cancelled":
+			styledStatus = cancelledStyle.Render("⊘ " + status)
 		default:
 			styledStatus = status
 		}
@@ -205,11 +208,13 @@ func AppHistory(ctx *Context, opts struct {
 				gitBranch,
 				gitMessage)
 		} else {
-			ctx.Printf("%-12s %-25s %-25s %-15s\n",
+			deploymentId := strings.TrimPrefix(dep.Id(), "deployment/")
+			ctx.Printf("%-12s %-25s %-25s %-15s %s\n",
 				styledStatus,
 				version,
 				user,
-				timeStr)
+				timeStr,
+				deploymentId)
 		}
 
 		// Show phase for in-progress deployments
@@ -218,8 +223,8 @@ func AppHistory(ctx *Context, opts struct {
 			ctx.Printf("             %s\n", phaseStyle.Render("Phase: "+dep.Phase()))
 		}
 
-		// Show error message if failed
-		if status == "failed" && dep.HasErrorMessage() && dep.ErrorMessage() != "" {
+		// Show error message if failed or cancelled
+		if (status == "failed" || status == "cancelled") && dep.HasErrorMessage() && dep.ErrorMessage() != "" {
 			errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Italic(true)
 			ctx.Printf("             %s\n", errorStyle.Render("Error: "+dep.ErrorMessage()))
 		}
