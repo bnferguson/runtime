@@ -34,9 +34,10 @@ func ServeTLSSelfSigned(ctx context.Context, log *slog.Logger, h http.Handler) e
 	}
 
 	server := &http.Server{
-		Addr:      ":443",
-		Handler:   h,
-		TLSConfig: tlsConfig,
+		Addr:              ":443",
+		Handler:           h,
+		TLSConfig:         tlsConfig,
+		ReadHeaderTimeout: 5 * time.Second,
 	}
 
 	go func() {
@@ -107,7 +108,7 @@ func generateSelfSignedCert() (tls.Certificate, error) {
 		},
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().Add(365 * 24 * time.Hour), // valid for 1 year
-		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		KeyUsage:              x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
 		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1"), net.IPv6loopback},

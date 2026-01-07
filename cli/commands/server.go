@@ -793,6 +793,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 			// Use self-signed certificate (for development/testing)
 			if err := autotls.ServeTLSSelfSigned(sub, ctx.Log, hs); err != nil {
 				ctx.Log.Error("failed to enable self-signed TLS", "error", err)
+				return err
 			}
 		} else {
 			email := cfg.TLS.GetAcmeEmail()
