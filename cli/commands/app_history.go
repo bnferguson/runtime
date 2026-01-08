@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"miren.dev/runtime/api/deployment/deployment_v1alpha"
+	"miren.dev/runtime/pkg/ui"
 )
 
 func AppHistory(ctx *Context, opts struct {
@@ -85,24 +86,31 @@ func AppHistory(ctx *Context, opts struct {
 	}
 	ctx.Printf("\n")
 
-	// Table header
-	if opts.Detailed {
-		ctx.Printf("%-12s %-8s %-25s %-20s %-15s %-17s %-15s %-33s\n",
-			"STATUS", "CLUSTER", "VERSION", "DEPLOYED BY", "WHEN", "GIT SHA", "BRANCH", "COMMIT MESSAGE")
-		ctx.Printf("%s\n", strings.Repeat("-", 160))
-	} else {
-		ctx.Printf("%-12s %-25s %-25s %-15s %s\n",
-			"STATUS", "VERSION", "DEPLOYED BY", "WHEN", "ID")
-		ctx.Printf("%s\n", strings.Repeat("-", 110))
-	}
-
-	// Status colors
+	// Status styles
 	activeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("10"))     // Green
 	succeededStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("12"))  // Blue
 	failedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("9"))      // Red
 	rolledBackStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("11")) // Yellow
 	inProgressStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("14")) // Cyan
 	cancelledStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("11"))  // Yellow
+
+	// Build headers and rows based on detailed mode
+	var headers []string
+	var rows []ui.Row
+
+	if opts.Detailed {
+		headers = []string{"STATUS", "CLUSTER", "VERSION", "DEPLOYED BY", "WHEN", "GIT SHA", "BRANCH", "COMMIT MESSAGE"}
+	} else {
+		headers = []string{"STATUS", "VERSION", "DEPLOYED BY", "WHEN", "ID"}
+	}
+
+	// Track rows that need extra info displayed after them
+	type extraInfo struct {
+		rowIndex int
+		info     string
+		style    lipgloss.Style
+	}
+	var extras []extraInfo
 
 	for _, dep := range deployments {
 		// Format status with color and icons
@@ -159,9 +167,6 @@ func AppHistory(ctx *Context, opts struct {
 		} else {
 			user = "-"
 		}
-		if len(user) > 20 {
-			user = user[:17] + "..."
-		}
 
 		// Format git info
 		gitSha := "-"
@@ -182,54 +187,81 @@ func AppHistory(ctx *Context, opts struct {
 			}
 			if git.HasBranch() && git.Branch() != "" {
 				gitBranch = git.Branch()
-				if len(gitBranch) > 15 {
-					gitBranch = gitBranch[:12] + "..."
-				}
 			}
 			if git.HasCommitMessage() && git.CommitMessage() != "" {
 				gitMessage = strings.TrimSpace(git.CommitMessage())
 				if idx := strings.Index(gitMessage, "\n"); idx > 0 {
 					gitMessage = gitMessage[:idx]
 				}
-				if len(gitMessage) > 40 {
-					gitMessage = gitMessage[:37] + "..."
-				}
 			}
 		}
 
+		var row ui.Row
 		if opts.Detailed {
-			ctx.Printf("%-12s %-8s %-25s %-20s %-15s %-17s %-15s %-33s\n",
-				styledStatus,
-				cluster,
-				version,
-				user,
-				timeStr,
-				gitSha,
-				gitBranch,
-				gitMessage)
+			row = ui.Row{styledStatus, cluster, version, user, timeStr, gitSha, gitBranch, gitMessage}
 		} else {
-			deploymentId := strings.TrimPrefix(dep.Id(), "deployment/")
-			ctx.Printf("%-12s %-25s %-25s %-15s %s\n",
-				styledStatus,
-				version,
-				user,
-				timeStr,
-				deploymentId)
+			deploymentId := ui.CleanEntityID(dep.Id())
+			row = ui.Row{styledStatus, version, user, timeStr, deploymentId}
 		}
+		rows = append(rows, row)
 
-		// Show phase for in-progress deployments
+		// Track extra info for in-progress and failed/cancelled deployments
+		rowIdx := len(rows) - 1
 		if status == "in_progress" && dep.HasPhase() && dep.Phase() != "" {
 			phaseStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Italic(true)
-			ctx.Printf("             %s\n", phaseStyle.Render("Phase: "+dep.Phase()))
+			extras = append(extras, extraInfo{
+				rowIndex: rowIdx,
+				info:     "Phase: " + dep.Phase(),
+				style:    phaseStyle,
+			})
 		}
-
-		// Show error message if failed or cancelled
 		if (status == "failed" || status == "cancelled") && dep.HasErrorMessage() && dep.ErrorMessage() != "" {
 			errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Italic(true)
-			ctx.Printf("             %s\n", errorStyle.Render("Error: "+dep.ErrorMessage()))
+			extras = append(extras, extraInfo{
+				rowIndex: rowIdx,
+				info:     "Error: " + dep.ErrorMessage(),
+				style:    errorStyle,
+			})
 		}
 	}
 
+	// Configure column hints
+	var builder *ui.ColumnBuilder
+	if opts.Detailed {
+		// In detailed mode, protect STATUS from truncation, allow others to scale
+		builder = ui.Columns().
+			NoTruncate(0).  // STATUS
+			MaxWidth(7, 40) // COMMIT MESSAGE
+	} else {
+		// In normal mode, protect STATUS, let ID expand
+		builder = ui.Columns().
+			NoTruncate(0, 4) // STATUS and ID
+	}
+
+	columns := ui.AutoSizeColumns(headers, rows, builder)
+	table := ui.NewTable(
+		ui.WithColumns(columns),
+		ui.WithRows(rows),
+	)
+
+	// Render table
+	tableStr := table.Render()
+	lines := strings.Split(tableStr, "\n")
+
+	// Insert extra info lines after their corresponding rows
+	// Process in reverse order so indices remain valid
+	for i := len(extras) - 1; i >= 0; i-- {
+		extra := extras[i]
+		// +1 for header row
+		insertIdx := extra.rowIndex + 2
+		if insertIdx <= len(lines) {
+			extraLine := "  " + extra.style.Render(extra.info)
+			// Insert after the row
+			lines = append(lines[:insertIdx], append([]string{extraLine}, lines[insertIdx:]...)...)
+		}
+	}
+
+	ctx.Printf("%s\n", strings.Join(lines, "\n"))
 	return nil
 }
 
