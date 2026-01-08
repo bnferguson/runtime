@@ -103,9 +103,9 @@ func AppHistory(ctx *Context, opts struct {
 
 	if opts.Detailed {
 		if hasIdentity {
-			headers = []string{"STATUS", "CLUSTER", "VERSION", "DEPLOYED BY", "WHEN", "GIT SHA", "BRANCH", "COMMIT MESSAGE"}
+			headers = []string{"STATUS", "VERSION", "DEPLOYED BY", "WHEN", "GIT SHA", "BRANCH", "COMMIT MESSAGE"}
 		} else {
-			headers = []string{"STATUS", "CLUSTER", "VERSION", "WHEN", "GIT SHA", "BRANCH", "COMMIT MESSAGE"}
+			headers = []string{"STATUS", "VERSION", "WHEN", "GIT SHA", "BRANCH", "COMMIT MESSAGE"}
 		}
 	} else {
 		if hasIdentity {
@@ -141,12 +141,6 @@ func AppHistory(ctx *Context, opts struct {
 		if dep.HasDeployedAt() && dep.DeployedAt() != nil {
 			deployedAt := time.Unix(dep.DeployedAt().Seconds(), 0)
 			timeStr = formatRelativeTime(deployedAt)
-		}
-
-		// Format cluster
-		cluster := dep.ClusterId()
-		if cluster == "" {
-			cluster = "default"
 		}
 
 		// Format version (handle special patterns)
@@ -210,9 +204,9 @@ func AppHistory(ctx *Context, opts struct {
 		var row ui.Row
 		if opts.Detailed {
 			if hasIdentity {
-				row = ui.Row{styledStatus, cluster, version, user, timeStr, gitSha, gitBranch, gitMessage}
+				row = ui.Row{styledStatus, version, user, timeStr, gitSha, gitBranch, gitMessage}
 			} else {
-				row = ui.Row{styledStatus, cluster, version, timeStr, gitSha, gitBranch, gitMessage}
+				row = ui.Row{styledStatus, version, timeStr, gitSha, gitBranch, gitMessage}
 			}
 		} else {
 			deploymentId := ui.CleanEntityID(dep.Id())
@@ -229,15 +223,15 @@ func AppHistory(ctx *Context, opts struct {
 	var builder *ui.ColumnBuilder
 	if opts.Detailed {
 		if hasIdentity {
-			// With identity: STATUS(0), CLUSTER(1), VERSION(2), DEPLOYED BY(3), WHEN(4), GIT SHA(5), BRANCH(6), COMMIT MESSAGE(7)
-			builder = ui.Columns().
-				NoTruncate(0).  // STATUS
-				MaxWidth(7, 40) // COMMIT MESSAGE
-		} else {
-			// Without identity: STATUS(0), CLUSTER(1), VERSION(2), WHEN(3), GIT SHA(4), BRANCH(5), COMMIT MESSAGE(6)
+			// With identity: STATUS(0), VERSION(1), DEPLOYED BY(2), WHEN(3), GIT SHA(4), BRANCH(5), COMMIT MESSAGE(6)
 			builder = ui.Columns().
 				NoTruncate(0).  // STATUS
 				MaxWidth(6, 40) // COMMIT MESSAGE
+		} else {
+			// Without identity: STATUS(0), VERSION(1), WHEN(2), GIT SHA(3), BRANCH(4), COMMIT MESSAGE(5)
+			builder = ui.Columns().
+				NoTruncate(0).  // STATUS
+				MaxWidth(5, 40) // COMMIT MESSAGE
 		}
 	} else {
 		if hasIdentity {
