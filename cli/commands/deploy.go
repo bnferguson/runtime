@@ -240,45 +240,18 @@ func Deploy(ctx *Context, opts struct {
 	buildCtx, cancelBuild := context.WithCancel(ctx.Context)
 	defer cancelBuild()
 
-	// Track if we were cancelled externally (vs user pressing CTRL-C)
-	var externallyCancelled bool
-	var cancelMu sync.Mutex
-
-	// Start goroutine to poll for external cancellation
+	// Start goroutine to poll for external cancellation using the cancellationPoller
+	statusGetter := newDepClientStatusGetter(depClient, ctx.Log)
+	poller := newCancellationPoller(deploymentId, statusGetter, 2*time.Second)
 	go func() {
-		ticker := time.NewTicker(2 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-buildCtx.Done():
-				return
-			case <-ticker.C:
-				// Use a fresh context for polling to avoid issues with cancelled parent
-				pollCtx, pollCancel := context.WithTimeout(context.Background(), 5*time.Second)
-				result, err := depClient.GetDeploymentById(pollCtx, deploymentId)
-				pollCancel()
-				if err != nil {
-					ctx.Log.Debug("Failed to poll deployment status", "error", err)
-					continue
-				}
-				if result.HasDeployment() && result.Deployment().Status() == "cancelled" {
-					cancelMu.Lock()
-					externallyCancelled = true
-					cancelMu.Unlock()
-					ctx.Log.Info("Deployment cancelled externally, stopping build")
-					cancelBuild()
-					return
-				}
-			}
-		}
+		poller.Start(buildCtx, func() {
+			ctx.Log.Info("Deployment cancelled externally, stopping build")
+			cancelBuild()
+		})
 	}()
 
 	// Helper to check if we were externally cancelled
-	wasExternallyCancelled := func() bool {
-		cancelMu.Lock()
-		defer cancelMu.Unlock()
-		return externallyCancelled
-	}
+	wasExternallyCancelled := poller.WasExternallyCancelled
 
 	// Parse environment variables to pass to build server
 	var envVars []*build_v1alpha.EnvironmentVariable
@@ -550,6 +523,9 @@ func Deploy(ctx *Context, opts struct {
 				}
 				if deployCtx.Err() != nil {
 					return deployCtx.Err()
+				}
+				if buildCtx.Err() != nil {
+					return buildCtx.Err()
 				}
 				return context.Canceled
 			}
