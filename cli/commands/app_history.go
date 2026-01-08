@@ -13,7 +13,7 @@ import (
 func AppHistory(ctx *Context, opts struct {
 	AppCentric
 
-	Limit      int32  `short:"n" long:"limit" description:"Maximum number of deployments to show" default:"20"`
+	Limit      int    `short:"n" long:"limit" description:"Maximum number of deployments to show" default:"10"`
 	Status     string `short:"s" long:"status" description:"Filter by status (active, failed, rolled_back)"`
 	All        bool   `long:"all" description:"Show deployments from all clusters"`
 	ShowFailed bool   `long:"show-failed" description:"Include failed deployments (shown by default)"`
@@ -34,7 +34,7 @@ func AppHistory(ctx *Context, opts struct {
 	}
 
 	// List deployments
-	result, err := depClient.ListDeployments(ctx, opts.App, clusterId, opts.Status, opts.Limit)
+	result, err := depClient.ListDeployments(ctx, opts.App, clusterId, opts.Status, int32(opts.Limit))
 	if err != nil {
 		return fmt.Errorf("failed to list deployments: %w", err)
 	}
