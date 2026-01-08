@@ -101,16 +101,8 @@ func AppHistory(ctx *Context, opts struct {
 	if opts.Detailed {
 		headers = []string{"STATUS", "CLUSTER", "VERSION", "DEPLOYED BY", "WHEN", "GIT SHA", "BRANCH", "COMMIT MESSAGE"}
 	} else {
-		headers = []string{"STATUS", "VERSION", "DEPLOYED BY", "WHEN", "ID"}
+		headers = []string{"STATUS", "VERSION", "DEPLOYED BY", "WHEN", "ID", "ERROR"}
 	}
-
-	// Track rows that need extra info displayed after them
-	type extraInfo struct {
-		rowIndex int
-		info     string
-		style    lipgloss.Style
-	}
-	var extras []extraInfo
 
 	for _, dep := range deployments {
 		// Format status with color and icons
@@ -196,33 +188,22 @@ func AppHistory(ctx *Context, opts struct {
 			}
 		}
 
+		// Format error/phase info for ERROR column
+		errorInfo := "-"
+		if status == "in_progress" && dep.HasPhase() && dep.Phase() != "" {
+			errorInfo = inProgressStyle.Render(dep.Phase())
+		} else if (status == "failed" || status == "cancelled") && dep.HasErrorMessage() && dep.ErrorMessage() != "" {
+			errorInfo = failedStyle.Render(dep.ErrorMessage())
+		}
+
 		var row ui.Row
 		if opts.Detailed {
 			row = ui.Row{styledStatus, cluster, version, user, timeStr, gitSha, gitBranch, gitMessage}
 		} else {
 			deploymentId := ui.CleanEntityID(dep.Id())
-			row = ui.Row{styledStatus, version, user, timeStr, deploymentId}
+			row = ui.Row{styledStatus, version, user, timeStr, deploymentId, errorInfo}
 		}
 		rows = append(rows, row)
-
-		// Track extra info for in-progress and failed/cancelled deployments
-		rowIdx := len(rows) - 1
-		if status == "in_progress" && dep.HasPhase() && dep.Phase() != "" {
-			phaseStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Italic(true)
-			extras = append(extras, extraInfo{
-				rowIndex: rowIdx,
-				info:     "Phase: " + dep.Phase(),
-				style:    phaseStyle,
-			})
-		}
-		if (status == "failed" || status == "cancelled") && dep.HasErrorMessage() && dep.ErrorMessage() != "" {
-			errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Italic(true)
-			extras = append(extras, extraInfo{
-				rowIndex: rowIdx,
-				info:     "Error: " + dep.ErrorMessage(),
-				style:    errorStyle,
-			})
-		}
 	}
 
 	// Configure column hints
@@ -233,7 +214,7 @@ func AppHistory(ctx *Context, opts struct {
 			NoTruncate(0).  // STATUS
 			MaxWidth(7, 40) // COMMIT MESSAGE
 	} else {
-		// In normal mode, protect STATUS, let ID expand
+		// In normal mode, protect STATUS and ID, allow ERROR to scale
 		builder = ui.Columns().
 			NoTruncate(0, 4) // STATUS and ID
 	}
@@ -244,24 +225,7 @@ func AppHistory(ctx *Context, opts struct {
 		ui.WithRows(rows),
 	)
 
-	// Render table
-	tableStr := table.Render()
-	lines := strings.Split(tableStr, "\n")
-
-	// Insert extra info lines after their corresponding rows
-	// Process in reverse order so indices remain valid
-	for i := len(extras) - 1; i >= 0; i-- {
-		extra := extras[i]
-		// +1 for header row
-		insertIdx := extra.rowIndex + 2
-		if insertIdx <= len(lines) {
-			extraLine := "  " + extra.style.Render(extra.info)
-			// Insert after the row
-			lines = append(lines[:insertIdx], append([]string{extraLine}, lines[insertIdx:]...)...)
-		}
-	}
-
-	ctx.Printf("%s\n", strings.Join(lines, "\n"))
+	ctx.Printf("%s\n", table.Render())
 	return nil
 }
 
