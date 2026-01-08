@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -77,6 +78,26 @@ func AppHistory(ctx *Context, opts struct {
 			return nil
 		}
 	}
+
+	// Sort deployments: active first, then by time (most recent first)
+	sort.Slice(deployments, func(i, j int) bool {
+		if deployments[i].Status() == "active" && deployments[j].Status() != "active" {
+			return true
+		}
+		if deployments[i].Status() != "active" && deployments[j].Status() == "active" {
+			return false
+		}
+		// Both same priority, sort by time (most recent first)
+		iTime := int64(0)
+		jTime := int64(0)
+		if deployments[i].HasDeployedAt() && deployments[i].DeployedAt() != nil {
+			iTime = deployments[i].DeployedAt().Seconds()
+		}
+		if deployments[j].HasDeployedAt() && deployments[j].DeployedAt() != nil {
+			jTime = deployments[j].DeployedAt().Seconds()
+		}
+		return iTime > jTime
+	})
 
 	// Header
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
