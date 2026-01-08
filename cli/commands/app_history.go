@@ -11,6 +11,21 @@ import (
 	"miren.dev/runtime/pkg/ui"
 )
 
+// Deployment status styles
+var (
+	statusStyles = map[string]struct {
+		icon  string
+		style lipgloss.Style
+	}{
+		"active":      {"✓", lipgloss.NewStyle().Foreground(lipgloss.Color("10"))}, // Green
+		"succeeded":   {"✓", lipgloss.NewStyle().Foreground(lipgloss.Color("12"))}, // Blue
+		"failed":      {"✗", lipgloss.NewStyle().Foreground(lipgloss.Color("9"))},  // Red
+		"rolled_back": {"↩", lipgloss.NewStyle().Foreground(lipgloss.Color("11"))}, // Yellow
+		"in_progress": {"⟳", lipgloss.NewStyle().Foreground(lipgloss.Color("14"))}, // Cyan
+		"cancelled":   {"⊘", lipgloss.NewStyle().Foreground(lipgloss.Color("11"))}, // Yellow
+	}
+)
+
 func AppHistory(ctx *Context, opts struct {
 	AppCentric
 
@@ -21,75 +36,103 @@ func AppHistory(ctx *Context, opts struct {
 	HideFailed bool   `long:"hide-failed" description:"Hide failed deployments"`
 	Detailed   bool   `long:"detailed" description:"Show all columns including git information"`
 }) error {
-	// Connect to deployment service
 	depCl, err := ctx.RPCClient("dev.miren.runtime/deployment")
 	if err != nil {
 		return fmt.Errorf("failed to connect to deployment service: %w", err)
 	}
 	depClient := deployment_v1alpha.NewDeploymentClient(depCl)
 
-	// Get cluster filter
 	clusterId := ""
 	if !opts.All {
 		clusterId = ctx.ClusterName
 	}
 
-	// List deployments
 	result, err := depClient.ListDeployments(ctx, opts.App, clusterId, opts.Status, int32(opts.Limit))
 	if err != nil {
 		return fmt.Errorf("failed to list deployments: %w", err)
 	}
 
-	if !result.HasDeployments() || len(result.Deployments()) == 0 {
-		ctx.Printf("No deployments found for app '%s'", opts.App)
-		if !opts.All {
-			ctx.Printf(" on cluster '%s'", ctx.ClusterName)
-		}
-		if opts.Status != "" {
-			ctx.Printf(" with status '%s'", opts.Status)
-		}
-		ctx.Printf("\n")
-		return nil
-	}
-
-	// Display deployments
 	deployments := result.Deployments()
+	if len(deployments) == 0 {
+		return printNoDeploymentsMessage(ctx, opts.App, opts.All, opts.Status, false)
+	}
 
 	// Filter out failed deployments if requested
 	if opts.HideFailed {
-		var filtered []*deployment_v1alpha.DeploymentInfo
-		for _, dep := range deployments {
-			if dep.Status() != "failed" {
-				filtered = append(filtered, dep)
-			}
-		}
-		deployments = filtered
-
-		// Check if all deployments were filtered out
+		deployments = filterDeployments(deployments, func(d *deployment_v1alpha.DeploymentInfo) bool {
+			return d.Status() != "failed"
+		})
 		if len(deployments) == 0 {
-			ctx.Printf("No deployments found for app '%s'", opts.App)
-			if !opts.All {
-				ctx.Printf(" on cluster '%s'", ctx.ClusterName)
-			}
-			if opts.Status != "" {
-				ctx.Printf(" with status '%s'", opts.Status)
-			}
-			ctx.Printf(" (failed deployments hidden)\n")
-			return nil
+			return printNoDeploymentsMessage(ctx, opts.App, opts.All, opts.Status, true)
 		}
 	}
 
-	// Sort deployments: active first, then by time (most recent first)
+	// Sort: active first, then by time (most recent first)
+	sortDeployments(deployments)
+
+	// Print header
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
+	ctx.Printf("%s\n", headerStyle.Render(fmt.Sprintf("Deployment History for %s", opts.App)))
+	if !opts.All {
+		ctx.Printf("Cluster: %s\n", ctx.ClusterName)
+	}
+	ctx.Printf("\n")
+
+	// Check if cluster has identity configured
+	hasIdentity := ctx.ClusterConfig != nil && (ctx.ClusterConfig.Identity != "" || ctx.ClusterConfig.CloudAuth)
+
+	// Build and render table
+	headers, rows, idColIndex := buildDeploymentTable(deployments, opts.Detailed, hasIdentity)
+	builder := ui.Columns().NoTruncate(0) // Always protect STATUS
+	if idColIndex >= 0 {
+		builder = builder.NoTruncate(idColIndex)
+	}
+	if opts.Detailed {
+		// Limit commit message width
+		builder = builder.MaxWidth(len(headers)-1, 40)
+	}
+
+	columns := ui.AutoSizeColumns(headers, rows, builder)
+	table := ui.NewTable(ui.WithColumns(columns), ui.WithRows(rows))
+	ctx.Printf("%s\n", table.Render())
+	return nil
+}
+
+func printNoDeploymentsMessage(ctx *Context, app string, all bool, status string, hiddenFailed bool) error {
+	ctx.Printf("No deployments found for app '%s'", app)
+	if !all {
+		ctx.Printf(" on cluster '%s'", ctx.ClusterName)
+	}
+	if status != "" {
+		ctx.Printf(" with status '%s'", status)
+	}
+	if hiddenFailed {
+		ctx.Printf(" (failed deployments hidden)")
+	}
+	ctx.Printf("\n")
+	return nil
+}
+
+func filterDeployments(deps []*deployment_v1alpha.DeploymentInfo, keep func(*deployment_v1alpha.DeploymentInfo) bool) []*deployment_v1alpha.DeploymentInfo {
+	var filtered []*deployment_v1alpha.DeploymentInfo
+	for _, d := range deps {
+		if keep(d) {
+			filtered = append(filtered, d)
+		}
+	}
+	return filtered
+}
+
+func sortDeployments(deployments []*deployment_v1alpha.DeploymentInfo) {
 	sort.Slice(deployments, func(i, j int) bool {
-		if deployments[i].Status() == "active" && deployments[j].Status() != "active" {
-			return true
+		// Active deployments come first
+		iActive := deployments[i].Status() == "active"
+		jActive := deployments[j].Status() == "active"
+		if iActive != jActive {
+			return iActive
 		}
-		if deployments[i].Status() != "active" && deployments[j].Status() == "active" {
-			return false
-		}
-		// Both same priority, sort by time (most recent first)
-		iTime := int64(0)
-		jTime := int64(0)
+		// Then sort by time (most recent first)
+		var iTime, jTime int64
 		if deployments[i].HasDeployedAt() && deployments[i].DeployedAt() != nil {
 			iTime = deployments[i].DeployedAt().Seconds()
 		}
@@ -98,205 +141,150 @@ func AppHistory(ctx *Context, opts struct {
 		}
 		return iTime > jTime
 	})
+}
 
-	// Header
-	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
-	ctx.Printf("%s\n", headerStyle.Render(fmt.Sprintf("Deployment History for %s", opts.App)))
-	if !opts.All {
-		ctx.Printf("Cluster: %s\n", ctx.ClusterName)
-	}
-	ctx.Printf("\n")
-
-	// Status styles
-	activeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("10"))     // Green
-	succeededStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("12"))  // Blue
-	failedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("9"))      // Red
-	rolledBackStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("11")) // Yellow
-	inProgressStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("14")) // Cyan
-	cancelledStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("11"))  // Yellow
-
-	// Check if cluster has identity configured
-	hasIdentity := ctx.ClusterConfig != nil && (ctx.ClusterConfig.Identity != "" || ctx.ClusterConfig.CloudAuth)
-
-	// Build headers and rows based on detailed mode
+func buildDeploymentTable(deployments []*deployment_v1alpha.DeploymentInfo, detailed, hasIdentity bool) ([]string, []ui.Row, int) {
 	var headers []string
 	var rows []ui.Row
+	idColIndex := -1
 
-	if opts.Detailed {
+	// Build headers based on mode
+	if detailed {
+		headers = []string{"STATUS", "VERSION"}
 		if hasIdentity {
-			headers = []string{"STATUS", "VERSION", "DEPLOYED BY", "WHEN", "GIT SHA", "BRANCH", "COMMIT MESSAGE"}
-		} else {
-			headers = []string{"STATUS", "VERSION", "WHEN", "GIT SHA", "BRANCH", "COMMIT MESSAGE"}
+			headers = append(headers, "DEPLOYED BY")
 		}
+		headers = append(headers, "WHEN", "GIT SHA", "BRANCH", "COMMIT MESSAGE")
 	} else {
+		headers = []string{"STATUS", "VERSION"}
 		if hasIdentity {
-			headers = []string{"STATUS", "VERSION", "DEPLOYED BY", "WHEN", "ID", "ERROR"}
-		} else {
-			headers = []string{"STATUS", "VERSION", "WHEN", "ID", "ERROR"}
+			headers = append(headers, "DEPLOYED BY")
+		}
+		headers = append(headers, "WHEN", "ID", "ERROR")
+		// Find ID column index for NoTruncate
+		for i, h := range headers {
+			if h == "ID" {
+				idColIndex = i
+				break
+			}
 		}
 	}
 
+	// Build rows
 	for _, dep := range deployments {
-		// Format status with color and icons
-		status := dep.Status()
-		var styledStatus string
-		switch status {
-		case "active":
-			styledStatus = activeStyle.Render("✓ " + status)
-		case "succeeded":
-			styledStatus = succeededStyle.Render("✓ " + status)
-		case "failed":
-			styledStatus = failedStyle.Render("✗ " + status)
-		case "rolled_back":
-			styledStatus = rolledBackStyle.Render("↩ " + status)
-		case "in_progress":
-			styledStatus = inProgressStyle.Render("⟳ " + status)
-		case "cancelled":
-			styledStatus = cancelledStyle.Render("⊘ " + status)
-		default:
-			styledStatus = status
-		}
-
-		// Format timestamp
-		timeStr := "unknown"
-		if dep.HasDeployedAt() && dep.DeployedAt() != nil {
-			deployedAt := time.Unix(dep.DeployedAt().Seconds(), 0)
-			timeStr = formatRelativeTime(deployedAt)
-		}
-
-		// Format version (handle special patterns)
-		version := dep.AppVersionId()
-		if strings.HasPrefix(version, "pending-") || strings.HasPrefix(version, "failed-") {
-			// No version was created - show appropriate message based on status
-			switch status {
-			case "in_progress":
-				version = "pending (building...)"
-			default:
-				version = "-"
-			}
-		} else if len(version) > 25 {
-			version = version[:22] + "..."
-		}
-
-		// Format user (prefer name, fallback to email, then user ID)
-		user := ""
-		if dep.HasDeployedByUserName() && dep.DeployedByUserName() != "" {
-			user = dep.DeployedByUserName()
-		} else if dep.DeployedByUserEmail() != "" && dep.DeployedByUserEmail() != "unknown@example.com" && dep.DeployedByUserEmail() != "user@example.com" {
-			user = dep.DeployedByUserEmail()
-		} else if dep.DeployedByUserId() != "" {
-			user = dep.DeployedByUserId()
-		} else {
-			user = "-"
-		}
-
-		// Format git info
-		gitSha := "-"
-		gitBranch := "-"
-		gitMessage := "-"
-
-		if dep.HasGitInfo() && dep.GitInfo() != nil {
-			git := dep.GitInfo()
-			if git.HasSha() && git.Sha() != "" {
-				gitSha = git.Sha()
-				if len(gitSha) > 10 {
-					gitSha = gitSha[:10]
-				}
-				// Append -dirty if working tree was dirty
-				if git.HasIsDirty() && git.IsDirty() {
-					gitSha += "-dirty"
-				}
-			}
-			if git.HasBranch() && git.Branch() != "" {
-				gitBranch = git.Branch()
-			}
-			if git.HasCommitMessage() && git.CommitMessage() != "" {
-				gitMessage = strings.TrimSpace(git.CommitMessage())
-				if idx := strings.Index(gitMessage, "\n"); idx > 0 {
-					gitMessage = gitMessage[:idx]
-				}
-			}
-		}
-
-		// Format error/phase info for ERROR column
-		errorInfo := "-"
-		if status == "in_progress" && dep.HasPhase() && dep.Phase() != "" {
-			errorInfo = inProgressStyle.Render(dep.Phase())
-		} else if (status == "failed" || status == "cancelled") && dep.HasErrorMessage() && dep.ErrorMessage() != "" {
-			errorInfo = failedStyle.Render(dep.ErrorMessage())
-		}
-
-		var row ui.Row
-		if opts.Detailed {
-			if hasIdentity {
-				row = ui.Row{styledStatus, version, user, timeStr, gitSha, gitBranch, gitMessage}
-			} else {
-				row = ui.Row{styledStatus, version, timeStr, gitSha, gitBranch, gitMessage}
-			}
-		} else {
-			deploymentId := ui.CleanEntityID(dep.Id())
-			if hasIdentity {
-				row = ui.Row{styledStatus, version, user, timeStr, deploymentId, errorInfo}
-			} else {
-				row = ui.Row{styledStatus, version, timeStr, deploymentId, errorInfo}
-			}
-		}
+		row := buildDeploymentRow(dep, detailed, hasIdentity)
 		rows = append(rows, row)
 	}
 
-	// Configure column hints (indices depend on whether identity column is shown)
-	var builder *ui.ColumnBuilder
-	if opts.Detailed {
-		if hasIdentity {
-			// With identity: STATUS(0), VERSION(1), DEPLOYED BY(2), WHEN(3), GIT SHA(4), BRANCH(5), COMMIT MESSAGE(6)
-			builder = ui.Columns().
-				NoTruncate(0).  // STATUS
-				MaxWidth(6, 40) // COMMIT MESSAGE
-		} else {
-			// Without identity: STATUS(0), VERSION(1), WHEN(2), GIT SHA(3), BRANCH(4), COMMIT MESSAGE(5)
-			builder = ui.Columns().
-				NoTruncate(0).  // STATUS
-				MaxWidth(5, 40) // COMMIT MESSAGE
-		}
-	} else {
-		if hasIdentity {
-			// With identity: STATUS(0), VERSION(1), DEPLOYED BY(2), WHEN(3), ID(4), ERROR(5)
-			builder = ui.Columns().
-				NoTruncate(0, 4) // STATUS and ID
-		} else {
-			// Without identity: STATUS(0), VERSION(1), WHEN(2), ID(3), ERROR(4)
-			builder = ui.Columns().
-				NoTruncate(0, 3) // STATUS and ID
-		}
-	}
-
-	columns := ui.AutoSizeColumns(headers, rows, builder)
-	table := ui.NewTable(
-		ui.WithColumns(columns),
-		ui.WithRows(rows),
-	)
-
-	ctx.Printf("%s\n", table.Render())
-	return nil
+	return headers, rows, idColIndex
 }
 
-// formatRelativeTime formats a time as a relative string (e.g. "2 hours ago")
+func buildDeploymentRow(dep *deployment_v1alpha.DeploymentInfo, detailed, hasIdentity bool) ui.Row {
+	status := dep.Status()
+
+	row := ui.Row{
+		formatDeploymentStatus(status),
+		formatVersion(dep.AppVersionId(), status),
+	}
+
+	if hasIdentity {
+		row = append(row, formatUser(dep))
+	}
+
+	row = append(row, formatDeploymentTime(dep))
+
+	if detailed {
+		gitSha, gitBranch, gitMessage := formatGitInfo(dep)
+		row = append(row, gitSha, gitBranch, gitMessage)
+	} else {
+		row = append(row, ui.CleanEntityID(dep.Id()), formatErrorInfo(dep, status))
+	}
+
+	return row
+}
+
+func formatDeploymentStatus(status string) string {
+	if s, ok := statusStyles[status]; ok {
+		return s.style.Render(s.icon + " " + status)
+	}
+	return status
+}
+
+func formatVersion(version, status string) string {
+	if strings.HasPrefix(version, "pending-") || strings.HasPrefix(version, "failed-") {
+		if status == "in_progress" {
+			return "pending (building...)"
+		}
+		return "-"
+	}
+	return version
+}
+
+func formatDeploymentTime(dep *deployment_v1alpha.DeploymentInfo) string {
+	if dep.HasDeployedAt() && dep.DeployedAt() != nil {
+		return formatRelativeTime(time.Unix(dep.DeployedAt().Seconds(), 0))
+	}
+	return "unknown"
+}
+
+func formatUser(dep *deployment_v1alpha.DeploymentInfo) string {
+	if dep.HasDeployedByUserName() && dep.DeployedByUserName() != "" {
+		return dep.DeployedByUserName()
+	}
+	return "-"
+}
+
+func formatGitInfo(dep *deployment_v1alpha.DeploymentInfo) (sha, branch, message string) {
+	sha, branch, message = "-", "-", "-"
+
+	if !dep.HasGitInfo() || dep.GitInfo() == nil {
+		return
+	}
+
+	git := dep.GitInfo()
+	if git.HasSha() && git.Sha() != "" {
+		sha = git.Sha()
+		if len(sha) > 10 {
+			sha = sha[:10]
+		}
+		if git.HasIsDirty() && git.IsDirty() {
+			sha += "-dirty"
+		}
+	}
+	if git.HasBranch() && git.Branch() != "" {
+		branch = git.Branch()
+	}
+	if git.HasCommitMessage() && git.CommitMessage() != "" {
+		message = strings.TrimSpace(git.CommitMessage())
+		if idx := strings.Index(message, "\n"); idx > 0 {
+			message = message[:idx]
+		}
+	}
+	return
+}
+
+func formatErrorInfo(dep *deployment_v1alpha.DeploymentInfo, status string) string {
+	if status == "in_progress" && dep.HasPhase() && dep.Phase() != "" {
+		return statusStyles["in_progress"].style.Render(dep.Phase())
+	}
+	if (status == "failed" || status == "cancelled") && dep.HasErrorMessage() && dep.ErrorMessage() != "" {
+		return statusStyles["failed"].style.Render(dep.ErrorMessage())
+	}
+	return "-"
+}
+
 func formatRelativeTime(t time.Time) string {
-	now := time.Now()
-	diff := now.Sub(t)
+	diff := time.Since(t)
 
 	switch {
 	case diff < time.Minute:
 		return "just now"
 	case diff < time.Hour:
-		mins := int(diff.Minutes())
-		return fmt.Sprintf("%dm ago", mins)
+		return fmt.Sprintf("%dm ago", int(diff.Minutes()))
 	case diff < 24*time.Hour:
-		hours := int(diff.Hours())
-		return fmt.Sprintf("%dh ago", hours)
+		return fmt.Sprintf("%dh ago", int(diff.Hours()))
 	case diff < 7*24*time.Hour:
-		days := int(diff.Hours() / 24)
-		return fmt.Sprintf("%dd ago", days)
+		return fmt.Sprintf("%dd ago", int(diff.Hours()/24))
 	default:
 		return t.Format("Jan 2")
 	}
