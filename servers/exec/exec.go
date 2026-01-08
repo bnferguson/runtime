@@ -117,7 +117,22 @@ func (s *Server) Exec(ctx context.Context, req *exec_v1alpha.SandboxExecExec) er
 
 		s.Log.Debug("found version", "id", verId)
 
-		ver = &v
+		// Only use the app version config (entrypoint, console command) if the container
+		// is using the app's built image. Service containers with custom images
+		// (like postgres) should not have the app's entrypoint applied.
+		containerImage, err := firstContainer.Image(ctx)
+		if err == nil {
+			containerImageName := containerImage.Name()
+			if imageMatchesAppVersion(containerImageName, v.ImageUrl) {
+				ver = &v
+			} else {
+				s.Log.Debug("container image differs from app version, skipping entrypoint",
+					"container_image", containerImageName,
+					"app_image", v.ImageUrl)
+			}
+		} else {
+			s.Log.Debug("failed to get container image, skipping entrypoint", "error", err)
+		}
 	}
 
 	pspec, err := s.spec(args.Options(), spec, ver)
@@ -213,16 +228,23 @@ func (e *Server) spec(opts *exec_v1alpha.ShellOptions, spec *oci.Spec, ver *core
 		User: spec.Process.User,
 	}
 
-	ep := ver.Config.Entrypoint
+	var ep string
+	if ver != nil {
+		ep = ver.Config.Entrypoint
+	}
 
 	args := opts.Command()
 
 	if len(args) == 0 {
-		if con := e.command(ver, "console"); con != "" {
-			// CommandFor already prepends the entrypoint
-			args = []string{"/bin/sh", "-c", "exec " + con}
-		} else if ep != "" {
-			args = []string{"/bin/sh", "-c", "exec " + ep + " /bin/sh"}
+		if ver != nil {
+			if con := e.command(ver, "console"); con != "" {
+				// CommandFor already prepends the entrypoint
+				args = []string{"/bin/sh", "-c", "exec " + con}
+			} else if ep != "" {
+				args = []string{"/bin/sh", "-c", "exec " + ep + " /bin/sh"}
+			} else {
+				args = []string{"/bin/sh"}
+			}
 		} else {
 			args = []string{"/bin/sh"}
 		}
@@ -242,4 +264,21 @@ func (e *Server) spec(opts *exec_v1alpha.ShellOptions, spec *oci.Spec, ver *core
 	}
 
 	return proc, nil
+}
+
+// imageMatchesAppVersion checks if a container image matches the app version's image.
+// This is used to determine whether to apply the app's entrypoint when exec'ing
+// into a container. Service containers with custom images (like postgres) should
+// not have the app's entrypoint applied.
+func imageMatchesAppVersion(containerImage, appVersionImage string) bool {
+	// Exact match
+	if containerImage == appVersionImage {
+		return true
+	}
+	// Handle case where container image has registry prefix (e.g., docker.io/library/)
+	// but the app version doesn't
+	if strings.HasSuffix(containerImage, "/"+appVersionImage) {
+		return true
+	}
+	return false
 }

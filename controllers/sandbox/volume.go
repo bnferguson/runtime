@@ -153,9 +153,9 @@ func (c *SandboxController) configureMirenVolume(ctx context.Context, sb *comput
 		}
 	}
 
-	// Check if there's already a lease for this disk on this node
+	// Acquire a lease for this disk on this node (creates new or takes over existing)
 	nodeID := entity.Id("node/" + c.NodeId)
-	leaseID, err := c.findOrCreateDiskLease(ctx, diskID, nodeID, sb.ID, appID, volume.MountPath, readOnly)
+	leaseID, err := c.acquireDiskLease(ctx, diskID, nodeID, sb.ID, appID, volume.MountPath, readOnly)
 	if err != nil {
 		return "", fmt.Errorf("failed to get or create disk lease: %w", err)
 	}
@@ -242,8 +242,13 @@ func (c *SandboxController) ensureDisk(ctx context.Context, diskName string, siz
 	return diskID, nil
 }
 
-func (c *SandboxController) findOrCreateDiskLease(ctx context.Context, diskID entity.Id, nodeID entity.Id, sandboxID entity.Id, appID entity.Id, mountPath string, readOnly bool) (entity.Id, error) {
-	// Check if there's already a lease for this disk on this node
+// acquireDiskLease gets or creates a disk lease for the given sandbox.
+// If this sandbox already has a lease for this disk on this node (e.g., from a
+// previous attempt), that lease is returned. Otherwise a new lease is created.
+// Note: Old sandbox leases are released by stopSandbox() when sandboxes die,
+// so we don't need transfer logic here.
+func (c *SandboxController) acquireDiskLease(ctx context.Context, diskID entity.Id, nodeID entity.Id, sandboxID entity.Id, appID entity.Id, mountPath string, readOnly bool) (entity.Id, error) {
+	// Check if we already have a lease for this disk on this node
 	listResp, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, storage.KindDiskLease))
 	if err != nil {
 		return entity.Id(""), fmt.Errorf("failed to list disk leases: %w", err)
@@ -255,16 +260,37 @@ func (c *SandboxController) findOrCreateDiskLease(ctx context.Context, diskID en
 
 		// Check if this lease is for our disk and node
 		if lease.DiskId == diskID && lease.NodeId == nodeID {
-			c.Log.Info("found existing disk lease",
+			// If the lease is owned by this sandbox, return it (retry case)
+			if lease.SandboxId == sandboxID {
+				c.Log.Info("found existing disk lease for this sandbox",
+					"lease", lease.ID,
+					"disk", diskID,
+					"node", nodeID,
+					"status", lease.Status)
+				return lease.ID, nil
+			}
+
+			// If there's an active lease (PENDING or BOUND) owned by another sandbox,
+			// that sandbox hasn't been cleaned up yet - the new sandbox shouldn't start
+			if lease.Status == storage.PENDING || lease.Status == storage.BOUND {
+				c.Log.Warn("disk lease still active for another sandbox",
+					"lease", lease.ID,
+					"disk", diskID,
+					"owner", lease.SandboxId,
+					"requester", sandboxID,
+					"status", lease.Status)
+				return entity.Id(""), fmt.Errorf("disk %s has an active lease (%s) for sandbox %s", diskID, lease.Status, lease.SandboxId)
+			}
+
+			// Lease is in a terminal state (RELEASED, FAILED) - ignore it
+			// and create a new one. The disk controller will clean up old leases.
+			c.Log.Debug("ignoring lease in terminal state",
 				"lease", lease.ID,
-				"disk", diskID,
-				"node", nodeID,
 				"status", lease.Status)
-			return lease.ID, nil
 		}
 	}
 
-	// No existing lease found, create a new one
+	// No usable lease found, create a new one
 	return c.createDiskLease(ctx, diskID, sandboxID, appID, mountPath, readOnly)
 }
 
@@ -296,9 +322,10 @@ func (c *SandboxController) createDiskLease(ctx context.Context, diskID entity.I
 	}
 
 	name := idgen.GenNS("disk-lease")
+	leaseEntityID := entity.Id("disk-lease/" + name)
 
 	putResp, err := c.EAC.Create(ctx, entity.New(
-		entity.DBId, "disk-lease/"+name,
+		entity.DBId, leaseEntityID,
 		lease.Encode,
 	).Attrs())
 	if err != nil {

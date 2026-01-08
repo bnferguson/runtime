@@ -28,6 +28,7 @@ type ServiceConcurrencyConfig struct {
 	RequestsPerInstance int    `toml:"requests_per_instance"`
 	ScaleDownDelay      string `toml:"scale_down_delay"` // e.g. "2m", "15m"
 	NumInstances        int    `toml:"num_instances"`
+	ShutdownTimeout     string `toml:"shutdown_timeout"` // e.g. "10s", "30s" - time to wait for graceful shutdown
 }
 
 // DiskConfig represents a disk attachment for a service
@@ -187,6 +188,13 @@ func (ac *AppConfig) Validate() error {
 					return fmt.Errorf("service %s: scale_down_delay cannot be set in fixed mode", serviceName)
 				}
 			}
+
+			// Validate shutdown_timeout (applies to both modes)
+			if concurrency.ShutdownTimeout != "" {
+				if _, err := time.ParseDuration(concurrency.ShutdownTimeout); err != nil {
+					return fmt.Errorf("service %s: invalid shutdown_timeout %q: %v", serviceName, concurrency.ShutdownTimeout, err)
+				}
+			}
 		}
 
 		// Validate service environment variables
@@ -256,13 +264,15 @@ func (ac *AppConfig) ResolveDefaults(services []string) {
 					Mode:                "auto",
 					RequestsPerInstance: 10,
 					ScaleDownDelay:      "15m",
+					ShutdownTimeout:     "10s",
 				},
 			}
 		} else {
 			ac.Services[serviceName] = &ServiceConfig{
 				Concurrency: &ServiceConcurrencyConfig{
-					Mode:         "fixed",
-					NumInstances: 1,
+					Mode:            "fixed",
+					NumInstances:    1,
+					ShutdownTimeout: "10s",
 				},
 			}
 		}

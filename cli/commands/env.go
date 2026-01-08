@@ -11,12 +11,111 @@ import (
 	"miren.dev/runtime/pkg/ui"
 )
 
+// EnvVarSpec represents a parsed environment variable specification
+type EnvVarSpec struct {
+	Key       string
+	Value     string
+	Sensitive bool
+	FromFile  bool   // true if value was read from a file
+	FromFile_ string // original filename if FromFile is true
+}
+
+// ParseEnvVarSpecs parses environment variable specifications from -e and -s flags.
+// Each spec can be: KEY=VALUE, KEY=@file, or KEY (to prompt interactively).
+func ParseEnvVarSpecs(envSpecs, sensitiveSpecs []string) ([]EnvVarSpec, error) {
+	var specs []EnvVarSpec
+
+	// Process regular env vars
+	for _, spec := range envSpecs {
+		parsed, err := parseEnvVarSpec(spec, false)
+		if err != nil {
+			return nil, err
+		}
+		specs = append(specs, parsed)
+	}
+
+	// Process sensitive env vars
+	for _, spec := range sensitiveSpecs {
+		parsed, err := parseEnvVarSpec(spec, true)
+		if err != nil {
+			return nil, err
+		}
+		specs = append(specs, parsed)
+	}
+
+	return specs, nil
+}
+
+// parseEnvVarSpec parses a single env var spec (KEY, KEY=VALUE, or KEY=@file)
+func parseEnvVarSpec(spec string, sensitive bool) (EnvVarSpec, error) {
+	parts := strings.SplitN(spec, "=", 2)
+	key := parts[0]
+
+	if key == "" {
+		return EnvVarSpec{}, fmt.Errorf("invalid environment variable: key cannot be empty")
+	}
+
+	result := EnvVarSpec{
+		Key:       key,
+		Sensitive: sensitive,
+	}
+
+	if len(parts) == 1 {
+		// No value provided - will need to prompt
+		var label string
+		if sensitive {
+			label = fmt.Sprintf("Enter value for sensitive variable '%s'", key)
+		} else {
+			label = fmt.Sprintf("Enter value for variable '%s'", key)
+		}
+
+		promptedValue, err := ui.PromptForInput(
+			ui.WithLabel(label),
+			ui.WithSensitive(sensitive),
+		)
+		if err != nil {
+			return EnvVarSpec{}, fmt.Errorf("failed to read value for %s: %w", key, err)
+		}
+		result.Value = promptedValue
+	} else {
+		value := parts[1]
+
+		if strings.HasPrefix(value, "@") {
+			filename := value[1:]
+			data, err := os.ReadFile(filename)
+			if err != nil {
+				if os.IsNotExist(err) {
+					return EnvVarSpec{}, fmt.Errorf("env var references file %s which does not exist", filename)
+				}
+				return EnvVarSpec{}, fmt.Errorf("failed to read env var from file %s: %w", filename, err)
+			}
+			result.Value = string(data)
+			result.FromFile = true
+			result.FromFile_ = filename
+		} else {
+			result.Value = value
+		}
+	}
+
+	return result, nil
+}
+
 func EnvSet(ctx *Context, opts struct {
 	AppCentric
 	Service   string   `short:"S" long:"service" description:"Set env var for specific service only (if not specified, sets for all services)"`
 	Env       []string `short:"e" long:"env" description:"Set environment variables (use KEY to prompt, KEY=VALUE to set directly, KEY=@file to read from file)"`
 	Sensitive []string `short:"s" long:"sensitive" description:"Set sensitive environment variables (use KEY to prompt with masking, KEY=VALUE to set directly, KEY=@file to read from file)"`
 }) error {
+	if len(opts.Env) == 0 && len(opts.Sensitive) == 0 {
+		return fmt.Errorf("no environment variables specified")
+	}
+
+	// Parse all env var specs
+	specs, err := ParseEnvVarSpecs(opts.Env, opts.Sensitive)
+	if err != nil {
+		return err
+	}
+
 	cl, err := ctx.RPCClient("dev.miren.runtime/app")
 	if err != nil {
 		return err
@@ -24,91 +123,20 @@ func EnvSet(ctx *Context, opts struct {
 
 	ac := app_v1alpha.NewCrudClient(cl)
 
-	// Collect all env vars to set
-	type envVar struct {
-		spec      string
-		sensitive bool
-	}
-
-	var allVars []envVar
-	for _, v := range opts.Env {
-		allVars = append(allVars, envVar{spec: v, sensitive: false})
-	}
-	for _, v := range opts.Sensitive {
-		allVars = append(allVars, envVar{spec: v, sensitive: true})
-	}
-
-	if len(allVars) == 0 {
-		return fmt.Errorf("no environment variables specified")
-	}
-
 	var lastVersionId string
 
-	for _, ev := range allVars {
-		var key, value string
-		var wasFile, wasPrompt bool
-
-		parts := strings.SplitN(ev.spec, "=", 2)
-		key = parts[0]
-
-		if key == "" {
-			return fmt.Errorf("invalid environment variable: key cannot be empty")
-		}
-
-		if len(parts) == 1 {
-			// Prompt for value
-			var label string
-			if ev.sensitive {
-				label = fmt.Sprintf("Enter value for sensitive variable '%s'", key)
-			} else {
-				label = fmt.Sprintf("Enter value for variable '%s'", key)
-			}
-
-			promptedValue, err := ui.PromptForInput(
-				ui.WithLabel(label),
-				ui.WithSensitive(ev.sensitive),
-			)
-			if err != nil {
-				return fmt.Errorf("failed to read value for %s: %w", key, err)
-			}
-			value = promptedValue
-			wasPrompt = true
-		} else {
-			value = parts[1]
-
-			if strings.HasPrefix(value, "@") {
-				filename := value[1:]
-				data, err := os.ReadFile(filename)
-				if err != nil {
-					if os.IsNotExist(err) {
-						return fmt.Errorf("env var references file %s which does not exist", filename)
-					}
-					return fmt.Errorf("failed to read env var from file %s: %w", filename, err)
-				}
-				wasFile = true
-				value = string(data)
-			}
-		}
-
+	for _, spec := range specs {
 		// Log what we're doing
-		if wasFile {
-			ctx.Printf("setting %s from file %s...\n", key, parts[1][1:])
-		} else if wasPrompt {
-			if ev.sensitive {
-				ctx.Printf("setting %s (sensitive, from prompt)...\n", key)
-			} else {
-				ctx.Printf("setting %s (from prompt)...\n", key)
-			}
+		if spec.FromFile {
+			ctx.Printf("setting %s from file %s...\n", spec.Key, spec.FromFile_)
+		} else if spec.Sensitive {
+			ctx.Printf("setting %s (sensitive)...\n", spec.Key)
 		} else {
-			if ev.sensitive {
-				ctx.Printf("setting %s (sensitive)...\n", key)
-			} else {
-				ctx.Printf("setting %s...\n", key)
-			}
+			ctx.Printf("setting %s...\n", spec.Key)
 		}
 
 		// Use the targeted SetEnvVar RPC - server handles source tracking
-		res, err := ac.SetEnvVar(ctx, opts.App, key, value, ev.sensitive, opts.Service)
+		res, err := ac.SetEnvVar(ctx, opts.App, spec.Key, spec.Value, spec.Sensitive, opts.Service)
 		if err != nil {
 			return err
 		}

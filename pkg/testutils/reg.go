@@ -2,8 +2,10 @@ package testutils
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -96,12 +98,36 @@ func NewTestDeps() (*TestDeps, func()) {
 		panic(err)
 	}
 
-	iface, err := ndb.ReserveInterface("mt")
+	// Generate a unique interface prefix to avoid conflicts with parallel tests.
+	// Each test has its own netdb, so without unique prefixes, multiple tests
+	// could all get "mt1" and conflict when creating the actual Linux bridge.
+	// Use a short random suffix to keep interface name within Linux's 15-char limit.
+	ifaceSuffix, err := rand.Int(rand.Reader, big.NewInt(10000))
+	if err != nil {
+		panic(err)
+	}
+	ifacePrefix := fmt.Sprintf("mt%d", ifaceSuffix.Int64())
+
+	iface, err := ndb.ReserveInterface(ifacePrefix)
 	if err != nil {
 		panic(err)
 	}
 
-	mega, err := ndb.Subnet("10.8.0.0/16")
+	// Use a random /16 within 10.0.0.0/8 to avoid conflicts with parallel tests.
+	// Each test gets its own netdb, so we need different base subnets to prevent
+	// IP address collisions when multiple tests run concurrently.
+	// We exclude 10 to avoid overlap with service-prefixes (10.10.0.0/16 below).
+	secondOctet, err := rand.Int(rand.Reader, big.NewInt(255))
+	if err != nil {
+		panic(err)
+	}
+	octet := secondOctet.Int64()
+	if octet >= 10 {
+		octet++ // Skip 10 to avoid collision with service-prefixes
+	}
+	megaSubnet := fmt.Sprintf("10.%d.0.0/16", octet)
+
+	mega, err := ndb.Subnet(megaSubnet)
 	if err != nil {
 		panic(err)
 	}

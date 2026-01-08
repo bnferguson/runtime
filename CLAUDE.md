@@ -14,6 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Testing
 
 - `make test` - Run all tests using iso (runs hack/test.sh in isolated container)
+- `make test-serial` - Run all tests serially with `-p 1` (for debugging test interference)
 - `make test-shell` - Run tests with interactive shell (set USESHELL=1)
 - `make test-e2e` - Run end-to-end tests
 - `hack/it <gopkg>` - Run all tests in a package using iso

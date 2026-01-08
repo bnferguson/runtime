@@ -274,8 +274,9 @@ func (l *Launcher) buildSandboxSpec(
 	port := int64(0)
 	portName := ""
 	portType := ""
+	shutdownTimeout := ""
 
-	// Check for per-service port configuration
+	// Check for per-service configuration
 	for _, svc := range ver.Config.Services {
 		if svc.Name == serviceName {
 			if svc.Port > 0 {
@@ -286,6 +287,9 @@ func (l *Launcher) buildSandboxSpec(
 			}
 			if svc.PortType != "" {
 				portType = svc.PortType
+			}
+			if svc.ServiceConcurrency.ShutdownTimeout != "" {
+				shutdownTimeout = svc.ServiceConcurrency.ShutdownTimeout
 			}
 			break
 		}
@@ -396,6 +400,11 @@ func (l *Launcher) buildSandboxSpec(
 			}
 			break
 		}
+	}
+
+	// Set shutdown timeout if configured
+	if shutdownTimeout != "" {
+		appCont.ShutdownTimeout = shutdownTimeout
 	}
 
 	spec.Container = []compute_v1alpha.SandboxSpecContainer{appCont}

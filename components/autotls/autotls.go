@@ -146,5 +146,3 @@ func ServeTLSWithController(ctx context.Context, log *slog.Logger, certProvider 
 
 	return nil
 }
-
-// Removed old ServeTLSWithDNS and lego-specific code - now handled by certificate controller

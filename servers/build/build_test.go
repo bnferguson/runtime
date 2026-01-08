@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/appconfig"
 )
@@ -1293,6 +1294,126 @@ func TestExtractWorkingDirFromImageConfig(t *testing.T) {
 			err := json.Unmarshal([]byte(tt.configJSON), &imgConfig)
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantDir, imgConfig.Config.WorkingDir)
+		})
+	}
+}
+
+// Helper to create a build_v1alpha.EnvironmentVariable for testing
+func makeEnvVar(key, value string, sensitive bool) *build_v1alpha.EnvironmentVariable {
+	ev := &build_v1alpha.EnvironmentVariable{}
+	ev.SetKey(key)
+	ev.SetValue(value)
+	ev.SetSensitive(sensitive)
+	return ev
+}
+
+func TestMergeCliEnvVars(t *testing.T) {
+	tests := []struct {
+		name          string
+		existingVars  []core_v1alpha.Variable
+		cliVars       []*build_v1alpha.EnvironmentVariable
+		wantVariables []core_v1alpha.Variable
+	}{
+		{
+			name:          "empty CLI vars returns existing unchanged",
+			existingVars:  []core_v1alpha.Variable{{Key: "FOO", Value: "bar", Source: "config"}},
+			cliVars:       nil,
+			wantVariables: []core_v1alpha.Variable{{Key: "FOO", Value: "bar", Source: "config"}},
+		},
+		{
+			name:         "CLI vars added to empty existing",
+			existingVars: nil,
+			cliVars: []*build_v1alpha.EnvironmentVariable{
+				makeEnvVar("FOO", "bar", false),
+			},
+			wantVariables: []core_v1alpha.Variable{
+				{Key: "FOO", Value: "bar", Sensitive: false, Source: "manual"},
+			},
+		},
+		{
+			name: "CLI vars override existing config vars",
+			existingVars: []core_v1alpha.Variable{
+				{Key: "FOO", Value: "old", Source: "config"},
+			},
+			cliVars: []*build_v1alpha.EnvironmentVariable{
+				makeEnvVar("FOO", "new", false),
+			},
+			wantVariables: []core_v1alpha.Variable{
+				{Key: "FOO", Value: "new", Sensitive: false, Source: "manual"},
+			},
+		},
+		{
+			name: "CLI vars override existing manual vars",
+			existingVars: []core_v1alpha.Variable{
+				{Key: "FOO", Value: "old-manual", Source: "manual"},
+			},
+			cliVars: []*build_v1alpha.EnvironmentVariable{
+				makeEnvVar("FOO", "new-manual", false),
+			},
+			wantVariables: []core_v1alpha.Variable{
+				{Key: "FOO", Value: "new-manual", Sensitive: false, Source: "manual"},
+			},
+		},
+		{
+			name: "CLI vars merge with existing - different keys",
+			existingVars: []core_v1alpha.Variable{
+				{Key: "EXISTING", Value: "value", Source: "config"},
+			},
+			cliVars: []*build_v1alpha.EnvironmentVariable{
+				makeEnvVar("NEW", "cli-value", false),
+			},
+			wantVariables: []core_v1alpha.Variable{
+				{Key: "EXISTING", Value: "value", Source: "config"},
+				{Key: "NEW", Value: "cli-value", Sensitive: false, Source: "manual"},
+			},
+		},
+		{
+			name: "sensitive flag preserved from CLI",
+			existingVars: []core_v1alpha.Variable{
+				{Key: "SECRET", Value: "old", Sensitive: false, Source: "config"},
+			},
+			cliVars: []*build_v1alpha.EnvironmentVariable{
+				makeEnvVar("SECRET", "new-secret", true),
+			},
+			wantVariables: []core_v1alpha.Variable{
+				{Key: "SECRET", Value: "new-secret", Sensitive: true, Source: "manual"},
+			},
+		},
+		{
+			name:         "multiple CLI vars",
+			existingVars: nil,
+			cliVars: []*build_v1alpha.EnvironmentVariable{
+				makeEnvVar("FOO", "foo-val", false),
+				makeEnvVar("BAR", "bar-val", false),
+				makeEnvVar("SECRET", "secret-val", true),
+			},
+			wantVariables: []core_v1alpha.Variable{
+				{Key: "FOO", Value: "foo-val", Sensitive: false, Source: "manual"},
+				{Key: "BAR", Value: "bar-val", Sensitive: false, Source: "manual"},
+				{Key: "SECRET", Value: "secret-val", Sensitive: true, Source: "manual"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := mergeCliEnvVars(tt.existingVars, tt.cliVars)
+
+			// Sort both for comparison since map iteration is non-deterministic
+			sort.Slice(result, func(i, j int) bool {
+				return result[i].Key < result[j].Key
+			})
+			sort.Slice(tt.wantVariables, func(i, j int) bool {
+				return tt.wantVariables[i].Key < tt.wantVariables[j].Key
+			})
+
+			require.Len(t, result, len(tt.wantVariables))
+			for i, want := range tt.wantVariables {
+				assert.Equal(t, want.Key, result[i].Key, "key mismatch at index %d", i)
+				assert.Equal(t, want.Value, result[i].Value, "value mismatch at index %d", i)
+				assert.Equal(t, want.Sensitive, result[i].Sensitive, "sensitive mismatch at index %d", i)
+				assert.Equal(t, want.Source, result[i].Source, "source mismatch at index %d", i)
+			}
 		})
 	}
 }

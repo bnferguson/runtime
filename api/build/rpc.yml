@@ -109,6 +109,22 @@ types:
         index: 7
         doc: Detection events from stack analysis
 
+  - type: EnvironmentVariable
+    doc: An environment variable to set on the app during deploy
+    fields:
+      - name: key
+        type: string
+        index: 0
+        doc: Environment variable name
+      - name: value
+        type: string
+        index: 1
+        doc: Environment variable value
+      - name: sensitive
+        type: bool
+        index: 2
+        doc: Whether the value should be masked in logs and output
+
 interfaces:
   - name: Stream
     methods:
@@ -130,6 +146,9 @@ interfaces:
             type: stream.RecvStream[[]byte]
           - name: status
             type: stream.SendStream[*Status]
+          - name: envVars
+            type: '[]*EnvironmentVariable'
+            doc: Environment variables to set on the app (optional, applied with source=manual)
         results:
           - name: version
             type: string

@@ -10,6 +10,9 @@ LOGFILE="/tmp/miren-server.log"
 ENV_FILE="${DEV_ENV_FILE:-}"
 EXTRA_FLAGS="${DEV_SERVER_FLAGS:-}"
 
+# Dev environment defaults: use self-signed TLS (ACME/autocert doesn't work with localhost)
+DEFAULT_FLAGS="--self-signed-tls"
+
 case "${1:-}" in
   start)
     if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
@@ -33,7 +36,7 @@ case "${1:-}" in
     echo "Starting miren server in standalone mode..."
     # Use nohup and disown to fully detach from the shell
     # (Script runs as root for process management privileges)
-    nohup ./bin/miren server -vv --mode standalone $EXTRA_FLAGS >"$LOGFILE" 2>&1 </dev/null &
+    nohup ./bin/miren server -vv --mode standalone $DEFAULT_FLAGS $EXTRA_FLAGS >"$LOGFILE" 2>&1 </dev/null &
     pid=$!
     disown
     echo $pid > "$PIDFILE"

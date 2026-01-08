@@ -1,0 +1,11 @@
+name = "long-shutdown"
+
+# App takes 5s to shutdown gracefully
+[[env]]
+key = "SHUTDOWN_WAIT"
+value = "5"
+
+[services.worker.concurrency]
+mode = "fixed"
+num_instances = 1
+shutdown_timeout = "10s"  # Give app 10s to shutdown (more than the 5s it needs)

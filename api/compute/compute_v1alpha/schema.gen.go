@@ -145,33 +145,35 @@ func (o *SandboxSpec) InitSchema(sb *schema.SchemaBuilder) {
 }
 
 const (
-	SandboxSpecContainerCommandId    = entity.Id("dev.miren.compute/component.sandbox_spec.container.command")
-	SandboxSpecContainerConfigFileId = entity.Id("dev.miren.compute/component.sandbox_spec.container.config_file")
-	SandboxSpecContainerDirectoryId  = entity.Id("dev.miren.compute/component.sandbox_spec.container.directory")
-	SandboxSpecContainerEnvId        = entity.Id("dev.miren.compute/component.sandbox_spec.container.env")
-	SandboxSpecContainerImageId      = entity.Id("dev.miren.compute/component.sandbox_spec.container.image")
-	SandboxSpecContainerMountId      = entity.Id("dev.miren.compute/component.sandbox_spec.container.mount")
-	SandboxSpecContainerNameId       = entity.Id("dev.miren.compute/component.sandbox_spec.container.name")
-	SandboxSpecContainerOomScoreId   = entity.Id("dev.miren.compute/component.sandbox_spec.container.oom_score")
-	SandboxSpecContainerPortId       = entity.Id("dev.miren.compute/component.sandbox_spec.container.port")
-	SandboxSpecContainerPrivilegedId = entity.Id("dev.miren.compute/component.sandbox_spec.container.privileged")
-	SandboxSpecContainerStdinId      = entity.Id("dev.miren.compute/component.sandbox_spec.container.stdin")
-	SandboxSpecContainerTtyId        = entity.Id("dev.miren.compute/component.sandbox_spec.container.tty")
+	SandboxSpecContainerCommandId         = entity.Id("dev.miren.compute/component.sandbox_spec.container.command")
+	SandboxSpecContainerConfigFileId      = entity.Id("dev.miren.compute/component.sandbox_spec.container.config_file")
+	SandboxSpecContainerDirectoryId       = entity.Id("dev.miren.compute/component.sandbox_spec.container.directory")
+	SandboxSpecContainerEnvId             = entity.Id("dev.miren.compute/component.sandbox_spec.container.env")
+	SandboxSpecContainerImageId           = entity.Id("dev.miren.compute/component.sandbox_spec.container.image")
+	SandboxSpecContainerMountId           = entity.Id("dev.miren.compute/component.sandbox_spec.container.mount")
+	SandboxSpecContainerNameId            = entity.Id("dev.miren.compute/component.sandbox_spec.container.name")
+	SandboxSpecContainerOomScoreId        = entity.Id("dev.miren.compute/component.sandbox_spec.container.oom_score")
+	SandboxSpecContainerPortId            = entity.Id("dev.miren.compute/component.sandbox_spec.container.port")
+	SandboxSpecContainerPrivilegedId      = entity.Id("dev.miren.compute/component.sandbox_spec.container.privileged")
+	SandboxSpecContainerShutdownTimeoutId = entity.Id("dev.miren.compute/component.sandbox_spec.container.shutdown_timeout")
+	SandboxSpecContainerStdinId           = entity.Id("dev.miren.compute/component.sandbox_spec.container.stdin")
+	SandboxSpecContainerTtyId             = entity.Id("dev.miren.compute/component.sandbox_spec.container.tty")
 )
 
 type SandboxSpecContainer struct {
-	Command    string                           `cbor:"command,omitempty" json:"command,omitempty"`
-	ConfigFile []SandboxSpecContainerConfigFile `cbor:"config_file,omitempty" json:"config_file,omitempty"`
-	Directory  string                           `cbor:"directory,omitempty" json:"directory,omitempty"`
-	Env        []string                         `cbor:"env,omitempty" json:"env,omitempty"`
-	Image      string                           `cbor:"image" json:"image"`
-	Mount      []SandboxSpecContainerMount      `cbor:"mount,omitempty" json:"mount,omitempty"`
-	Name       string                           `cbor:"name,omitempty" json:"name,omitempty"`
-	OomScore   int64                            `cbor:"oom_score,omitempty" json:"oom_score,omitempty"`
-	Port       []SandboxSpecContainerPort       `cbor:"port,omitempty" json:"port,omitempty"`
-	Privileged bool                             `cbor:"privileged,omitempty" json:"privileged,omitempty"`
-	Stdin      bool                             `cbor:"stdin,omitempty" json:"stdin,omitempty"`
-	Tty        bool                             `cbor:"tty,omitempty" json:"tty,omitempty"`
+	Command         string                           `cbor:"command,omitempty" json:"command,omitempty"`
+	ConfigFile      []SandboxSpecContainerConfigFile `cbor:"config_file,omitempty" json:"config_file,omitempty"`
+	Directory       string                           `cbor:"directory,omitempty" json:"directory,omitempty"`
+	Env             []string                         `cbor:"env,omitempty" json:"env,omitempty"`
+	Image           string                           `cbor:"image" json:"image"`
+	Mount           []SandboxSpecContainerMount      `cbor:"mount,omitempty" json:"mount,omitempty"`
+	Name            string                           `cbor:"name,omitempty" json:"name,omitempty"`
+	OomScore        int64                            `cbor:"oom_score,omitempty" json:"oom_score,omitempty"`
+	Port            []SandboxSpecContainerPort       `cbor:"port,omitempty" json:"port,omitempty"`
+	Privileged      bool                             `cbor:"privileged,omitempty" json:"privileged,omitempty"`
+	ShutdownTimeout string                           `cbor:"shutdown_timeout,omitempty" json:"shutdown_timeout,omitempty"`
+	Stdin           bool                             `cbor:"stdin,omitempty" json:"stdin,omitempty"`
+	Tty             bool                             `cbor:"tty,omitempty" json:"tty,omitempty"`
 }
 
 func (o *SandboxSpecContainer) Decode(e entity.AttrGetter) {
@@ -219,6 +221,9 @@ func (o *SandboxSpecContainer) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(SandboxSpecContainerPrivilegedId); ok && a.Value.Kind() == entity.KindBool {
 		o.Privileged = a.Value.Bool()
 	}
+	if a, ok := e.Get(SandboxSpecContainerShutdownTimeoutId); ok && a.Value.Kind() == entity.KindString {
+		o.ShutdownTimeout = a.Value.String()
+	}
 	if a, ok := e.Get(SandboxSpecContainerStdinId); ok && a.Value.Kind() == entity.KindBool {
 		o.Stdin = a.Value.Bool()
 	}
@@ -256,6 +261,9 @@ func (o *SandboxSpecContainer) Encode() (attrs []entity.Attr) {
 		attrs = append(attrs, entity.Component(SandboxSpecContainerPortId, v.Encode()))
 	}
 	attrs = append(attrs, entity.Bool(SandboxSpecContainerPrivilegedId, o.Privileged))
+	if !entity.Empty(o.ShutdownTimeout) {
+		attrs = append(attrs, entity.String(SandboxSpecContainerShutdownTimeoutId, o.ShutdownTimeout))
+	}
 	attrs = append(attrs, entity.Bool(SandboxSpecContainerStdinId, o.Stdin))
 	attrs = append(attrs, entity.Bool(SandboxSpecContainerTtyId, o.Tty))
 	return
@@ -292,6 +300,9 @@ func (o *SandboxSpecContainer) Empty() bool {
 	if !entity.Empty(o.Privileged) {
 		return false
 	}
+	if !entity.Empty(o.ShutdownTimeout) {
+		return false
+	}
 	if !entity.Empty(o.Stdin) {
 		return false
 	}
@@ -315,6 +326,7 @@ func (o *SandboxSpecContainer) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Component("port", "dev.miren.compute/component.sandbox_spec.container.port", schema.Doc("Network port declaration"), schema.Many)
 	(&SandboxSpecContainerPort{}).InitSchema(sb.Builder("component.sandbox_spec.container.port"))
 	sb.Bool("privileged", "dev.miren.compute/component.sandbox_spec.container.privileged", schema.Doc("Whether container runs in privileged mode"))
+	sb.String("shutdown_timeout", "dev.miren.compute/component.sandbox_spec.container.shutdown_timeout", schema.Doc("Time to wait for graceful shutdown before force-killing (e.g. 10s, 30s)"))
 	sb.Bool("stdin", "dev.miren.compute/component.sandbox_spec.container.stdin", schema.Doc("Keep stdin open for the container"))
 	sb.Bool("tty", "dev.miren.compute/component.sandbox_spec.container.tty", schema.Doc("Allocate a TTY for the container"))
 }
@@ -1133,33 +1145,35 @@ func (o *Sandbox) InitSchema(sb *schema.SchemaBuilder) {
 }
 
 const (
-	ContainerCommandId    = entity.Id("dev.miren.compute/container.command")
-	ContainerConfigFileId = entity.Id("dev.miren.compute/container.config_file")
-	ContainerDirectoryId  = entity.Id("dev.miren.compute/container.directory")
-	ContainerEnvId        = entity.Id("dev.miren.compute/container.env")
-	ContainerImageId      = entity.Id("dev.miren.compute/container.image")
-	ContainerMountId      = entity.Id("dev.miren.compute/container.mount")
-	ContainerNameId       = entity.Id("dev.miren.compute/container.name")
-	ContainerOomScoreId   = entity.Id("dev.miren.compute/container.oom_score")
-	ContainerPortId       = entity.Id("dev.miren.compute/container.port")
-	ContainerPrivilegedId = entity.Id("dev.miren.compute/container.privileged")
-	ContainerStdinId      = entity.Id("dev.miren.compute/container.stdin")
-	ContainerTtyId        = entity.Id("dev.miren.compute/container.tty")
+	ContainerCommandId         = entity.Id("dev.miren.compute/container.command")
+	ContainerConfigFileId      = entity.Id("dev.miren.compute/container.config_file")
+	ContainerDirectoryId       = entity.Id("dev.miren.compute/container.directory")
+	ContainerEnvId             = entity.Id("dev.miren.compute/container.env")
+	ContainerImageId           = entity.Id("dev.miren.compute/container.image")
+	ContainerMountId           = entity.Id("dev.miren.compute/container.mount")
+	ContainerNameId            = entity.Id("dev.miren.compute/container.name")
+	ContainerOomScoreId        = entity.Id("dev.miren.compute/container.oom_score")
+	ContainerPortId            = entity.Id("dev.miren.compute/container.port")
+	ContainerPrivilegedId      = entity.Id("dev.miren.compute/container.privileged")
+	ContainerShutdownTimeoutId = entity.Id("dev.miren.compute/container.shutdown_timeout")
+	ContainerStdinId           = entity.Id("dev.miren.compute/container.stdin")
+	ContainerTtyId             = entity.Id("dev.miren.compute/container.tty")
 )
 
 type Container struct {
-	Command    string       `cbor:"command,omitempty" json:"command,omitempty"`
-	ConfigFile []ConfigFile `cbor:"config_file,omitempty" json:"config_file,omitempty"`
-	Directory  string       `cbor:"directory,omitempty" json:"directory,omitempty"`
-	Env        []string     `cbor:"env,omitempty" json:"env,omitempty"`
-	Image      string       `cbor:"image" json:"image"`
-	Mount      []Mount      `cbor:"mount,omitempty" json:"mount,omitempty"`
-	Name       string       `cbor:"name,omitempty" json:"name,omitempty"`
-	OomScore   int64        `cbor:"oom_score,omitempty" json:"oom_score,omitempty"`
-	Port       []Port       `cbor:"port,omitempty" json:"port,omitempty"`
-	Privileged bool         `cbor:"privileged,omitempty" json:"privileged,omitempty"`
-	Stdin      bool         `cbor:"stdin,omitempty" json:"stdin,omitempty"`
-	Tty        bool         `cbor:"tty,omitempty" json:"tty,omitempty"`
+	Command         string       `cbor:"command,omitempty" json:"command,omitempty"`
+	ConfigFile      []ConfigFile `cbor:"config_file,omitempty" json:"config_file,omitempty"`
+	Directory       string       `cbor:"directory,omitempty" json:"directory,omitempty"`
+	Env             []string     `cbor:"env,omitempty" json:"env,omitempty"`
+	Image           string       `cbor:"image" json:"image"`
+	Mount           []Mount      `cbor:"mount,omitempty" json:"mount,omitempty"`
+	Name            string       `cbor:"name,omitempty" json:"name,omitempty"`
+	OomScore        int64        `cbor:"oom_score,omitempty" json:"oom_score,omitempty"`
+	Port            []Port       `cbor:"port,omitempty" json:"port,omitempty"`
+	Privileged      bool         `cbor:"privileged,omitempty" json:"privileged,omitempty"`
+	ShutdownTimeout string       `cbor:"shutdown_timeout,omitempty" json:"shutdown_timeout,omitempty"`
+	Stdin           bool         `cbor:"stdin,omitempty" json:"stdin,omitempty"`
+	Tty             bool         `cbor:"tty,omitempty" json:"tty,omitempty"`
 }
 
 func (o *Container) Decode(e entity.AttrGetter) {
@@ -1207,6 +1221,9 @@ func (o *Container) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(ContainerPrivilegedId); ok && a.Value.Kind() == entity.KindBool {
 		o.Privileged = a.Value.Bool()
 	}
+	if a, ok := e.Get(ContainerShutdownTimeoutId); ok && a.Value.Kind() == entity.KindString {
+		o.ShutdownTimeout = a.Value.String()
+	}
 	if a, ok := e.Get(ContainerStdinId); ok && a.Value.Kind() == entity.KindBool {
 		o.Stdin = a.Value.Bool()
 	}
@@ -1244,6 +1261,9 @@ func (o *Container) Encode() (attrs []entity.Attr) {
 		attrs = append(attrs, entity.Component(ContainerPortId, v.Encode()))
 	}
 	attrs = append(attrs, entity.Bool(ContainerPrivilegedId, o.Privileged))
+	if !entity.Empty(o.ShutdownTimeout) {
+		attrs = append(attrs, entity.String(ContainerShutdownTimeoutId, o.ShutdownTimeout))
+	}
 	attrs = append(attrs, entity.Bool(ContainerStdinId, o.Stdin))
 	attrs = append(attrs, entity.Bool(ContainerTtyId, o.Tty))
 	return
@@ -1280,6 +1300,9 @@ func (o *Container) Empty() bool {
 	if !entity.Empty(o.Privileged) {
 		return false
 	}
+	if !entity.Empty(o.ShutdownTimeout) {
+		return false
+	}
 	if !entity.Empty(o.Stdin) {
 		return false
 	}
@@ -1303,6 +1326,7 @@ func (o *Container) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Component("port", "dev.miren.compute/container.port", schema.Doc("A network port the container declares"), schema.Many)
 	(&Port{}).InitSchema(sb.Builder("container.port"))
 	sb.Bool("privileged", "dev.miren.compute/container.privileged", schema.Doc("Whether or not the container runs in privileged mode"))
+	sb.String("shutdown_timeout", "dev.miren.compute/container.shutdown_timeout", schema.Doc("Time to wait for graceful shutdown before force-killing (e.g. 10s, 30s)"))
 	sb.Bool("stdin", "dev.miren.compute/container.stdin", schema.Doc("Keep stdin open for the container"))
 	sb.Bool("tty", "dev.miren.compute/container.tty", schema.Doc("Allocate a TTY for the container"))
 }
@@ -1990,5 +2014,5 @@ func init() {
 		(&SandboxPool{}).InitSchema(sb)
 		(&Schedule{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.compute", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xec\\[\xaf\xec\xa4\x17\xff\x1a\xff\xf3W\x8f\xb7x\x8b\xb1[\x8d\xf7x;Q_\xfd\n\rS\xd6t\xd8\xd3B\x0f\xd0\xd93\xbe\xa91\xd1\xc4O\xe1\xd9\xdbo\xa8Ϧ@[\xdaBK\x99\xf3ؗ\x1d\xa0\xac\x1f\xac\v\v\x16\x8b=\xf7\x98\xa2\x12\x9eb8%%\xe1@\x93\x8c\x95U-\x01\x8e\x84b\xf1p~a\xf2\xe5\xa6\xf9\x92P\x86\xe1oE{\x9a\xf6h>j\x80\x7f\xf7\x98\x95\x88\xd0\xe9\x00\xfb=\x81\x02\x8b_\x9f\xed\b>\xbf\xe6\xc6HPER\x841\a!\xd4XG\xbbA^*\xd8\v\xc9\t\xcd\xef\xe7@2F\x85\xe4\x88P)p\x89\xe8\xe5\x1f\re77PP\xa0\x1d\x14\n\xe9%\x0f\x92\x90H\xd6z&{Sn(1к<6\x7f\xd2\x13*j\x10\xf7\xc0\x01\xe1\xcb\xf9\xf1\x14G\x93%\xea{^\xd3#ew\xf4\xfc\x8a\xb7\x9f\xe9q\xc0D\xa0]\x01\xf8\xfc\xaa\xb7kۅ\xd4\xf4\x00\xa8\x90\x87\x8bK\"\x1d\xae铟\x80\v\xc2h~\xfa\x00\x15\xd5\x01\x15\x15'%◴Q\x1fn\xb8>\xbf\xe81\x81\x02\x9006p7\xed\xa2\xbe\xae2\x827= I\x81\x84L\x0f\x80\xb8\xdc\x01\x92j@:jSj\x90\xa4\x04\x85\xf4\xb2\x0f\xa9\xe2\xec\x162\r\x91\xb7\x95\x86vG\xf0<\xa5@\x14\xef\xd8YS\xb6\x15C9+CP\xf4.SPB4PZ\x8c\xe7G\x0e\x85\xe9\x0e\x81\x92\xfc\xf3\xa1\xe1\xe2u/L\xb3\x18$\"\x14\xb8\xb5\x14H\xdf\xd8pD\x1a\x1aF\x81ʾd\xe67\x05N&\xc0\xa13}\xe6\x99i\aԴ\x94\xa8\xb1\xc2F\xe6m\xc5Z\xf5\x8a\u05f7\xe6\x11\xe8\x9e\xe4\xe9\x9e\x140Z\xfa]\xf3\x02\xc77\x01\x1c\xdb\xc3\\\xeb\xf6,\xa8\x04#\x89\xd4,\xb0*Y\x9c\x87P\x97\f\x83\xa6V\xa5\x95\xd4\x15\x92\aM\xadJ\x16\xf5\xac\xb5\xdfj\x8c\x06B\x8d\xf2Ɯv0\xe1\x90I\xc6/\xda\n\xfb\xeaس;Ve\x8f\x02\xf4d\xe96k\xaac^\x1dN\xb3\xa7'%ʵ\xa0@\x17\xc7\x166K]\xb2\x9aJk|\xd0\r\vV\xf5N\x88U)\xa4@{\xfaŷ\x9a\x14H\x82AHB\x91$\x8c\xea\x15`7\x8c\xa5\xe5pU\x1aE\xb0\x9ag`\xb6?]\x0e\xb5\v-\x16\x05\xef\xd8\xecz\x9e\x95\xc5\xf5\x7f\xc6S\x9b5'\xc6\xcaTd\x8ckZ\xd2W\x1b\x94\x8cP\xf9\xb08|Ÿ\xadL\xac\xea\v\xba|;D\x97\rP\xa0*\x7fS\x9c:\xce]\rƒ\x80\x1c\xdci2\x86!U\xdc(\xd9\xf4\xd5V6\xb3\x83v\x84x@\xe3[\x9b\x9a\x863\xc92V(\xbaCWs\x9e\x97\xfe\xcadV\xb9\xec\xae%KdVe5\x9e\xefS\xe3j\x96\v5t'\xb5`\xd3U<\xfb\x0e(\x96\x8699\x91\x02r\xd0\xfbխUW\xc3\xed\x18+\x96\x9d\x91\x90\x98\xe8%\n\xba8\xa4\x9du\x84RjG\x9a5\x85\x8en\x96\xb7~\xe7\xf7-\xaf֔\x0fL\xc8\x1fA\xde1~\xd4\x1e\xc4n\xe8\x06\xbb\xf7\xd8`\x8b\xa2\x8e\xd8\xf6)|oZ\xc6v\xec\xd8\xd5{\f!S\x94Ir\"\x86\xe1r\xd8ԝ\x05\xef=J\xeb\x90X\xfeDJNv\xb5\xb4\x8f\aŠ\xbd\x0f\r|.ւ\xfb\x81\xcavR\xa4\xaf\x06l(-\x065\x12\xedg\x93SK\xc83nh\n\x9a\x8c@Wm%\x8e9\x1a\x98\xc4\x0e\xc8rG0\xe6sD-\xbd\xa8w\x14\xa4\xd9Ft9t-\xb6\xc2x\xf0,\x86\x96cΆ*\x05ݰ \xc2)`2\x00\xbcv/V \xeb\xf6b\a\x8f\x1a%G\x12\xee\x906\xb5\xbc\xad\x04\xef\xc6\n\xe3\u07b3ٷ<\x8b\n2\xed/Ui\xf56x\xd3uiŘ6@\x81R\xfc]\xe9\xf8\xc3P\xd4+\x03\x9b\xe98\xc9\xd28\xab\xe2\x9c/\xd6\xf3\x11\x16\xfe|\x1d\x05|mT4\x1duQ\\\xd1A\xd2w\xd7q\xb8\x14E]\v\xbf\x10f]\v\x1f\x19\x87\x9d\x1f\x1b\xec\x06\xbaC\x1e\x05g_F\xcc-8f\xfb$\x02< \x94\xfb,\x02v1\u008b\x01\x8d\v\xfc\xa6#-/\x9c\xf5q\xe0\xf7\xb1\xfc\xacۜ\xbe\x89\x1e\xe6\x8aH\xf2\xfc\xc8e\xd9}x\xf9iĤ\x16\x82\xaa\x98u\x12\x16\x8c\xc6L6&F\x9d\x8e\xb3lv\xabC\xd6\x181\x85ĴO\xa2q\x83\x82\xde\xe8i\xcfE\xc5\xdfF\x83\xae\x0e\x9bc\x16\xfb`\xa8.\xb8\xbe\x1e\xa9\r\xc1\xa3e\x1a\x19\xa3\x9f\xff\xe7r\n]\xe0\xfeU\xcctB\xe3\xf9\x98\xcdc!̏\xd9;#\xa2\x7f\xe9\x12\x9a\x9a\xc0G\xc1\x13Xq/\xf0q0hL`\x1e\x1e)\x04\xc7\xe9I0d\\\xbc9\xc5\xf7y\xe5\xf5\xe1gx\xc0\x11\x11\x95\x86\xdb\xe7s\bV+\xcbJ\x15\xdc\xc3:\v\x15\x12I\x92\xa5\x8d]\xdaюݼ\xa0\xa7\xe9X>=Y\xa0\xab\xb4\xf5y\f7j\xedig\xd9qak)\xfcpa\x83\x92JA\xeeH\x15\xac\xa1\xdaҐ\x86j\x90\xd4\x1c\xde\x0f\x9e\x83\x19@\xdbH[1\tV\xa5\xf1i&\xce\vŊ\xba\xb4\x97\xe3\u07b4\xac\xcf\xf5͎\x10\xa8\xe2?V\xaaX\x83'\x98\x88cڝ\x8aH_\x1d\xeb9|\xa9\x1b\xe4&\x00\x14\x17!\xa1\xd4[\x9bU\x8f\x8f\xe2\f\xf6\xec\r\xaf\xe5\xae÷\xe4\x16\x18\x90\x80T\x92\x12X-͵\xef\xa0\xe9j\xb1\xa8\x18\"\xed\x02\xee[\xab>\xc6\x0e\xf7>\x06{\xe1\x88\x1b~\x860x\x15g'\x82\x81w\xc7D]\x1b\xe3\xae6:\x0e\b\xa7\x8c\x16fo\xec\xab\xc3\x03J\xb8k1\xb8\x82\xfc\x04i\xbe3\xcf'L\xa5=1\xcf:\x97\xa7\x96s\xd1`\xb3\xdd\v{\U00107164\xc6\xf5[\xc3\x14<q\x80\xaf\xda\v<\x8fv\x02\x9d\xbe\xe7)\xd1\x15\xde\xfd\xb6w\xe9K\xe9\x9d\xd0\xf7Q\x0f\x18\x03r>\xb3j\xdf2\x01\xc2y\x05\x14\x13\x9aϼ\x8e2=r^S:\xdf\xd3\xf4ȅdU\x05^1\xd5\"1=\be2կ\xb8\xfc\xaf\xa8\xba>\xbe\xccr+\x98\xd8\x1di\n\x99\f!CoR}\xa9ڕ^ۡ\xb10\a\xe7H'\x05{\xb2Y\xeb\xdc\a\xf8\x84\xf6\xbd\x96K\x00\xfa\x11Vv\x00\\\x17\xe61\xdb\xf9\xff\x0eE\x9a\x1e\x81\xf2\xfeٛ[18\xc9\x11L\xb8\xd6\x14\x16\xac`\x8a\x93\xd88\xab\xbc\x8b\x83\xb7#\\\x12\xfdگќ*\xd9O\xe2<\x14\xb4\xbb\xf7\xa6\xed\xbd\xf7\xd2S\xb8\x86\xd7\xd9\x0e\x87\x96-W\xf6\xcc~.\x97V\x8c\x15^\xe9\xdcؽV\xa5i\\K\xdd\xc2JP\xa5\xfdg\xd6\x14l!9\xceI\x03\u008cQ\x01Y-\xc9\tҌ#qH3u]\xac\x1eO\xfa>\x0e\xae\xa9\xde[\x1c\x81\x15\x98\xddѴ\xa6\x92\xe8\xeb#:j\x1b>\x92t\x1c͇\x805\xe7@eJ\xa8\x90\x88f\xa0\xfd\xfa\xd3i\xf3`\x9aK\xa8\x18\x04\xe1\x80Ǩ\xd3\xe6\x01\xaa#\x12\x1f\xa0\xaa\a\x00Zt\r\x7f\n\x93\x8d\x1b\x87\xec/A*\xbf>\x9a&\x1b7\x0e\xee\xfc\x1c\xf7\x1b#\xc4=p\xa0\x19\xe0twI\xcd:\xb0\x9d\xee\xc9\xd3\xc3\x18\xda}\x88\x19\xb4\x95\x89G\xa7\xa3/#\xcf\x1e\x8a[qؓ\xf3\x10Ѵ\x8dc\x87w\x03!\xbb<\xf3\xe0\xec\xb6囷|\xf3\x96o\xde\xf2\xcd[\xbey\xcb7o\xf9\xe6E\xc8-\u07fc囷|\xf3\x96o\xde\xf2\xcd[\xbey\xcb7o\xf9\xe6-\u07fc0\x87-\u07fc囷|\xf3\x96o~\x9e\xf9f\xdf\x7f\t\x0e\xaf=\x81\x9f\x88\tF\xf3\xb6\x12\xea\xfa\n\x1bj\xdc\xf3(\x0e\x8c\xcbT\xffr\x87\xfe톹\x9f\xef0\xbfL0\xfb\xf3\x0e]\xeal\xe1\xf7\v\xfa\xcc\xcdR\x8em\xc0AP\x9e\xe7?\x00\x00\x00\xff\xff\x01\x00\x00\xff\xff%\xe0\xc5c\xa3D\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.compute", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xec\\َ\xec4\x13~\x8d\xff\xfc\xcb\xf9Y\xc4& \x03\x88]lG\xc0-\xaf\x10\xb9\xe3괧\x13;\xc7vz\xba\xb9\x03\x84\x04\x12\xbc\x04g\x867\x84k\xe4%\x89\xb38q\xdc\\\xa1܌l\xc7\xf5ٵ\xb8\xecry\xfa\x1eST\xc2S\f\xa7\xa4$\x1ch\x92\xb1\xb2\xaa%\xc0\x91P,\x1e\xce\xff\x19}\xb9Q_\x12\xca0\xfc\xaeiO\xe3\x1e\xea\xa3\x01\xf8s\x8fY\x89\b\x1d\x0f\xb0\xdf\x13(\xb0\xf8\xe1َ\xe0\xf3\v\xd3\x18\t\xaaH\x8a0\xe6 \x84\x1e\xeb\xe86\xc8K\x05{!9\xa1\xf9\xfd\x1cHƨ\x90\x1c\x11*\x05.\x11\xbd\xfca\xa0\xdcf\x05\x05\x05\xdaA\xa1\x91\xfe\xe7A\x12\x12\xc9\xda\xccdoˊ\x12\x03\xadˣ\xfa\x93\x9ePQ\x83\xb8\a\x0e\b_Ώ\xc78\x86,\xd1\xdf\xf3\x9a\x1e)\xbb\xa3\xe7\xe7\xbc\xfdl\x8f\x03&\x02\xed\n\xc0\xe7\xe7\xbd]\x9b.\xa4\xa6\a@\x85<\\\xa6$\xd2\xe2\xda>\xf9\t\xb8 \x8c槷QQ\x1dPQqR\"~I\x95\xfa\xb0\xe2\xfa\xfc_\x8f\t\x14\x80\x84\xb5\x81\xbbq\x17\xfdu\x95\x11\xbc\xec\x01I\n$dz\x00\xc4\xe5\x0e\x90\xd4\x03\xd2A\x9bV\x83$%h\xa4\xff\xfb\x90*\xcen!3\x10ySQ\xb4;\x82\xe7)\x05\xa2x\xc7Ά\xb2\xa9X\xcaY\x19\x82\xa6\x9f2\x05-D\ve\xc4x~4\xa10\xd3!P\x92\xbf<(.^\xf4¨\xc5 \x11\xa1\xc0\x9d\xa5@\xbaF\xc5\x11Q4\x8c\x02\x95]\xc9\xceo\f\x9c\x8c\x80\x03g\xfa\xeb3\xcfL[ \xd5R\"e\x85J\xe6M\xc5Y\xf5\x9a\xd7W\xe6\x11\xe8\x9e\xe4\xe9\x9e\x140X\xfam\xf3\x02\xc77\x01\x1c\xbb\xc3\\\xeb\xf6\x1c\xa8\x04#\x89\xf4,\xb0.9\x9c\x87P\x97\f\x83\xa1֥\x95\xd4\x15\x92\aC\xadK\x0e\xf5\xac\xb5\xdf\x1a\f\x05\xa1GyiN;\x98p\xc8$\xe3\x17c\x85]u\xe8\xd9'Ve\x87\x02\xf4\xe4\xe86S\xd5!\xaf\x13N\xb3\xa3'%ʍ\xa0\xc0\x14\x87\x166K]\xb2\x9aJg|0\r\vV\xf5Z\x88Ui\xa4@{\xfa\u07b7\x9a4H\x82AHB\x91$\x8c\x9a\x15\xe06\f\xa55\xe1\xaa\f\x8a`5\xcf\xc0n\x7f\xa6\x1cj\x17F,\x1a~b\xb3\xebx\xd6\x16\xd7\xfd\x19Nm֜\x18+S\x911nhIWU(\x19\xa1\xf2aq\xf8\x8aqW\x99X\xd7\x17t\xf9j\x88.\x15P\xa0*\x7fԜN\x9c\xbb\x14ƒ\x80&\xb83d\fC\xaa\xb9Ѳ骍lf\am\tq\x8fƷ6\r\rg\x92e\xac\xd0t\x87\xb66y^\xfa-\x93Y5ew\rY\"\xb3*\xab\xf1|\x9f\x1aW\xb3\\\xe8\xa1[\xa9\x05\x9b\xae\xe6\xd9w@q4\xccɉ\x14\x90\x83ٯn\x9d\xba\x1en\xc7X\xa1QޘC\x11\x87ZbvGSu\x96a\xb5\x91z5j]\xe5\xe0\x84\xc4\xc4,{0\xc5\xfe|f\x9d\xab\x94\xc69g\xaa\xd0\xd2\xcdʫ;M\xf8\x96l\xb3<\x0eL\xc8o@\xde1~4^\xc9mh\a\xbb\xf7\xd8u\x83\xa2\x8f\xed\xee\xc9~o[\x86B\x9a8)t\x18B\xa6(\x93\xe4D,\xc3e\xbf\xa9=_\xde{\f\xa1Eb\xf9\x13)9\xd9\xd5\xd2=r\x14\xbd\xf6.\xdc\xf0\xb9m\a\xeek*\x9bI\x91\xae\x1a\xb0I5\x18\xd4J\xb4\x9bMN\x1d!ϸ\xb61h2\x00]\xb5=M\xcc\xd1\xc2$n\x90\x97O\x04x>\xe7\xd6ЋzGAڭɔC\xd7w#\x8c\a\xcfbh8欯R0\r\v\"\x1c\x03&=\xc0k\xf7w\r\xb2n\x7f\x9f\xe0Ѡ\xe4H\xc2\x1d2\xa6\x967\x95\xe0\x1d^c\xdc{\x0e\x10\rϢ\x82\xcc\xf8`]Z\xbd\xb5\u07b4]\x1a1\xa6\n(P\x8a?i\x1d\xbf\x13\x8aze\xb04\x1e'Y\x1agU\xec\xf4\xf1z>\xc2B\xaaϢ\x80\xaf\x8d\xb4ƣ.\x8a+:\xf0\xfa\xf2:\x0e\x97\"\xb3k\xe1\x17B\xb7k\xe1#c\xbb\xf3c\x8b\xad\xa0[\xe4A\xc0\xf7I\xc4܂\xe3\xc0\xf7#\xc0\x03\xc2\xc3\x0f#`\x17\xa3\xc6\x18и`r<\xd2\xf2\xc2Y\x1f[~\x15\xcbϺ\xcd\xe9\xf3\xe8a\xae\x88NϏ\xa6,\xbb\vY?\x88\x98\xd4B\xa0\x16\xb3N\xc2\x02ܘ\xc9\xc6Ľ\xe3q\x96\xcdnu\x18\x1c#\xa6\x908\xf9I4nP \x1d=\xed\xb9H\xfb\x8bh\xd0աx\xccb\xef\r\xd5\x06\xec\xd7#5a}\xb4L#\xe3\xfe\U000ff99cB{\x19\xf0i\xcctB\xef\bbv\xf8ȫ\x83\x98}j\xe1F!f\x9b\x8e\xb8h\x90S\xfa\xd1\x13x7x\x02+\xae \xde\v\x06\x8d\xb9\x03\b\x0fJ\x82\xaf\x04\x92`ȸ\xd0v\x8c\xef\xdb\x00\xd6G\xba\xe1\xb1MD\x00\x1cn\x9f\x7fC\\\\9V\xaa\xe1\x1e\xd6Y\xa8\x90H\x92,Uv\xe9\x06Vn\xf3\x82\x9e\xc6c\xf9\xf4䀮\xd2\xd6G1\xdc\xe8\xb5g\xfcr˅\xab\xa5\xf0s\x8c\vJ*\r\xb9#U\xb0\x86jGC\x06J!\xe99\xbc\x15<\a;\x80\xb1\x91\xa6b\xf3\xc3Z\xe3\xe3D\xa2\x17\x8a\x15u\xe9.ǽmY\x9f\xaa\x9c\x1d!P\xc5?\xafT\xb1\x01O0\x11Ǵ=\x80\x91\xae:\xd4s\xf8R\xb7\xc8*\xd6\x14\x17!\xa14\xbb\xa8S\x8f\x0f\x18-\xf6\xece\xb2\xe3\xae\xc3w\xff\x06\x18\x90\x80\xde\xd6\\\xf6\x9b\xae\x16\x8b\x0eW\xd26\xb6\xbfu\xeaC\xecp\xefc\xb1\x17N\xd3\xe1g\b\x8bWqv\"\x18x{\"5\xb5!\xeej\xa3\xe3\x80p\xcaha\xf7Ʈ\xda?\xa0\x84\xbb\x16\x8b+ȷ\x90\xe6;\xfb\xfa\xc3V\x9a\xc3\xf9\xacsy\xea8\x17\x036۽pG\x7fXȟ\\\xbf5\x8c\xc1\x93\t\xf0U{\x81\xe7\xcdQ\xa0\xd3\xf7\xbc\x84\xba»\xdfv.})\x93\x14\xfa\xbc\xeb\x01c@\x93\xafĚ\xa7X\x80p^\x01ń\xe63\x8f\xbbl\x8f\x9cה\xce\xf7\xb4=r!YU\x81WL\xb5Hl\x0fB\x99L\xcd#4\xff#\xb0\xb6\x8f/1\xde\b&vG\x1aC&}\xc8\xd0K[_\xa6y\xa5מ\xd0X\x98\x83\x9b\xc8\\\x05{\xb2Y\xeb\xdc\a\xf8\x84\xe6\xb9ٔ\x00\xcc\x1b\xb2\xec\x00\xb8.\xec[\xbc\xf3\xbf'\x14i{\x04\xca\xfb;o\x1a\xc7\xe2$G\xb0\xe1\x9a*,X\xc1\x18'qqVy\x97\tގpI\xcccE\xa59]r_\xf4y(h{\xc5N\x9b+\xf6\xa5\x97|\x8a\xd7\xd9\x0e\x87\x86\xad\xa9D\x9d\xfb\xda/\xad\x18+\xbcҹq{\x85\xbe\xfb\xf3\xfa^\a+A\x95\xf1\x9f\x99*\xb8B\x9a8'\xf5\b3F\x05d\xb5$'H3\x8e\xc4!\xcd\xf4ʹ\x02\xbb\xf3}\xec݈\xbd\xb98\x02+\xf4=EM%17Ut\xd0\xd6\x7f\xe39q4\xef\x03֜\x03\x95)\xa1B\"\x9a\x81\xf1\xebO\xc7ͽi.\xa1b\x10\x84\x03\x1e\xa2\x8e\x9b{\xa8\x13\x91x\x0fU\xbf50\xa2S\xfciL6l쳿\x04\xa9\xfd\xfa`\x9al\xd8ػ^\x9c\xb8\xdf\x18 \xee\x81\x03\xcd\x00\xa7\xbbKjׁ\xebtO\x9e\x1e\xd6\xd0\xeeC̠\xa9\x8c<:\x1d|\x19x\xf6P܊Þ\x9c\xfb\x88\xb6m\x18;\xbc\x1e\b٦\xb4{g\xb7-\xb5\xbd\xa5\xb6\xb7\xd4\xf6\x96\xda\xdeR\xdb[j{Km/Bn\xa9\xed-\xb5\xbd\xa5\xb6\xb7\xd4\xf6\x96\xda\xdeR\xdb[j{Kmo\xa9\xed-\xb5\xbd\xa5\xb6\xb7\xd4\xf6\x96\xda\xfeg\xa6\xb6}\xffOٿa\x05~\"6\xee͛J\xa8\xeb+\\\xa8aϣ80.S\xf3\x1b'\xe6W.\xe6~\xe8\xc4\xfe\x86\xc3\xec\x0fa\xb4Y\xba\x85_z\xe8\x92DK\xe9\xbc\x1e\aA)\xa5\xbf\x00\x00\x00\xff\xff\x01\x00\x00\xff\xff\xbf-bT\xcdE\x00\x00"))
 }

@@ -201,6 +201,7 @@ func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[st
 					NumInstances:        int64(serviceConfig.Concurrency.NumInstances),
 					RequestsPerInstance: int64(serviceConfig.Concurrency.RequestsPerInstance),
 					ScaleDownDelay:      serviceConfig.Concurrency.ScaleDownDelay,
+					ShutdownTimeout:     serviceConfig.Concurrency.ShutdownTimeout,
 				}
 			}
 
@@ -251,6 +252,10 @@ type ConfigInputs struct {
 
 	// ExistingConfig is the current config to preserve manual env vars from
 	ExistingConfig core_v1alpha.Config
+
+	// CliEnvVars are environment variables passed via CLI flags (e.g., miren deploy -e KEY=VALUE)
+	// These are applied with source="manual" and take precedence over app.toml vars
+	CliEnvVars []*build_v1alpha.EnvironmentVariable
 }
 
 // buildVersionConfig builds the app version config from all inputs.
@@ -343,6 +348,9 @@ func buildVersionConfig(inputs ConfigInputs) core_v1alpha.Config {
 	// Preserves existing variables when app.toml has no [[env]] section
 	cfg.Variable = mergeVariablesFromAppConfig(cfg.Variable, ac)
 
+	// Apply CLI-provided env vars last (highest precedence, always source="manual")
+	cfg.Variable = mergeCliEnvVars(cfg.Variable, inputs.CliEnvVars)
+
 	return cfg
 }
 
@@ -404,6 +412,38 @@ func mergeVariablesFromAppConfig(existingVars []core_v1alpha.Variable, appConfig
 	for key, v := range appConfigMap {
 		if _, hasManual := varMap[key]; !hasManual {
 			varMap[key] = v
+		}
+	}
+
+	// Convert map back to slice
+	result := make([]core_v1alpha.Variable, 0, len(varMap))
+	for _, v := range varMap {
+		result = append(result, v)
+	}
+
+	return result
+}
+
+// mergeCliEnvVars merges CLI-provided environment variables into the existing config.
+// CLI vars are always marked with source="manual" and override any existing var with the same key.
+func mergeCliEnvVars(existingVars []core_v1alpha.Variable, cliVars []*build_v1alpha.EnvironmentVariable) []core_v1alpha.Variable {
+	if len(cliVars) == 0 {
+		return existingVars
+	}
+
+	// Build a map of existing vars
+	varMap := make(map[string]core_v1alpha.Variable)
+	for _, v := range existingVars {
+		varMap[v.Key] = v
+	}
+
+	// CLI vars always override (marked as manual)
+	for _, cv := range cliVars {
+		varMap[cv.Key()] = core_v1alpha.Variable{
+			Key:       cv.Key(),
+			Value:     cv.Value(),
+			Sensitive: cv.Sensitive(),
+			Source:    "manual",
 		}
 	}
 
@@ -718,7 +758,12 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		AppConfig:        ac,
 		ProcfileServices: procfileServices,
 		ExistingConfig:   mrv.Config,
+		CliEnvVars:       args.EnvVars(),
 	})
+
+	if len(args.EnvVars()) > 0 {
+		b.Log.Info("applied CLI env vars", "count", len(args.EnvVars()))
+	}
 
 	if ac != nil && len(ac.EnvVars) > 0 {
 		b.Log.Info("merged env vars from app config", "count", len(ac.EnvVars))

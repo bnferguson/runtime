@@ -153,6 +153,24 @@ interfaces:
             type: DeploymentInfo
             doc: The active deployment (if any)
 
+      - name: CancelDeployment
+        index: 8
+        doc: Cancel an in-progress deployment
+        parameters:
+          - name: deployment_id
+            type: string
+            doc: The ID of the deployment to cancel
+          - name: caller_user_id
+            type: string
+            doc: User ID of the caller (from JWT claims, empty if no auth)
+        results:
+          - name: success
+            type: bool
+            doc: Whether cancellation succeeded
+          - name: error
+            type: string
+            doc: Error message if cancellation failed
+
 types:
   - type: DeploymentInfo
     doc: Information about a deployment

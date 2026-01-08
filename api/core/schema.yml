@@ -131,6 +131,9 @@ kinds:
                 num_instances:
                   type: int
                   doc: For fixed mode, number of instances to maintain
+                shutdown_timeout:
+                  type: string
+                  doc: Time to wait for graceful shutdown before force-killing (e.g. 10s, 30s). Defaults to 10s.
             disks:
               type: component
               doc: Disk attachments for this service

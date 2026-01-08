@@ -474,6 +474,77 @@ func (v *AnalysisResult) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type environmentVariableData struct {
+	Key       *string `cbor:"0,keyasint,omitempty" json:"key,omitempty"`
+	Value     *string `cbor:"1,keyasint,omitempty" json:"value,omitempty"`
+	Sensitive *bool   `cbor:"2,keyasint,omitempty" json:"sensitive,omitempty"`
+}
+
+type EnvironmentVariable struct {
+	data environmentVariableData
+}
+
+func (v *EnvironmentVariable) HasKey() bool {
+	return v.data.Key != nil
+}
+
+func (v *EnvironmentVariable) Key() string {
+	if v.data.Key == nil {
+		return ""
+	}
+	return *v.data.Key
+}
+
+func (v *EnvironmentVariable) SetKey(key string) {
+	v.data.Key = &key
+}
+
+func (v *EnvironmentVariable) HasValue() bool {
+	return v.data.Value != nil
+}
+
+func (v *EnvironmentVariable) Value() string {
+	if v.data.Value == nil {
+		return ""
+	}
+	return *v.data.Value
+}
+
+func (v *EnvironmentVariable) SetValue(value string) {
+	v.data.Value = &value
+}
+
+func (v *EnvironmentVariable) HasSensitive() bool {
+	return v.data.Sensitive != nil
+}
+
+func (v *EnvironmentVariable) Sensitive() bool {
+	if v.data.Sensitive == nil {
+		return false
+	}
+	return *v.data.Sensitive
+}
+
+func (v *EnvironmentVariable) SetSensitive(sensitive bool) {
+	v.data.Sensitive = &sensitive
+}
+
+func (v *EnvironmentVariable) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EnvironmentVariable) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EnvironmentVariable) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EnvironmentVariable) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type streamRecvArgsData struct {
 	Count *int32 `cbor:"0,keyasint,omitempty" json:"count,omitempty"`
 }
@@ -640,9 +711,10 @@ func (v StreamClient) Recv(ctx context.Context, count int32) (*StreamClientRecvR
 }
 
 type builderBuildFromTarArgsData struct {
-	Application *string         `cbor:"0,keyasint,omitempty" json:"application,omitempty"`
-	Tardata     *rpc.Capability `cbor:"1,keyasint,omitempty" json:"tardata,omitempty"`
-	Status      *rpc.Capability `cbor:"2,keyasint,omitempty" json:"status,omitempty"`
+	Application *string                 `cbor:"0,keyasint,omitempty" json:"application,omitempty"`
+	Tardata     *rpc.Capability         `cbor:"1,keyasint,omitempty" json:"tardata,omitempty"`
+	Status      *rpc.Capability         `cbor:"2,keyasint,omitempty" json:"status,omitempty"`
+	EnvVars     *[]*EnvironmentVariable `cbor:"3,keyasint,omitempty" json:"envVars,omitempty"`
 }
 
 type BuilderBuildFromTarArgs struct {
@@ -681,6 +753,14 @@ func (v *BuilderBuildFromTarArgs) Status() *stream.SendStreamClient[*Status] {
 		return nil
 	}
 	return &stream.SendStreamClient[*Status]{Client: v.call.NewClient(v.data.Status)}
+}
+
+func (v *BuilderBuildFromTarArgs) HasEnvVars() bool {
+	return v.data.EnvVars != nil
+}
+
+func (v *BuilderBuildFromTarArgs) EnvVars() []*EnvironmentVariable {
+	return *v.data.EnvVars
 }
 
 func (v *BuilderBuildFromTarArgs) MarshalCBOR() ([]byte, error) {
@@ -930,7 +1010,7 @@ func (v *BuilderClientBuildFromTarResults) AccessInfo() *AccessInfo {
 	return *v.data.AccessInfo
 }
 
-func (v BuilderClient) BuildFromTar(ctx context.Context, application string, tardata stream.RecvStream[[]byte], status stream.SendStream[*Status]) (*BuilderClientBuildFromTarResults, error) {
+func (v BuilderClient) BuildFromTar(ctx context.Context, application string, tardata stream.RecvStream[[]byte], status stream.SendStream[*Status], envVars []*EnvironmentVariable) (*BuilderClientBuildFromTarResults, error) {
 	args := BuilderBuildFromTarArgs{}
 	caps := map[rpc.OID]*rpc.InlineCapability{}
 	args.data.Application = &application
@@ -944,6 +1024,7 @@ func (v BuilderClient) BuildFromTar(ctx context.Context, application string, tar
 		args.data.Status = c
 		caps[oid] = ic
 	}
+	args.data.EnvVars = &envVars
 
 	var ret builderBuildFromTarResultsData
 

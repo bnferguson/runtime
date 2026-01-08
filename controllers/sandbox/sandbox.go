@@ -43,6 +43,7 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/network/network_v1alpha"
+	storage "miren.dev/runtime/api/storage/storage_v1alpha"
 )
 
 const (
@@ -477,10 +478,13 @@ func (c *SandboxController) Close() error {
 }
 
 const (
-	sandboxVersionLabel   = "runtime.computer/sandbox-version"
-	sandboxEntityLabel    = "runtime.computer/entity-id"
-	sandboxVerEntityLabel = "runtime.computer/version-entity"
-	sandboxKindLabel      = "runtime.computer/container-kind"
+	sandboxVersionLabel    = "runtime.computer/sandbox-version"
+	sandboxEntityLabel     = "runtime.computer/entity-id"
+	sandboxVerEntityLabel  = "runtime.computer/version-entity"
+	sandboxKindLabel       = "runtime.computer/container-kind"
+	shutdownTimeoutLabel   = "runtime.computer/shutdown-timeout"
+	defaultShutdownTimeout = 10 * time.Second
+	shutdownPollInterval   = 100 * time.Millisecond
 )
 
 const (
@@ -1942,6 +1946,10 @@ func (c *SandboxController) buildSubContainerSpec(
 		lbls[sandboxVerEntityLabel] = sb.Spec.Version.String()
 	}
 
+	if co.ShutdownTimeout != "" {
+		lbls[shutdownTimeoutLabel] = co.ShutdownTimeout
+	}
+
 	opts = append(opts,
 		containerd.WithNewSnapshot(id, img),
 		containerd.WithNewSpec(specOpts...),
@@ -1950,6 +1958,34 @@ func (c *SandboxController) buildSubContainerSpec(
 	)
 
 	return opts, nil
+}
+
+// containerShutdownInfo tracks a container during graceful shutdown
+type containerShutdownInfo struct {
+	container containerd.Container
+	task      containerd.Task
+	timeout   time.Duration
+	id        string
+}
+
+// getShutdownTimeout extracts shutdown timeout from container labels, falling back to default
+func getShutdownTimeout(ctx context.Context, cont containerd.Container) time.Duration {
+	labels, err := cont.Labels(ctx)
+	if err != nil {
+		return defaultShutdownTimeout
+	}
+
+	timeoutStr := labels[shutdownTimeoutLabel]
+	if timeoutStr == "" {
+		return defaultShutdownTimeout
+	}
+
+	timeout, err := time.ParseDuration(timeoutStr)
+	if err != nil {
+		return defaultShutdownTimeout
+	}
+
+	return timeout
 }
 
 func (c *SandboxController) destroySubContainers(ctx context.Context, id entity.Id) error {
@@ -1962,121 +1998,164 @@ func (c *SandboxController) destroySubContainers(ctx context.Context, id entity.
 	}
 
 	prefix := containerPrefix(id)
-	var containerIds []string
+	var containers []containerShutdownInfo
+	var maxTimeout time.Duration
+
 	for _, cont := range containerList {
 		containerID := cont.ID()
 		if strings.HasPrefix(containerID, prefix+"-") {
-			containerIds = append(containerIds, containerID)
+			timeout := getShutdownTimeout(ctx, cont)
+			if timeout > maxTimeout {
+				maxTimeout = timeout
+			}
+			containers = append(containers, containerShutdownInfo{
+				container: cont,
+				id:        containerID,
+				timeout:   timeout,
+			})
 		}
 	}
 
-	if len(containerIds) == 0 {
+	if len(containers) == 0 {
 		c.Log.Debug("no subcontainers found to destroy", "id", id)
 		return nil
 	}
 
-	// Set up timeout for the entire operation (1 minute max)
-	timeout := 60 * time.Second
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	// Set up timeout for the entire operation (max shutdown timeout + buffer)
+	overallTimeout := maxTimeout + 30*time.Second
+	ctx, cancel := context.WithTimeout(ctx, overallTimeout)
 	defer cancel()
 
-	c.Log.Info("starting subcontainer destruction", "id", id, "containers", len(containerIds), "timeout", timeout)
+	c.Log.Info("starting graceful shutdown of subcontainers",
+		"sandbox_id", id,
+		"containers", len(containers),
+		"max_shutdown_timeout", maxTimeout,
+		"overall_timeout", overallTimeout)
 
 	// Stop port monitoring for all containers
-	for _, containerID := range containerIds {
+	for _, info := range containers {
 		if c.portMonitor != nil {
-			c.portMonitor.StopMonitoring(containerID)
+			c.portMonitor.StopMonitoring(info.id)
 		}
 	}
 
-	// Retry loop with exponential backoff
-	retryInterval := 100 * time.Millisecond
-	maxRetryInterval := 2 * time.Second
+	// Phase 1: Send SIGTERM to all containers and set up exit detection
+	startTime := time.Now()
 
-	for {
+	// Channel for aggregated exit events
+	type exitEvent struct {
+		id     string
+		status containerd.ExitStatus
+	}
+	exitedChan := make(chan exitEvent, len(containers))
+
+	// Track containers waiting for shutdown
+	tasksByID := make(map[string]*containerShutdownInfo)
+
+	for i := range containers {
+		info := &containers[i]
+		task, err := info.container.Task(ctx, nil)
+		if err != nil {
+			c.Log.Debug("no task found for container", "id", info.id)
+			continue
+		}
+		info.task = task
+
+		// Set up exit channel before sending SIGTERM
+		exitCh, err := task.Wait(ctx)
+		if err != nil {
+			c.Log.Debug("failed to get wait channel, process may already be gone", "id", info.id, "err", err)
+			continue
+		}
+
+		// Spawn goroutine to detect exit
+		go func(id string, ch <-chan containerd.ExitStatus) {
+			select {
+			case status := <-ch:
+				exitedChan <- exitEvent{id: id, status: status}
+			case <-ctx.Done():
+			}
+		}(info.id, exitCh)
+
+		if err := task.Kill(ctx, unix.SIGTERM); err != nil {
+			c.Log.Debug("failed to send SIGTERM", "id", info.id, "err", err)
+			continue
+		}
+
+		c.Log.Debug("sent SIGTERM to task", "id", info.id, "shutdown_timeout", info.timeout)
+		tasksByID[info.id] = info
+	}
+
+	// Phase 2: Wait for graceful exit, respecting per-container timeouts
+	ticker := time.NewTicker(shutdownPollInterval)
+	defer ticker.Stop()
+
+	for len(tasksByID) > 0 {
 		select {
 		case <-ctx.Done():
-			if ctx.Err() == context.DeadlineExceeded {
-				return fmt.Errorf("failed to destroy subcontainers within %v timeout", timeout)
-			}
-			return fmt.Errorf("context cancelled while destroying subcontainers: %w", ctx.Err())
-		default:
-		}
+			c.Log.Warn("context cancelled during graceful shutdown", "sandbox_id", id, "remaining", len(tasksByID))
+			goto forceKill
 
-		// Check if any containers still exist
-		remainingContainers := make([]string, 0)
-		for _, id := range containerIds {
-			cont, err := c.CC.LoadContainer(ctx, id)
-			if err != nil {
-				if errdefs.IsNotFound(err) {
-					// Container doesn't exist, consider it deleted
-					c.Log.Debug("container not found, considering deleted", "id", id)
-				} else {
-					c.Log.Error("failed to load container", "id", id, "err", err)
+		case ev := <-exitedChan:
+			info, ok := tasksByID[ev.id]
+			if !ok {
+				continue // Already processed
+			}
+			c.Log.Debug("task exited gracefully", "id", info.id, "exit_code", ev.status.ExitCode())
+			if _, err := info.task.Delete(ctx); err != nil {
+				c.Log.Debug("failed to delete exited task", "id", info.id, "err", err)
+			}
+			delete(tasksByID, ev.id)
+
+		case <-ticker.C:
+			// Check timeouts for remaining tasks
+			for id, info := range tasksByID {
+				if time.Since(startTime) >= info.timeout {
+					c.Log.Info("shutdown timeout expired, force killing",
+						"id", info.id,
+						"elapsed", time.Since(startTime),
+						"timeout", info.timeout)
+					if err := info.task.Kill(ctx, unix.SIGKILL); err != nil {
+						c.Log.Debug("failed to send SIGKILL", "id", info.id, "err", err)
+					}
+					if _, err := info.task.Delete(ctx, containerd.WithProcessKill); err != nil {
+						c.Log.Debug("failed to delete task after SIGKILL", "id", info.id, "err", err)
+					}
+					delete(tasksByID, id)
 				}
-
-				continue
-			}
-			remainingContainers = append(remainingContainers, id)
-
-			// Try to kill and delete the task
-			task, err := cont.Task(ctx, nil)
-			if err == nil {
-				// First try SIGTERM
-				err = task.Kill(ctx, unix.SIGTERM)
-				if err != nil {
-					c.Log.Debug("failed to send SIGTERM", "id", id, "err", err)
-				} else {
-					c.Log.Debug("sent SIGTERM to task", "id", id)
-				}
-
-				// Wait a bit then try to delete the task
-				time.Sleep(50 * time.Millisecond)
-
-				_, err = task.Delete(ctx, containerd.WithProcessKill)
-				if err != nil {
-					c.Log.Debug("failed to delete task", "id", id, "err", err)
-				} else {
-					c.Log.Debug("deleted task", "id", id)
-				}
-			} else {
-				c.Log.Debug("no task found for container", "id", id)
-			}
-
-			// Try to delete the container
-			err = cont.Delete(ctx, containerd.WithSnapshotCleanup)
-			if err != nil {
-				c.Log.Debug("failed to delete container", "id", id, "err", err)
-			} else {
-				c.Log.Debug("deleted container", "id", id)
-			}
-		}
-
-		// If no containers remain, we're done
-		if len(remainingContainers) == 0 {
-			c.Log.Info("all subcontainers destroyed successfully", "id", id)
-			return nil
-		}
-
-		// Update the list of containers to check in the next iteration
-		containerIds = remainingContainers
-		c.Log.Debug("waiting for containers to be destroyed", "id", id, "remaining", len(containerIds), "retry_in", retryInterval)
-
-		// Wait before retrying
-		select {
-		case <-ctx.Done():
-			if ctx.Err() == context.DeadlineExceeded {
-				return fmt.Errorf("failed to destroy subcontainers within %v timeout, remaining: %v", timeout, containerIds)
-			}
-			return fmt.Errorf("context cancelled while destroying subcontainers: %w", ctx.Err())
-		case <-time.After(retryInterval):
-			// Exponential backoff with max limit
-			retryInterval = time.Duration(float64(retryInterval) * 1.5)
-			if retryInterval > maxRetryInterval {
-				retryInterval = maxRetryInterval
 			}
 		}
 	}
+
+	c.Log.Info("all tasks exited", "sandbox_id", id, "elapsed", time.Since(startTime))
+	goto cleanup
+
+forceKill:
+	// Force kill any remaining tasks
+	for _, info := range tasksByID {
+		c.Log.Info("force killing task", "id", info.id)
+		if err := info.task.Kill(ctx, unix.SIGKILL); err != nil {
+			c.Log.Debug("failed to send SIGKILL", "id", info.id, "err", err)
+		}
+		if _, err := info.task.Delete(ctx, containerd.WithProcessKill); err != nil {
+			c.Log.Debug("failed to delete task", "id", info.id, "err", err)
+		}
+	}
+
+cleanup:
+	// Delete all containers
+	for _, info := range containers {
+		if err := info.container.Delete(ctx, containerd.WithSnapshotCleanup); err != nil {
+			if !errdefs.IsNotFound(err) {
+				c.Log.Debug("failed to delete container", "id", info.id, "err", err)
+			}
+		} else {
+			c.Log.Debug("deleted container", "id", info.id)
+		}
+	}
+
+	c.Log.Info("subcontainer destruction complete", "sandbox_id", id, "elapsed", time.Since(startTime))
+	return nil
 }
 
 func (c *SandboxController) Delete(ctx context.Context, id entity.Id) error {
@@ -2207,6 +2286,12 @@ func (c *SandboxController) stopSandbox(ctx context.Context, id entity.Id) error
 		c.Log.Info("container stopped", "id", id)
 	}
 
+	// Release disk leases owned by this sandbox
+	if err := c.releaseDiskLeases(ctx, id); err != nil {
+		c.Log.Error("failed to release disk leases", "id", id, "error", err)
+		// Continue with cleanup even if this fails
+	}
+
 	// Clean up temp directory
 	tmpDir := filepath.Join(c.Tempdir, "containerd", id.PathSafe())
 	_ = os.RemoveAll(tmpDir)
@@ -2234,6 +2319,56 @@ func (c *SandboxController) stopSandbox(ctx context.Context, id entity.Id) error
 	err = c.deleteEndpoints(ctx, id, sandboxIPs)
 	if err != nil {
 		c.Log.Error("failed to delete endpoints for sandbox", "id", id, "error", err)
+	}
+
+	return nil
+}
+
+// releaseDiskLeases releases all disk leases owned by the given sandbox.
+// This transitions leases to RELEASED status, which triggers the disk lease
+// controller to unmount the volumes and release the underlying resources.
+func (c *SandboxController) releaseDiskLeases(ctx context.Context, sandboxID entity.Id) error {
+	// Find all disk leases owned by this sandbox
+	listResp, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, storage.KindDiskLease))
+	if err != nil {
+		return fmt.Errorf("failed to list disk leases: %w", err)
+	}
+
+	for _, e := range listResp.Values() {
+		var lease storage.DiskLease
+		lease.Decode(e.Entity())
+
+		if lease.SandboxId != sandboxID {
+			continue
+		}
+
+		// Skip if already released
+		if lease.Status == storage.RELEASED {
+			continue
+		}
+
+		c.Log.Info("releasing disk lease",
+			"lease", lease.ID,
+			"disk", lease.DiskId,
+			"sandbox", sandboxID)
+
+		_, err := c.EAC.Patch(ctx, entity.New(
+			entity.DBId, lease.ID,
+			(&storage.DiskLease{
+				Status: storage.RELEASED,
+			}).Encode,
+		).Attrs(), 0)
+		if err != nil {
+			c.Log.Error("failed to release disk lease",
+				"lease", lease.ID,
+				"error", err)
+			// Continue releasing other leases
+			continue
+		}
+
+		c.Log.Info("disk lease released",
+			"lease", lease.ID,
+			"disk", lease.DiskId)
 	}
 
 	return nil

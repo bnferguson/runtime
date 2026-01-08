@@ -262,6 +262,10 @@ func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 		cfg.TLS.AdditionalNames = flags.TLSConfigAdditionalNames
 	}
 
+	if flags.TLSConfigSelfSigned != nil {
+		cfg.TLS.SelfSigned = flags.TLSConfigSelfSigned
+	}
+
 	if flags.TLSConfigStandardTLS != nil {
 		cfg.TLS.StandardTLS = flags.TLSConfigStandardTLS
 	}

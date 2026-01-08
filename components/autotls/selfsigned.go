@@ -1,0 +1,144 @@
+package autotls
+
+import (
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"fmt"
+	"log/slog"
+	"math"
+	"math/big"
+	"net"
+	"net/http"
+	"time"
+)
+
+// ServeTLSSelfSigned serves HTTPS using a self-signed certificate.
+// This is intended for development and testing only.
+func ServeTLSSelfSigned(ctx context.Context, log *slog.Logger, h http.Handler) error {
+	log = log.With("module", "autotls", "mode", "self-signed")
+	log.Info("serving TLS with self-signed certificate (dev mode)")
+
+	cert, err := generateSelfSignedCert()
+	if err != nil {
+		return fmt.Errorf("failed to generate self-signed certificate: %w", err)
+	}
+
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
+	}
+
+	server := &http.Server{
+		Addr:              ":443",
+		Handler:           h,
+		TLSConfig:         tlsConfig,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	go func() {
+		log.Info("starting HTTPS server with self-signed cert", "addr", ":443")
+		err := server.ListenAndServeTLS("", "")
+		if err != nil && err != http.ErrServerClosed {
+			log.Error("error serving HTTPS", "error", err)
+		}
+	}()
+
+	// Also start HTTP server on port 80 that redirects to HTTPS
+	httpServer := &http.Server{
+		Addr: ":80",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			host := r.Host
+			if hostWithoutPort, _, err := net.SplitHostPort(host); err == nil {
+				host = hostWithoutPort
+			}
+			target := "https://" + host + r.URL.RequestURI()
+			http.Redirect(w, r, target, http.StatusFound)
+		}),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	go func() {
+		log.Info("starting HTTP server for HTTPS redirect", "addr", ":80")
+		err := httpServer.ListenAndServe()
+		if err != nil && err != http.ErrServerClosed {
+			log.Error("error serving HTTP", "error", err)
+		}
+	}()
+
+	// Monitor for context cancellation
+	go func() {
+		<-ctx.Done()
+		log.Info("shutting down HTTPS and HTTP servers")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Error("HTTPS server shutdown error", "error", err)
+		}
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			log.Error("HTTP server shutdown error", "error", err)
+		}
+		log.Info("HTTPS and HTTP servers shutdown complete")
+	}()
+
+	return nil
+}
+
+// generateSelfSignedCert creates an in-memory self-signed certificate
+func generateSelfSignedCert() (tls.Certificate, error) {
+	pubkey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("failed to generate private key: %w", err)
+	}
+
+	serialNumber, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("failed to generate serial number: %w", err)
+	}
+
+	certTemplate := x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject: pkix.Name{
+			Organization: []string{"Miren Dev"},
+		},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(365 * 24 * time.Hour), // valid for 1 year
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1"), net.IPv6loopback},
+		DNSNames:              []string{"localhost"},
+	}
+
+	derBytes, err := x509.CreateCertificate(rand.Reader, &certTemplate, &certTemplate, pubkey, privateKey)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("failed to create certificate: %w", err)
+	}
+
+	pkbytes, err := x509.MarshalPKCS8PrivateKey(privateKey)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("failed to marshal private key: %w", err)
+	}
+
+	privateKeyPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "PRIVATE KEY",
+		Bytes: pkbytes,
+	})
+
+	certPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: derBytes,
+	})
+
+	tlsCert, err := tls.X509KeyPair(certPEM, privateKeyPEM)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("failed to create x509 key pair: %w", err)
+	}
+
+	return tlsCert, nil
+}

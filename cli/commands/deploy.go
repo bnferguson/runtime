@@ -33,10 +33,12 @@ import (
 func Deploy(ctx *Context, opts struct {
 	AppCentric
 
-	Analyze       bool   `long:"analyze" description:"Analyze the app without building (show detected stack, services, etc.)"`
-	Explain       bool   `short:"x" long:"explain" description:"Explain the build process"`
-	ExplainFormat string `long:"explain-format" description:"Explain format" choice:"auto" choice:"plain" choice:"tty" choice:"rawjson" default:"auto"` //nolint
-	Force         bool   `short:"f" long:"force" description:"Skip confirmation prompt"`
+	Analyze       bool     `long:"analyze" description:"Analyze the app without building (show detected stack, services, etc.)"`
+	Explain       bool     `short:"x" long:"explain" description:"Explain the build process"`
+	ExplainFormat string   `long:"explain-format" description:"Explain format" choice:"auto" choice:"plain" choice:"tty" choice:"rawjson" default:"auto"` //nolint
+	Force         bool     `short:"f" long:"force" description:"Skip confirmation prompt"`
+	Env           []string `short:"e" long:"env" description:"Set environment variable (KEY=VALUE, KEY=@file, or KEY to prompt)"`
+	Sensitive     []string `short:"s" long:"sensitive" description:"Set sensitive environment variable (masked in output)"`
 }) error {
 	name := opts.App
 	dir := opts.Dir
@@ -234,6 +236,27 @@ func Deploy(ctx *Context, opts struct {
 	deploymentId := createResult.Deployment().Id()
 	ctx.Log.Info("Created deployment record", "deployment_id", deploymentId)
 
+	// Parse environment variables to pass to build server
+	var envVars []*build_v1alpha.EnvironmentVariable
+	if len(opts.Env) > 0 || len(opts.Sensitive) > 0 {
+		envSpecs, err := ParseEnvVarSpecs(opts.Env, opts.Sensitive)
+		if err != nil {
+			return err
+		}
+
+		// Convert to build_v1alpha.EnvironmentVariable for RPC
+		envVars = make([]*build_v1alpha.EnvironmentVariable, len(envSpecs))
+		for i, spec := range envSpecs {
+			ev := &build_v1alpha.EnvironmentVariable{}
+			ev.SetKey(spec.Key)
+			ev.SetValue(spec.Value)
+			ev.SetSensitive(spec.Sensitive)
+			envVars[i] = ev
+		}
+
+		ctx.Printf("  Setting %d environment variable(s)...\n", len(envVars))
+	}
+
 	// Initialize build error/log tracking
 	var buildErrors []string
 	var buildLogs []string
@@ -360,7 +383,7 @@ func Deploy(ctx *Context, opts struct {
 
 		cb = createBuildStatusCallback(ctx, nil, nil, nil, &buildErrors, nil, progressHandler)
 
-		results, err = bc.BuildFromTar(ctx, name, stream.ServeReader(ctx, r), cb)
+		results, err = bc.BuildFromTar(ctx, name, stream.ServeReader(ctx, r), cb, envVars)
 		if err != nil {
 			// Check if this was a context cancellation (user pressed CTRL-C)
 			if ctx.Err() != nil {
@@ -446,7 +469,7 @@ func Deploy(ctx *Context, opts struct {
 
 		cb = createBuildStatusCallback(deployCtx, updateCh, transferCh, transfers, &buildErrors, &buildLogs, progressHandler)
 
-		results, err = bc.BuildFromTar(deployCtx, name, stream.ServeReader(deployCtx, r), cb)
+		results, err = bc.BuildFromTar(deployCtx, name, stream.ServeReader(deployCtx, r), cb, envVars)
 
 		// Ensure the progress UI is shut down before printing
 		p.Quit()

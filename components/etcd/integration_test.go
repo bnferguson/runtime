@@ -19,8 +19,6 @@ import (
 	"miren.dev/runtime/pkg/testutils"
 )
 
-const testNamespace = "miren-etcd-test"
-
 func TestEtcdComponentIntegration(t *testing.T) {
 	testDeps, cleanup := testutils.NewTestDeps()
 	defer cleanup()
@@ -37,12 +35,15 @@ func TestEtcdComponentIntegration(t *testing.T) {
 		Level: slog.LevelDebug,
 	}))
 
+	// Use dynamic namespace to avoid conflicts with parallel tests
+	testNamespace := fmt.Sprintf("miren-etcd-test-%d", time.Now().UnixNano())
+
 	// Create etcd component
 	component := etcd.NewEtcdComponent(log, cc, testNamespace, tmpDir)
 
-	// Use test-specific ports to avoid conflicts
-	clientPort := 23790
-	peerPort := 23791
+	// Use dynamic ports to avoid conflicts with parallel tests
+	clientPort := testutils.GetFreePort(t)
+	peerPort := testutils.GetFreePort(t)
 
 	config := etcd.EtcdConfig{
 		Name:         "test-etcd",

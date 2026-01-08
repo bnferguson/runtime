@@ -362,6 +362,7 @@ type TLSConfig struct {
 	AcmeEmail       *string  `toml:"acme_email" env:"MIREN_TLS_ACME_EMAIL"`
 	AdditionalIPs   []string `toml:"additional_ips" env:"MIREN_TLS_ADDITIONAL_IPS"`
 	AdditionalNames []string `toml:"additional_names" env:"MIREN_TLS_ADDITIONAL_NAMES"`
+	SelfSigned      *bool    `toml:"self_signed" env:"MIREN_TLS_SELF_SIGNED"`
 	StandardTLS     *bool    `toml:"standard_tls" env:"MIREN_TLS_STANDARD_TLS"`
 }
 
@@ -389,6 +390,19 @@ func (c *TLSConfig) GetAcmeEmail() string {
 // SetAcmeEmail sets the value of AcmeEmail
 func (c *TLSConfig) SetAcmeEmail(v string) {
 	c.AcmeEmail = &v
+}
+
+// GetSelfSigned returns the value of SelfSigned or its zero value if nil
+func (c *TLSConfig) GetSelfSigned() bool {
+	if c.SelfSigned != nil {
+		return *c.SelfSigned
+	}
+	return false
+}
+
+// SetSelfSigned sets the value of SelfSigned
+func (c *TLSConfig) SetSelfSigned(v bool) {
+	c.SelfSigned = &v
 }
 
 // GetStandardTLS returns the value of StandardTLS or its zero value if nil
