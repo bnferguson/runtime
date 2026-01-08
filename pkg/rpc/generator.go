@@ -617,11 +617,25 @@ func (g *Generator) readForField(f *j.File, t *DescType, field *DescField) {
 
 			f.Line()
 
-			f.Func().Params(
-				j.Id("v").Op("*").Add(recv),
-			).Id(fname).Params().Add(g.properType(field.Type)).Block(
-				j.Return(j.Op("*").Id("v").Dot("data").Dot(name)),
-			)
+			// Check if the type is nillable (slice or pointer) to determine if we can return nil
+			isNillable := strings.HasPrefix(field.Type, "[]") || strings.HasPrefix(field.Type, "*")
+
+			if isNillable {
+				f.Func().Params(
+					j.Id("v").Op("*").Add(recv),
+				).Id(fname).Params().Add(g.properType(field.Type)).Block(
+					j.If(j.Id("v").Dot("data").Dot(name).Op("==").Nil()).Block(
+						j.Return(j.Nil()),
+					),
+					j.Return(j.Op("*").Id("v").Dot("data").Dot(name)),
+				)
+			} else {
+				f.Func().Params(
+					j.Id("v").Op("*").Add(recv),
+				).Id(fname).Params().Add(g.properType(field.Type)).Block(
+					j.Return(j.Op("*").Id("v").Dot("data").Dot(name)),
+				)
+			}
 		}
 
 		f.Line()
