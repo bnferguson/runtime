@@ -94,14 +94,25 @@ func AppHistory(ctx *Context, opts struct {
 	inProgressStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("14")) // Cyan
 	cancelledStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("11"))  // Yellow
 
+	// Check if cluster has identity configured
+	hasIdentity := ctx.ClusterConfig != nil && (ctx.ClusterConfig.Identity != "" || ctx.ClusterConfig.CloudAuth)
+
 	// Build headers and rows based on detailed mode
 	var headers []string
 	var rows []ui.Row
 
 	if opts.Detailed {
-		headers = []string{"STATUS", "CLUSTER", "VERSION", "DEPLOYED BY", "WHEN", "GIT SHA", "BRANCH", "COMMIT MESSAGE"}
+		if hasIdentity {
+			headers = []string{"STATUS", "CLUSTER", "VERSION", "DEPLOYED BY", "WHEN", "GIT SHA", "BRANCH", "COMMIT MESSAGE"}
+		} else {
+			headers = []string{"STATUS", "CLUSTER", "VERSION", "WHEN", "GIT SHA", "BRANCH", "COMMIT MESSAGE"}
+		}
 	} else {
-		headers = []string{"STATUS", "VERSION", "DEPLOYED BY", "WHEN", "ID", "ERROR"}
+		if hasIdentity {
+			headers = []string{"STATUS", "VERSION", "DEPLOYED BY", "WHEN", "ID", "ERROR"}
+		} else {
+			headers = []string{"STATUS", "VERSION", "WHEN", "ID", "ERROR"}
+		}
 	}
 
 	for _, dep := range deployments {
@@ -198,25 +209,46 @@ func AppHistory(ctx *Context, opts struct {
 
 		var row ui.Row
 		if opts.Detailed {
-			row = ui.Row{styledStatus, cluster, version, user, timeStr, gitSha, gitBranch, gitMessage}
+			if hasIdentity {
+				row = ui.Row{styledStatus, cluster, version, user, timeStr, gitSha, gitBranch, gitMessage}
+			} else {
+				row = ui.Row{styledStatus, cluster, version, timeStr, gitSha, gitBranch, gitMessage}
+			}
 		} else {
 			deploymentId := ui.CleanEntityID(dep.Id())
-			row = ui.Row{styledStatus, version, user, timeStr, deploymentId, errorInfo}
+			if hasIdentity {
+				row = ui.Row{styledStatus, version, user, timeStr, deploymentId, errorInfo}
+			} else {
+				row = ui.Row{styledStatus, version, timeStr, deploymentId, errorInfo}
+			}
 		}
 		rows = append(rows, row)
 	}
 
-	// Configure column hints
+	// Configure column hints (indices depend on whether identity column is shown)
 	var builder *ui.ColumnBuilder
 	if opts.Detailed {
-		// In detailed mode, protect STATUS from truncation, allow others to scale
-		builder = ui.Columns().
-			NoTruncate(0).  // STATUS
-			MaxWidth(7, 40) // COMMIT MESSAGE
+		if hasIdentity {
+			// With identity: STATUS(0), CLUSTER(1), VERSION(2), DEPLOYED BY(3), WHEN(4), GIT SHA(5), BRANCH(6), COMMIT MESSAGE(7)
+			builder = ui.Columns().
+				NoTruncate(0).  // STATUS
+				MaxWidth(7, 40) // COMMIT MESSAGE
+		} else {
+			// Without identity: STATUS(0), CLUSTER(1), VERSION(2), WHEN(3), GIT SHA(4), BRANCH(5), COMMIT MESSAGE(6)
+			builder = ui.Columns().
+				NoTruncate(0).  // STATUS
+				MaxWidth(6, 40) // COMMIT MESSAGE
+		}
 	} else {
-		// In normal mode, protect STATUS and ID, allow ERROR to scale
-		builder = ui.Columns().
-			NoTruncate(0, 4) // STATUS and ID
+		if hasIdentity {
+			// With identity: STATUS(0), VERSION(1), DEPLOYED BY(2), WHEN(3), ID(4), ERROR(5)
+			builder = ui.Columns().
+				NoTruncate(0, 4) // STATUS and ID
+		} else {
+			// Without identity: STATUS(0), VERSION(1), WHEN(2), ID(3), ERROR(4)
+			builder = ui.Columns().
+				NoTruncate(0, 3) // STATUS and ID
+		}
 	}
 
 	columns := ui.AutoSizeColumns(headers, rows, builder)
