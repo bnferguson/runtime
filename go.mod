@@ -113,7 +113,7 @@ require (
 	google.golang.org/protobuf v1.36.10
 	gopkg.in/yaml.v3 v3.0.1
 	k8s.io/klog/v2 v2.130.1
-	miren.dev/mflags v0.0.0-20251218002004-ecb4128a2af4
+	miren.dev/mflags v0.0.0-20260108185351-14a5f63f5679
 )
 
 require (
