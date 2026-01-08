@@ -15,6 +15,7 @@ import (
 	"miren.dev/runtime/pkg/entity/enttest"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/pkg/testutils"
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 )
