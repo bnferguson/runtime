@@ -166,10 +166,14 @@ func AppHistory(ctx *Context, opts struct {
 
 		// Format version (handle special patterns)
 		version := dep.AppVersionId()
-		if strings.HasPrefix(version, "pending-") {
-			version = "pending (building...)"
-		} else if strings.HasPrefix(version, "failed-") {
-			version = "failed (no version)"
+		if strings.HasPrefix(version, "pending-") || strings.HasPrefix(version, "failed-") {
+			// No version was created - show appropriate message based on status
+			switch status {
+			case "in_progress":
+				version = "pending (building...)"
+			default:
+				version = "-"
+			}
 		} else if len(version) > 25 {
 			version = version[:22] + "..."
 		}
