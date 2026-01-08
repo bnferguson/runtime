@@ -760,6 +760,9 @@ func (v *BuilderBuildFromTarArgs) HasEnvVars() bool {
 }
 
 func (v *BuilderBuildFromTarArgs) EnvVars() []*EnvironmentVariable {
+	if v.data.EnvVars == nil {
+		return nil
+	}
 	return *v.data.EnvVars
 }
 
@@ -1007,6 +1010,9 @@ func (v *BuilderClientBuildFromTarResults) HasAccessInfo() bool {
 }
 
 func (v *BuilderClientBuildFromTarResults) AccessInfo() *AccessInfo {
+	if v.data.AccessInfo == nil {
+		return nil
+	}
 	return *v.data.AccessInfo
 }
 
@@ -1046,6 +1052,9 @@ func (v *BuilderClientAnalyzeAppResults) HasResult() bool {
 }
 
 func (v *BuilderClientAnalyzeAppResults) Result() *AnalysisResult {
+	if v.data.Result == nil {
+		return nil
+	}
 	return *v.data.Result
 }
 

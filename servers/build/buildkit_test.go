@@ -1,13 +1,14 @@
 package build
 
 import (
-	"bytes"
 	"context"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
@@ -24,68 +25,74 @@ import (
 	_ "github.com/moby/buildkit/client/connhelper/dockercontainer"
 )
 
+const (
+	// testResourcePrefix is used to identify test resources for cleanup
+	testResourcePrefix = "buildkit-test-"
+	// cleanupTimeout is the maximum time to wait for cleanup operations
+	cleanupTimeout = 30 * time.Second
+)
+
 func checkDocker() bool {
 	_, err := os.Stat("/var/run/docker.sock")
 	return err == nil
 }
 
-// testInfra holds the docker client, network, and cleanup functions for test infrastructure
 type testInfra struct {
+	t           *testing.T
 	docker      *client.Client
 	networkID   string
 	networkName string
-	cleanups    []func()
 }
 
-func setupTestInfra(t *testing.T, ctx context.Context) *testInfra {
+func setupTestInfra(t *testing.T) *testInfra {
 	t.Helper()
 
 	cl, err := client.NewClientWithOpts(client.FromEnv)
 	require.NoError(t, err)
 
-	// Create a unique network for this test
-	networkName := "buildkit-test-" + t.Name()
+	networkName := testResourcePrefix + sanitizeTestName(t.Name())
+	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	defer cancel()
+
 	networkResp, err := cl.NetworkCreate(ctx, networkName, dockernetwork.CreateOptions{})
 	require.NoError(t, err)
 
 	infra := &testInfra{
+		t:           t,
 		docker:      cl,
 		networkID:   networkResp.ID,
 		networkName: networkName,
 	}
 
-	// Add network cleanup
-	infra.cleanups = append(infra.cleanups, func() {
-		if err := cl.NetworkRemove(ctx, networkResp.ID); err != nil {
-			t.Logf("failed to remove network: %v", err)
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), cleanupTimeout)
+		defer cleanupCancel()
+
+		if err := cl.NetworkRemove(cleanupCtx, networkResp.ID); err != nil {
+			t.Errorf("failed to remove network %s: %v", networkName, err)
 		}
 	})
 
 	return infra
 }
 
-func (infra *testInfra) cleanup() {
-	// Run cleanups in reverse order
-	for i := len(infra.cleanups) - 1; i >= 0; i-- {
-		infra.cleanups[i]()
-	}
+func sanitizeTestName(name string) string {
+	name = strings.ReplaceAll(name, "/", "-")
+	name = strings.ReplaceAll(name, " ", "-")
+	return name
 }
 
-// setupBuildkitContainer creates a buildkit container and returns a client to it.
-// registryHost is the hostname of the insecure registry to allow (e.g., "registry:5000").
 func (infra *testInfra) setupBuildkitContainer(t *testing.T, ctx context.Context, registryHost string) *buildkit.Client {
 	t.Helper()
 
 	cl := infra.docker
 
-	// Pull buildkit image
 	pullReader, err := cl.ImagePull(ctx, imagerefs.BuildKit, image.PullOptions{})
 	require.NoError(t, err)
 	_, err = io.Copy(io.Discard, pullReader)
 	require.NoError(t, err)
 	pullReader.Close()
 
-	// Create buildkit config file that allows insecure registry
 	configDir := t.TempDir()
 	configPath := filepath.Join(configDir, "buildkitd.toml")
 	configContent := `
@@ -96,7 +103,8 @@ func (infra *testInfra) setupBuildkitContainer(t *testing.T, ctx context.Context
 	err = os.WriteFile(configPath, []byte(configContent), 0644)
 	require.NoError(t, err)
 
-	// Create buildkit container connected to our test network
+	containerName := testResourcePrefix + "buildkit-" + sanitizeTestName(t.Name())
+
 	resp, err := cl.ContainerCreate(ctx,
 		&container.Config{
 			Image: imagerefs.BuildKit,
@@ -115,48 +123,31 @@ func (infra *testInfra) setupBuildkitContainer(t *testing.T, ctx context.Context
 			},
 		},
 		nil,
-		"",
+		containerName,
 	)
 	require.NoError(t, err)
 
-	infra.cleanups = append(infra.cleanups, func() {
-		err := cl.ContainerKill(ctx, resp.ID, "KILL")
-		if err != nil {
-			t.Logf("failed to kill buildkit container: %v", err)
-		}
-		err = cl.ContainerRemove(ctx, resp.ID, container.RemoveOptions{
+	containerID := resp.ID
+
+	err = cl.ContainerStart(ctx, containerID, container.StartOptions{})
+	require.NoError(t, err)
+
+	bkc, err := buildkit.New(ctx, "docker-container://"+containerID)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		bkc.Close()
+
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), cleanupTimeout)
+		defer cleanupCancel()
+
+		_ = cl.ContainerKill(cleanupCtx, containerID, "KILL")
+		if err := cl.ContainerRemove(cleanupCtx, containerID, container.RemoveOptions{
 			RemoveVolumes: true,
 			Force:         true,
-		})
-		if err != nil {
-			t.Logf("failed to remove buildkit container: %v", err)
+		}); err != nil {
+			t.Errorf("failed to remove buildkit container %s: %v", containerName, err)
 		}
-	})
-
-	// Capture logs for debugging
-	var buf bytes.Buffer
-	go func() {
-		r, err := cl.ContainerLogs(ctx, resp.ID, container.LogsOptions{
-			ShowStdout: true,
-			ShowStderr: true,
-			Follow:     true,
-		})
-		if err != nil {
-			t.Logf("failed to get buildkit container logs: %v", err)
-			return
-		}
-		defer r.Close()
-		io.Copy(&buf, r)
-	}()
-
-	err = cl.ContainerStart(ctx, resp.ID, container.StartOptions{})
-	require.NoError(t, err)
-
-	bkc, err := buildkit.New(ctx, "docker-container://"+resp.ID)
-	require.NoError(t, err)
-
-	infra.cleanups = append(infra.cleanups, func() {
-		bkc.Close()
 	})
 
 	// Verify buildkit is ready
@@ -166,28 +157,24 @@ func (infra *testInfra) setupBuildkitContainer(t *testing.T, ctx context.Context
 	return bkc
 }
 
-// registryAddrs holds both the network-accessible and host-accessible registry addresses
 type registryAddrs struct {
-	network string // Address for buildkit to push to (docker network name)
-	host    string // Address for host to fetch from (localhost:port)
+	network string
+	host    string
 }
 
-// setupLocalRegistry creates a local registry container and returns both network and host addresses.
 func (infra *testInfra) setupLocalRegistry(t *testing.T, ctx context.Context) registryAddrs {
 	t.Helper()
 
 	cl := infra.docker
 
-	// Pull registry image
 	pullReader, err := cl.ImagePull(ctx, "registry:2", image.PullOptions{})
 	require.NoError(t, err)
 	_, err = io.Copy(io.Discard, pullReader)
 	require.NoError(t, err)
 	pullReader.Close()
 
-	registryName := "registry-" + t.Name()
+	registryName := testResourcePrefix + "registry-" + sanitizeTestName(t.Name())
 
-	// Create registry container connected to our test network
 	resp, err := cl.ContainerCreate(ctx,
 		&container.Config{
 			Image: "registry:2",
@@ -211,25 +198,25 @@ func (infra *testInfra) setupLocalRegistry(t *testing.T, ctx context.Context) re
 	)
 	require.NoError(t, err)
 
-	infra.cleanups = append(infra.cleanups, func() {
-		err := cl.ContainerKill(ctx, resp.ID, "KILL")
-		if err != nil {
-			t.Logf("failed to kill registry container: %v", err)
-		}
-		err = cl.ContainerRemove(ctx, resp.ID, container.RemoveOptions{
+	containerID := resp.ID
+
+	err = cl.ContainerStart(ctx, containerID, container.StartOptions{})
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), cleanupTimeout)
+		defer cleanupCancel()
+
+		_ = cl.ContainerKill(cleanupCtx, containerID, "KILL")
+		if err := cl.ContainerRemove(cleanupCtx, containerID, container.RemoveOptions{
 			RemoveVolumes: true,
 			Force:         true,
-		})
-		if err != nil {
-			t.Logf("failed to remove registry container: %v", err)
+		}); err != nil {
+			t.Errorf("failed to remove registry container %s: %v", registryName, err)
 		}
 	})
 
-	err = cl.ContainerStart(ctx, resp.ID, container.StartOptions{})
-	require.NoError(t, err)
-
-	// Get the mapped port for host access
-	inspect, err := cl.ContainerInspect(ctx, resp.ID)
+	inspect, err := cl.ContainerInspect(ctx, containerID)
 	require.NoError(t, err)
 	portBindings := inspect.NetworkSettings.Ports["5000/tcp"]
 	require.NotEmpty(t, portBindings, "registry port should be mapped")
@@ -248,14 +235,9 @@ func TestBuildImageWorkingDir(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Setup test infrastructure
-	infra := setupTestInfra(t, ctx)
-	defer infra.cleanup()
+	infra := setupTestInfra(t)
 
-	// Setup local registry
 	registry := infra.setupLocalRegistry(t, ctx)
-
-	// Setup buildkit with the registry as insecure
 	bkc := infra.setupBuildkitContainer(t, ctx, registry.network)
 
 	// Create test directory with Dockerfile.miren
@@ -302,14 +284,9 @@ func TestBuildImageWorkingDirRoot(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Setup test infrastructure
-	infra := setupTestInfra(t, ctx)
-	defer infra.cleanup()
+	infra := setupTestInfra(t)
 
-	// Setup local registry
 	registry := infra.setupLocalRegistry(t, ctx)
-
-	// Setup buildkit with the registry as insecure
 	bkc := infra.setupBuildkitContainer(t, ctx, registry.network)
 
 	// Create test directory with Dockerfile.miren that has WORKDIR /
@@ -350,14 +327,9 @@ func TestBuildImageNoWorkdir(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Setup test infrastructure
-	infra := setupTestInfra(t, ctx)
-	defer infra.cleanup()
+	infra := setupTestInfra(t)
 
-	// Setup local registry
 	registry := infra.setupLocalRegistry(t, ctx)
-
-	// Setup buildkit with the registry as insecure
 	bkc := infra.setupBuildkitContainer(t, ctx, registry.network)
 
 	// Create test directory with Dockerfile.miren that has no WORKDIR
@@ -401,14 +373,9 @@ func TestBuildImageEntrypointAndCmd(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Setup test infrastructure
-	infra := setupTestInfra(t, ctx)
-	defer infra.cleanup()
+	infra := setupTestInfra(t)
 
-	// Setup local registry
 	registry := infra.setupLocalRegistry(t, ctx)
-
-	// Setup buildkit with the registry as insecure
 	bkc := infra.setupBuildkitContainer(t, ctx, registry.network)
 
 	// Create test directory with Dockerfile.miren that has ENTRYPOINT and CMD
@@ -454,14 +421,9 @@ func TestBuildImageCmdOnly(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Setup test infrastructure
-	infra := setupTestInfra(t, ctx)
-	defer infra.cleanup()
+	infra := setupTestInfra(t)
 
-	// Setup local registry
 	registry := infra.setupLocalRegistry(t, ctx)
-
-	// Setup buildkit with the registry as insecure
 	bkc := infra.setupBuildkitContainer(t, ctx, registry.network)
 
 	// Create test directory with Dockerfile.miren that has only CMD
@@ -504,14 +466,9 @@ func TestBuildImageNestedWorkdir(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Setup test infrastructure
-	infra := setupTestInfra(t, ctx)
-	defer infra.cleanup()
+	infra := setupTestInfra(t)
 
-	// Setup local registry
 	registry := infra.setupLocalRegistry(t, ctx)
-
-	// Setup buildkit with the registry as insecure
 	bkc := infra.setupBuildkitContainer(t, ctx, registry.network)
 
 	// Create test directory with Dockerfile.miren with deeply nested WORKDIR
