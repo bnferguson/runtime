@@ -219,6 +219,160 @@ func TestEtcdComponentIntegration(t *testing.T) {
 	t.Log("Restart test completed successfully!")
 }
 
+func TestEtcdComponentAutoRestart(t *testing.T) {
+	testDeps, cleanup := testutils.NewTestDeps()
+	defer cleanup()
+
+	cc := testDeps.CC
+
+	// Create temporary directory for test data
+	tmpDir, err := os.MkdirTemp("", "etcd-restart-test")
+	require.NoError(t, err, "failed to create temp dir")
+	defer os.RemoveAll(tmpDir)
+
+	// Create logger
+	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+
+	// Use dynamic namespace to avoid conflicts with parallel tests
+	testNamespace := fmt.Sprintf("miren-etcd-restart-test-%d", time.Now().UnixNano())
+
+	// Create etcd component
+	component := etcd.NewEtcdComponent(log, cc, testNamespace, tmpDir)
+
+	// Use dynamic ports to avoid conflicts
+	clientPort := testutils.GetFreePort(t)
+	peerPort := testutils.GetFreePort(t)
+	httpClientPort := testutils.GetFreePort(t)
+
+	config := etcd.EtcdConfig{
+		Name:           "test-etcd-restart",
+		ClientPort:     clientPort,
+		HTTPClientPort: httpClientPort,
+		PeerPort:       peerPort,
+		InitialToken:   "restart-test-cluster",
+		ClusterState:   "new",
+	}
+
+	// Ensure cleanup
+	defer func() {
+		if component.IsRunning() {
+			err := component.Stop(context.Background())
+			if err != nil {
+				t.Logf("failed to stop component: %v", err)
+			}
+		}
+		cleanupContainer(t, cc, testNamespace)
+	}()
+
+	// Start the etcd component
+	t.Log("Starting etcd component...")
+	err = component.Start(context.Background(), config)
+	if err != nil {
+		if strings.Contains(err.Error(), "permission denied") {
+			t.Skip("permission denied error, skipping test")
+		}
+		require.NoError(t, err, "failed to start etcd component")
+	}
+
+	assert.True(t, component.IsRunning(), "component should report as running")
+
+	// Wait for etcd to be fully ready
+	endpoint := component.ClientEndpoint()
+	var etcdClient *clientv3.Client
+	require.Eventually(t, func() bool {
+		var err error
+		etcdClient, err = clientv3.New(clientv3.Config{
+			Endpoints:   []string{endpoint},
+			DialTimeout: 1 * time.Second,
+		})
+		if err != nil {
+			return false
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		defer cancel()
+		_, err = etcdClient.Get(ctx, "health-check")
+		if err != nil {
+			etcdClient.Close()
+			etcdClient = nil
+			return false
+		}
+		return true
+	}, 30*time.Second, 500*time.Millisecond, "etcd failed to become ready")
+	etcdClient.Close()
+
+	t.Log("etcd is ready, now killing the task to simulate crash...")
+
+	// Kill the etcd task directly using containerd to simulate a crash
+	ctx := namespaces.WithNamespace(context.Background(), testNamespace)
+	containers, err := cc.Containers(ctx)
+	require.NoError(t, err, "failed to list containers")
+
+	var etcdContainer containerd.Container
+	for _, c := range containers {
+		if strings.Contains(c.ID(), "etcd") {
+			etcdContainer = c
+			break
+		}
+	}
+	require.NotNil(t, etcdContainer, "should find etcd container")
+
+	task, err := etcdContainer.Task(ctx, nil)
+	require.NoError(t, err, "should get task")
+
+	// Kill the task with SIGKILL to simulate crash
+	err = task.Kill(ctx, unix.SIGKILL)
+	require.NoError(t, err, "should be able to kill task")
+
+	t.Log("Task killed, waiting for auto-restart...")
+
+	// Wait for the component to auto-restart and become ready again
+	// The restart has a 2 second backoff for the first restart
+	require.Eventually(t, func() bool {
+		// Try to connect to etcd
+		client, err := clientv3.New(clientv3.Config{
+			Endpoints:   []string{endpoint},
+			DialTimeout: 1 * time.Second,
+		})
+		if err != nil {
+			return false
+		}
+		defer client.Close()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		defer cancel()
+		_, err = client.Get(ctx, "restart-health-check")
+		return err == nil
+	}, 30*time.Second, 1*time.Second, "etcd should auto-restart and become ready")
+
+	t.Log("etcd auto-restarted successfully!")
+
+	// Verify the component still reports as running
+	assert.True(t, component.IsRunning(), "component should still report as running after auto-restart")
+
+	// Test that we can still perform operations
+	etcdClient2, err := clientv3.New(clientv3.Config{
+		Endpoints:   []string{endpoint},
+		DialTimeout: 5 * time.Second,
+	})
+	require.NoError(t, err, "should be able to create client after restart")
+	defer etcdClient2.Close()
+
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel2()
+
+	_, err = etcdClient2.Put(ctx2, "post-restart-key", "post-restart-value")
+	require.NoError(t, err, "should be able to write after auto-restart")
+
+	resp, err := etcdClient2.Get(ctx2, "post-restart-key")
+	require.NoError(t, err, "should be able to read after auto-restart")
+	require.Len(t, resp.Kvs, 1, "should have one key")
+	assert.Equal(t, "post-restart-value", string(resp.Kvs[0].Value), "value should match")
+
+	t.Log("Auto-restart test completed successfully!")
+}
+
 func cleanupContainer(t *testing.T, cc *containerd.Client, namespace string) {
 	ctx := context.Background()
 	ctx = namespaces.WithNamespace(ctx, namespace)
