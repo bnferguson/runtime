@@ -60,9 +60,16 @@ func DebugBundle(ctx *Context, opts struct {
 	// Track success to determine if we should clean up on exit
 	success := false
 	defer func() {
-		tw.Close()
-		gw.Close()
-		outFile.Close()
+		// Only close if not already closed (nil check prevents double-close)
+		if tw != nil {
+			tw.Close()
+		}
+		if gw != nil {
+			gw.Close()
+		}
+		if outFile != nil {
+			outFile.Close()
+		}
 		if !success {
 			os.Remove(opts.OutputFile)
 		}
@@ -124,14 +131,22 @@ func DebugBundle(ctx *Context, opts struct {
 		return fmt.Errorf("writing server-logs.txt: %w", err)
 	}
 
-	// Close archive writers in correct order (defer will also close, but we need
-	// to check for errors here)
+	// Close archive writers in correct order and check for errors.
+	// Set to nil after close to prevent double-close in defer.
 	if err := tw.Close(); err != nil {
 		return fmt.Errorf("closing tar writer: %w", err)
 	}
+	tw = nil
+
 	if err := gw.Close(); err != nil {
 		return fmt.Errorf("closing gzip writer: %w", err)
 	}
+	gw = nil
+
+	if err := outFile.Close(); err != nil {
+		return fmt.Errorf("closing output file: %w", err)
+	}
+	outFile = nil
 
 	success = true
 	ctx.Completed("Debug information written to %s", opts.OutputFile)

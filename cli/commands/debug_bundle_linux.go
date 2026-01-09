@@ -5,6 +5,7 @@ package commands
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -115,10 +116,11 @@ func checkSocketAccess(socket string) error {
 	}
 
 	// Check if we can actually connect to the socket
-	if err := unix.Access(socket, unix.W_OK); err != nil {
-		if os.IsPermission(err) {
+	if err := unix.Access(socket, unix.R_OK|unix.W_OK); err != nil {
+		if errors.Is(err, unix.EACCES) || errors.Is(err, unix.EPERM) || os.IsPermission(err) {
 			return fmt.Errorf("permission denied accessing containerd socket at %s (try running with sudo)", socket)
 		}
+		return fmt.Errorf("checking containerd socket permissions at %s: %w", socket, err)
 	}
 
 	return nil
