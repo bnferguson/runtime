@@ -357,6 +357,13 @@ func (b *BaseComponent) StartExitMonitor(ctx context.Context) {
 	b.stopMonitor = make(chan struct{})
 	b.monitorDone = make(chan struct{})
 	task := b.task
+	if task == nil {
+		b.stopMonitor = nil
+		b.monitorDone = nil
+		b.stateMu.Unlock()
+		b.Log.Error(b.ComponentName + " cannot start exit monitor: task is nil")
+		return
+	}
 	// Capture channels before releasing lock to avoid race with stopInternal
 	stopMonitor := b.stopMonitor
 	monitorDone := b.monitorDone
@@ -427,6 +434,10 @@ func (b *BaseComponent) handleRestart(ctx context.Context, stopMonitor <-chan st
 	container := b.container
 	task := b.task
 	b.stateMu.Unlock()
+
+	if container == nil {
+		return fmt.Errorf("cannot restart %s: container is nil", b.ComponentName)
+	}
 
 	// Reset restart count if enough time has passed
 	if time.Since(lastRestartAt) > policy.ResetWindow {
