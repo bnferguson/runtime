@@ -243,8 +243,16 @@ func (b *BaseComponent) stopTask(ctx context.Context, task containerd.Task) {
 			if err := task.Kill(killCtx, unix.SIGKILL); err != nil {
 				b.Log.Error("failed to send SIGKILL to "+b.ComponentName+" task", "error", err)
 			} else {
-				if _, waitErr := task.Wait(killCtx); waitErr != nil {
-					b.Log.Error(b.ComponentName+" task wait after SIGKILL failed", "error", waitErr)
+				statusCh, waitErr := task.Wait(killCtx)
+				if waitErr != nil {
+					b.Log.Error(b.ComponentName+" task wait channel after SIGKILL failed", "error", waitErr)
+				} else {
+					select {
+					case <-statusCh:
+						// Task exited
+					case <-killCtx.Done():
+						b.Log.Warn(b.ComponentName + " task did not exit after SIGKILL within timeout")
+					}
 				}
 			}
 		}
