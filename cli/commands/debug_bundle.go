@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,7 +15,30 @@ import (
 	"github.com/shirou/gopsutil/v4/process"
 )
 
-func DebugSystem(ctx *Context, opts struct {
+const (
+	// Default timeout for quick commands like df, free, ps
+	cmdTimeoutShort = 30 * time.Second
+	// Timeout for longer operations like log gathering
+	cmdTimeoutLong = 60 * time.Second
+)
+
+// runWithTimeout executes a command with the given timeout.
+// Returns the combined stdout/stderr output and any error.
+func runWithTimeout(timeout time.Duration, name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, name, args...)
+	output, err := cmd.CombinedOutput()
+
+	if ctx.Err() == context.DeadlineExceeded {
+		return output, fmt.Errorf("command timed out after %s", timeout)
+	}
+
+	return output, err
+}
+
+func DebugBundle(ctx *Context, opts struct {
 	OutputFile      string `short:"o" long:"output" description:"Output file path" default:"miren-debug.tar.gz"`
 	Since           string `short:"s" long:"since" description:"Include logs since this time" default:"1 day ago"`
 	Namespace       string `long:"namespace" description:"containerd namespace" default:"miren"`
@@ -23,10 +47,26 @@ func DebugSystem(ctx *Context, opts struct {
 }) error {
 	ctx.Info("Gathering system debug information...")
 
-	// Prepare archive
-	var buf bytes.Buffer
-	gw := gzip.NewWriter(&buf)
+	// Create output file and stream directly to disk to minimize memory usage
+	// on potentially distressed systems
+	outFile, err := os.Create(opts.OutputFile)
+	if err != nil {
+		return fmt.Errorf("creating output file: %w", err)
+	}
+
+	gw := gzip.NewWriter(outFile)
 	tw := tar.NewWriter(gw)
+
+	// Track success to determine if we should clean up on exit
+	success := false
+	defer func() {
+		tw.Close()
+		gw.Close()
+		outFile.Close()
+		if !success {
+			os.Remove(opts.OutputFile)
+		}
+	}()
 
 	// Gather system info
 	ctx.Info("Collecting system information...")
@@ -84,7 +124,8 @@ func DebugSystem(ctx *Context, opts struct {
 		return fmt.Errorf("writing server-logs.txt: %w", err)
 	}
 
-	// Close archive
+	// Close archive writers in correct order (defer will also close, but we need
+	// to check for errors here)
 	if err := tw.Close(); err != nil {
 		return fmt.Errorf("closing tar writer: %w", err)
 	}
@@ -92,11 +133,7 @@ func DebugSystem(ctx *Context, opts struct {
 		return fmt.Errorf("closing gzip writer: %w", err)
 	}
 
-	// Write to file
-	if err := os.WriteFile(opts.OutputFile, buf.Bytes(), 0644); err != nil {
-		return fmt.Errorf("writing output file: %w", err)
-	}
-
+	success = true
 	ctx.Completed("Debug information written to %s", opts.OutputFile)
 	return nil
 }
@@ -129,7 +166,7 @@ func gatherSystemInfo() []byte {
 	fmt.Fprintf(&buf, "\n%s\n", strings.Repeat("=", 80))
 	fmt.Fprintf(&buf, "DISK USAGE (df -h)\n")
 	fmt.Fprintf(&buf, "%s\n", strings.Repeat("=", 80))
-	dfOutput, err := exec.Command("df", "-h").Output()
+	dfOutput, err := runWithTimeout(cmdTimeoutShort, "df", "-h")
 	if err != nil {
 		fmt.Fprintf(&buf, "Error running df: %v\n", err)
 	} else {
@@ -140,7 +177,7 @@ func gatherSystemInfo() []byte {
 	fmt.Fprintf(&buf, "\n%s\n", strings.Repeat("=", 80))
 	fmt.Fprintf(&buf, "MEMORY USAGE (free -h)\n")
 	fmt.Fprintf(&buf, "%s\n", strings.Repeat("=", 80))
-	freeOutput, err := exec.Command("free", "-h").Output()
+	freeOutput, err := runWithTimeout(cmdTimeoutShort, "free", "-h")
 	if err != nil {
 		fmt.Fprintf(&buf, "Error running free: %v\n", err)
 	} else {
@@ -256,8 +293,7 @@ func gatherServerLogs(since, dockerContainer string) ([]byte, error) {
 	fmt.Fprintf(&buf, "JOURNALCTL LOGS (miren service)\n")
 	fmt.Fprintf(&buf, "%s\n", strings.Repeat("=", 80))
 
-	cmd := exec.Command("journalctl", "-u", "miren", "--no-pager", "--since", since)
-	output, err := cmd.CombinedOutput()
+	output, err := runWithTimeout(cmdTimeoutLong, "journalctl", "-u", "miren", "--no-pager", "--since", since)
 	if err != nil {
 		fmt.Fprintf(&buf, "journalctl error: %v\n\nOutput:\n%s\n", err, string(output))
 	} else {
@@ -286,8 +322,7 @@ func findDockerContainers(containerName string) []dockerContainerInfo {
 	}
 
 	// Find containers matching the specified name (running or recently stopped)
-	cmd := exec.Command("docker", "ps", "-a", "--filter", "name="+containerName, "--format", "{{.ID}}\t{{.Names}}\t{{.Status}}")
-	output, err := cmd.Output()
+	output, err := runWithTimeout(cmdTimeoutShort, "docker", "ps", "-a", "--filter", "name="+containerName, "--format", "{{.ID}}\t{{.Names}}\t{{.Status}}")
 	if err != nil {
 		return nil
 	}
@@ -338,8 +373,7 @@ func gatherDockerLogs(since, containerName string) []byte {
 		fmt.Fprintf(&buf, "%s\n", strings.Repeat("=", 80))
 
 		// Get logs with --since flag
-		logCmd := exec.Command("docker", "logs", "--since", dockerSince, container.id)
-		logOutput, err := logCmd.CombinedOutput()
+		logOutput, err := runWithTimeout(cmdTimeoutLong, "docker", "logs", "--since", dockerSince, container.id)
 		if err != nil {
 			fmt.Fprintf(&buf, "Error getting logs: %v\n%s\n", err, logOutput)
 		} else if len(logOutput) == 0 {
@@ -417,12 +451,10 @@ func gatherDockerProcesses(containerName string) []byte {
 
 		// Run ps inside the container
 		fmt.Fprintf(&buf, "\n--- PROCESSES (ps aux) ---\n")
-		psCmd := exec.Command("docker", "exec", container.id, "ps", "aux")
-		psOutput, err := psCmd.CombinedOutput()
+		psOutput, err := runWithTimeout(cmdTimeoutShort, "docker", "exec", container.id, "ps", "aux")
 		if err != nil {
 			// Try alternative: ps without aux (some minimal containers don't have full ps)
-			psCmd = exec.Command("docker", "exec", container.id, "ps", "-ef")
-			psOutput, err = psCmd.CombinedOutput()
+			psOutput, err = runWithTimeout(cmdTimeoutShort, "docker", "exec", container.id, "ps", "-ef")
 			if err != nil {
 				fmt.Fprintf(&buf, "Error running ps: %v\n", err)
 			} else {
@@ -434,8 +466,7 @@ func gatherDockerProcesses(containerName string) []byte {
 
 		// Run df inside the container
 		fmt.Fprintf(&buf, "\n--- DISK USAGE (df -h) ---\n")
-		dfCmd := exec.Command("docker", "exec", container.id, "df", "-h")
-		dfOutput, err := dfCmd.CombinedOutput()
+		dfOutput, err := runWithTimeout(cmdTimeoutShort, "docker", "exec", container.id, "df", "-h")
 		if err != nil {
 			fmt.Fprintf(&buf, "Error running df: %v\n", err)
 		} else {
@@ -444,12 +475,10 @@ func gatherDockerProcesses(containerName string) []byte {
 
 		// Run free inside the container
 		fmt.Fprintf(&buf, "\n--- MEMORY USAGE (free -h) ---\n")
-		freeCmd := exec.Command("docker", "exec", container.id, "free", "-h")
-		freeOutput, err := freeCmd.CombinedOutput()
+		freeOutput, err := runWithTimeout(cmdTimeoutShort, "docker", "exec", container.id, "free", "-h")
 		if err != nil {
 			// Try without -h flag for systems that don't support it
-			freeCmd = exec.Command("docker", "exec", container.id, "free")
-			freeOutput, err = freeCmd.CombinedOutput()
+			freeOutput, err = runWithTimeout(cmdTimeoutShort, "docker", "exec", container.id, "free")
 			if err != nil {
 				fmt.Fprintf(&buf, "Error running free: %v\n", err)
 			} else {
@@ -461,12 +490,12 @@ func gatherDockerProcesses(containerName string) []byte {
 
 		// Run nerdctl to list miren containers
 		fmt.Fprintf(&buf, "\n--- MIREN CONTAINERS (nerdctl) ---\n")
-		nerdctlCmd := exec.Command("docker", "exec", container.id,
+		nerdctlOutput, err := runWithTimeout(cmdTimeoutShort,
+			"docker", "exec", container.id,
 			"/var/lib/miren/release/nerdctl",
 			"-a", "/var/lib/miren/containerd/containerd.sock",
 			"--namespace", "miren",
 			"ps", "-a", "--no-trunc")
-		nerdctlOutput, err := nerdctlCmd.CombinedOutput()
 		if err != nil {
 			fmt.Fprintf(&buf, "Error running nerdctl: %v\n%s\n", err, nerdctlOutput)
 		} else {
@@ -495,8 +524,7 @@ func gatherDockerInspect(containerName string) []byte {
 
 	// Run docker inspect on all containers at once
 	args := append([]string{"inspect"}, ids...)
-	cmd := exec.Command("docker", args...)
-	output, err := cmd.Output()
+	output, err := runWithTimeout(cmdTimeoutShort, "docker", args...)
 	if err != nil {
 		return nil
 	}
