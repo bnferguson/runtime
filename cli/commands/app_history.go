@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -24,15 +25,16 @@ var statusStyles = map[string]struct {
 }
 
 type historyDisplayOpts struct {
-	detailed bool
+	detailed    bool
+	hasIdentity bool
 }
 
 func AppHistory(ctx *Context, opts struct {
 	AppCentric
 
-	Limit      int32  `short:"n" long:"limit" description:"Maximum number of deployments to show" default:"20"`
+	Limit      int    `short:"n" long:"limit" description:"Maximum number of deployments to show" default:"10"`
+	All        bool   `short:"a" long:"all" description:"Show all deployments (ignore limit)"`
 	Status     string `short:"s" long:"status" description:"Filter by status (active, failed, rolled_back)"`
-	All        bool   `long:"all" description:"Show deployments from all clusters"`
 	HideFailed bool   `long:"hide-failed" description:"Hide failed deployments"`
 	Detailed   bool   `long:"detailed" description:"Show all columns including git information"`
 }) error {
@@ -42,19 +44,19 @@ func AppHistory(ctx *Context, opts struct {
 	}
 	depClient := deployment_v1alpha.NewDeploymentClient(depCl)
 
-	clusterId := ""
-	if !opts.All {
-		clusterId = ctx.ClusterName
+	limit := int32(opts.Limit)
+	if opts.All {
+		limit = 0
 	}
 
-	result, err := depClient.ListDeployments(ctx, opts.App, clusterId, opts.Status, opts.Limit)
+	result, err := depClient.ListDeployments(ctx, opts.App, ctx.ClusterName, opts.Status, limit)
 	if err != nil {
 		return fmt.Errorf("failed to list deployments: %w", err)
 	}
 
 	deployments := result.Deployments()
 	if len(deployments) == 0 {
-		printNoDeploymentsMessage(ctx, opts.App, opts.All, opts.Status, false)
+		printNoDeploymentsMessage(ctx, opts.App, opts.Status, false)
 		return nil
 	}
 
@@ -64,21 +66,23 @@ func AppHistory(ctx *Context, opts struct {
 			return d.Status() != "failed"
 		})
 		if len(deployments) == 0 {
-			printNoDeploymentsMessage(ctx, opts.App, opts.All, opts.Status, true)
+			printNoDeploymentsMessage(ctx, opts.App, opts.Status, true)
 			return nil
 		}
 	}
 
+	// Sort: active first, then by time (most recent first)
+	sortDeployments(deployments)
+
 	// Print header
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
 	ctx.Printf("%s\n", headerStyle.Render(fmt.Sprintf("Deployment History for %s", opts.App)))
-	if !opts.All {
-		ctx.Printf("Cluster: %s\n", ctx.ClusterName)
-	}
+	ctx.Printf("Cluster: %s\n", ctx.ClusterName)
 	ctx.Printf("\n")
 
 	displayOpts := historyDisplayOpts{
-		detailed: opts.Detailed,
+		detailed:    opts.Detailed,
+		hasIdentity: ctx.ClusterConfig != nil && (ctx.ClusterConfig.Identity != "" || ctx.ClusterConfig.CloudAuth),
 	}
 
 	// Build and render table
@@ -89,11 +93,8 @@ func AppHistory(ctx *Context, opts struct {
 	return nil
 }
 
-func printNoDeploymentsMessage(ctx *Context, app string, all bool, status string, hiddenFailed bool) {
-	ctx.Printf("No deployments found for app '%s'", app)
-	if !all {
-		ctx.Printf(" on cluster '%s'", ctx.ClusterName)
-	}
+func printNoDeploymentsMessage(ctx *Context, app string, status string, hiddenFailed bool) {
+	ctx.Printf("No deployments found for app '%s' on cluster '%s'", app, ctx.ClusterName)
 	if status != "" {
 		ctx.Printf(" with status '%s'", status)
 	}
@@ -113,20 +114,56 @@ func filterDeployments(deps []*deployment_v1alpha.DeploymentInfo, keep func(*dep
 	return filtered
 }
 
+func sortDeployments(deployments []*deployment_v1alpha.DeploymentInfo) {
+	sort.Slice(deployments, func(i, j int) bool {
+		// Active deployments come first
+		iActive := deployments[i].Status() == "active"
+		jActive := deployments[j].Status() == "active"
+		if iActive != jActive {
+			return iActive
+		}
+		// Then sort by time (most recent first)
+		var iTime, jTime int64
+		if deployments[i].HasDeployedAt() && deployments[i].DeployedAt() != nil {
+			iTime = deployments[i].DeployedAt().Seconds()
+		}
+		if deployments[j].HasDeployedAt() && deployments[j].DeployedAt() != nil {
+			jTime = deployments[j].DeployedAt().Seconds()
+		}
+		return iTime > jTime
+	})
+}
+
 func buildDeploymentTable(deployments []*deployment_v1alpha.DeploymentInfo, opts historyDisplayOpts) ([]string, []ui.Row, *ui.ColumnBuilder) {
 	var headers []string
 	var rows []ui.Row
 	var builder *ui.ColumnBuilder
 
 	if opts.detailed {
-		headers = []string{"STATUS", "VERSION", "DEPLOYED BY", "WHEN", "GIT SHA", "BRANCH", "COMMIT MESSAGE"}
+		headers = []string{"STATUS", "VERSION"}
+		if opts.hasIdentity {
+			headers = append(headers, "DEPLOYED BY")
+		}
+		headers = append(headers, "WHEN", "GIT SHA", "BRANCH", "COMMIT MESSAGE")
 		builder = ui.Columns().
 			NoTruncate(0).               // STATUS
 			MaxWidth(len(headers)-1, 40) // COMMIT MESSAGE
 	} else {
-		headers = []string{"STATUS", "VERSION", "DEPLOYED BY", "WHEN", "ID", "ERROR"}
+		headers = []string{"STATUS", "VERSION"}
+		if opts.hasIdentity {
+			headers = append(headers, "DEPLOYED BY")
+		}
+		headers = append(headers, "WHEN", "ID", "ERROR")
+		// Find ID column index dynamically
+		idColIndex := -1
+		for i, h := range headers {
+			if h == "ID" {
+				idColIndex = i
+				break
+			}
+		}
 		builder = ui.Columns().
-			NoTruncate(0, 4) // STATUS and ID
+			NoTruncate(0, idColIndex) // STATUS and ID
 	}
 
 	for _, dep := range deployments {
@@ -142,24 +179,20 @@ func buildDeploymentRow(dep *deployment_v1alpha.DeploymentInfo, opts historyDisp
 
 	row := ui.Row{
 		formatDeploymentStatus(status),
+		formatVersion(dep.AppVersionId(), status),
 	}
 
+	if opts.hasIdentity {
+		row = append(row, formatUser(dep))
+	}
+
+	row = append(row, formatDeploymentTime(dep))
+
 	if opts.detailed {
-		row = append(row,
-			formatVersion(dep.AppVersionId(), status),
-			formatUser(dep),
-			formatDeploymentTime(dep),
-		)
 		gitSha, gitBranch, gitMessage := formatGitInfo(dep)
 		row = append(row, gitSha, gitBranch, gitMessage)
 	} else {
-		row = append(row,
-			formatVersion(dep.AppVersionId(), status),
-			formatUser(dep),
-			formatDeploymentTime(dep),
-			ui.CleanEntityID(dep.Id()),
-			formatErrorInfo(dep, status),
-		)
+		row = append(row, ui.CleanEntityID(dep.Id()), formatErrorInfo(dep, status))
 	}
 
 	return row
