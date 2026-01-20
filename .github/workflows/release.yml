@@ -1,14 +1,20 @@
 name: Release
 
 on:
+  workflow_dispatch:
+    # Manual trigger for re-releasing old tags or recovery
+    inputs:
+      ref:
+        description: 'Git ref to build (tag, branch, or SHA). Leave empty to use current ref.'
+        required: false
+        default: ''
   workflow_run:
     workflows: ["Test"]
+    branches: [main]
     types: [completed]
-    # Note: No branches filter - triggers for both main branch and tags
-    # This ensures all releases (main builds and tagged releases) wait for tests to pass
 
 concurrency:
-  group: release-${{ github.event.workflow_run.head_branch || github.ref_name }}
+  group: release-${{ inputs.ref || github.event.workflow_run.head_branch || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -106,7 +112,7 @@ jobs:
     steps:
     - uses: actions/checkout@v5
       with:
-        ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+        ref: ${{ inputs.ref || github.event.workflow_run.head_sha || github.sha }}
 
     - name: Set up Go
       uses: actions/setup-go@v6
@@ -121,8 +127,8 @@ jobs:
 
     - name: Build and package for ${{ matrix.arch }}
       env:
-        GIT_BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
-        GIT_COMMIT: ${{ github.event.workflow_run.head_sha || github.sha }}
+        GIT_BRANCH: ${{ inputs.ref || github.event.workflow_run.head_branch || github.ref_name }}
+        GIT_COMMIT: ${{ inputs.ref || github.event.workflow_run.head_sha || github.sha }}
       run: |
         # Pass git info from GitHub Actions context to avoid git commands in iso
         export BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -219,7 +225,7 @@ jobs:
     steps:
     - uses: actions/checkout@v5
       with:
-        ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+        ref: ${{ inputs.ref || github.event.workflow_run.head_sha || github.sha }}
     - name: Set up Go
       uses: actions/setup-go@v6
       with:
@@ -317,7 +323,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ inputs.ref || github.event.workflow_run.head_sha || github.sha }}
 
       - name: Download amd64 package
         uses: actions/download-artifact@v4
@@ -352,7 +358,7 @@ jobs:
       - name: Determine Docker tags
         id: docker-tags
         run: |
-          HEAD_BRANCH="${{ github.event.workflow_run.head_branch || github.ref_name }}"
+          HEAD_BRANCH="${{ inputs.ref || github.event.workflow_run.head_branch || github.ref_name }}"
           TAGS="us-central1-docker.pkg.dev/miren-cloud/miren-oci/miren:$HEAD_BRANCH"
 
           # Add latest tag for stable releases only (exclude all prereleases)
@@ -429,7 +435,7 @@ jobs:
     needs: [package, build-binaries]
     runs-on: depot-ubuntu-latest
     concurrency:
-      group: upload-to-miren-${{ github.event.workflow_run.head_branch || github.ref_name }}
+      group: upload-to-miren-${{ inputs.ref || github.event.workflow_run.head_branch || github.ref_name }}
       cancel-in-progress: false
     permissions:
       id-token: write
@@ -438,7 +444,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ inputs.ref || github.event.workflow_run.head_sha || github.sha }}
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -457,7 +463,7 @@ jobs:
         run: |
           set -eo pipefail
 
-          HEAD_BRANCH="${{ github.event.workflow_run.head_branch || github.ref_name }}"
+          HEAD_BRANCH="${{ inputs.ref || github.event.workflow_run.head_branch || github.ref_name }}"
 
           # Determine if this is a tag build
           IS_TAG_BUILD=false
@@ -573,7 +579,7 @@ jobs:
           # Get git information
           COMMIT=$(git rev-parse HEAD)
           COMMIT_SHORT=$(git rev-parse --short HEAD)
-          BRANCH="${{ github.event.workflow_run.head_branch || github.ref_name }}"
+          BRANCH="${{ inputs.ref || github.event.workflow_run.head_branch || github.ref_name }}"
           BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
           # Determine version string
@@ -666,7 +672,7 @@ jobs:
         if: success()
         run: |
           # Determine what was uploaded
-          HEAD_BRANCH="${{ github.event.workflow_run.head_branch || github.ref_name }}"
+          HEAD_BRANCH="${{ inputs.ref || github.event.workflow_run.head_branch || github.ref_name }}"
           RELEASE_TYPE="branch"
 
           if [[ "$HEAD_BRANCH" == v* ]]; then
