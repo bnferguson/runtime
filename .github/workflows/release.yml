@@ -20,6 +20,13 @@ concurrency:
   group: release-${{ inputs.ref || github.ref_name }}
   cancel-in-progress: true
 
+# Permissions needed for reusable workflow (test.yml) and release jobs
+permissions:
+  contents: write        # For package job
+  pull-requests: read    # For golangci-lint in test.yml
+  id-token: write        # For OIDC auth and attestations
+  attestations: write    # For build artifact attestations
+
 jobs:
   init:
     runs-on: ubuntu-latest
