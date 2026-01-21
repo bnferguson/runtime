@@ -51,7 +51,6 @@ require (
 	github.com/lab47/lsvd v0.0.0-20240924031640-ac13c6bb62f0
 	github.com/lab47/lz4decode v0.0.0-20240106213008-0c6757ab03cd
 	github.com/lab47/mode v0.0.0-20231220013342-9703805c0e9c
-	github.com/lima-vm/go-qcow2reader v0.1.1
 	github.com/lucasb-eyer/go-colorful v1.2.0
 	github.com/mattn/go-colorable v0.1.14
 	github.com/mattn/go-isatty v0.0.20
