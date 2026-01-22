@@ -111,9 +111,10 @@ func ServeTLS(ctx context.Context, log *slog.Logger, dataPath string, email stri
 	log.Info("serving TLS with autocert (self-signed fallback for unconfigured hosts)")
 
 	server := &http.Server{
-		Addr:      ":443",
-		Handler:   h,
-		TLSConfig: tlsConfig,
+		Addr:              ":443",
+		Handler:           h,
+		TLSConfig:         tlsConfig,
+		ReadHeaderTimeout: 5 * time.Second,
 	}
 
 	go func() {

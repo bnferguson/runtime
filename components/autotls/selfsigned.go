@@ -100,56 +100,8 @@ func ServeTLSSelfSigned(ctx context.Context, log *slog.Logger, h http.Handler) e
 
 // generateSelfSignedCert creates an in-memory self-signed certificate
 func generateSelfSignedCert() (tls.Certificate, error) {
-	pubkey, privateKey, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return tls.Certificate{}, fmt.Errorf("failed to generate private key: %w", err)
-	}
-
-	serialNumber, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
-	if err != nil {
-		return tls.Certificate{}, fmt.Errorf("failed to generate serial number: %w", err)
-	}
-
-	certTemplate := x509.Certificate{
-		SerialNumber: serialNumber,
-		Subject: pkix.Name{
-			Organization: []string{"Miren Dev"},
-		},
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(365 * 24 * time.Hour), // valid for 1 year
-		KeyUsage:              x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		BasicConstraintsValid: true,
-		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1"), net.IPv6loopback},
-		DNSNames:              []string{"localhost"},
-	}
-
-	derBytes, err := x509.CreateCertificate(rand.Reader, &certTemplate, &certTemplate, pubkey, privateKey)
-	if err != nil {
-		return tls.Certificate{}, fmt.Errorf("failed to create certificate: %w", err)
-	}
-
-	pkbytes, err := x509.MarshalPKCS8PrivateKey(privateKey)
-	if err != nil {
-		return tls.Certificate{}, fmt.Errorf("failed to marshal private key: %w", err)
-	}
-
-	privateKeyPEM := pem.EncodeToMemory(&pem.Block{
-		Type:  "PRIVATE KEY",
-		Bytes: pkbytes,
-	})
-
-	certPEM := pem.EncodeToMemory(&pem.Block{
-		Type:  "CERTIFICATE",
-		Bytes: derBytes,
-	})
-
-	tlsCert, err := tls.X509KeyPair(certPEM, privateKeyPEM)
-	if err != nil {
-		return tls.Certificate{}, fmt.Errorf("failed to create x509 key pair: %w", err)
-	}
-
-	return tlsCert, nil
+	cert, _, _, err := generateSelfSignedCertWithPEM()
+	return cert, err
 }
 
 // loadOrGenerateFallbackCert loads a cached fallback certificate from disk,
