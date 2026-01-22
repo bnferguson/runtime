@@ -3,11 +3,11 @@ package autotls
 import (
 	"context"
 	"crypto/tls"
-	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -69,30 +69,55 @@ func (rs *RouteSet) Replace(hosts []string) {
 }
 
 func ServeTLS(ctx context.Context, log *slog.Logger, dataPath string, email string, routeWatcher RouteWatcher, h http.Handler) error {
-	mgr := &autocert.Manager{
-		Prompt: autocert.AcceptTOS,
-		Cache:  autocert.DirCache(filepath.Join(dataPath, "certs")),
-		Email:  email,
-		HostPolicy: func(_ context.Context, host string) error {
-			if !routeWatcher.HasRoute(host) {
-				log.Warn("rejected cert request for host without configured route", "host", host)
-				return fmt.Errorf("no route configured for host: %s", host)
-			}
-			log.Debug("allowing cert provisioning for host with configured route", "host", host)
-			return nil
-		},
-	}
-
 	log = log.With("module", "autotls")
 
-	log.Info("serving TLS with autocert")
+	// Load or generate a self-signed fallback cert for hosts without configured routes.
+	// This allows default routes and unconfigured hosts to still work over HTTPS
+	// (with a browser warning) while only provisioning real ACME certs for
+	// explicitly configured domains. The cert is persisted to disk so users
+	// who accept the browser warning don't have to re-accept on every restart.
+	certsDir := filepath.Join(dataPath, "certs")
+	fallbackCert, err := loadOrGenerateFallbackCert(certsDir)
+	if err != nil {
+		return err
+	}
+	log.Info("loaded fallback self-signed certificate for unconfigured hosts")
+
+	mgr := &autocert.Manager{
+		Prompt: autocert.AcceptTOS,
+		Cache:  autocert.DirCache(certsDir),
+		Email:  email,
+	}
+
+	// Custom GetCertificate that falls back to self-signed for unconfigured hosts
+	getCertificate := func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		host := strings.ToLower(hello.ServerName)
+
+		if routeWatcher.HasRoute(host) {
+			log.Debug("using ACME cert for configured host", "host", host)
+			return mgr.GetCertificate(hello)
+		}
+
+		log.Debug("using self-signed fallback for unconfigured host", "host", host)
+		return &fallbackCert, nil
+	}
+
+	tlsConfig := &tls.Config{
+		GetCertificate: getCertificate,
+		NextProtos:     []string{"h2", "http/1.1", "acme-tls/1"},
+		MinVersion:     tls.VersionTLS12,
+	}
+
+	log.Info("serving TLS with autocert (self-signed fallback for unconfigured hosts)")
 
 	server := &http.Server{
-		Handler: h,
+		Addr:      ":443",
+		Handler:   h,
+		TLSConfig: tlsConfig,
 	}
 
 	go func() {
-		err := server.Serve(mgr.Listener())
+		err := server.ListenAndServeTLS("", "")
 		if err != nil && err != http.ErrServerClosed {
 			log.Error("error serving TLS", "error", err)
 		}

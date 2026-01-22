@@ -14,7 +14,16 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
+)
+
+const (
+	fallbackCertFile = "fallback-cert.pem"
+	fallbackKeyFile  = "fallback-key.pem"
+	// Regenerate the fallback cert if it expires within this duration
+	fallbackCertRenewalWindow = 30 * 24 * time.Hour
 )
 
 // ServeTLSSelfSigned serves HTTPS using a self-signed certificate.
@@ -141,4 +150,118 @@ func generateSelfSignedCert() (tls.Certificate, error) {
 	}
 
 	return tlsCert, nil
+}
+
+// loadOrGenerateFallbackCert loads a cached fallback certificate from disk,
+// or generates a new one if it doesn't exist or is expiring soon.
+// This ensures users who accept the browser warning don't have to re-accept
+// on every server restart.
+func loadOrGenerateFallbackCert(certsDir string) (tls.Certificate, error) {
+	certPath := filepath.Join(certsDir, fallbackCertFile)
+	keyPath := filepath.Join(certsDir, fallbackKeyFile)
+
+	// Try to load existing cert
+	cert, err := loadFallbackCert(certPath, keyPath)
+	if err == nil {
+		// Check if cert is expiring soon
+		if !certExpiringSoon(cert) {
+			return cert, nil
+		}
+		// Cert is expiring, fall through to regenerate
+	}
+
+	// Generate new cert
+	cert, certPEM, keyPEM, err := generateSelfSignedCertWithPEM()
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
+	// Ensure certs directory exists
+	if err := os.MkdirAll(certsDir, 0700); err != nil {
+		return tls.Certificate{}, fmt.Errorf("failed to create certs directory: %w", err)
+	}
+
+	// Save cert and key to disk
+	if err := os.WriteFile(certPath, certPEM, 0644); err != nil {
+		return tls.Certificate{}, fmt.Errorf("failed to write fallback cert: %w", err)
+	}
+	if err := os.WriteFile(keyPath, keyPEM, 0600); err != nil {
+		return tls.Certificate{}, fmt.Errorf("failed to write fallback key: %w", err)
+	}
+
+	return cert, nil
+}
+
+// loadFallbackCert loads a certificate from disk.
+func loadFallbackCert(certPath, keyPath string) (tls.Certificate, error) {
+	return tls.LoadX509KeyPair(certPath, keyPath)
+}
+
+// certExpiringSoon checks if a certificate is expiring within the renewal window.
+func certExpiringSoon(cert tls.Certificate) bool {
+	if len(cert.Certificate) == 0 {
+		return true
+	}
+
+	x509Cert, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		return true
+	}
+
+	return time.Until(x509Cert.NotAfter) < fallbackCertRenewalWindow
+}
+
+// generateSelfSignedCertWithPEM creates a self-signed certificate and returns
+// both the tls.Certificate and the PEM-encoded cert and key for persistence.
+func generateSelfSignedCertWithPEM() (tls.Certificate, []byte, []byte, error) {
+	pubkey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return tls.Certificate{}, nil, nil, fmt.Errorf("failed to generate private key: %w", err)
+	}
+
+	serialNumber, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
+	if err != nil {
+		return tls.Certificate{}, nil, nil, fmt.Errorf("failed to generate serial number: %w", err)
+	}
+
+	certTemplate := x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject: pkix.Name{
+			Organization: []string{"Miren Dev"},
+		},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1"), net.IPv6loopback},
+		DNSNames:              []string{"localhost"},
+	}
+
+	derBytes, err := x509.CreateCertificate(rand.Reader, &certTemplate, &certTemplate, pubkey, privateKey)
+	if err != nil {
+		return tls.Certificate{}, nil, nil, fmt.Errorf("failed to create certificate: %w", err)
+	}
+
+	pkbytes, err := x509.MarshalPKCS8PrivateKey(privateKey)
+	if err != nil {
+		return tls.Certificate{}, nil, nil, fmt.Errorf("failed to marshal private key: %w", err)
+	}
+
+	keyPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "PRIVATE KEY",
+		Bytes: pkbytes,
+	})
+
+	certPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: derBytes,
+	})
+
+	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return tls.Certificate{}, nil, nil, fmt.Errorf("failed to create x509 key pair: %w", err)
+	}
+
+	return tlsCert, certPEM, keyPEM, nil
 }
