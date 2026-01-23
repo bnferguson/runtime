@@ -13,9 +13,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
+	apitypes "github.com/containerd/containerd/api/types"
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
@@ -1591,4 +1593,167 @@ func TestSandbox(t *testing.T) {
 		r.Equal(compute.RUNNING, finalSb.Status, "sandbox should transition from PENDING to RUNNING when containers are healthy")
 	})
 
+}
+
+// mockTask implements containerd.Task for testing monitorTaskExit
+type mockTask struct {
+	waitCalls int
+	waitErr   error
+	waitCh    chan containerd.ExitStatus
+}
+
+func (m *mockTask) ID() string                  { return "mock-task" }
+func (m *mockTask) Pid() uint32                 { return 1234 }
+func (m *mockTask) Start(context.Context) error { return nil }
+func (m *mockTask) Delete(context.Context, ...containerd.ProcessDeleteOpts) (*containerd.ExitStatus, error) {
+	return nil, nil
+}
+func (m *mockTask) Kill(context.Context, syscall.Signal, ...containerd.KillOpts) error { return nil }
+func (m *mockTask) Wait(context.Context) (<-chan containerd.ExitStatus, error) {
+	m.waitCalls++
+	if m.waitCalls > 1 {
+		// After the first call, return an error to simulate failed re-establishment
+		return nil, m.waitErr
+	}
+	return m.waitCh, nil
+}
+func (m *mockTask) CloseIO(context.Context, ...containerd.IOCloserOpts) error { return nil }
+func (m *mockTask) Resize(ctx context.Context, w, h uint32) error             { return nil }
+func (m *mockTask) IO() cio.IO                                                { return nil }
+func (m *mockTask) Status(context.Context) (containerd.Status, error) {
+	return containerd.Status{}, nil
+}
+func (m *mockTask) Pause(context.Context) error  { return nil }
+func (m *mockTask) Resume(context.Context) error { return nil }
+func (m *mockTask) Exec(context.Context, string, *specs.Process, cio.Creator) (containerd.Process, error) {
+	return nil, nil
+}
+func (m *mockTask) Pids(context.Context) ([]containerd.ProcessInfo, error) { return nil, nil }
+func (m *mockTask) Checkpoint(context.Context, ...containerd.CheckpointTaskOpts) (containerd.Image, error) {
+	return nil, nil
+}
+func (m *mockTask) Update(context.Context, ...containerd.UpdateTaskOpts) error { return nil }
+func (m *mockTask) LoadProcess(context.Context, string, cio.Attach) (containerd.Process, error) {
+	return nil, nil
+}
+func (m *mockTask) Metrics(context.Context) (*apitypes.Metric, error) { return nil, nil }
+func (m *mockTask) Spec(context.Context) (*oci.Spec, error)           { return nil, nil }
+
+// TestMonitorTaskExitIgnoresErrorStatus verifies that monitorTaskExit does not
+// mark a sandbox as STOPPED when the exit status contains an error.
+// This is critical for server restart scenarios where containerd may return
+// spurious exit events with UnknownExitStatus (255) and zero exit time.
+func TestMonitorTaskExitIgnoresErrorStatus(t *testing.T) {
+	r := require.New(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	testDeps, cleanup := testutils.NewTestDeps()
+	defer cleanup()
+
+	co, err := newSandboxController(testDeps)
+	r.NoError(err)
+	defer co.Close()
+
+	r.NoError(co.Init(ctx))
+
+	// Create a sandbox entity with RUNNING status
+	id := entity.Id(idgen.GenNS("sb"))
+
+	var sb compute.Sandbox
+	sb.ID = id
+	sb.Status = compute.RUNNING
+	sb.Labels = append(sb.Labels, "runtime.computer/app=test-app")
+
+	var rpcE entityserver_v1alpha.Entity
+	rpcE.SetId(id.String())
+	rpcE.SetAttrs(entity.New(entity.DBId, id, sb.Encode).Attrs())
+	_, err = co.EAC.Put(ctx, &rpcE)
+	r.NoError(err)
+
+	// Create an exit channel and send an ExitStatus WITH an error
+	// This simulates what happens during server restart when containerd
+	// returns spurious exit events
+	exitCh := make(chan containerd.ExitStatus, 1)
+	testErr := fmt.Errorf("simulated containerd error during restart")
+	exitStatus := containerd.NewExitStatus(containerd.UnknownExitStatus, time.Time{}, testErr)
+	exitCh <- *exitStatus
+
+	// Create a mock task that will fail to re-establish monitoring
+	// Set waitCalls to 1 so the first call to Wait() from inside monitorTaskExit
+	// (which happens when trying to re-establish after the error status)
+	// will return an error immediately
+	task := &mockTask{
+		waitCalls: 1,
+		waitErr:   fmt.Errorf("task not found"),
+	}
+
+	// Call monitorTaskExit - it should ignore the error status and fail to re-establish
+	co.monitorTaskExit(&sb, "test-container", task, exitCh)
+
+	// Give a moment for any async operations
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify the sandbox status was NOT changed to STOPPED
+	result, err := co.EAC.Get(ctx, id.String())
+	r.NoError(err)
+
+	var checkSb compute.Sandbox
+	checkSb.Decode(result.Entity().Entity())
+	r.Equal(compute.RUNNING, checkSb.Status, "sandbox should remain RUNNING when exit status has an error")
+}
+
+// TestMonitorTaskExitHandlesValidExit verifies that monitorTaskExit correctly
+// marks a sandbox as STOPPED when receiving a valid exit status (no error).
+func TestMonitorTaskExitHandlesValidExit(t *testing.T) {
+	r := require.New(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	testDeps, cleanup := testutils.NewTestDeps()
+	defer cleanup()
+
+	co, err := newSandboxController(testDeps)
+	r.NoError(err)
+	defer co.Close()
+
+	r.NoError(co.Init(ctx))
+
+	// Create a sandbox entity with RUNNING status
+	id := entity.Id(idgen.GenNS("sb"))
+
+	var sb compute.Sandbox
+	sb.ID = id
+	sb.Status = compute.RUNNING
+	sb.Labels = append(sb.Labels, "runtime.computer/app=test-app")
+
+	var rpcE entityserver_v1alpha.Entity
+	rpcE.SetId(id.String())
+	rpcE.SetAttrs(entity.New(entity.DBId, id, sb.Encode).Attrs())
+	_, err = co.EAC.Put(ctx, &rpcE)
+	r.NoError(err)
+
+	// Create an exit channel and send a valid ExitStatus (no error)
+	exitCh := make(chan containerd.ExitStatus, 1)
+	exitStatus := containerd.NewExitStatus(0, time.Now(), nil)
+	exitCh <- *exitStatus
+
+	// Create a mock task (not used for valid exits, but required by interface)
+	task := &mockTask{waitCh: exitCh}
+
+	// Call monitorTaskExit - it should process the valid exit and mark as STOPPED
+	co.monitorTaskExit(&sb, "test-container", task, exitCh)
+
+	// Give a moment for the patch operation
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify the sandbox status was changed to STOPPED
+	result, err := co.EAC.Get(ctx, id.String())
+	r.NoError(err)
+
+	var checkSb compute.Sandbox
+	checkSb.Decode(result.Entity().Entity())
+	r.Equal(compute.STOPPED, checkSb.Status, "sandbox should be STOPPED after valid exit event")
 }
