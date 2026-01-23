@@ -53,6 +53,36 @@ case "${1:-}" in
     fi
     ;;
 
+  wait-ready)
+    # Wait for server to be fully ready (for use in scripts)
+    TIMEOUT=${2:-30}
+    # Poll every 100ms, print dot every second
+    MAX_ITERATIONS=$((TIMEOUT * 10))
+    DOT_INTERVAL=10
+
+    echo -n "Waiting for server to be ready"
+    for i in $(seq 1 "$MAX_ITERATIONS"); do
+      if grep -q "Miren server started" "$LOGFILE" 2>/dev/null; then
+        echo " ready!"
+        exit 0
+      fi
+      # Check if server process died
+      if [ -f "$PIDFILE" ] && ! kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+        echo " failed!"
+        echo "Error: Server process died. Check $LOGFILE"
+        exit 1
+      fi
+      # Print a dot every second for visual feedback
+      if [ $((i % DOT_INTERVAL)) -eq 0 ]; then
+        echo -n "."
+      fi
+      sleep 0.1
+    done
+    echo " timeout!"
+    echo "Error: Server did not become ready within ${TIMEOUT}s. Check $LOGFILE"
+    exit 1
+    ;;
+
   stop)
     if [ ! -f "$PIDFILE" ]; then
       echo "Server not running (no PID file)"
@@ -106,7 +136,7 @@ case "${1:-}" in
     ;;
 
   *)
-    echo "Usage: $0 {start|stop|restart|status|logs}"
+    echo "Usage: $0 {start|stop|restart|status|logs|wait-ready [timeout]}"
     exit 1
     ;;
 esac

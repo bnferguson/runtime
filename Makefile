@@ -8,6 +8,22 @@ export DO_NOT_TRACK=1
 # Generate a unique session name based on the project directory
 ISO_SESSION ?= dev-$(shell basename "$$(pwd)")
 
+# Extract git info on the host for passing to container builds
+# These handle both regular repos and worktrees
+GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "dev")
+GIT_COMMIT := $(shell git rev-parse HEAD 2>/dev/null || echo "")
+GIT_VERSION := $(shell \
+  if git describe --exact-match --tags HEAD 2>/dev/null; then \
+    git describe --exact-match --tags HEAD 2>/dev/null; \
+  elif echo "$(GIT_BRANCH)" | grep -q '^release/'; then \
+    echo "$(GIT_BRANCH)" | sed 's|^release/||'; \
+  elif [ -n "$(GIT_COMMIT)" ]; then \
+    echo "$(GIT_BRANCH):$$(echo $(GIT_COMMIT) | cut -c1-7)"; \
+  else \
+    echo "$(GIT_BRANCH)"; \
+  fi \
+)
+
 # Convert DEV_ENV_FILE relative paths to container paths (/src is the workdir)
 # If path starts with /, use as-is (absolute)
 # If path starts with ./ or is relative, prepend /src/
@@ -38,13 +54,15 @@ dev-shell: ## Open interactive shell in dev environment
 	@./hack/dev-exec bash
 
 dev-server-start: ## Start the miren server (supports DEV_ENV_FILE and DEV_SERVER_FLAGS)
-	./hack/dev-exec --root env DEV_ENV_FILE="$(DEV_ENV_FILE_CONTAINER)" DEV_SERVER_FLAGS="$(DEV_SERVER_FLAGS)" bash hack/dev-server start
+	@./hack/dev-exec --root env DEV_ENV_FILE="$(DEV_ENV_FILE_CONTAINER)" DEV_SERVER_FLAGS="$(DEV_SERVER_FLAGS)" bash hack/dev-server start
+	@./hack/dev-exec --root bash hack/dev-server wait-ready
 
 dev-server-stop: ## Stop the miren server
-	./hack/dev-exec --root bash hack/dev-server stop
+	@./hack/dev-exec --root bash hack/dev-server stop
 
 dev-server-restart: ## Restart the miren server (supports DEV_ENV_FILE and DEV_SERVER_FLAGS)
-	./hack/dev-exec --root env DEV_ENV_FILE="$(DEV_ENV_FILE_CONTAINER)" DEV_SERVER_FLAGS="$(DEV_SERVER_FLAGS)" bash hack/dev-server restart
+	@./hack/dev-exec --root env DEV_ENV_FILE="$(DEV_ENV_FILE_CONTAINER)" DEV_SERVER_FLAGS="$(DEV_SERVER_FLAGS)" bash hack/dev-server restart
+	@./hack/dev-exec --root bash hack/dev-server wait-ready
 
 dev-server-status: ## Check miren server status
 	./hack/dev-exec --root bash hack/dev-server status
@@ -55,7 +73,7 @@ dev-server-logs: ## View miren server logs
 dev-start: ## Start dev environment (internal - use 'dev' instead)
 	@if ! ISO_SESSION=$(ISO_SESSION) iso status 2>&1 | grep -q "Container is running"; then \
 		ISO_SESSION=$(ISO_SESSION) iso start && \
-		ISO_SESSION=$(ISO_SESSION) iso run bash hack/dev.sh; \
+		ISO_SESSION=$(ISO_SESSION) iso run GIT_BRANCH="$(GIT_BRANCH)" GIT_COMMIT="$(GIT_COMMIT)" GIT_VERSION="$(GIT_VERSION)" bash hack/dev.sh; \
 	else \
 		echo "✓ Container already running"; \
 	fi
