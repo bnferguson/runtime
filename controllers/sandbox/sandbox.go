@@ -730,7 +730,7 @@ func (c *SandboxController) reattachLogs(ctx context.Context, sb *compute.Sandbo
 		c.Log.Warn("failed to set up task wait during reattach", "id", containerID, "error", err)
 	} else {
 		// Launch goroutine to monitor process exit
-		go c.monitorTaskExit(sb, containerID, exitCh)
+		go c.monitorTaskExit(sb, containerID, task, exitCh)
 		c.Log.Debug("re-established task exit monitoring", "sandbox", sb.ID, "container", containerID)
 	}
 
@@ -1647,7 +1647,7 @@ func (c *SandboxController) bootContainers(
 			c.Log.Warn("failed to set up task wait", "id", cc.ID(), "error", err)
 		} else {
 			// Launch goroutine to monitor process exit
-			go c.monitorTaskExit(sb, cc.ID(), exitCh)
+			go c.monitorTaskExit(sb, cc.ID(), task, exitCh)
 		}
 
 		// Start port monitoring for this container if it has ports
@@ -1663,51 +1663,82 @@ func (c *SandboxController) bootContainers(
 func (c *SandboxController) monitorTaskExit(
 	sb *compute.Sandbox,
 	containerID string,
+	task containerd.Task,
 	exitCh <-chan containerd.ExitStatus,
 ) {
 	c.Log.Debug("monitoring task for exit", "sandbox", sb.ID, "container", containerID)
 
-	select {
-	case exitStatus := <-exitCh:
-		c.Log.Info("container process exited",
-			"sandbox", sb.ID,
-			"container", containerID,
-			"exit_code", exitStatus.ExitCode(),
-			"exit_time", exitStatus.ExitTime(),
-		)
-
-		// Update sandbox status to STOPPED using Patch (only updating Status field)
-		// We use Patch instead of Put since we're only changing one field
-		// STOPPED status triggers cleanup in reconciliation (stopSandbox), which:
-		// - Releases IPs immediately
-		// - Cleans up containers
-		// - Marks as DEAD afterward
-		patchAttrs := entity.New(
-			entity.Ref(entity.DBId, sb.ID),
-			(&compute.Sandbox{
-				Status: compute.STOPPED,
-			}).Encode,
-		)
-
-		ctx := context.Background()
-		result, err := c.EAC.Patch(ctx, patchAttrs.Attrs(), 0)
-		if err != nil {
-			if !errors.Is(err, cond.ErrNotFound{}) {
-				c.Log.Error("failed to update sandbox status to STOPPED",
+	for {
+		select {
+		case exitStatus := <-exitCh:
+			// Check if the exit status contains an error. Per containerd docs:
+			// "ExitCode() is only valid if Error() returns nil" and
+			// "If an error is returned, the process may still be running."
+			// This can happen when re-establishing task monitoring after server restart,
+			// where containerd returns an ExitStatus with UnknownExitStatus (255) and
+			// zero exit time because the task state is uncertain.
+			if err := exitStatus.Error(); err != nil {
+				c.Log.Warn("received exit status with error, attempting to re-establish monitoring",
 					"sandbox", sb.ID,
+					"container", containerID,
 					"error", err,
 				)
+				// Try to re-establish monitoring since the process may still be running
+				newExitCh, waitErr := task.Wait(c.topCtx)
+				if waitErr != nil {
+					c.Log.Warn("failed to re-establish task monitoring after error status",
+						"sandbox", sb.ID,
+						"container", containerID,
+						"error", waitErr,
+					)
+					return
+				}
+				exitCh = newExitCh
+				continue
 			}
+
+			c.Log.Info("container process exited",
+				"sandbox", sb.ID,
+				"container", containerID,
+				"exit_code", exitStatus.ExitCode(),
+				"exit_time", exitStatus.ExitTime(),
+			)
+
+			// Update sandbox status to STOPPED using Patch (only updating Status field)
+			// We use Patch instead of Put since we're only changing one field
+			// STOPPED status triggers cleanup in reconciliation (stopSandbox), which:
+			// - Releases IPs immediately
+			// - Cleans up containers
+			// - Marks as DEAD afterward
+			patchAttrs := entity.New(
+				entity.Ref(entity.DBId, sb.ID),
+				(&compute.Sandbox{
+					Status: compute.STOPPED,
+				}).Encode,
+			)
+
+			ctx := context.Background()
+			result, err := c.EAC.Patch(ctx, patchAttrs.Attrs(), 0)
+			if err != nil {
+				if !errors.Is(err, cond.ErrNotFound{}) {
+					c.Log.Error("failed to update sandbox status to STOPPED",
+						"sandbox", sb.ID,
+						"error", err,
+					)
+				}
+				return
+			}
+			if c.writeTracker != nil && result.HasRevision() {
+				c.writeTracker.RecordWrite(result.Revision())
+			}
+
+			c.Log.Info("marked sandbox as STOPPED due to process exit, cleanup will be triggered by reconciliation", "sandbox", sb.ID)
+			return
+
+		case <-c.topCtx.Done():
+			c.Log.Debug("task monitoring cancelled", "sandbox", sb.ID, "container", containerID)
 			return
 		}
-		if c.writeTracker != nil && result.HasRevision() {
-			c.writeTracker.RecordWrite(result.Revision())
-		}
-
-		c.Log.Info("marked sandbox as STOPPED due to process exit, cleanup will be triggered by reconciliation", "sandbox", sb.ID)
-
-	case <-c.topCtx.Done():
-		c.Log.Debug("task monitoring cancelled", "sandbox", sb.ID, "container", containerID)
 	}
 }
 
