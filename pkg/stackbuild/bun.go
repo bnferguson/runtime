@@ -30,6 +30,10 @@ func (s *BunStack) Detect() bool {
 		s.Event("file", "bun.lock", "Found bun.lock (Bun runtime)")
 		return true
 	}
+	if s.hasFile("bun.lockb") {
+		s.Event("file", "bun.lockb", "Found bun.lockb (Bun runtime, legacy)")
+		return true
+	}
 	if s.detectInFile("Procfile", `web:\s+bun`) {
 		s.Event("file", "Procfile", "Procfile references bun")
 		return true
@@ -76,7 +80,7 @@ func (s *BunStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error
 	base = s.addAppUser(base)
 
 	// Copy package files first for better caching
-	pkgFiles := []string{"package.json", "bun.lock"}
+	pkgFiles := []string{"package.json", "bun.lock", "bun.lockb"}
 	depState := base.File(llb.Copy(localCtx, "/", "/app", &llb.CopyInfo{
 		IncludePatterns: pkgFiles,
 	}))

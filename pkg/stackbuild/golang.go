@@ -72,7 +72,7 @@ func (s *GoStack) commandDir(opts BuildOptions) string {
 		return ""
 	}
 
-	if len(entries) == 1 {
+	if len(entries) == 1 && entries[0].IsDir() {
 		return filepath.Join("cmd", entries[0].Name())
 	}
 

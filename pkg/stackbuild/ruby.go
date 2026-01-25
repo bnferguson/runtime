@@ -91,6 +91,10 @@ func (s *RubyStack) Gemfile() ([]byte, []byte, error) {
 	gemfileLockPath := "Gemfile.lock"
 	gemfileLockContent, err := os.ReadFile(filepath.Join(s.dir, gemfileLockPath))
 	if err != nil {
+		if os.IsNotExist(err) {
+			// Gemfile.lock is optional - proceed without it
+			return gemfileContent, nil, nil
+		}
 		return gemfileContent, nil, err
 	}
 
