@@ -429,18 +429,26 @@ func (c *Component) checkAndUpgradeVersion(ctx context.Context, config *Config) 
 	pid := int(versionResult.Pid())
 	c.log.Info("waiting for lsvd-server to exit for upgrade", "pid", pid)
 
-	// Close existing RPC connection
+	// Close existing RPC connection and capture waitDone for synchronization
 	c.mu.Lock()
 	if c.rpcState != nil {
 		c.rpcState.Close()
 		c.rpcState = nil
 	}
 	c.debugClient = nil
+	waitDone := c.waitDone
 	c.mu.Unlock()
 
 	// Wait for the process to exit
 	if err := c.waitForPidExit(ctx, pid, 30*time.Second); err != nil {
 		return false, fmt.Errorf("failed waiting for process to exit: %w", err)
+	}
+
+	// Wait for the monitor goroutine to finish before clearing state
+	// This prevents a race where the monitor's deferred close(c.waitDone)
+	// could close a new waitDone channel created by the subsequent Start()
+	if waitDone != nil {
+		<-waitDone
 	}
 
 	// Clear our state

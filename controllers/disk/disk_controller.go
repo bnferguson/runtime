@@ -465,7 +465,7 @@ func (d *DiskController) handleDeletionViaEntity(ctx context.Context, disk *stor
 				d.Log.Error("Failed to update lsvd_volume desired_state",
 					"lsvd_volume", volume.ID,
 					"error", err)
-				return nil
+				return err
 			}
 
 			// Wait for lsvd-server to delete the volume

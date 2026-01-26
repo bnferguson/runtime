@@ -114,6 +114,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	client, err := rpcState.Connect(s.entityServerAddr, "entities")
 	if err != nil {
+		rpcState.Close()
 		return fmt.Errorf("failed to connect to entity server: %w", err)
 	}
 
@@ -144,6 +145,7 @@ func (s *Server) Run(ctx context.Context) error {
 		rpc.WithSkipVerify,
 	)
 	if err != nil {
+		rpcState.Close()
 		return fmt.Errorf("failed to create debug RPC state: %w", err)
 	}
 	s.debugRpcState = debugRpcState
