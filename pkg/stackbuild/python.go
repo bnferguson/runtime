@@ -59,8 +59,17 @@ func (s *PythonStack) Detect() bool {
 	}
 
 	if s.hasFile("pyproject.toml") {
-		s.packageManager = pythonPkgPoetry
-		s.Event("file", "pyproject.toml", "Found pyproject.toml (poetry)")
+		// Check if this is actually a Poetry project by looking for [tool.poetry]
+		if data, err := s.readFile("pyproject.toml"); err == nil {
+			if strings.Contains(string(data), "[tool.poetry]") {
+				s.packageManager = pythonPkgPoetry
+				s.Event("file", "pyproject.toml", "Found pyproject.toml (poetry)")
+				return true
+			}
+		}
+		// pyproject.toml without poetry - use pip
+		s.packageManager = pythonPkgPip
+		s.Event("file", "pyproject.toml", "Found pyproject.toml (pip)")
 		return true
 	}
 
@@ -400,10 +409,7 @@ func (s *PythonStack) WebCommand() string {
 		if s.wsgiModule != "" {
 			return "gunicorn " + s.wsgiModule + " -b 0.0.0.0:$PORT"
 		}
-		// Fallback: check common entry points
-		if s.hasFile("app.py") {
-			return "gunicorn app:app -b 0.0.0.0:$PORT"
-		}
+		// Fallback to common entry point
 		return "gunicorn app:app -b 0.0.0.0:$PORT"
 	}
 
