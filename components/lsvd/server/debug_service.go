@@ -129,3 +129,35 @@ func (d *DebugService) GetMetrics(ctx context.Context, state *lsvd_v1alpha.LsvdD
 	state.Results().SetMetrics(metrics)
 	return nil
 }
+
+// CheckVersion checks if the server version matches the expected version.
+// If the expected version is greater than the current version, the server
+// will initiate a graceful shutdown to allow for an upgrade.
+func (d *DebugService) CheckVersion(ctx context.Context, state *lsvd_v1alpha.LsvdDebugCheckVersion) error {
+	expectedVersion := state.Args().ExpectedVersion()
+	currentVersion := ServerVersion
+
+	result := &lsvd_v1alpha.VersionCheckResult{}
+	result.SetCurrentVersion(currentVersion)
+	result.SetPid(int32(os.Getpid()))
+
+	if expectedVersion > currentVersion {
+		d.server.log.Info("version upgrade requested",
+			"current_version", currentVersion,
+			"expected_version", expectedVersion,
+		)
+		result.SetNeedsRestart(true)
+
+		// Trigger graceful shutdown in a goroutine so the RPC can return first
+		go func() {
+			// Small delay to ensure RPC response is sent
+			time.Sleep(100 * time.Millisecond)
+			d.server.triggerShutdown()
+		}()
+	} else {
+		result.SetNeedsRestart(false)
+	}
+
+	state.Results().SetResult(result)
+	return nil
+}

@@ -410,3 +410,120 @@ func TestDebugServiceGetMetricsZeroDurations(t *testing.T) {
 	assert.False(t, metrics.HasLastVolumeDuration())
 	assert.False(t, metrics.HasLastMountDuration())
 }
+
+func TestDebugServiceCheckVersionSameVersion(t *testing.T) {
+	ctx := t.Context()
+
+	server := &Server{
+		log:      slog.Default(),
+		dataPath: t.TempDir(),
+		state:    NewState(),
+	}
+
+	debugService := NewDebugService(server)
+
+	ss, err := rpc.NewState(ctx, rpc.WithSkipVerify)
+	require.NoError(t, err)
+
+	ss.Server().ExposeValue("lsvd-debug", lsvd_v1alpha.AdaptLsvdDebug(debugService))
+
+	cs, err := rpc.NewState(ctx, rpc.WithSkipVerify)
+	require.NoError(t, err)
+
+	c, err := cs.Connect(ss.ListenAddr(), "lsvd-debug")
+	require.NoError(t, err)
+
+	client := lsvd_v1alpha.NewLsvdDebugClient(c)
+
+	// Check with the same version - should not need restart
+	result, err := client.CheckVersion(ctx, ServerVersion)
+	require.NoError(t, err)
+
+	versionResult := result.Result()
+	require.NotNil(t, versionResult)
+
+	assert.Equal(t, ServerVersion, versionResult.CurrentVersion())
+	assert.False(t, versionResult.NeedsRestart())
+	assert.Equal(t, int32(os.Getpid()), versionResult.Pid())
+}
+
+func TestDebugServiceCheckVersionOlderVersion(t *testing.T) {
+	ctx := t.Context()
+
+	server := &Server{
+		log:        slog.Default(),
+		dataPath:   t.TempDir(),
+		state:      NewState(),
+		shutdownCh: make(chan struct{}),
+	}
+
+	debugService := NewDebugService(server)
+
+	ss, err := rpc.NewState(ctx, rpc.WithSkipVerify)
+	require.NoError(t, err)
+
+	ss.Server().ExposeValue("lsvd-debug", lsvd_v1alpha.AdaptLsvdDebug(debugService))
+
+	cs, err := rpc.NewState(ctx, rpc.WithSkipVerify)
+	require.NoError(t, err)
+
+	c, err := cs.Connect(ss.ListenAddr(), "lsvd-debug")
+	require.NoError(t, err)
+
+	client := lsvd_v1alpha.NewLsvdDebugClient(c)
+
+	// Check with a lower version - should not need restart
+	result, err := client.CheckVersion(ctx, ServerVersion-1)
+	require.NoError(t, err)
+
+	versionResult := result.Result()
+	require.NotNil(t, versionResult)
+
+	assert.Equal(t, ServerVersion, versionResult.CurrentVersion())
+	assert.False(t, versionResult.NeedsRestart())
+}
+
+func TestDebugServiceCheckVersionNewerVersion(t *testing.T) {
+	ctx := t.Context()
+
+	server := &Server{
+		log:        slog.Default(),
+		dataPath:   t.TempDir(),
+		state:      NewState(),
+		shutdownCh: make(chan struct{}),
+	}
+
+	debugService := NewDebugService(server)
+
+	ss, err := rpc.NewState(ctx, rpc.WithSkipVerify)
+	require.NoError(t, err)
+
+	ss.Server().ExposeValue("lsvd-debug", lsvd_v1alpha.AdaptLsvdDebug(debugService))
+
+	cs, err := rpc.NewState(ctx, rpc.WithSkipVerify)
+	require.NoError(t, err)
+
+	c, err := cs.Connect(ss.ListenAddr(), "lsvd-debug")
+	require.NoError(t, err)
+
+	client := lsvd_v1alpha.NewLsvdDebugClient(c)
+
+	// Check with a higher version - should need restart
+	result, err := client.CheckVersion(ctx, ServerVersion+1)
+	require.NoError(t, err)
+
+	versionResult := result.Result()
+	require.NotNil(t, versionResult)
+
+	assert.Equal(t, ServerVersion, versionResult.CurrentVersion())
+	assert.True(t, versionResult.NeedsRestart())
+	assert.Equal(t, int32(os.Getpid()), versionResult.Pid())
+
+	// Verify shutdown was triggered (will be signaled after a short delay)
+	select {
+	case <-server.shutdownCh:
+		// Shutdown was triggered
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("shutdown was not triggered")
+	}
+}

@@ -551,6 +551,77 @@ func (v *ReconcileMetrics) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type versionCheckResultData struct {
+	CurrentVersion *uint64 `cbor:"0,keyasint,omitempty" json:"current_version,omitempty"`
+	NeedsRestart   *bool   `cbor:"1,keyasint,omitempty" json:"needs_restart,omitempty"`
+	Pid            *int32  `cbor:"2,keyasint,omitempty" json:"pid,omitempty"`
+}
+
+type VersionCheckResult struct {
+	data versionCheckResultData
+}
+
+func (v *VersionCheckResult) HasCurrentVersion() bool {
+	return v.data.CurrentVersion != nil
+}
+
+func (v *VersionCheckResult) CurrentVersion() uint64 {
+	if v.data.CurrentVersion == nil {
+		return 0
+	}
+	return *v.data.CurrentVersion
+}
+
+func (v *VersionCheckResult) SetCurrentVersion(current_version uint64) {
+	v.data.CurrentVersion = &current_version
+}
+
+func (v *VersionCheckResult) HasNeedsRestart() bool {
+	return v.data.NeedsRestart != nil
+}
+
+func (v *VersionCheckResult) NeedsRestart() bool {
+	if v.data.NeedsRestart == nil {
+		return false
+	}
+	return *v.data.NeedsRestart
+}
+
+func (v *VersionCheckResult) SetNeedsRestart(needs_restart bool) {
+	v.data.NeedsRestart = &needs_restart
+}
+
+func (v *VersionCheckResult) HasPid() bool {
+	return v.data.Pid != nil
+}
+
+func (v *VersionCheckResult) Pid() int32 {
+	if v.data.Pid == nil {
+		return 0
+	}
+	return *v.data.Pid
+}
+
+func (v *VersionCheckResult) SetPid(pid int32) {
+	v.data.Pid = &pid
+}
+
+func (v *VersionCheckResult) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *VersionCheckResult) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *VersionCheckResult) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *VersionCheckResult) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type lsvdDebugHealthArgsData struct{}
 
 type LsvdDebugHealthArgs struct {
@@ -761,6 +832,71 @@ func (v *LsvdDebugGetMetricsResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type lsvdDebugCheckVersionArgsData struct {
+	ExpectedVersion *uint64 `cbor:"0,keyasint,omitempty" json:"expected_version,omitempty"`
+}
+
+type LsvdDebugCheckVersionArgs struct {
+	call rpc.Call
+	data lsvdDebugCheckVersionArgsData
+}
+
+func (v *LsvdDebugCheckVersionArgs) HasExpectedVersion() bool {
+	return v.data.ExpectedVersion != nil
+}
+
+func (v *LsvdDebugCheckVersionArgs) ExpectedVersion() uint64 {
+	if v.data.ExpectedVersion == nil {
+		return 0
+	}
+	return *v.data.ExpectedVersion
+}
+
+func (v *LsvdDebugCheckVersionArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *LsvdDebugCheckVersionArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *LsvdDebugCheckVersionArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *LsvdDebugCheckVersionArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type lsvdDebugCheckVersionResultsData struct {
+	Result *VersionCheckResult `cbor:"0,keyasint,omitempty" json:"result,omitempty"`
+}
+
+type LsvdDebugCheckVersionResults struct {
+	call rpc.Call
+	data lsvdDebugCheckVersionResultsData
+}
+
+func (v *LsvdDebugCheckVersionResults) SetResult(result *VersionCheckResult) {
+	v.data.Result = result
+}
+
+func (v *LsvdDebugCheckVersionResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *LsvdDebugCheckVersionResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *LsvdDebugCheckVersionResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *LsvdDebugCheckVersionResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type LsvdDebugHealth struct {
 	rpc.Call
 	args    LsvdDebugHealthArgs
@@ -865,11 +1001,38 @@ func (t *LsvdDebugGetMetrics) Results() *LsvdDebugGetMetricsResults {
 	return results
 }
 
+type LsvdDebugCheckVersion struct {
+	rpc.Call
+	args    LsvdDebugCheckVersionArgs
+	results LsvdDebugCheckVersionResults
+}
+
+func (t *LsvdDebugCheckVersion) Args() *LsvdDebugCheckVersionArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *LsvdDebugCheckVersion) Results() *LsvdDebugCheckVersionResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type LsvdDebug interface {
 	Health(ctx context.Context, state *LsvdDebugHealth) error
 	ListVolumes(ctx context.Context, state *LsvdDebugListVolumes) error
 	ListMounts(ctx context.Context, state *LsvdDebugListMounts) error
 	GetMetrics(ctx context.Context, state *LsvdDebugGetMetrics) error
+	CheckVersion(ctx context.Context, state *LsvdDebugCheckVersion) error
 }
 
 type reexportLsvdDebug struct {
@@ -889,6 +1052,10 @@ func (reexportLsvdDebug) ListMounts(ctx context.Context, state *LsvdDebugListMou
 }
 
 func (reexportLsvdDebug) GetMetrics(ctx context.Context, state *LsvdDebugGetMetrics) error {
+	panic("not implemented")
+}
+
+func (reexportLsvdDebug) CheckVersion(ctx context.Context, state *LsvdDebugCheckVersion) error {
 	panic("not implemented")
 }
 
@@ -928,6 +1095,14 @@ func AdaptLsvdDebug(t LsvdDebug) *rpc.Interface {
 			Index:         0,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.GetMetrics(ctx, &LsvdDebugGetMetrics{Call: call})
+			},
+		},
+		{
+			Name:          "checkVersion",
+			InterfaceName: "LsvdDebug",
+			Index:         0,
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.CheckVersion(ctx, &LsvdDebugCheckVersion{Call: call})
 			},
 		},
 	}
@@ -1055,4 +1230,31 @@ func (v LsvdDebugClient) GetMetrics(ctx context.Context) (*LsvdDebugClientGetMet
 	}
 
 	return &LsvdDebugClientGetMetricsResults{client: v.Client, data: ret}, nil
+}
+
+type LsvdDebugClientCheckVersionResults struct {
+	client rpc.Client
+	data   lsvdDebugCheckVersionResultsData
+}
+
+func (v *LsvdDebugClientCheckVersionResults) HasResult() bool {
+	return v.data.Result != nil
+}
+
+func (v *LsvdDebugClientCheckVersionResults) Result() *VersionCheckResult {
+	return v.data.Result
+}
+
+func (v LsvdDebugClient) CheckVersion(ctx context.Context, expected_version uint64) (*LsvdDebugClientCheckVersionResults, error) {
+	args := LsvdDebugCheckVersionArgs{}
+	args.data.ExpectedVersion = &expected_version
+
+	var ret lsvdDebugCheckVersionResultsData
+
+	err := v.Call(ctx, "checkVersion", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &LsvdDebugClientCheckVersionResults{client: v.Client, data: ret}, nil
 }

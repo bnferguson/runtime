@@ -136,6 +136,22 @@ types:
         index: 5
         doc: Duration of last mount reconciliation
 
+  - type: VersionCheckResult
+    doc: Result of a version check
+    fields:
+      - name: current_version
+        type: uint64
+        index: 0
+        doc: The version currently running
+      - name: needs_restart
+        type: bool
+        index: 1
+        doc: True if the server will exit for upgrade
+      - name: pid
+        type: int32
+        index: 2
+        doc: Process ID of the server (for waiting on exit)
+
 interfaces:
   - name: LsvdDebug
     doc: Debug interface for lsvd-server inspection
@@ -169,3 +185,14 @@ interfaces:
           - name: metrics
             type: ReconcileMetrics
             doc: Reconciliation metrics
+
+      - name: checkVersion
+        doc: Check if server version matches expected, triggers graceful restart if outdated
+        parameters:
+          - name: expected_version
+            type: uint64
+            doc: The version the caller expects
+        results:
+          - name: result
+            type: VersionCheckResult
+            doc: Version check result with restart indicator

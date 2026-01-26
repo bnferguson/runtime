@@ -37,6 +37,11 @@ type Server struct {
 	volumeController *VolumeController
 	mountController  *MountController
 
+	// Shutdown control for version upgrades
+	shutdownMu     sync.Mutex
+	shutdownCh     chan struct{}
+	shutdownCancel context.CancelFunc
+
 	// Health tracking
 	healthMu              sync.RWMutex
 	entityServerConnected bool
@@ -67,6 +72,11 @@ func NewServer(log *slog.Logger, dataPath, nodeId, entityServerAddr, debugAddr s
 
 // Run starts the server and blocks until context is cancelled
 func (s *Server) Run(ctx context.Context) error {
+	// Initialize shutdown channel for version upgrades
+	s.shutdownMu.Lock()
+	s.shutdownCh = make(chan struct{})
+	s.shutdownMu.Unlock()
+
 	s.log.Info("loading persisted state")
 
 	// Load state from disk
@@ -171,13 +181,31 @@ func (s *Server) Run(ctx context.Context) error {
 		errCh <- s.watchMounts(ctx)
 	}()
 
-	// Wait for context cancellation or error
+	// Wait for context cancellation, shutdown signal, or error
 	select {
 	case <-ctx.Done():
 		s.log.Info("context cancelled, shutting down")
 		return nil
+	case <-s.shutdownCh:
+		s.log.Info("shutdown requested for version upgrade")
+		return nil
 	case err := <-errCh:
 		return err
+	}
+}
+
+// triggerShutdown signals the server to shut down gracefully for an upgrade
+func (s *Server) triggerShutdown() {
+	s.shutdownMu.Lock()
+	defer s.shutdownMu.Unlock()
+
+	if s.shutdownCh != nil {
+		select {
+		case <-s.shutdownCh:
+			// Already closed
+		default:
+			close(s.shutdownCh)
+		}
 	}
 }
 

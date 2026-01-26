@@ -164,9 +164,25 @@ func (c *Component) Start(ctx context.Context, config *Config) error {
 		// Don't fail startup if RPC connection fails
 	}
 
+	// Check if the running server needs to be upgraded
+	upgraded, err := c.checkAndUpgradeVersion(ctx, config)
+	if err != nil {
+		c.log.Warn("failed to check version", "error", err)
+	} else if upgraded {
+		// Server was restarted, get fresh PID
+		c.mu.Lock()
+		cmd = c.cmd
+		c.mu.Unlock()
+	}
+
+	pid := 0
+	if cmd != nil && cmd.Process != nil {
+		pid = cmd.Process.Pid
+	}
+
 	c.log.Info("lsvd-server ready",
 		"data_path", config.DataPath,
-		"pid", cmd.Process.Pid,
+		"pid", pid,
 	)
 
 	return nil
@@ -374,4 +390,102 @@ func (c *Component) IsHealthy() bool {
 	}
 
 	return status.Healthy
+}
+
+// checkAndUpgradeVersion checks if the running lsvd-server needs to be upgraded.
+// If an upgrade is needed, it waits for the old process to exit and starts a new one.
+// Returns true if an upgrade was performed.
+func (c *Component) checkAndUpgradeVersion(ctx context.Context, config *Config) (bool, error) {
+	c.mu.Lock()
+	client := c.debugClient
+	c.mu.Unlock()
+
+	if client == nil {
+		return false, fmt.Errorf("RPC client not connected")
+	}
+
+	// Check version with the expected version from the server package
+	result, err := client.CheckVersion(ctx, server.ServerVersion)
+	if err != nil {
+		return false, fmt.Errorf("version check failed: %w", err)
+	}
+
+	versionResult := result.Result()
+	if versionResult == nil {
+		return false, fmt.Errorf("nil result from version check")
+	}
+
+	c.log.Info("version check result",
+		"current_version", versionResult.CurrentVersion(),
+		"expected_version", server.ServerVersion,
+		"needs_restart", versionResult.NeedsRestart(),
+	)
+
+	if !versionResult.NeedsRestart() {
+		return false, nil
+	}
+
+	// Server indicated it will exit for upgrade
+	pid := int(versionResult.Pid())
+	c.log.Info("waiting for lsvd-server to exit for upgrade", "pid", pid)
+
+	// Close existing RPC connection
+	c.mu.Lock()
+	if c.rpcState != nil {
+		c.rpcState.Close()
+		c.rpcState = nil
+	}
+	c.debugClient = nil
+	c.mu.Unlock()
+
+	// Wait for the process to exit
+	if err := c.waitForPidExit(ctx, pid, 30*time.Second); err != nil {
+		return false, fmt.Errorf("failed waiting for process to exit: %w", err)
+	}
+
+	// Clear our state
+	c.mu.Lock()
+	c.running = false
+	c.cmd = nil
+	c.mu.Unlock()
+
+	c.log.Info("old lsvd-server exited, starting new version")
+
+	// Start the new version
+	if err := c.Start(ctx, config); err != nil {
+		return false, fmt.Errorf("failed to start new version: %w", err)
+	}
+
+	return true, nil
+}
+
+// waitForPidExit waits for a process with the given PID to exit
+func (c *Component) waitForPidExit(ctx context.Context, pid int, timeout time.Duration) error {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	deadline := time.After(timeout)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline:
+			return fmt.Errorf("timeout waiting for pid %d to exit", pid)
+		case <-ticker.C:
+			// Check if process still exists by sending signal 0
+			process, err := os.FindProcess(pid)
+			if err != nil {
+				// Process not found
+				return nil
+			}
+
+			// On Unix, FindProcess always succeeds, so we need to send signal 0
+			err = process.Signal(syscall.Signal(0))
+			if err != nil {
+				// Process doesn't exist or we can't signal it
+				return nil
+			}
+		}
+	}
 }

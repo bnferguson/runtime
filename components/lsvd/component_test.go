@@ -316,6 +316,15 @@ func (m *mockDebugService) GetMetrics(ctx context.Context, state *lsvd_v1alpha.L
 	return nil
 }
 
+func (m *mockDebugService) CheckVersion(ctx context.Context, state *lsvd_v1alpha.LsvdDebugCheckVersion) error {
+	result := &lsvd_v1alpha.VersionCheckResult{}
+	result.SetCurrentVersion(1)
+	result.SetPid(int32(os.Getpid()))
+	result.SetNeedsRestart(false)
+	state.Results().SetResult(result)
+	return nil
+}
+
 func TestComponentConnectRPCAndHealth(t *testing.T) {
 	ctx := t.Context()
 	log := slog.Default()
