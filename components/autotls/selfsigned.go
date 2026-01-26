@@ -2,7 +2,8 @@ package autotls
 
 import (
 	"context"
-	"crypto/ed25519"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
@@ -165,8 +166,9 @@ func certExpiringSoon(cert tls.Certificate) bool {
 
 // generateSelfSignedCertWithPEM creates a self-signed certificate and returns
 // both the tls.Certificate and the PEM-encoded cert and key for persistence.
+// Uses ECDSA P-256 for broad browser compatibility.
 func generateSelfSignedCertWithPEM() (tls.Certificate, []byte, []byte, error) {
-	pubkey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return tls.Certificate{}, nil, nil, fmt.Errorf("failed to generate private key: %w", err)
 	}
@@ -183,14 +185,14 @@ func generateSelfSignedCertWithPEM() (tls.Certificate, []byte, []byte, error) {
 		},
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:              x509.KeyUsageDigitalSignature,
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
 		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1"), net.IPv6loopback},
 		DNSNames:              []string{"localhost"},
 	}
 
-	derBytes, err := x509.CreateCertificate(rand.Reader, &certTemplate, &certTemplate, pubkey, privateKey)
+	derBytes, err := x509.CreateCertificate(rand.Reader, &certTemplate, &certTemplate, &privateKey.PublicKey, privateKey)
 	if err != nil {
 		return tls.Certificate{}, nil, nil, fmt.Errorf("failed to create certificate: %w", err)
 	}
