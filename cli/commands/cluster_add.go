@@ -14,7 +14,17 @@ import (
 
 	"github.com/quic-go/quic-go"
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/pkg/ui"
 )
+
+// skipAddresses contains addresses that should be skipped when trying to connect
+var skipAddresses = map[string]bool{
+	"0.0.0.0":               true,
+	"127.0.0.1":             true,
+	"::1":                   true,
+	"localhost":             true,
+	"localhost.localdomain": true,
+}
 
 func ClusterAdd(ctx *Context, opts struct {
 	Identity string `short:"i" long:"identity" description:"Name of the identity to use (optional - will use the only one if single)"`
@@ -72,6 +82,7 @@ func addCluster(ctx *Context, identityName, clusterName, address string, force b
 	// If no cluster name or address provided, query the identity server for available clusters
 	var caCert string
 	var allAddresses []string
+	var clusterXID string
 
 	if clusterName == "" && address == "" {
 		ctx.Info("Fetching available clusters from identity server...")
@@ -92,6 +103,7 @@ func addCluster(ctx *Context, identityName, clusterName, address string, force b
 		}
 
 		clusterName = localName
+		clusterXID = selectedCluster.XID
 
 		// Store all available addresses
 		allAddresses = selectedCluster.APIAddresses
@@ -117,7 +129,7 @@ func addCluster(ctx *Context, identityName, clusterName, address string, force b
 		ctx.Info("Connecting to %s to extract TLS certificate...", address)
 
 		// Extract the TLS certificate from the server
-		cert, fingerprint, err := extractTLSCertificateFromAddress(ctx, address)
+		cert, fingerprint, err := extractTLSCertificate(ctx, address)
 		if err != nil {
 			return fmt.Errorf("failed to extract TLS certificate: %w", err)
 		}
@@ -130,6 +142,7 @@ func addCluster(ctx *Context, identityName, clusterName, address string, force b
 		Hostname:     address,
 		AllAddresses: allAddresses,
 		Identity:     identityName,
+		XID:          clusterXID,
 		CACert:       caCert,
 	}
 
@@ -146,7 +159,25 @@ func addCluster(ctx *Context, identityName, clusterName, address string, force b
 
 	// Check if the leaf config already exists (by trying to get the cluster)
 	if mainConfig.HasCluster(clusterName) && !force {
-		return fmt.Errorf("cluster configuration %q already exists. Use --force to overwrite", clusterName)
+		if ui.IsInteractive() {
+			// Prompt user to choose: overwrite or cancel
+			items := []ui.PickerItem{
+				ui.SimplePickerItem{Text: "Overwrite existing configuration"},
+				ui.SimplePickerItem{Text: "Cancel"},
+			}
+
+			title := fmt.Sprintf("Cluster %q already exists", clusterName)
+			selected, err := ui.RunPicker(items, ui.WithTitle(title))
+			if err != nil {
+				return fmt.Errorf("failed to run picker: %w", err)
+			}
+			if selected == nil || selected.ID() == "Cancel" {
+				return fmt.Errorf("cancelled")
+			}
+			// User chose to overwrite, continue
+		} else {
+			return fmt.Errorf("cluster configuration %q already exists. Use --force to overwrite", clusterName)
+		}
 	}
 
 	// Create the cluster config data
@@ -183,9 +214,60 @@ func addCluster(ctx *Context, identityName, clusterName, address string, force b
 	return nil
 }
 
-// extractTLSCertificateFromAddress connects to the server via QUIC and extracts the TLS certificate
-// This is a renamed version to avoid conflicts, the original is in config_bind.go
-func extractTLSCertificateFromAddress(ctx *Context, address string) (string, string, error) {
+// normalizeAddress handles robust address normalization for various formats:
+// - Strips optional scheme prefixes (https:// or http://)
+// - Handles IPv6 literals correctly (bracketed and unbracketed)
+// - Adds default port 8443 when no port is present
+// Returns normalized address and host for SNI (with brackets stripped for IPv6)
+func normalizeAddress(address string) (normalizedAddr, sniHost string, err error) {
+	// Strip scheme if present
+	addr := address
+	if strings.HasPrefix(addr, "https://") {
+		addr = strings.TrimPrefix(addr, "https://")
+	} else if strings.HasPrefix(addr, "http://") {
+		addr = strings.TrimPrefix(addr, "http://")
+	}
+
+	// Handle IPv6 literals and port logic
+	if strings.Contains(addr, "]") {
+		// Bracketed IPv6 format [::1]:8443 or [::1]
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			// No port specified, assume it's just [::1]
+			if strings.HasSuffix(addr, "]") {
+				normalizedAddr = addr + ":8443"
+				sniHost = strings.Trim(addr, "[]")
+				return normalizedAddr, sniHost, nil
+			}
+			return "", "", fmt.Errorf("invalid IPv6 address format: %w", err)
+		}
+		normalizedAddr = addr
+		sniHost = strings.Trim(host, "[]")
+		return normalizedAddr, sniHost, nil
+	} else if strings.Count(addr, ":") > 1 && !strings.Contains(addr, "[") {
+		// Unbracketed IPv6 like ::1 or 2001:db8::1
+		// Need to wrap in brackets and add port
+		normalizedAddr = "[" + addr + "]:8443"
+		sniHost = addr
+		return normalizedAddr, sniHost, nil
+	} else {
+		// IPv4 or hostname
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			// No port specified
+			normalizedAddr = addr + ":8443"
+			sniHost = addr
+			return normalizedAddr, sniHost, nil
+		}
+		normalizedAddr = addr
+		sniHost = host
+		return normalizedAddr, sniHost, nil
+	}
+}
+
+// extractTLSCertificate connects to the server via QUIC and extracts the TLS certificate
+// Returns the PEM-encoded certificate and its SHA1 fingerprint (hex-encoded)
+func extractTLSCertificate(ctx *Context, address string) (string, string, error) {
 	// Normalize the address with robust parsing
 	normalizedAddr, sniHost, err := normalizeAddress(address)
 	if err != nil {

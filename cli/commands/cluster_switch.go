@@ -119,27 +119,31 @@ func checkClusterAccess(ctx *Context, cfg *clientconfig.Config, clusterName stri
 		return fmt.Errorf("identity %q not found: %w", cluster.Identity, err)
 	}
 
-	// First, get the cluster's XID by fetching all clusters and finding a match
-	clusters, err := fetchAvailableClusters(ctx, cfg, identity)
-	if err != nil {
-		// If we can't reach the cloud API, we'll allow the switch
-		// The user will get an access denied error when they try to perform actions
-		ctx.Warn("Could not verify cluster access: %v", err)
-		ctx.Warn("Proceeding with switch. You may encounter permission errors if you don't have access.")
-		return nil
-	}
-
-	// Find the cluster XID
-	var clusterXID string
-	for _, c := range clusters {
-		if c.Name == clusterName || c.XID == clusterName {
-			clusterXID = c.XID
-			break
-		}
-	}
-
+	// Use stored XID if available, otherwise try to look it up by name
+	clusterXID := cluster.XID
 	if clusterXID == "" {
-		return fmt.Errorf("cluster %q not found in organization", clusterName)
+		// Fall back to fetching clusters and finding by name (for backwards compatibility
+		// with clusters added before XID was stored)
+		clusters, err := fetchAvailableClusters(ctx, cfg, identity)
+		if err != nil {
+			// If we can't reach the cloud API, we'll allow the switch
+			// The user will get an access denied error when they try to perform actions
+			ctx.Warn("Could not verify cluster access: %v", err)
+			ctx.Warn("Proceeding with switch. You may encounter permission errors if you don't have access.")
+			return nil
+		}
+
+		// Find the cluster XID by name
+		for _, c := range clusters {
+			if c.Name == clusterName || c.XID == clusterName {
+				clusterXID = c.XID
+				break
+			}
+		}
+
+		if clusterXID == "" {
+			return fmt.Errorf("cluster %q not found in organization", clusterName)
+		}
 	}
 
 	// Check RBAC permission via the check-access endpoint

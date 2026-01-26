@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/pkg/auth"
 	"miren.dev/runtime/pkg/cloudauth"
+	"miren.dev/runtime/pkg/ui"
 )
 
 var (
@@ -111,7 +113,7 @@ func getOrCreateKey(ctx *Context, keyName string) (*cloudauth.KeyPair, error) {
 
 // LoginWithDefaults runs the login flow with default settings
 func LoginWithDefaults(ctx *Context) error {
-	return login(ctx, "https://miren.cloud", "cloud", "miren-cli", false)
+	return login(ctx, "https://miren.cloud", "cloud", "miren-cli", false, false)
 }
 
 // Login authenticates with miren.cloud using device flow
@@ -120,11 +122,69 @@ func Login(ctx *Context, opts struct {
 	IdentityName string `short:"i" long:"identity" description:"Name for this identity in config" default:"cloud"`
 	KeyName      string `short:"k" long:"key-name" description:"Name for the authentication key" default:"miren-cli"`
 	NoSave       bool   `long:"no-save" description:"Don't save credentials to config file"`
+	Force        bool   `short:"f" long:"force" description:"Overwrite existing identity without prompting"`
 }) error {
-	return login(ctx, opts.CloudURL, opts.IdentityName, opts.KeyName, opts.NoSave)
+	return login(ctx, opts.CloudURL, opts.IdentityName, opts.KeyName, opts.NoSave, opts.Force)
 }
 
-func login(ctx *Context, cloudURL, identityName, keyName string, noSave bool) error {
+func login(ctx *Context, cloudURL, identityName, keyName string, noSave, force bool) error {
+	// Check for existing identity (unless forcing or not saving)
+	if !force && !noSave {
+		config, err := clientconfig.LoadConfig()
+		if err != nil && err != clientconfig.ErrNoConfig {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+
+		if config != nil && config.HasIdentity(identityName) {
+			if ui.IsInteractive() {
+				// Try to get user info for the existing identity
+				userInfo := getIdentityUserInfo(ctx, config, identityName)
+
+				// Prompt user to choose: update existing or create new
+				updateText := fmt.Sprintf("Update '%s' (re-authenticate)", identityName)
+				if userInfo != "" {
+					updateText = fmt.Sprintf("Update '%s' - %s (re-authenticate)", identityName, userInfo)
+				}
+
+				items := []ui.PickerItem{
+					ui.SimplePickerItem{Text: updateText},
+					ui.SimplePickerItem{Text: "Add new identity"},
+				}
+
+				title := fmt.Sprintf("Identity '%s' already exists", identityName)
+				selected, err := ui.RunPicker(items,
+					ui.WithTitle(title),
+				)
+				if err != nil {
+					return fmt.Errorf("failed to run picker: %w", err)
+				}
+				if selected == nil {
+					return fmt.Errorf("cancelled")
+				}
+
+				if selected.ID() == "Add new identity" {
+					newName, err := ui.PromptForInput(
+						ui.WithLabel("Enter name for new identity:"),
+						ui.WithPlaceholder("personal"),
+					)
+					if err != nil {
+						return err
+					}
+					if newName == "" {
+						return fmt.Errorf("identity name cannot be empty")
+					}
+					if config.HasIdentity(newName) {
+						return fmt.Errorf("identity %q already exists; choose a different name or select 'Update' to re-authenticate", newName)
+					}
+					identityName = newName
+				}
+			} else {
+				// Non-interactive: require explicit --force or --identity
+				return fmt.Errorf("identity '%s' already exists; use --force to overwrite or --identity to specify a different name", identityName)
+			}
+		}
+	}
+
 	// Initialize device flow
 	ctx.Info("Initiating device flow authentication...")
 	initResp, err := initiateDeviceFlow(cloudURL)
@@ -660,6 +720,7 @@ func autoConfigureCluster(ctx *Context, identityName, cloudURL string, keyPair *
 		Hostname:     workingAddress,
 		AllAddresses: cluster.APIAddresses,
 		Identity:     identityName,
+		XID:          cluster.XID,
 		CACert:       caCert,
 	}
 
@@ -705,4 +766,53 @@ func autoConfigureCluster(ctx *Context, identityName, cloudURL string, keyPair *
 	}
 
 	return nil
+}
+
+// getIdentityUserInfo tries to get user info (email) for an existing identity
+// by authenticating with the identity's key and parsing the JWT claims.
+// Returns empty string if unable to fetch.
+func getIdentityUserInfo(ctx *Context, config *clientconfig.Config, identityName string) string {
+	identity, err := config.GetIdentity(identityName)
+	if err != nil || identity == nil {
+		return ""
+	}
+
+	if identity.Type != "keypair" {
+		return ""
+	}
+
+	// Get the private key
+	privateKeyPEM, err := config.GetPrivateKeyPEM(identity)
+	if err != nil {
+		return ""
+	}
+
+	keyPair, err := cloudauth.LoadKeyPairFromPEM(privateKeyPEM)
+	if err != nil {
+		return ""
+	}
+
+	// Get auth server URL
+	authServer := identity.Issuer
+	if authServer == "" {
+		return ""
+	}
+
+	// Authenticate and get JWT token
+	token, err := clientconfig.AuthenticateWithKey(ctx, authServer, keyPair)
+	if err != nil {
+		return ""
+	}
+
+	// Parse claims to get user info
+	claims, err := auth.ParseUnverifiedClaims(token)
+	if err != nil || claims == nil {
+		return ""
+	}
+
+	// Prefer UserName (display name), fall back to UserID
+	if claims.UserName != "" {
+		return claims.UserName
+	}
+	return claims.UserID
 }

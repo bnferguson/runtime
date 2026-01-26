@@ -32,6 +32,7 @@ import (
 	"miren.dev/runtime/components/autotls"
 	"miren.dev/runtime/components/buildkit"
 	"miren.dev/runtime/components/netresolve"
+	artifactctrl "miren.dev/runtime/controllers/artifact"
 	certctrl "miren.dev/runtime/controllers/certificate"
 	deploymentctrl "miren.dev/runtime/controllers/deployment"
 	"miren.dev/runtime/controllers/sandboxpool"
@@ -119,6 +120,7 @@ type Coordinator struct {
 	spm            *sandboxpool.Manager
 	cm             *controller.ControllerManager
 	certController *certctrl.Controller
+	artifactGC     *artifactctrl.GCController
 
 	authority *caauth.Authority
 
@@ -142,6 +144,9 @@ func (c *Coordinator) SandboxPoolManager() *sandboxpool.Manager {
 func (c *Coordinator) Stop() {
 	if c.cm != nil {
 		c.cm.Stop()
+	}
+	if c.artifactGC != nil {
+		c.artifactGC.Stop()
 	}
 	if c.debugServer != nil {
 		if err := c.debugServer.Close(); err != nil {
@@ -663,6 +668,14 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		c.Log.Error("failed to start controller manager", "error", err)
 		return err
 	}
+
+	// Start the artifact GC controller
+	c.artifactGC = &artifactctrl.GCController{
+		Log:    c.Log.With("module", "artifact-gc"),
+		EAC:    eac,
+		Config: artifactctrl.DefaultGCConfig(),
+	}
+	c.artifactGC.Start(ctx)
 
 	eps := execproxy.NewServer(c.Log, eac, rs)
 	server.ExposeValue("dev.miren.runtime/exec", exec_v1alpha.AdaptSandboxExec(eps))

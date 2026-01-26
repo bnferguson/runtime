@@ -3,6 +3,7 @@ package commands
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"miren.dev/runtime/clientconfig"
 )
@@ -106,7 +107,9 @@ func ConfigInfo(ctx *Context, opts struct {
 		ActiveCluster   string   `json:"active_cluster,omitempty"`
 		ClusterCount    int      `json:"cluster_count"`
 		IdentityCount   int      `json:"identity_count"`
-		LeafConfigs     []string `json:"leaf_configs,omitempty"`
+		ClusterConfigs  []string `json:"cluster_configs,omitempty"`
+		IdentityConfigs []string `json:"identity_configs,omitempty"`
+		KeyConfigs      []string `json:"key_configs,omitempty"`
 	}
 
 	info := ConfigInfo{
@@ -129,14 +132,19 @@ func ConfigInfo(ctx *Context, opts struct {
 		// Count identities
 		info.IdentityCount = len(cfg.GetIdentityNames())
 
-		// List leaf config files
+		// Categorize leaf config files by type
 		if leafConfigs := cfg.GetLeafConfigNames(); len(leafConfigs) > 0 {
-			// Create a new slice to avoid mutating the original
-			formatted := make([]string, len(leafConfigs))
-			for i, name := range leafConfigs {
-				formatted[i] = fmt.Sprintf("clientconfig.d/%s.yaml", name)
+			for _, name := range leafConfigs {
+				filename := fmt.Sprintf("clientconfig.d/%s.yaml", name)
+				switch {
+				case strings.HasPrefix(name, "identity-"):
+					info.IdentityConfigs = append(info.IdentityConfigs, filename)
+				case strings.HasPrefix(name, "key-"):
+					info.KeyConfigs = append(info.KeyConfigs, filename)
+				default:
+					info.ClusterConfigs = append(info.ClusterConfigs, filename)
+				}
 			}
-			info.LeafConfigs = formatted
 		}
 	}
 
@@ -163,10 +171,24 @@ func ConfigInfo(ctx *Context, opts struct {
 		ctx.Printf("  Clusters:       %d configured\n", info.ClusterCount)
 		ctx.Printf("  Identities:     %d configured\n", info.IdentityCount)
 
-		if len(info.LeafConfigs) > 0 {
+		if len(info.ClusterConfigs) > 0 {
 			ctx.Printf("\nCluster Configs:\n")
-			for _, leaf := range info.LeafConfigs {
-				ctx.Printf("  - %s\n", leaf)
+			for _, cfg := range info.ClusterConfigs {
+				ctx.Printf("  - %s\n", cfg)
+			}
+		}
+
+		if len(info.IdentityConfigs) > 0 {
+			ctx.Printf("\nIdentity Configs:\n")
+			for _, cfg := range info.IdentityConfigs {
+				ctx.Printf("  - %s\n", cfg)
+			}
+		}
+
+		if len(info.KeyConfigs) > 0 {
+			ctx.Printf("\nKey Configs:\n")
+			for _, cfg := range info.KeyConfigs {
+				ctx.Printf("  - %s\n", cfg)
 			}
 		}
 	} else {

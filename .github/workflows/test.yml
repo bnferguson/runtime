@@ -1,15 +1,18 @@
 name: Test
 
 on:
-  push:
-    branches: [ "main" ]
-    tags:
-      - 'v*'
   pull_request:
   merge_group:
+  workflow_call:
+    # Called by release.yml for main/tag builds
+    inputs:
+      ref:
+        description: 'Git ref to test'
+        required: false
+        type: string
+        default: ''
 
 # Cancel in-progress runs when a new run is triggered on the same branch/PR.
-# This also means if lint fails, running test jobs will be cancelled.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -25,6 +28,8 @@ jobs:
     runs-on: depot-ubuntu-latest
     steps:
     - uses: actions/checkout@v5
+      with:
+        ref: ${{ inputs.ref }}
 
     - name: Set up Go
       uses: actions/setup-go@v6
@@ -79,6 +84,8 @@ jobs:
     runs-on: depot-ubuntu-latest
     steps:
     - uses: actions/checkout@v5
+      with:
+        ref: ${{ inputs.ref }}
 
     - name: Set up Go
       uses: actions/setup-go@v6
@@ -101,6 +108,7 @@ jobs:
         echo "Coverage: $COVERAGE%"
 
     - name: Upload Coverage Report
+      if: github.event_name != 'workflow_call'
       uses: actions/upload-artifact@v4
       with:
         name: coverage-report
@@ -158,6 +166,8 @@ jobs:
     runs-on: depot-ubuntu-latest
     steps:
     - uses: actions/checkout@v5
+      with:
+        ref: ${{ inputs.ref }}
 
     - name: Set up Go
       uses: actions/setup-go@v6
@@ -174,6 +184,8 @@ jobs:
       run: make test-e2e
 
   build-binaries:
+    # Skip when called from release.yml - it has its own build-binaries with signing
+    if: github.event_name != 'workflow_call'
     strategy:
       matrix:
         include:
@@ -196,6 +208,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
@@ -207,9 +221,13 @@ jobs:
           zip -j miren-${{ matrix.os }}-${{ matrix.arch }}.zip bin/miren
 
   build:
+    # Skip when called from release.yml - it has its own build jobs
+    if: github.event_name != 'workflow_call'
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v5
+      with:
+        ref: ${{ inputs.ref }}
 
     - name: Set up Go
       uses: actions/setup-go@v6

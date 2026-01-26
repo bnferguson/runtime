@@ -286,6 +286,7 @@ func (h *RegistryHandler) putManifest(w http.ResponseWriter, r *http.Request, na
 
 	artifact.Manifest = string(manifestData)
 	artifact.ManifestDigest = digest
+	artifact.Status = core_v1alpha.ACTIVE
 
 	err = h.ec.Get(r.Context(), name, &app)
 	if err != nil {

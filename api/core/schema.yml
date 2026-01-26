@@ -43,6 +43,12 @@ kinds:
       doc: The digest of the manifest
       indexed: true
 
+    status:
+      type: enum
+      doc: Artifact lifecycle status
+      choices: [active, archived]
+      indexed: true
+
   app_version:
     app:
       type: ref

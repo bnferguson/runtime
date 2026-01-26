@@ -1326,10 +1326,13 @@ func TestEtcdStore_ReplaceEntity(t *testing.T) {
 		))
 		require.NoError(t, err)
 
+		// Use a revision that's definitely wrong (one more than current)
+		wrongRevision := initial.GetRevision() + 1
+
 		_, err = store.ReplaceEntity(t.Context(), New(
 			Any(DBId, initial.Id()),
 			Any(Doc, "Will fail"),
-		), WithFromRevision(9999))
+		), WithFromRevision(wrongRevision))
 		assert.Error(t, err)
 	})
 
@@ -1476,10 +1479,13 @@ func TestEtcdStore_PatchEntity(t *testing.T) {
 		))
 		require.NoError(t, err)
 
+		// Use a revision that's definitely wrong (one more than current)
+		wrongRevision := initial.GetRevision() + 1
+
 		_, err = store.PatchEntity(t.Context(), New(
 			Any(DBId, initial.Id()),
 			Any(Doc, "Will fail"),
-		), WithFromRevision(9999))
+		), WithFromRevision(wrongRevision))
 		assert.Error(t, err)
 	})
 

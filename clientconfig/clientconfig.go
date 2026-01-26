@@ -44,6 +44,7 @@ type ClusterConfig struct {
 	Hostname     string   `yaml:"hostname"`
 	AllAddresses []string `yaml:"all_addresses,omitempty"` // All available addresses for this cluster
 	Identity     string   `yaml:"identity,omitempty"`      // Reference to an identity in the Identities section
+	XID          string   `yaml:"xid,omitempty"`           // Cloud cluster XID for permission checks
 	CACert       string   `yaml:"ca_cert,omitempty"`       // PEM encoded CA certificate
 	ClientCert   string   `yaml:"client_cert,omitempty"`   // PEM encoded client certificate (deprecated, use identity)
 	ClientKey    string   `yaml:"client_key,omitempty"`    // PEM encoded client key (deprecated, use identity)

@@ -26,6 +26,7 @@ import (
 	"k8s.io/klog/v2"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/components/autotls"
 	"miren.dev/runtime/components/buildkit"
@@ -677,7 +678,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	hs := httpingress.NewServer(ctx, ctx.Log, ingressConfig, client, aa, httpMetrics, logWriter)
 
 	// Initialize remaining ServerState components
-	ctx.ServerState.InitNetServ(ctx.Log)
+	ctx.ServerState.InitNetServ(ctx.Log, eac)
 	ctx.ServerState.InitLogsMaintainer()
 	ctx.ServerState.InitStatusMonitor(ctx.Log)
 	ctx.ServerState.InitSandboxMetrics(ctx.Log)
@@ -761,7 +762,23 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 				}
 			} else {
 				// Use HTTP challenge (default - autocert)
-				if err := autotls.ServeTLS(sub, ctx.Log, cfg.Server.GetDataPath(), email, hs); err != nil {
+				// Start route watcher to track which hosts have configured routes
+				// This restricts cert provisioning to only domains with explicit routes
+				routeWatcher := ingress.NewRouteWatcher(ctx.Log, eac)
+
+				// Load existing routes synchronously before starting TLS
+				// to avoid rejecting cert requests during startup
+				if err := routeWatcher.LoadExistingRoutes(sub); err != nil {
+					ctx.Log.Error("failed to load existing routes", "error", err)
+					return err
+				}
+
+				// Start watching for route changes in the background
+				eg.Go(func() error {
+					return routeWatcher.Watch(sub)
+				})
+
+				if err := autotls.ServeTLS(sub, ctx.Log, cfg.Server.GetDataPath(), email, routeWatcher.RouteSet(), hs); err != nil {
 					ctx.Log.Error("failed to enable standard TLS", "error", err)
 				}
 			}

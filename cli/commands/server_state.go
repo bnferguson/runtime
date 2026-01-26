@@ -9,6 +9,7 @@ import (
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/controllers/sandbox"
 	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/network"
@@ -121,11 +122,11 @@ func (s *ServerState) InitLogsMaintainer() {
 }
 
 // InitNetServ creates the network service manager if not already set.
-func (s *ServerState) InitNetServ(log *slog.Logger) {
+func (s *ServerState) InitNetServ(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient) {
 	if s.NetServ != nil {
 		return
 	}
-	s.NetServ = network.NewServiceManager(log, nil)
+	s.NetServ = network.NewServiceManager(log, eac)
 }
 
 // InitSandboxMetrics creates the sandbox metrics if not already set.

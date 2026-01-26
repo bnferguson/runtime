@@ -17,6 +17,7 @@ require (
 	github.com/containerd/cgroups/v3 v3.0.5
 	github.com/containerd/console v1.0.4
 	github.com/containerd/containerd v1.7.23
+	github.com/containerd/containerd/api v1.8.0
 	github.com/containerd/containerd/v2 v2.0.2
 	github.com/containerd/errdefs v1.0.0
 	github.com/containerd/log v0.1.0
@@ -51,7 +52,6 @@ require (
 	github.com/lab47/lsvd v0.0.0-20240924031640-ac13c6bb62f0
 	github.com/lab47/lz4decode v0.0.0-20240106213008-0c6757ab03cd
 	github.com/lab47/mode v0.0.0-20231220013342-9703805c0e9c
-	github.com/lima-vm/go-qcow2reader v0.1.1
 	github.com/lucasb-eyer/go-colorful v1.2.0
 	github.com/mattn/go-colorable v0.1.14
 	github.com/mattn/go-isatty v0.0.20
@@ -192,7 +192,6 @@ require (
 	github.com/charmbracelet/x/ansi v0.4.5 // indirect
 	github.com/charmbracelet/x/term v0.2.1 // indirect
 	github.com/clbanning/mxj/v2 v2.7.0 // indirect
-	github.com/containerd/containerd/api v1.8.0 // indirect
 	github.com/containerd/continuity v0.4.5 // indirect
 	github.com/containerd/errdefs/pkg v0.3.0 // indirect
 	github.com/containerd/fifo v1.1.0 // indirect

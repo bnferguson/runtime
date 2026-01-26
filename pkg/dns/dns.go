@@ -463,12 +463,19 @@ func (s *Server) watchSandboxes(ctx context.Context) {
 }
 
 func (s *Server) handleSandboxUpdate(ctx context.Context, sb *compute_v1alpha.Sandbox, en *entity.Entity) {
+	// Only track RUNNING sandboxes - this matches recoverSandboxes() behavior
+	if sb.Status != compute_v1alpha.RUNNING {
+		// Sandbox is not running - remove from DNS if we were tracking it
+		s.handleSandboxDeleteByID(sb.ID.String())
+		return
+	}
+
 	s.mu.Lock()
 	_, tracked := s.entityToIP[sb.ID.String()]
 	s.mu.Unlock()
 
 	if tracked {
-		// Already tracked, skip
+		// Already tracked and still RUNNING, skip
 		return
 	}
 

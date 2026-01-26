@@ -102,6 +102,7 @@ Warning: These commands are intended for advanced users and developers. They may
 	d.Dispatch("debug ctr", Infer("debug ctr", "Run ctr with miren defaults", DebugCtr))
 	d.Dispatch("debug ctr nuke", Infer("debug ctr nuke", "Nuke a containerd namespace", CtrNuke))
 	d.Dispatch("debug colors", Infer("debug colors", "Print some colors", Colors))
+	d.Dispatch("debug bundle", Infer("debug bundle", "Create a support bundle with system debug information", DebugBundle))
 
 	// Debug RBAC commands
 	d.Dispatch("debug rbac", Infer("debug rbac", "Fetch and display RBAC rules from miren.cloud", DebugRBAC))

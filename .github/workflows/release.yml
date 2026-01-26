@@ -1,98 +1,55 @@
 name: Release
 
 on:
-  workflow_run:
-    workflows: ["Test"]
-    types: [completed]
-    # Note: No branches filter - triggers for both main branch and tags
-    # This ensures all releases (main builds and tagged releases) wait for tests to pass
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref to build (tag, branch, or SHA). Leave empty to use current ref.'
+        required: false
+        default: ''
+      update_latest:
+        description: 'Update the latest channel (only applies to stable version tags)'
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
-  group: release-${{ github.event.workflow_run.head_branch || github.ref_name }}
+  group: release-${{ inputs.ref || github.ref_name }}
   cancel-in-progress: true
 
+# Permissions needed for reusable workflow (test.yml) and release jobs
+permissions:
+  contents: write        # For package job
+  pull-requests: read    # For golangci-lint in test.yml
+  id-token: write        # For OIDC auth and attestations
+  attestations: write    # For build artifact attestations
+
 jobs:
-  check-test-success:
+  init:
     runs-on: ubuntu-latest
-    # Skip check for manual/push triggers (for testing), require success for workflow_run
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    outputs:
+      ref: ${{ steps.set-ref.outputs.ref }}
+      sha: ${{ steps.set-ref.outputs.sha }}
     steps:
-      - name: Check test workflow status
-        run: echo "Tests passed successfully, proceeding with release"
-
-  tests-failed:
-    runs-on: ubuntu-latest
-    # Only notify for actual failures on main branch or version tags, not for cancellations or PRs
-    if: ${{ github.event.workflow_run.conclusion == 'failure' && (github.event.workflow_run.head_branch == 'main' || startsWith(github.event.workflow_run.head_branch, 'v')) }}
-    steps:
-      - name: Tests failed - blocking release
-        run: |
-          REF_NAME="${{ github.event.workflow_run.head_branch }}"
-          echo "
-          ╔═══════════════════════════════════════════════════════════════════════════╗
-          ║                                                                           ║
-          ║   ❌ ❌ ❌  TESTS FAILED - RELEASE BLOCKED  ❌ ❌ ❌                       ║
-          ║                                                                           ║
-          ║   The test workflow did not pass successfully.                           ║
-          ║   Release artifacts will NOT be built or pushed.                         ║
-          ║                                                                           ║
-          ║   Ref: $REF_NAME                                                         ║
-          ║   Test workflow conclusion: ${{ github.event.workflow_run.conclusion }}  ║
-          ║   Test workflow run: ${{ github.event.workflow_run.html_url }}           ║
-          ║                                                                           ║
-          ╚═══════════════════════════════════════════════════════════════════════════╝
-          "
-          exit 1
-
-      - name: Send Slack notification for test failure
-        if: always()
-        uses: slackapi/slack-github-action@v2.1.1
+      - uses: actions/checkout@v5
         with:
-          method: chat.postMessage
-          token: ${{ secrets.SLACK_BOT_TOKEN }}
-          payload: |
-            {
-              "channel": "${{ vars.SLACK_CHANNEL_ID }}",
-              "text": "❌ Tests failed for ${{ github.event.workflow_run.head_branch }} - Release blocked",
-              "blocks": [
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "❌ *Tests failed for `${{ github.event.workflow_run.head_branch }}`*\nRelease artifacts will not be built or pushed."
-                  }
-                },
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "*Commit:*\n${{ github.event.workflow_run.head_commit.message }}"
-                  }
-                },
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "*Author:* ${{ github.event.workflow_run.head_commit.author.name }}"
-                  }
-                },
-                {
-                  "type": "context",
-                  "elements": [
-                    {
-                      "type": "mrkdwn",
-                      "text": "<${{ github.event.workflow_run.repository.html_url }}/commit/${{ github.event.workflow_run.head_sha }}|View commit> • <${{ github.event.workflow_run.html_url }}|View test run>"
-                    }
-                  ]
-                }
-              ],
-              "unfurl_links": false,
-              "unfurl_media": false
-            }
+          ref: ${{ inputs.ref || github.ref_name }}
+      - id: set-ref
+        run: |
+          echo "ref=${{ inputs.ref || github.ref_name }}" >> $GITHUB_OUTPUT
+          echo "sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+
+  test:
+    needs: init
+    uses: ./.github/workflows/test.yml
+    with:
+      ref: ${{ needs.init.outputs.ref }}
+
   package:
-    needs: check-test-success
-    # Only build releases for main branch or version tags (or any branch for manual/push triggers during testing)
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.head_branch == 'main' || startsWith(github.event.workflow_run.head_branch, 'v') }}
+    needs: [init, test]
     strategy:
       matrix:
         include:
@@ -106,7 +63,7 @@ jobs:
     steps:
     - uses: actions/checkout@v5
       with:
-        ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+        ref: ${{ needs.init.outputs.ref }}
 
     - name: Set up Go
       uses: actions/setup-go@v6
@@ -121,13 +78,14 @@ jobs:
 
     - name: Build and package for ${{ matrix.arch }}
       env:
-        GIT_BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
-        GIT_COMMIT: ${{ github.event.workflow_run.head_sha || github.sha }}
+        GIT_BRANCH: ${{ needs.init.outputs.ref }}
+        GIT_COMMIT: ${{ needs.init.outputs.sha }}
       run: |
         # Pass git info from GitHub Actions context to avoid git commands in iso
         export BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
         make release-data
         mv release.tar.gz release-base-linux-${{ matrix.arch }}.tar.gz
+
     - name: Upload build artifact
       uses: actions/upload-artifact@v4
       with:
@@ -135,67 +93,8 @@ jobs:
         path: release-base-linux-${{ matrix.arch }}.tar.gz
         retention-days: 1
 
-    - name: Send Slack notification on package failure
-      if: failure()
-      uses: slackapi/slack-github-action@v2.1.1
-      with:
-        method: chat.postMessage
-        token: ${{ secrets.SLACK_BOT_TOKEN }}
-        payload: |
-          {
-            "channel": "${{ vars.SLACK_CHANNEL_ID }}",
-            "text": "❌ Miren release packaging failed for ${{ github.event.workflow_run.head_branch }}",
-            "blocks": [
-              {
-                "type": "section",
-                "text": {
-                  "type": "mrkdwn",
-                  "text": "❌ *Miren release packaging failed (${{ matrix.arch }})*\nFailed to build or package release artifacts."
-                }
-              },
-              {
-                "type": "section",
-                "fields": [
-                  {
-                    "type": "mrkdwn",
-                    "text": "*Branch:*\n`${{ github.event.workflow_run.head_branch }}`"
-                  },
-                  {
-                    "type": "mrkdwn",
-                    "text": "*Architecture:*\n`${{ matrix.arch }}`"
-                  }
-                ]
-              },
-              {
-                "type": "section",
-                "text": {
-                  "type": "mrkdwn",
-                  "text": "*Commit:*\n${{ github.event.workflow_run.head_commit.message }}"
-                }
-              },
-              {
-                "type": "section",
-                "text": {
-                  "type": "mrkdwn",
-                  "text": "*Author:* ${{ github.event.workflow_run.head_commit.author.name }}"
-                }
-              },
-              {
-                "type": "context",
-                "elements": [
-                  {
-                    "type": "mrkdwn",
-                    "text": "<${{ github.event.workflow_run.repository.html_url }}/commit/${{ github.event.workflow_run.head_sha }}|View commit> • <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View workflow run>"
-                  }
-                ]
-              }
-            ],
-            "unfurl_links": false,
-            "unfurl_media": false
-          }
-
   build-binaries:
-    needs: check-test-success
+    needs: [init, test]
     strategy:
       matrix:
         include:
@@ -219,11 +118,13 @@ jobs:
     steps:
     - uses: actions/checkout@v5
       with:
-        ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+        ref: ${{ needs.init.outputs.ref }}
+
     - name: Set up Go
       uses: actions/setup-go@v6
       with:
         go-version-file: 'go.mod'
+
     - name: Build binary for ${{ matrix.os }}-${{ matrix.arch }}
       run: |
         GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} make bin/miren
@@ -300,6 +201,7 @@ jobs:
       run: |
         # Create a zip file with the binary
         zip -j miren-${{ matrix.os }}-${{ matrix.arch }}.zip bin/miren
+
     - name: Upload build artifact
       uses: actions/upload-artifact@v4
       with:
@@ -308,7 +210,7 @@ jobs:
         retention-days: 1
 
   build-and-push-docker:
-    needs: [package, upload-to-miren]
+    needs: [init, package, upload-to-miren]
     runs-on: depot-ubuntu-latest
     permissions:
       contents: read
@@ -317,7 +219,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ needs.init.outputs.ref }}
 
       - name: Download amd64 package
         uses: actions/download-artifact@v4
@@ -352,14 +254,19 @@ jobs:
       - name: Determine Docker tags
         id: docker-tags
         run: |
-          HEAD_BRANCH="${{ github.event.workflow_run.head_branch || github.ref_name }}"
-          TAGS="us-central1-docker.pkg.dev/miren-cloud/miren-oci/miren:$HEAD_BRANCH"
+          REF_NAME="${{ needs.init.outputs.ref }}"
+          TAGS="us-central1-docker.pkg.dev/miren-cloud/miren-oci/miren:$REF_NAME"
 
           # Add latest tag for stable releases only (exclude all prereleases)
           # Prereleases have a hyphen: v0.0.0-test.1, v0.1.0-rc.1, v1.0.0-beta.1, etc.
-          if [[ "$HEAD_BRANCH" == v* ]] && [[ ! "$HEAD_BRANCH" =~ ^v[0-9]+\.[0-9]+\.[0-9]+- ]]; then
-            TAGS="$TAGS
+          # For workflow_dispatch, require explicit opt-in via update_latest flag
+          if [[ "$REF_NAME" == v* ]] && [[ ! "$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+- ]]; then
+            if [[ "${{ github.event_name }}" == "push" ]] || [[ "${{ inputs.update_latest }}" == "true" ]]; then
+              TAGS="$TAGS
           us-central1-docker.pkg.dev/miren-cloud/miren-oci/miren:latest"
+            else
+              echo "Skipping latest Docker tag (workflow_dispatch without update_latest flag)"
+            fi
           fi
 
           echo "tags<<EOF" >> $GITHUB_OUTPUT
@@ -377,59 +284,11 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Send Slack notification on Docker build failure
-        if: failure()
-        uses: slackapi/slack-github-action@v2.1.1
-        with:
-          method: chat.postMessage
-          token: ${{ secrets.SLACK_BOT_TOKEN }}
-          payload: |
-            {
-              "channel": "${{ vars.SLACK_CHANNEL_ID }}",
-              "text": "❌ Miren Docker build/push failed for ${{ github.event.workflow_run.head_branch }}",
-              "blocks": [
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "❌ *Miren Docker build/push failed*\nFailed to build or push Docker image to Artifact Registry."
-                  }
-                },
-                {
-                  "type": "section",
-                  "fields": [
-                    {
-                      "type": "mrkdwn",
-                      "text": "*Branch:*\n`${{ github.event.workflow_run.head_branch }}`"
-                    }
-                  ]
-                },
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "*Commit:*\n${{ github.event.workflow_run.head_commit.message }}"
-                  }
-                },
-                {
-                  "type": "context",
-                  "elements": [
-                    {
-                      "type": "mrkdwn",
-                      "text": "<${{ github.event.workflow_run.repository.html_url }}/commit/${{ github.event.workflow_run.head_sha }}|View commit> • <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View workflow run>"
-                    }
-                  ]
-                }
-              ],
-              "unfurl_links": false,
-              "unfurl_media": false
-            }
-
   upload-to-miren:
-    needs: [package, build-binaries]
+    needs: [init, package, build-binaries]
     runs-on: depot-ubuntu-latest
     concurrency:
-      group: upload-to-miren-${{ github.event.workflow_run.head_branch || github.ref_name }}
+      group: upload-to-miren-${{ needs.init.outputs.ref }}
       cancel-in-progress: false
     permissions:
       id-token: write
@@ -438,7 +297,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ needs.init.outputs.ref }}
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -457,14 +316,14 @@ jobs:
         run: |
           set -eo pipefail
 
-          HEAD_BRANCH="${{ github.event.workflow_run.head_branch || github.ref_name }}"
+          REF_NAME="${{ needs.init.outputs.ref }}"
 
           # Determine if this is a tag build
           IS_TAG_BUILD=false
           IS_PRERELEASE=false
-          if [[ "$HEAD_BRANCH" == v* ]]; then
+          if [[ "$REF_NAME" == v* ]]; then
             IS_TAG_BUILD=true
-            TAG_NAME="$HEAD_BRANCH"
+            TAG_NAME="$REF_NAME"
             echo "Building for tag: $TAG_NAME"
 
             # Check if this is a prerelease (has hyphen: v0.0.0-test.1, v0.1.0-rc.1, etc.)
@@ -481,12 +340,17 @@ jobs:
             # Always upload to the tag path
             paths+=("$TAG_NAME")
             # Only upload to latest for stable releases (not prereleases)
+            # For workflow_dispatch, require explicit opt-in via update_latest flag
             if [ "$IS_PRERELEASE" = false ]; then
-              paths+=("latest")
+              if [[ "${{ github.event_name }}" == "push" ]] || [[ "${{ inputs.update_latest }}" == "true" ]]; then
+                paths+=("latest")
+              else
+                echo "Skipping latest channel (workflow_dispatch without update_latest flag)"
+              fi
             fi
           else
             # For branches, upload to branch path only
-            paths+=("$HEAD_BRANCH")
+            paths+=("$REF_NAME")
           fi
 
           echo "Upload paths: ${paths[*]}"
@@ -573,12 +437,10 @@ jobs:
           # Get git information
           COMMIT=$(git rev-parse HEAD)
           COMMIT_SHORT=$(git rev-parse --short HEAD)
-          BRANCH="${{ github.event.workflow_run.head_branch || github.ref_name }}"
+          BRANCH="${{ needs.init.outputs.ref }}"
           BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
           # Determine version string
-          # Note: Uses workflow_run head_branch pattern matching rather than
-          # git describe (used in build scripts). Produces equivalent results for tagged releases.
           if [[ $BRANCH =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
             VERSION="$BRANCH"
           elif [[ $BRANCH =~ ^release/(.*) ]]; then
@@ -614,113 +476,14 @@ jobs:
               "https://api.miren.cloud/assets/release/miren/${path}/version.json"
           done
 
-      - name: Send Slack notification on upload failure
-        if: failure()
-        uses: slackapi/slack-github-action@v2.1.1
-        with:
-          method: chat.postMessage
-          token: ${{ secrets.SLACK_BOT_TOKEN }}
-          payload: |
-            {
-              "channel": "${{ vars.SLACK_CHANNEL_ID }}",
-              "text": "❌ Miren release upload failed for ${{ github.event.workflow_run.head_branch }}",
-              "blocks": [
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "❌ *Miren release upload failed*\nFailed to upload release artifacts to Miren API."
-                  }
-                },
-                {
-                  "type": "section",
-                  "fields": [
-                    {
-                      "type": "mrkdwn",
-                      "text": "*Branch:*\n`${{ github.event.workflow_run.head_branch }}`"
-                    }
-                  ]
-                },
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "*Commit:*\n${{ github.event.workflow_run.head_commit.message }}"
-                  }
-                },
-                {
-                  "type": "context",
-                  "elements": [
-                    {
-                      "type": "mrkdwn",
-                      "text": "<${{ github.event.workflow_run.repository.html_url }}/commit/${{ github.event.workflow_run.head_sha }}|View commit> • <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View workflow run>"
-                    }
-                  ]
-                }
-              ],
-              "unfurl_links": false,
-              "unfurl_media": false
-            }
-
-      - name: Send Slack notification on upload success
-        if: success()
-        run: |
-          # Determine what was uploaded
-          HEAD_BRANCH="${{ github.event.workflow_run.head_branch || github.ref_name }}"
-          RELEASE_TYPE="branch"
-
-          if [[ "$HEAD_BRANCH" == v* ]]; then
-            # Check if it's a prerelease (has hyphen)
-            if [[ "$HEAD_BRANCH" =~ ^v[0-9]+\.[0-9]+\.[0-9]+- ]]; then
-              RELEASE_TYPE="prerelease"
-              CHANNELS="$HEAD_BRANCH"
-            else
-              RELEASE_TYPE="release"
-              CHANNELS="$HEAD_BRANCH, latest"
-            fi
-          else
-            CHANNELS="$HEAD_BRANCH"
-          fi
-
-          # Get version from version.json
-          VERSION=$(jq -r '.version' version.json)
-          COMMIT_SHORT=$(echo "${{ github.event.workflow_run.head_sha || github.sha }}" | cut -c1-7)
-
-          # Build the Slack message
-          curl -X POST -H 'Content-type: application/json' \
-            -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
-            --data @- https://slack.com/api/chat.postMessage <<EOF
-          {
-            "channel": "${{ vars.SLACK_CHANNEL_ID }}",
-            "text": "✅ Miren $RELEASE_TYPE $VERSION deployed",
-            "blocks": [
-              {
-                "type": "section",
-                "text": {
-                  "type": "mrkdwn",
-                  "text": "✅ Miren $RELEASE_TYPE \`$VERSION\` deployed to $CHANNELS"
-                }
-              },
-              {
-                "type": "context",
-                "elements": [
-                  {
-                    "type": "mrkdwn",
-                    "text": "<${{ github.event.workflow_run.repository.html_url }}/commit/${{ github.event.workflow_run.head_sha }}|$COMMIT_SHORT> • <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|workflow>"
-                  }
-                ]
-              }
-            ],
-            "unfurl_links": false,
-            "unfurl_media": false
-          }
-          EOF
-
   update-homebrew-tap:
-    needs: [upload-to-miren]
+    needs: [init, upload-to-miren]
     runs-on: ubuntu-latest
     # Only update homebrew tap for stable version tags (not prereleases, not branch builds)
-    if: ${{ startsWith(github.event.workflow_run.head_branch, 'v') && !contains(github.event.workflow_run.head_branch, '-') }}
+    # For workflow_dispatch, require explicit opt-in via update_latest flag
+    if: |
+      startsWith(needs.init.outputs.ref, 'v') && !contains(needs.init.outputs.ref, '-') &&
+      (github.event_name == 'push' || inputs.update_latest == true)
     steps:
       - name: Generate GitHub App token
         id: generate-token
@@ -735,7 +498,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.generate-token.outputs.token }}
         run: |
-          VERSION="${{ github.event.workflow_run.head_branch }}"
+          VERSION="${{ needs.init.outputs.ref }}"
           echo "Triggering homebrew-tap update for $VERSION..."
 
           gh workflow run update-cask.yml \
@@ -744,8 +507,13 @@ jobs:
 
           echo "Homebrew tap update triggered for $VERSION"
 
-      - name: Send Slack notification on homebrew update failure
-        if: failure()
+  notify:
+    needs: [init, test, package, build-binaries, upload-to-miren, build-and-push-docker, update-homebrew-tap]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Slack notification on failure
+        if: contains(needs.*.result, 'failure')
         uses: slackapi/slack-github-action@v2.1.1
         with:
           method: chat.postMessage
@@ -753,13 +521,13 @@ jobs:
           payload: |
             {
               "channel": "${{ vars.SLACK_CHANNEL_ID }}",
-              "text": "⚠️ Homebrew tap update failed for ${{ github.event.workflow_run.head_branch }}",
+              "text": "❌ Release workflow failed for ${{ needs.init.outputs.ref }}",
               "blocks": [
                 {
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "⚠️ *Homebrew tap update failed*\nRelease artifacts were uploaded successfully, but the homebrew tap update failed."
+                    "text": "❌ *Release workflow failed*"
                   }
                 },
                 {
@@ -767,7 +535,11 @@ jobs:
                   "fields": [
                     {
                       "type": "mrkdwn",
-                      "text": "*Version:*\n`${{ github.event.workflow_run.head_branch }}`"
+                      "text": "*Ref:*\n`${{ needs.init.outputs.ref }}`"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Commit:*\n`${{ needs.init.outputs.sha }}`"
                     }
                   ]
                 },
@@ -776,7 +548,7 @@ jobs:
                   "elements": [
                     {
                       "type": "mrkdwn",
-                      "text": "You can manually update the tap by running: `gh workflow run update-cask.yml -R mirendev/homebrew-tap -f version=${{ github.event.workflow_run.head_branch }}`"
+                      "text": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View workflow run>"
                     }
                   ]
                 }
@@ -785,3 +557,58 @@ jobs:
               "unfurl_media": false
             }
 
+      - name: Send Slack notification on success
+        if: success() && needs.upload-to-miren.result == 'success'
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        run: |
+          REF_NAME="${{ needs.init.outputs.ref }}"
+          COMMIT_SHORT=$(echo "${{ needs.init.outputs.sha }}" | cut -c1-7)
+
+          # Determine release type and channels
+          if [[ "$REF_NAME" == v* ]]; then
+            if [[ "$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+- ]]; then
+              RELEASE_TYPE="prerelease"
+              CHANNELS="$REF_NAME"
+            else
+              RELEASE_TYPE="release"
+              # Check if latest was updated
+              if [[ "${{ github.event_name }}" == "push" ]] || [[ "${{ inputs.update_latest }}" == "true" ]]; then
+                CHANNELS="$REF_NAME, latest"
+              else
+                CHANNELS="$REF_NAME"
+              fi
+            fi
+          else
+            RELEASE_TYPE="branch"
+            CHANNELS="$REF_NAME"
+          fi
+
+          curl -X POST -H 'Content-type: application/json' \
+            -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+            --data @- https://slack.com/api/chat.postMessage <<EOF
+          {
+            "channel": "${{ vars.SLACK_CHANNEL_ID }}",
+            "text": "✅ Miren $RELEASE_TYPE $REF_NAME deployed",
+            "blocks": [
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "✅ Miren $RELEASE_TYPE \`$REF_NAME\` deployed to $CHANNELS"
+                }
+              },
+              {
+                "type": "context",
+                "elements": [
+                  {
+                    "type": "mrkdwn",
+                    "text": "<${{ github.server_url }}/${{ github.repository }}/commit/${{ needs.init.outputs.sha }}|$COMMIT_SHORT> • <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|workflow>"
+                  }
+                ]
+              }
+            ],
+            "unfurl_links": false,
+            "unfurl_media": false
+          }
+          EOF

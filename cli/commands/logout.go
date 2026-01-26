@@ -4,14 +4,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/pkg/ui"
 )
 
 // Logout removes the local identity and key files
 func Logout(ctx *Context, opts struct {
 	ConfigCentric
-	IdentityName string `short:"i" long:"identity" description:"Name of the identity to remove" default:"cloud"`
+	IdentityName string `short:"i" long:"identity" description:"Name of the identity to remove"`
 }) error {
 	cfg, err := opts.LoadConfig()
 	if err != nil {
@@ -24,6 +26,50 @@ func Logout(ctx *Context, opts struct {
 	}
 
 	identityName := opts.IdentityName
+	identityNames := cfg.GetIdentityNames()
+
+	// If no identity specified, prompt or auto-select
+	if identityName == "" {
+		if len(identityNames) == 0 {
+			ctx.Info("No identities configured. Nothing to logout from.")
+			return nil
+		} else if len(identityNames) == 1 {
+			// Auto-select the only identity
+			identityName = identityNames[0]
+		} else if ui.IsInteractive() {
+			// Multiple identities - show picker with user info
+			items := make([]ui.PickerItem, len(identityNames))
+			for i, name := range identityNames {
+				label := name
+				if userInfo := getIdentityUserInfo(ctx, cfg, name); userInfo != "" {
+					label = fmt.Sprintf("%s - %s", name, userInfo)
+				}
+				items[i] = ui.SimplePickerItem{Text: label}
+			}
+
+			selected, err := ui.RunPicker(items,
+				ui.WithTitle("Select identity to logout:"),
+			)
+			if err != nil {
+				return fmt.Errorf("failed to run picker: %w", err)
+			}
+			if selected == nil {
+				return fmt.Errorf("cancelled")
+			}
+
+			// Extract identity name from selection (before the " - ")
+			identityName = identityNames[0]
+			for _, name := range identityNames {
+				if selected.ID() == name || strings.HasPrefix(selected.ID(), name+" - ") {
+					identityName = name
+					break
+				}
+			}
+		} else {
+			// Non-interactive with multiple identities
+			return fmt.Errorf("multiple identities configured; use --identity to specify which one: %v", identityNames)
+		}
+	}
 
 	// Check if the identity exists
 	identity, err := cfg.GetIdentity(identityName)

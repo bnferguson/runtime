@@ -16,12 +16,15 @@ chown -R "$HOST_UID:$HOST_GID" /go/build-cache /go/pkg 2>/dev/null || true
 chmod -R 770 /go/build-cache /go/pkg 2>/dev/null || true
 
 echo "Building miren as host user (UID ${ISO_UID})..."
-su -s /bin/bash "$HOST_USER" -c "make bin/miren"
+su -s /bin/bash "$HOST_USER" -c "GIT_BRANCH='$GIT_BRANCH' GIT_COMMIT='$GIT_COMMIT' GIT_VERSION='$GIT_VERSION' bash ./hack/build.sh"
 
+<<<<<<< HEAD
 echo "Building lsvd-server as host user (UID ${ISO_UID})..."
 su -s /bin/bash "$HOST_USER" -c "make bin/lsvd-server"
 
 ln -sf "$PWD"/bin/miren /bin/m
+ln -sf "$PWD"/bin/miren /usr/local/bin/miren
+ln -sf "$PWD"/bin/miren /usr/local/bin/m
 
 mkdir -p /var/lib/miren/server
 chown -R "$HOST_UID:$HOST_GID" /var/lib/miren

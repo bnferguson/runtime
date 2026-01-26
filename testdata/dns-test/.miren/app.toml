@@ -1,0 +1,15 @@
+name = "dns-test"
+
+[services.web]
+command = "/bin/app web"
+
+[services.web.concurrency]
+mode = "fixed"
+num_instances = 1
+
+[services.backend]
+command = "/bin/app backend"
+
+[services.backend.concurrency]
+mode = "fixed"
+num_instances = 1

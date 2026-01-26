@@ -36,19 +36,24 @@ func ConfigLoad(ctx *Context, opts struct {
 		return err
 	}
 
-	// Merge clusters from input config
+	// Merge clusters from input config (write to clientconfig.d/)
 	err = input.IterateClusters(func(name string, cluster *clientconfig.ClusterConfig) error {
 		if cfg.HasCluster(name) && !opts.Force {
 			return errors.New("cluster \"" + name + "\" already exists in current config, use --force to overwrite")
 		}
-		cfg.SetCluster(name, cluster)
+		leafConfigData := &clientconfig.ConfigData{
+			Clusters: map[string]*clientconfig.ClusterConfig{
+				name: cluster,
+			},
+		}
+		cfg.SetLeafConfig(name, leafConfigData)
 		return nil
 	})
 	if err != nil {
 		return err
 	}
 
-	// Merge identities from input config
+	// Merge identities from input config (write to clientconfig.d/)
 	for _, identityName := range input.GetIdentityNames() {
 		if cfg.HasIdentity(identityName) && !opts.Force {
 			return errors.New("identity \"" + identityName + "\" already exists in current config, use --force to overwrite")
@@ -57,7 +62,12 @@ func ConfigLoad(ctx *Context, opts struct {
 		if err != nil {
 			return err
 		}
-		cfg.SetIdentity(identityName, identity)
+		leafConfigData := &clientconfig.ConfigData{
+			Identities: map[string]*clientconfig.IdentityConfig{
+				identityName: identity,
+			},
+		}
+		cfg.SetLeafConfig("identity-"+identityName, leafConfigData)
 	}
 
 	// Update active cluster if requested and input config has one
