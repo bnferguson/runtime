@@ -18,9 +18,19 @@ The Miren CLI (`miren`) provides commands for managing applications and deployme
 
 | Flag | Description |
 |------|-------------|
+| `-e KEY=VALUE` | Set environment variable for this deployment. Can be repeated. Use `KEY=@file` to read from file, or `KEY` alone to prompt interactively. |
+| `-s KEY=VALUE` | Set sensitive environment variable (masked in output). Same syntax as `-e`. |
 | `--analyze` | Analyze the app without building or deploying. Shows detected stack, services, and configuration. |
 | `--force` | Force deployment even if no changes detected |
 | `--wait` | Wait for deployment to complete |
+
+#### Cancel a Deployment
+
+```bash
+miren deploy cancel <deployment-id>
+```
+
+Cancel a stuck in-progress deployment. Get the deployment ID from `miren app history`.
 
 ### Server Install
 
@@ -81,6 +91,11 @@ The Miren CLI (`miren`) provides commands for managing applications and deployme
 - `miren debug disk lease-status` - Show status of a disk lease
 - `miren debug disk lease-release` - Release a disk lease
 - `miren debug disk mounts` - List mounted disks
+
+### Diagnostics
+
+- `miren debug bundle` - Collect system info, logs, and container state into a tar.gz archive for troubleshooting
+- `miren doctor` - Run diagnostic checks on your Miren setup
 
 ### Utility Commands
 

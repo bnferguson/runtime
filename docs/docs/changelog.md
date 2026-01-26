@@ -2,6 +2,33 @@
 
 All notable changes to Miren Runtime will be documented in this file.
 
+## Unreleased
+*main*
+
+**Features**
+
+- **Automatic image garbage collection** - Container images are now automatically garbage collected to prevent disk exhaustion. Images are kept if less than 30 days old or within the last 20 releases per app. Garbage collection runs weekly or immediately when disk usage exceeds 80%. ([#544](https://github.com/mirendev/runtime/pull/544))
+- **Deploy-time environment variables** - Set environment variables atomically with your deployment using `miren deploy -e KEY=VALUE` or `-s SECRET=value` for sensitive values. Supports reading from files with `@file` syntax and interactive prompts. ([#521](https://github.com/mirendev/runtime/pull/521))
+- **Graceful shutdown during redeploy** - Apps now receive proper graceful shutdown time during redeploy instead of being force-killed. Configure per-service with `shutdown_timeout` in app.toml (default 10 seconds). ([#520](https://github.com/mirendev/runtime/pull/520))
+- **`miren deploy cancel`** - Cancel stuck in-progress deployments without waiting for the 30-minute lock expiry. ([#517](https://github.com/mirendev/runtime/pull/517))
+- **`miren debug bundle`** - New diagnostic command that collects system info, logs, container state, and process info into a tar.gz archive for troubleshooting. ([#531](https://github.com/mirendev/runtime/pull/531))
+- **Domain allow list for TLS** - Automatic TLS certificate provisioning is now restricted to domains with explicitly configured routes, preventing certificate issuance for arbitrary domains pointed at the server. ([#542](https://github.com/mirendev/runtime/pull/542))
+
+**Improvements**
+
+- **Better app history display** - The `miren app history` command now shows deployment IDs (useful for `deploy cancel`) and improved status formatting. ([#529](https://github.com/mirendev/runtime/pull/529), [#532](https://github.com/mirendev/runtime/pull/532))
+
+**Bug Fixes**
+
+- **Fixed server restart killing all sandboxes** - Sandbox recovery no longer incorrectly kills all sandboxes when the server restarts. ([#546](https://github.com/mirendev/runtime/pull/546))
+- **Fixed disk lease transfers** - Disk leases are now properly released when sandboxes stop, allowing new sandboxes to acquire them. ([#516](https://github.com/mirendev/runtime/pull/516))
+- **Fixed sandbox exec issues** - Fixed panic when running `sandbox exec` without a TTY and fixed wrong entrypoint being applied to service containers. ([#515](https://github.com/mirendev/runtime/pull/515), [#518](https://github.com/mirendev/runtime/pull/518))
+- **Fixed deployment panic handling** - Panics during deployment are now properly marked as failed instead of leaving deployments stuck. ([#513](https://github.com/mirendev/runtime/pull/513))
+- **Fixed WebSocket 502 errors** - WebSocket connections no longer fail with 502 Bad Gateway. ([#507](https://github.com/mirendev/runtime/pull/507))
+- **Fixed cluster switch for multi-identity setups** - Improved identity handling and UX when switching between clusters. ([#535](https://github.com/mirendev/runtime/pull/535))
+
+---
+
 ## v0.2.1
 *2025-12-19*
 

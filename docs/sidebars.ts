@@ -52,6 +52,7 @@ const sidebars: SidebarsConfig = {
       collapsed: false,
       items: [
         'changelog',
+        'cloud-updates',
         'support',
         'conduct',
         {

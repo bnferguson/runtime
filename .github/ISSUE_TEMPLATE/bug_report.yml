@@ -40,7 +40,10 @@ body:
     id: logs
     attributes:
       label: Relevant log output
-      description: Please copy and paste any relevant log output. This will be automatically formatted into code.
+      description: |
+        Please copy and paste any relevant log output. This will be automatically formatted into code.
+
+        Tip: Run `miren debug bundle` to collect system info, logs, and container state into a single archive for troubleshooting.
       render: shell
 
   - type: input

@@ -174,6 +174,7 @@ Each service can configure:
 | `port` | Port the web service listens on | 3000 (web only) |
 | `env` | Service-specific environment variables | (none) |
 | `concurrency` | Scaling configuration | See [Scaling](/scaling) |
+| `concurrency.shutdown_timeout` | Time to wait for graceful shutdown during redeploy | `10s` |
 | `disks` | Persistent disk attachments | (none) |
 
 ### Environment Variables

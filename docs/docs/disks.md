@@ -2,18 +2,78 @@
 sidebar_position: 4
 ---
 
-# Disks
+# Persistent Storage
 
-Miren Disks provide persistent storage for your applications. Unlike ephemeral container storage that disappears when your app restarts, disks preserve your data across deployments, restarts, and even cluster migrations.
+Miren provides two options for persistent storage: **Local Shared Storage** (recommended for most use cases) and **Miren Disks** (experimental, for advanced scenarios).
 
-## Why Use Disks?
+## Local Shared Storage
 
-- **Persistent data**: Store databases, uploads, cache files, or any data that needs to survive restarts
+Every Miren app automatically gets persistent storage at `/miren/data/local`. This is the simplest way to persist data across restarts and deployments.
+
+### How It Works
+
+- **Automatic**: No configuration needed—just write to `/miren/data/local`
+- **Persistent**: Data survives container restarts and redeployments
+- **Shared**: All containers within your app share the same storage
+- **Host-local**: Data lives on the server's filesystem
+
+### Example: SQLite Database
+
+```javascript
+const sqlite3 = require('sqlite3');
+const path = require('path');
+
+// Database persists at /miren/data/local/app.db
+const dbPath = path.join('/miren/data/local', 'app.db');
+const db = new sqlite3.Database(dbPath);
+```
+
+### Example: File Uploads
+
+```python
+import os
+
+UPLOAD_DIR = '/miren/data/local/uploads'
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+def save_upload(file):
+    path = os.path.join(UPLOAD_DIR, file.filename)
+    file.save(path)
+```
+
+### When to Use Local Shared Storage
+
+- SQLite databases
+- File uploads and user content
+- Application cache
+- Session storage
+- Any data that needs to persist across restarts
+
+### Limitations
+
+- **Host-local**: Data is tied to the server. If you move your app to a different server, you'll need to migrate the data manually.
+- **No automatic backups**: Unlike Miren Disks, local storage isn't replicated to Miren Cloud.
+- **Shared access**: All containers in your app can read/write simultaneously—your application needs to handle concurrent access (SQLite handles this well when configured with `PRAGMA journal_mode=WAL`).
+
+---
+
+## Miren Disks
+
+:::info Experimental Feature
+We're excited about Miren Disks—cloud-synced storage that travels with your app is a powerful capability we're actively building toward. That said, we're still working out the kinks, so for data you care about today, [Local Shared Storage](#local-shared-storage) is the safer choice.
+
+We'd love to have you try Disks and share your feedback as we work toward making this a production-grade feature!
+:::
+
+Miren Disks provide cloud-synced persistent storage with automatic replication to Miren Cloud. This enables data portability across clusters but adds complexity.
+
+### Why Use Disks?
+
 - **Portable across clusters**: Your disk data is automatically synced to Miren Cloud and can be restored on any cluster
 - **Automatic backups**: Data is replicated to Miren Cloud, giving you peace of mind
-- **Simple configuration**: Just specify a disk name and mount path in your app config
+- **Configurable size and filesystem**: Specify exactly what you need
 
-## How Disks Work
+### How Disks Work
 
 When you configure a disk for your application:
 
@@ -27,15 +87,15 @@ When your app stops or restarts:
 - Data remains on the disk
 - Your next instance can acquire the lease and continue where it left off
 
-## How Much Storage Does Miren Provide?
+### How Much Storage Does Miren Provide?
 
 During the Developer Preview, we're providing unmetered storage. The intention is to implement a free tier
-and usage based pricing on the storage. We'll be sure to communicate often and clearly how we intend
+and usage-based pricing on the storage. We'll be sure to communicate often and clearly how we intend
 to proceed.
 
 The feature is designed to keep our costs low, and our intention is to pass that low cost on to our users.
 
-## Configuring Disks
+### Configuring Disks
 
 Add a disk to your application by including a `disks` section in your service configuration in `.miren/app.toml`:
 
@@ -50,7 +110,7 @@ size_gb = 10
 filesystem = "ext4"
 ```
 
-### Configuration Options
+#### Configuration Options
 
 | Option | Required | Description |
 |--------|----------|-------------|
@@ -62,7 +122,7 @@ filesystem = "ext4"
 
 *`size_gb` is required when the disk doesn't already exist. If the disk exists, this field is ignored.
 
-## Example: PostgreSQL with Persistent Storage
+### Example: PostgreSQL with Persistent Storage
 
 ```toml
 [services.db]
@@ -83,7 +143,7 @@ size_gb = 20
 filesystem = "ext4"
 ```
 
-## Example: File Upload Storage
+### Example: File Upload Storage
 
 ```toml
 [services.web]
@@ -95,20 +155,20 @@ mount_path = "/app/uploads"
 size_gb = 50
 ```
 
-## Disk Lifecycle
+### Disk Lifecycle
 
-### Creation
+#### Creation
 
 Disks are automatically created when your app first deploys with a volume configuration that includes `size_gb`. The disk is provisioned with the specified size and filesystem.
 
-### Reuse
+#### Reuse
 
-If you deploy an app with a `disk_name` that already exists, Miren will attach the existing disk instead of creating a new one. This allows you to:
+If you deploy an app with a `name` that matches an existing disk, Miren will attach that disk instead of creating a new one. This allows you to:
 - Share data between app versions
 - Preserve data across complete redeployments
 - Reference disks created by other apps
 
-### Deletion
+#### Deletion
 
 Disks are **not** automatically deleted when you delete an app. This is intentional - your data is precious. To delete a disk:
 
@@ -116,7 +176,7 @@ Disks are **not** automatically deleted when you delete an app. This is intentio
 miren debug disk delete -i <disk-id>
 ```
 
-## Viewing Disks in Miren Cloud
+### Viewing Disks in Miren Cloud
 
 When connected to Miren Cloud, you can view and monitor your disks:
 
@@ -126,7 +186,7 @@ When connected to Miren Cloud, you can view and monitor your disks:
 
 Visit [miren.cloud](https://miren.cloud) and navigate to your cluster to view disk details.
 
-## Inspecting Disks via CLI
+### Inspecting Disks via CLI
 
 List all disks:
 
@@ -148,28 +208,28 @@ miren debug disk lease-list
 
 See [CLI Reference - Disk Commands](/cli/disk) for complete command documentation.
 
-## Important Considerations
+### Important Considerations
 
-### One Instance per Disk
+#### One Instance per Disk
 
 Disks use exclusive leasing - only one app instance can mount a disk at a time. This ensures data consistency but means:
 
 - Multiple replicas of your app cannot share the same disk
 - If you need shared storage, use separate disks per instance or external storage
 
-### Disk Sizing
+#### Disk Sizing
 
-- Disks use a "thin provisioning" technology, enabling it to only allocated storage when needed
+- Disks use thin provisioning, so storage is only allocated as needed
 - Choose a size that accommodates growth
 
-### Filesystem Choice
+#### Filesystem Choice
 
 - **ext4**: Best general-purpose choice, widely compatible
 - **xfs**: Better for large files and high-throughput workloads
 
 **NOTE:** Your server must have the mkfs tools to format the disk types.
 
-## Next Steps
+### Next Steps
 
 - [Getting Started](/getting-started) - Deploy your first app
 - [CLI Reference - Disk Commands](/cli/disk) - Complete disk CLI reference
