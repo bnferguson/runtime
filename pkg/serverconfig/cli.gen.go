@@ -11,6 +11,7 @@ type CLIFlags struct {
 	BuildkitConfigSocketPath             *string  `long:"buildkit-socket" description:"Path to external BuildKit Unix socket (for distributed mode)"`
 	BuildkitConfigStartEmbedded          *bool    `long:"start-buildkit" description:"Start embedded BuildKit daemon for container image builds"`
 	ConfigFile                           *string  `long:"config" description:"Path to configuration file"`
+	Labs                                 []string `long:"labs" description:"Comma-separated list of Miren Labs features to enable/disable. Prefix with - to disable."`
 	Mode                                 *string  `long:"mode" short:"m" description:"Server mode: standalone (default), distributed (experimental)"`
 	ContainerdConfigBinaryPath           *string  `long:"containerd-binary" description:"Path to containerd binary"`
 	ContainerdConfigSocketPath           *string  `long:"containerd-socket" description:"Path to containerd socket"`

@@ -85,6 +85,7 @@ type Config struct {
 	Buildkit        BuildkitConfig        `toml:"buildkit"`
 	Containerd      ContainerdConfig      `toml:"containerd"`
 	Etcd            EtcdConfig            `toml:"etcd"`
+	Labs            []string              `toml:"labs" env:"MIREN_LABS"`
 	Mode            *string               `toml:"mode" env:"MIREN_MODE"`
 	Server          ServerConfig          `toml:"server"`
 	TLS             TLSConfig             `toml:"tls"`
