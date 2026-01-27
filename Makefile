@@ -10,8 +10,9 @@ ISO_SESSION ?= dev-$(shell basename "$$(pwd)")
 
 # Extract git info on the host for passing to container builds
 # These handle both regular repos and worktrees
-GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "dev")
-GIT_COMMIT := $(shell git rev-parse HEAD 2>/dev/null || echo "")
+# Use ?= so CI can override via env vars (e.g., for detached HEAD tag checkouts)
+GIT_BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "dev")
+GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo "")
 GIT_VERSION := $(shell \
   if git describe --exact-match --tags HEAD 2>/dev/null; then \
     git describe --exact-match --tags HEAD 2>/dev/null; \
