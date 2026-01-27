@@ -56,6 +56,29 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 
 	}
 
+	// Apply MIREN_LABS
+	if val := os.Getenv("MIREN_LABS"); val != "" {
+
+		// Split and clean CSV list
+		parts := strings.Split(val, ",")
+		cleaned := make([]string, 0, len(parts))
+		seen := make(map[string]struct{})
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			if _, exists := seen[p]; exists {
+				continue
+			}
+			seen[p] = struct{}{}
+			cleaned = append(cleaned, p)
+		}
+		cfg.Labs = cleaned
+		log.Debug("applied env var", "key", "MIREN_LABS", "count", len(cleaned))
+
+	}
+
 	// Apply MIREN_MODE
 	if val := os.Getenv("MIREN_MODE"); val != "" {
 

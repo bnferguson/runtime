@@ -44,6 +44,7 @@ import (
 	"miren.dev/runtime/pkg/caauth"
 	"miren.dev/runtime/pkg/grunge"
 	"miren.dev/runtime/pkg/ipdiscovery"
+	"miren.dev/runtime/pkg/labs"
 	"miren.dev/runtime/pkg/nbd"
 	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/registration"
@@ -67,6 +68,9 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	if err != nil {
 		return fmt.Errorf("failed to load configuration: %w", err)
 	}
+
+	// Initialize Miren Labs feature flags
+	labs.Init(ctx.Log, cfg.Labs)
 
 	versionInfo := version.GetInfo()
 	ctx.UILog.Info("starting miren server", "version", versionInfo.Version, "commit", versionInfo.Commit)

@@ -13,6 +13,7 @@ func DefaultConfig() *Config {
 		Buildkit:        DefaultBuildkitConfig(),
 		Containerd:      DefaultContainerdConfig(),
 		Etcd:            DefaultEtcdConfig(),
+		Labs:            []string{},
 		Mode:            strPtr("standalone"),
 		Server:          DefaultServerConfig(),
 		TLS:             DefaultTLSConfig(),

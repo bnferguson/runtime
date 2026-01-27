@@ -23,6 +23,15 @@ configs:
         validation:
           enum: [standalone, distributed]
 
+      labs:
+        type: "[]string"
+        default: []
+        cli:
+          long: labs
+          description: "Comma-separated list of Miren Labs features to enable/disable. Prefix with - to disable."
+        env: MIREN_LABS
+        toml: labs
+
       server:
         type: ServerConfig
         toml: server

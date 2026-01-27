@@ -170,6 +170,10 @@ func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 		cfg.Buildkit.StartEmbedded = flags.BuildkitConfigStartEmbedded
 	}
 
+	if len(flags.Labs) > 0 {
+		cfg.Labs = flags.Labs
+	}
+
 	if flags.Mode != nil && *flags.Mode != "" {
 		cfg.Mode = flags.Mode
 	}
