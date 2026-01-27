@@ -4,22 +4,41 @@ on:
   pull_request:
     branches: [main]
     types: [closed]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag to create (e.g., v0.3.0)'
+        required: true
+        type: string
 
 jobs:
   tag-release:
     if: >-
-      github.event.pull_request.merged == true &&
-      startsWith(github.event.pull_request.head.ref, 'release/v')
+      (github.event_name == 'workflow_dispatch') ||
+      (github.event.pull_request.merged == true &&
+       startsWith(github.event.pull_request.head.ref, 'release/v'))
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v5
 
-      - name: Extract version and create tag
+      - name: Configure git identity
         run: |
-          BRANCH="${{ github.event.pull_request.head.ref }}"
-          VERSION="${BRANCH#release/}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Extract version and create tag
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          PR_BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="$INPUT_VERSION"
+          else
+            VERSION="${PR_BRANCH#release/}"
+          fi
           echo "Creating tag $VERSION"
           git tag -a "$VERSION" -m "Release $VERSION"
           git push origin "$VERSION"
