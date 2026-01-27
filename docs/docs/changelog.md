@@ -5,6 +5,11 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *main*
 
+---
+
+## v0.3.0
+*2026-01-27*
+
 **Features**
 
 - **Automatic image garbage collection** - Container images are now automatically garbage collected to prevent disk exhaustion. Images are kept if less than 30 days old or within the last 20 releases per app. Garbage collection runs weekly or immediately when disk usage exceeds 80%. ([#544](https://github.com/mirendev/runtime/pull/544))
