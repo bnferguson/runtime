@@ -1,0 +1,34 @@
+domain: dev.miren.saga
+version: v1alpha
+kinds:
+  saga:
+    definition_name:
+      type: string
+      doc: The name of the registered saga definition
+      indexed: true
+
+    definition_version:
+      type: int
+      doc: The version of the definition when this execution started
+
+    status:
+      type: enum
+      doc: Current execution status
+      choices: [pending, running, undoing, completed, failed]
+      indexed: true
+
+    initial_inputs:
+      type: bytes
+      doc: JSON-encoded initial inputs for the saga
+
+    executed_actions:
+      type: bytes
+      doc: JSON-encoded map of action name to ActionResult
+
+    execution_order:
+      type: bytes
+      doc: JSON-encoded array of action names in execution order
+
+    error:
+      type: string
+      doc: Error message if the saga failed
