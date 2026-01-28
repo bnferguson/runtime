@@ -25,7 +25,7 @@ func (h *collectHandler) Handle(_ context.Context, r slog.Record) error {
 }
 
 func (h *collectHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
-func (h *collectHandler) WithGroup(_ string) slog.Handler       { return h }
+func (h *collectHandler) WithGroup(_ string) slog.Handler      { return h }
 
 func TestSlogReplayBasic(t *testing.T) {
 	h := &collectHandler{}
