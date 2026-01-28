@@ -11,15 +11,11 @@ git config --global --add safe.directory /src
 echo "Building miren binary..."
 bash hack/build-ci.sh
 
-echo "Building lsvd-server binary..."
-go build -o bin/lsvd-server ./components/lsvd/cmd/lsvd-server
-
 echo "Creating package directory..."
 mkdir -p /tmp/package
 
 echo "Copying binaries to package..."
 cp bin/miren /tmp/package
-cp bin/lsvd-server /tmp/package
 cp /usr/local/bin/runc /tmp/package
 cp /usr/local/bin/containerd-shim-runc-v2 /tmp/package
 cp /usr/local/bin/containerd /tmp/package

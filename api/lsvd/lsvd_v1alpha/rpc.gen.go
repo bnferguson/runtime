@@ -10,164 +10,6 @@ import (
 	"miren.dev/runtime/pkg/rpc/standard"
 )
 
-type healthStatusData struct {
-	Healthy               *bool               `cbor:"0,keyasint,omitempty" json:"healthy,omitempty"`
-	Timestamp             *standard.Timestamp `cbor:"1,keyasint,omitempty" json:"timestamp,omitempty"`
-	Pid                   *int32              `cbor:"2,keyasint,omitempty" json:"pid,omitempty"`
-	EntityServerConnected *bool               `cbor:"3,keyasint,omitempty" json:"entity_server_connected,omitempty"`
-	VolumeCount           *int32              `cbor:"4,keyasint,omitempty" json:"volume_count,omitempty"`
-	MountCount            *int32              `cbor:"5,keyasint,omitempty" json:"mount_count,omitempty"`
-	LastVolumeReconcile   *standard.Timestamp `cbor:"6,keyasint,omitempty" json:"last_volume_reconcile,omitempty"`
-	LastMountReconcile    *standard.Timestamp `cbor:"7,keyasint,omitempty" json:"last_mount_reconcile,omitempty"`
-	LastError             *string             `cbor:"8,keyasint,omitempty" json:"last_error,omitempty"`
-}
-
-type HealthStatus struct {
-	data healthStatusData
-}
-
-func (v *HealthStatus) HasHealthy() bool {
-	return v.data.Healthy != nil
-}
-
-func (v *HealthStatus) Healthy() bool {
-	if v.data.Healthy == nil {
-		return false
-	}
-	return *v.data.Healthy
-}
-
-func (v *HealthStatus) SetHealthy(healthy bool) {
-	v.data.Healthy = &healthy
-}
-
-func (v *HealthStatus) HasTimestamp() bool {
-	return v.data.Timestamp != nil
-}
-
-func (v *HealthStatus) Timestamp() *standard.Timestamp {
-	return v.data.Timestamp
-}
-
-func (v *HealthStatus) SetTimestamp(timestamp *standard.Timestamp) {
-	v.data.Timestamp = timestamp
-}
-
-func (v *HealthStatus) HasPid() bool {
-	return v.data.Pid != nil
-}
-
-func (v *HealthStatus) Pid() int32 {
-	if v.data.Pid == nil {
-		return 0
-	}
-	return *v.data.Pid
-}
-
-func (v *HealthStatus) SetPid(pid int32) {
-	v.data.Pid = &pid
-}
-
-func (v *HealthStatus) HasEntityServerConnected() bool {
-	return v.data.EntityServerConnected != nil
-}
-
-func (v *HealthStatus) EntityServerConnected() bool {
-	if v.data.EntityServerConnected == nil {
-		return false
-	}
-	return *v.data.EntityServerConnected
-}
-
-func (v *HealthStatus) SetEntityServerConnected(entity_server_connected bool) {
-	v.data.EntityServerConnected = &entity_server_connected
-}
-
-func (v *HealthStatus) HasVolumeCount() bool {
-	return v.data.VolumeCount != nil
-}
-
-func (v *HealthStatus) VolumeCount() int32 {
-	if v.data.VolumeCount == nil {
-		return 0
-	}
-	return *v.data.VolumeCount
-}
-
-func (v *HealthStatus) SetVolumeCount(volume_count int32) {
-	v.data.VolumeCount = &volume_count
-}
-
-func (v *HealthStatus) HasMountCount() bool {
-	return v.data.MountCount != nil
-}
-
-func (v *HealthStatus) MountCount() int32 {
-	if v.data.MountCount == nil {
-		return 0
-	}
-	return *v.data.MountCount
-}
-
-func (v *HealthStatus) SetMountCount(mount_count int32) {
-	v.data.MountCount = &mount_count
-}
-
-func (v *HealthStatus) HasLastVolumeReconcile() bool {
-	return v.data.LastVolumeReconcile != nil
-}
-
-func (v *HealthStatus) LastVolumeReconcile() *standard.Timestamp {
-	return v.data.LastVolumeReconcile
-}
-
-func (v *HealthStatus) SetLastVolumeReconcile(last_volume_reconcile *standard.Timestamp) {
-	v.data.LastVolumeReconcile = last_volume_reconcile
-}
-
-func (v *HealthStatus) HasLastMountReconcile() bool {
-	return v.data.LastMountReconcile != nil
-}
-
-func (v *HealthStatus) LastMountReconcile() *standard.Timestamp {
-	return v.data.LastMountReconcile
-}
-
-func (v *HealthStatus) SetLastMountReconcile(last_mount_reconcile *standard.Timestamp) {
-	v.data.LastMountReconcile = last_mount_reconcile
-}
-
-func (v *HealthStatus) HasLastError() bool {
-	return v.data.LastError != nil
-}
-
-func (v *HealthStatus) LastError() string {
-	if v.data.LastError == nil {
-		return ""
-	}
-	return *v.data.LastError
-}
-
-func (v *HealthStatus) SetLastError(last_error string) {
-	v.data.LastError = &last_error
-}
-
-func (v *HealthStatus) MarshalCBOR() ([]byte, error) {
-	return cbor.Marshal(v.data)
-}
-
-func (v *HealthStatus) UnmarshalCBOR(data []byte) error {
-	return cbor.Unmarshal(data, &v.data)
-}
-
-func (v *HealthStatus) MarshalJSON() ([]byte, error) {
-	return json.Marshal(v.data)
-}
-
-func (v *HealthStatus) UnmarshalJSON(data []byte) error {
-	return json.Unmarshal(data, &v.data)
-}
-
 type volumeInfoData struct {
 	EntityId   *string `cbor:"0,keyasint,omitempty" json:"entity_id,omitempty"`
 	VolumeId   *string `cbor:"1,keyasint,omitempty" json:"volume_id,omitempty"`
@@ -551,129 +393,6 @@ func (v *ReconcileMetrics) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
-type versionCheckResultData struct {
-	CurrentVersion *uint64 `cbor:"0,keyasint,omitempty" json:"current_version,omitempty"`
-	NeedsRestart   *bool   `cbor:"1,keyasint,omitempty" json:"needs_restart,omitempty"`
-	Pid            *int32  `cbor:"2,keyasint,omitempty" json:"pid,omitempty"`
-}
-
-type VersionCheckResult struct {
-	data versionCheckResultData
-}
-
-func (v *VersionCheckResult) HasCurrentVersion() bool {
-	return v.data.CurrentVersion != nil
-}
-
-func (v *VersionCheckResult) CurrentVersion() uint64 {
-	if v.data.CurrentVersion == nil {
-		return 0
-	}
-	return *v.data.CurrentVersion
-}
-
-func (v *VersionCheckResult) SetCurrentVersion(current_version uint64) {
-	v.data.CurrentVersion = &current_version
-}
-
-func (v *VersionCheckResult) HasNeedsRestart() bool {
-	return v.data.NeedsRestart != nil
-}
-
-func (v *VersionCheckResult) NeedsRestart() bool {
-	if v.data.NeedsRestart == nil {
-		return false
-	}
-	return *v.data.NeedsRestart
-}
-
-func (v *VersionCheckResult) SetNeedsRestart(needs_restart bool) {
-	v.data.NeedsRestart = &needs_restart
-}
-
-func (v *VersionCheckResult) HasPid() bool {
-	return v.data.Pid != nil
-}
-
-func (v *VersionCheckResult) Pid() int32 {
-	if v.data.Pid == nil {
-		return 0
-	}
-	return *v.data.Pid
-}
-
-func (v *VersionCheckResult) SetPid(pid int32) {
-	v.data.Pid = &pid
-}
-
-func (v *VersionCheckResult) MarshalCBOR() ([]byte, error) {
-	return cbor.Marshal(v.data)
-}
-
-func (v *VersionCheckResult) UnmarshalCBOR(data []byte) error {
-	return cbor.Unmarshal(data, &v.data)
-}
-
-func (v *VersionCheckResult) MarshalJSON() ([]byte, error) {
-	return json.Marshal(v.data)
-}
-
-func (v *VersionCheckResult) UnmarshalJSON(data []byte) error {
-	return json.Unmarshal(data, &v.data)
-}
-
-type lsvdDebugHealthArgsData struct{}
-
-type LsvdDebugHealthArgs struct {
-	call rpc.Call
-	data lsvdDebugHealthArgsData
-}
-
-func (v *LsvdDebugHealthArgs) MarshalCBOR() ([]byte, error) {
-	return cbor.Marshal(v.data)
-}
-
-func (v *LsvdDebugHealthArgs) UnmarshalCBOR(data []byte) error {
-	return cbor.Unmarshal(data, &v.data)
-}
-
-func (v *LsvdDebugHealthArgs) MarshalJSON() ([]byte, error) {
-	return json.Marshal(v.data)
-}
-
-func (v *LsvdDebugHealthArgs) UnmarshalJSON(data []byte) error {
-	return json.Unmarshal(data, &v.data)
-}
-
-type lsvdDebugHealthResultsData struct {
-	Status *HealthStatus `cbor:"0,keyasint,omitempty" json:"status,omitempty"`
-}
-
-type LsvdDebugHealthResults struct {
-	call rpc.Call
-	data lsvdDebugHealthResultsData
-}
-
-func (v *LsvdDebugHealthResults) SetStatus(status *HealthStatus) {
-	v.data.Status = status
-}
-
-func (v *LsvdDebugHealthResults) MarshalCBOR() ([]byte, error) {
-	return cbor.Marshal(v.data)
-}
-
-func (v *LsvdDebugHealthResults) UnmarshalCBOR(data []byte) error {
-	return cbor.Unmarshal(data, &v.data)
-}
-
-func (v *LsvdDebugHealthResults) MarshalJSON() ([]byte, error) {
-	return json.Marshal(v.data)
-}
-
-func (v *LsvdDebugHealthResults) UnmarshalJSON(data []byte) error {
-	return json.Unmarshal(data, &v.data)
-}
-
 type lsvdDebugListVolumesArgsData struct{}
 
 type LsvdDebugListVolumesArgs struct {
@@ -832,97 +551,6 @@ func (v *LsvdDebugGetMetricsResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
-type lsvdDebugCheckVersionArgsData struct {
-	ExpectedVersion *uint64 `cbor:"0,keyasint,omitempty" json:"expected_version,omitempty"`
-}
-
-type LsvdDebugCheckVersionArgs struct {
-	call rpc.Call
-	data lsvdDebugCheckVersionArgsData
-}
-
-func (v *LsvdDebugCheckVersionArgs) HasExpectedVersion() bool {
-	return v.data.ExpectedVersion != nil
-}
-
-func (v *LsvdDebugCheckVersionArgs) ExpectedVersion() uint64 {
-	if v.data.ExpectedVersion == nil {
-		return 0
-	}
-	return *v.data.ExpectedVersion
-}
-
-func (v *LsvdDebugCheckVersionArgs) MarshalCBOR() ([]byte, error) {
-	return cbor.Marshal(v.data)
-}
-
-func (v *LsvdDebugCheckVersionArgs) UnmarshalCBOR(data []byte) error {
-	return cbor.Unmarshal(data, &v.data)
-}
-
-func (v *LsvdDebugCheckVersionArgs) MarshalJSON() ([]byte, error) {
-	return json.Marshal(v.data)
-}
-
-func (v *LsvdDebugCheckVersionArgs) UnmarshalJSON(data []byte) error {
-	return json.Unmarshal(data, &v.data)
-}
-
-type lsvdDebugCheckVersionResultsData struct {
-	Result *VersionCheckResult `cbor:"0,keyasint,omitempty" json:"result,omitempty"`
-}
-
-type LsvdDebugCheckVersionResults struct {
-	call rpc.Call
-	data lsvdDebugCheckVersionResultsData
-}
-
-func (v *LsvdDebugCheckVersionResults) SetResult(result *VersionCheckResult) {
-	v.data.Result = result
-}
-
-func (v *LsvdDebugCheckVersionResults) MarshalCBOR() ([]byte, error) {
-	return cbor.Marshal(v.data)
-}
-
-func (v *LsvdDebugCheckVersionResults) UnmarshalCBOR(data []byte) error {
-	return cbor.Unmarshal(data, &v.data)
-}
-
-func (v *LsvdDebugCheckVersionResults) MarshalJSON() ([]byte, error) {
-	return json.Marshal(v.data)
-}
-
-func (v *LsvdDebugCheckVersionResults) UnmarshalJSON(data []byte) error {
-	return json.Unmarshal(data, &v.data)
-}
-
-type LsvdDebugHealth struct {
-	rpc.Call
-	args    LsvdDebugHealthArgs
-	results LsvdDebugHealthResults
-}
-
-func (t *LsvdDebugHealth) Args() *LsvdDebugHealthArgs {
-	args := &t.args
-	if args.call != nil {
-		return args
-	}
-	args.call = t.Call
-	t.Call.Args(args)
-	return args
-}
-
-func (t *LsvdDebugHealth) Results() *LsvdDebugHealthResults {
-	results := &t.results
-	if results.call != nil {
-		return results
-	}
-	results.call = t.Call
-	t.Call.Results(results)
-	return results
-}
-
 type LsvdDebugListVolumes struct {
 	rpc.Call
 	args    LsvdDebugListVolumesArgs
@@ -1001,46 +629,14 @@ func (t *LsvdDebugGetMetrics) Results() *LsvdDebugGetMetricsResults {
 	return results
 }
 
-type LsvdDebugCheckVersion struct {
-	rpc.Call
-	args    LsvdDebugCheckVersionArgs
-	results LsvdDebugCheckVersionResults
-}
-
-func (t *LsvdDebugCheckVersion) Args() *LsvdDebugCheckVersionArgs {
-	args := &t.args
-	if args.call != nil {
-		return args
-	}
-	args.call = t.Call
-	t.Call.Args(args)
-	return args
-}
-
-func (t *LsvdDebugCheckVersion) Results() *LsvdDebugCheckVersionResults {
-	results := &t.results
-	if results.call != nil {
-		return results
-	}
-	results.call = t.Call
-	t.Call.Results(results)
-	return results
-}
-
 type LsvdDebug interface {
-	Health(ctx context.Context, state *LsvdDebugHealth) error
 	ListVolumes(ctx context.Context, state *LsvdDebugListVolumes) error
 	ListMounts(ctx context.Context, state *LsvdDebugListMounts) error
 	GetMetrics(ctx context.Context, state *LsvdDebugGetMetrics) error
-	CheckVersion(ctx context.Context, state *LsvdDebugCheckVersion) error
 }
 
 type reexportLsvdDebug struct {
 	client rpc.Client
-}
-
-func (reexportLsvdDebug) Health(ctx context.Context, state *LsvdDebugHealth) error {
-	panic("not implemented")
 }
 
 func (reexportLsvdDebug) ListVolumes(ctx context.Context, state *LsvdDebugListVolumes) error {
@@ -1055,24 +651,12 @@ func (reexportLsvdDebug) GetMetrics(ctx context.Context, state *LsvdDebugGetMetr
 	panic("not implemented")
 }
 
-func (reexportLsvdDebug) CheckVersion(ctx context.Context, state *LsvdDebugCheckVersion) error {
-	panic("not implemented")
-}
-
 func (t reexportLsvdDebug) CapabilityClient() rpc.Client {
 	return t.client
 }
 
 func AdaptLsvdDebug(t LsvdDebug) *rpc.Interface {
 	methods := []rpc.Method{
-		{
-			Name:          "health",
-			InterfaceName: "LsvdDebug",
-			Index:         0,
-			Handler: func(ctx context.Context, call rpc.Call) error {
-				return t.Health(ctx, &LsvdDebugHealth{Call: call})
-			},
-		},
 		{
 			Name:          "listVolumes",
 			InterfaceName: "LsvdDebug",
@@ -1097,14 +681,6 @@ func AdaptLsvdDebug(t LsvdDebug) *rpc.Interface {
 				return t.GetMetrics(ctx, &LsvdDebugGetMetrics{Call: call})
 			},
 		},
-		{
-			Name:          "checkVersion",
-			InterfaceName: "LsvdDebug",
-			Index:         0,
-			Handler: func(ctx context.Context, call rpc.Call) error {
-				return t.CheckVersion(ctx, &LsvdDebugCheckVersion{Call: call})
-			},
-		},
 	}
 
 	return rpc.NewInterface(methods, t)
@@ -1120,32 +696,6 @@ func NewLsvdDebugClient(client rpc.Client) *LsvdDebugClient {
 
 func (c LsvdDebugClient) Export() LsvdDebug {
 	return reexportLsvdDebug{client: c.Client}
-}
-
-type LsvdDebugClientHealthResults struct {
-	client rpc.Client
-	data   lsvdDebugHealthResultsData
-}
-
-func (v *LsvdDebugClientHealthResults) HasStatus() bool {
-	return v.data.Status != nil
-}
-
-func (v *LsvdDebugClientHealthResults) Status() *HealthStatus {
-	return v.data.Status
-}
-
-func (v LsvdDebugClient) Health(ctx context.Context) (*LsvdDebugClientHealthResults, error) {
-	args := LsvdDebugHealthArgs{}
-
-	var ret lsvdDebugHealthResultsData
-
-	err := v.Call(ctx, "health", &args, &ret)
-	if err != nil {
-		return nil, err
-	}
-
-	return &LsvdDebugClientHealthResults{client: v.Client, data: ret}, nil
 }
 
 type LsvdDebugClientListVolumesResults struct {
@@ -1230,31 +780,4 @@ func (v LsvdDebugClient) GetMetrics(ctx context.Context) (*LsvdDebugClientGetMet
 	}
 
 	return &LsvdDebugClientGetMetricsResults{client: v.Client, data: ret}, nil
-}
-
-type LsvdDebugClientCheckVersionResults struct {
-	client rpc.Client
-	data   lsvdDebugCheckVersionResultsData
-}
-
-func (v *LsvdDebugClientCheckVersionResults) HasResult() bool {
-	return v.data.Result != nil
-}
-
-func (v *LsvdDebugClientCheckVersionResults) Result() *VersionCheckResult {
-	return v.data.Result
-}
-
-func (v LsvdDebugClient) CheckVersion(ctx context.Context, expected_version uint64) (*LsvdDebugClientCheckVersionResults, error) {
-	args := LsvdDebugCheckVersionArgs{}
-	args.data.ExpectedVersion = &expected_version
-
-	var ret lsvdDebugCheckVersionResultsData
-
-	err := v.Call(ctx, "checkVersion", &args, &ret)
-	if err != nil {
-		return nil, err
-	}
-
-	return &LsvdDebugClientCheckVersionResults{client: v.Client, data: ret}, nil
 }

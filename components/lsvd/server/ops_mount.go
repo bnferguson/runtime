@@ -8,6 +8,8 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -16,16 +18,25 @@ import (
 	"miren.dev/runtime/lsvd"
 	"miren.dev/runtime/lsvd/pkg/nbd"
 	"miren.dev/runtime/lsvd/pkg/nbdnl"
+	"miren.dev/runtime/pkg/cloudauth"
 )
 
 // realMountOps implements MountOps with real OS operations
 type realMountOps struct {
-	log *slog.Logger
+	log        *slog.Logger
+	authClient *cloudauth.AuthClient
+	cloudURL   string
 }
 
-// NewRealMountOps creates a MountOps that performs real OS operations
-func NewRealMountOps(log *slog.Logger) MountOps {
-	return &realMountOps{log: log}
+// NewRealMountOps creates a MountOps that performs real OS operations.
+// If authClient is non-nil, disks are opened with a ReplicaWriter that
+// replicates writes to the remote cloud.
+func NewRealMountOps(log *slog.Logger, authClient *cloudauth.AuthClient, cloudURL string) MountOps {
+	return &realMountOps{
+		log:        log,
+		authClient: authClient,
+		cloudURL:   cloudURL,
+	}
 }
 
 func (r *realMountOps) CreateDir(path string, perm os.FileMode) error {
@@ -53,15 +64,44 @@ func (r *realMountOps) CreateDeviceNode(path string, nbdIndex uint32) error {
 	// Remove stale device if exists
 	os.Remove(path)
 
-	// Get NBD partition range (default: 16)
-	nbdRng := uint32(16)
+	// Read max_part from sysfs to compute the correct minor number.
+	// The minor for /dev/nbdN is N * (max_part + 1).
+	maxPart, err := readNBDMaxPart()
+	if err != nil {
+		return fmt.Errorf("failed to read NBD max_part: %w", err)
+	}
+	minor := nbdIndex * (maxPart + 1)
 
-	devNum := int(unix.Mkdev(43, nbdIndex*nbdRng))
+	devNum := int(unix.Mkdev(43, minor))
+	r.log.Info("creating device node",
+		"path", path,
+		"nbd_index", nbdIndex,
+		"major", 43,
+		"minor", minor,
+		"max_part", maxPart,
+		"dev_num", devNum,
+	)
+
 	if err := unix.Mknod(path, unix.S_IFBLK|0660, devNum); err != nil && !os.IsExist(err) {
 		return fmt.Errorf("failed to create device node: %w", err)
 	}
 
 	return nil
+}
+
+// readNBDMaxPart reads the max_part parameter from the nbd kernel module.
+func readNBDMaxPart() (uint32, error) {
+	data, err := os.ReadFile("/sys/module/nbd/parameters/max_part")
+	if err != nil {
+		return 0, err
+	}
+
+	val, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("parsing max_part value %q: %w", string(data), err)
+	}
+
+	return uint32(val), nil
 }
 
 func (r *realMountOps) Mount(device, mountPath, filesystem string, readOnly bool) error {
@@ -70,7 +110,28 @@ func (r *realMountOps) Mount(device, mountPath, filesystem string, readOnly bool
 		flags |= syscall.MS_RDONLY
 	}
 
-	return syscall.Mount(device, mountPath, filesystem, flags, "")
+	r.log.Info("performing mount syscall",
+		"device", device,
+		"mount_path", mountPath,
+		"filesystem", filesystem,
+		"read_only", readOnly,
+	)
+
+	if err := syscall.Mount(device, mountPath, filesystem, flags, ""); err != nil {
+		return err
+	}
+
+	// Verify the mount actually took effect
+	if r.IsMounted(mountPath) {
+		r.log.Info("mount verified in /proc/mounts", "mount_path", mountPath)
+	} else {
+		r.log.Error("mount syscall succeeded but NOT visible in /proc/mounts",
+			"mount_path", mountPath,
+			"device", device,
+		)
+	}
+
+	return nil
 }
 
 func (r *realMountOps) Unmount(path string) error {
@@ -97,6 +158,40 @@ func (r *realMountOps) IsMounted(path string) bool {
 	return false
 }
 
+// findMountPoint reads /proc/self/mountinfo to find the mount point
+// that contains the given path.
+func (r *realMountOps) findMountPoint(path string) (string, error) {
+	data, err := os.ReadFile("/proc/self/mountinfo")
+	if err != nil {
+		return "", fmt.Errorf("failed to read mountinfo: %w", err)
+	}
+
+	// Walk up from path to find the longest matching mount point
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("failed to get absolute path: %w", err)
+	}
+
+	// Parse mount points from mountinfo (field 5 is the mount point)
+	var bestMatch string
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 5 {
+			continue
+		}
+		mp := fields[4]
+		if strings.HasPrefix(absPath, mp) && len(mp) > len(bestMatch) {
+			bestMatch = mp
+		}
+	}
+
+	if bestMatch == "" {
+		return "", fmt.Errorf("no mount point found for %s", path)
+	}
+
+	return bestMatch, nil
+}
+
 func (r *realMountOps) IsFormatted(device, filesystem string) (bool, error) {
 	cmd := exec.Command("blkid", "-o", "value", "-s", "TYPE", device)
 	output, err := cmd.Output()
@@ -121,6 +216,8 @@ func (r *realMountOps) IsFormatted(device, filesystem string) (bool, error) {
 func (r *realMountOps) FormatDevice(ctx context.Context, device, filesystem string) error {
 	var cmd *exec.Cmd
 
+	ctx = context.Background()
+
 	switch filesystem {
 	case "ext4":
 		cmd = exec.CommandContext(ctx, "mkfs.ext4", "-F", device)
@@ -133,25 +230,67 @@ func (r *realMountOps) FormatDevice(ctx context.Context, device, filesystem stri
 	}
 
 	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("mkfs failed: %w: %s", err, string(output))
+		return fmt.Errorf("mkfs %+v failed: %w: %s", cmd.Args, err, string(output))
 	}
 
 	return nil
 }
 
-func (r *realMountOps) OpenLSVDDisk(ctx context.Context, diskPath, volumeId string) (LSVDDisk, error) {
-	sa := &lsvd.LocalFileAccess{
-		Dir: diskPath,
-		Log: r.log,
-	}
+func (r *realMountOps) OpenLSVDDisk(ctx context.Context, diskPath, volumeId string, remoteOnly bool) (LSVDDisk, error) {
+	var sa lsvd.SegmentAccess
+	var sizeBytes int64
 
-	if err := sa.InitContainer(ctx); err != nil {
-		return nil, fmt.Errorf("failed to init container: %w", err)
-	}
+	if remoteOnly {
+		// Remote-only mode: only use cloud storage
+		if r.authClient == nil {
+			return nil, fmt.Errorf("remote-only disk requires cloud auth")
+		}
 
-	volInfo, err := sa.GetVolumeInfo(ctx, volumeId)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get volume info: %w", err)
+		remoteSA := lsvd.NewDiskAPISegmentAccess(r.log, r.cloudURL, r.authClient)
+		sa = remoteSA
+
+		volInfo, err := remoteSA.GetVolumeInfo(ctx, volumeId)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get remote volume info: %w", err)
+		}
+		sizeBytes = volInfo.Size.Bytes().Int64()
+
+		r.log.Info("OpenLSVDDisk: remote-only volume",
+			"volume_id", volumeId,
+			"size_bytes", sizeBytes,
+			"size_gb", sizeBytes/(1024*1024*1024),
+		)
+	} else {
+		// Local or replica mode
+		localSA := &lsvd.LocalFileAccess{
+			Dir: diskPath,
+			Log: r.log,
+		}
+
+		if err := localSA.InitContainer(ctx); err != nil {
+			return nil, fmt.Errorf("failed to init container: %w", err)
+		}
+
+		volInfo, err := localSA.GetVolumeInfo(ctx, volumeId)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get volume info: %w", err)
+		}
+
+		sizeBytes = volInfo.Size.Bytes().Int64()
+		r.log.Info("OpenLSVDDisk: volume info",
+			"disk_path", diskPath,
+			"volume_id", volumeId,
+			"size_bytes", sizeBytes,
+			"size_gb", sizeBytes/(1024*1024*1024),
+		)
+
+		// Build segment access: use ReplicaWriter when cloud auth is available
+		if r.authClient != nil {
+			remoteSA := lsvd.NewDiskAPISegmentAccess(r.log, r.cloudURL, r.authClient)
+			sa = lsvd.ReplicaWriter(r.log, localSA, remoteSA)
+		} else {
+			sa = localSA
+		}
 	}
 
 	disk, err := lsvd.NewDisk(ctx, r.log, diskPath,
@@ -166,7 +305,7 @@ func (r *realMountOps) OpenLSVDDisk(ctx context.Context, diskPath, volumeId stri
 	return &realLSVDDisk{
 		disk: disk,
 		log:  r.log,
-		size: volInfo.Size.Bytes().Int64(),
+		size: sizeBytes,
 	}, nil
 }
 

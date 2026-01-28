@@ -604,7 +604,7 @@ func (d *DiskController) provisionVolumeViaEntity(ctx context.Context, disk *sto
 		RemoteOnly:   disk.RemoteOnly,
 		DesiredState: storage_v1alpha.VOL_PRESENT,
 		ActualState:  storage_v1alpha.VOL_PENDING,
-		NodeId:       entity.Id(d.NodeId),
+		NodeId:       entity.Id("node/" + d.NodeId),
 	}
 
 	d.Log.Info("Creating lsvd_volume entity",

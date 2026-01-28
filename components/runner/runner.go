@@ -86,9 +86,6 @@ type RunnerDeps struct {
 	// When enabled, uses lsvd_volume/lsvd_mount entities instead of direct LsvdClient calls
 	LsvdEntityMode bool
 
-	// Path to lsvd-server binary (required when LsvdEntityMode is true)
-	LsvdServerBinary string
-
 	// Entity server address for lsvd-server (required when LsvdEntityMode is true)
 	EntityServerAddr string
 }
@@ -391,73 +388,103 @@ func (r *Runner) SetupControllers(
 	var diskController *disk.DiskController
 	var diskLeaseController *disk.DiskLeaseController
 
-	if r.deps.LsvdEntityMode {
-		// Validate required config for entity mode
-		if r.deps.LsvdServerBinary == "" {
-			return nil, fmt.Errorf("lsvd_server_binary is required when lsvd_entity_mode is true")
-		}
-		if r.deps.EntityServerAddr == "" {
-			return nil, fmt.Errorf("entity_server_addr is required when lsvd_entity_mode is true")
-		}
-
+	// Try to use LSVD entity mode if configured
+	// Entity mode works entirely locally without cloud auth - data is stored on disk
+	lsvdEntityModeEnabled := false
+	if r.deps.LsvdEntityMode && r.deps.EntityServerAddr != "" {
 		// Entity mode: start lsvd-server and use entity-based controllers
-		log.Info("Using LSVD entity mode with lsvd-server",
-			"binary", r.deps.LsvdServerBinary,
+		// This mode does not require cloud auth - all data is stored locally
+		log.Info("Using LSVD entity mode with lsvd-server (local storage)",
 			"node_id", r.Id)
+
+		// Write service config with credentials if available
+		if r.Config != nil {
+			if cluster, err := r.Config.GetActiveCluster(); err == nil {
+				if cluster.ClientCert != "" && cluster.ClientKey != "" {
+					svcConfig := &lsvd.ServiceConfig{
+						ClientCert: []byte(cluster.ClientCert),
+						ClientKey:  []byte(cluster.ClientKey),
+					}
+					if r.CloudAuth != nil && r.CloudAuth.Enabled {
+						svcConfig.CloudURL = r.CloudAuth.CloudURL
+						svcConfig.PrivateKey = r.CloudAuth.PrivateKey
+					}
+					svcConfigPath := filepath.Join(dataPath, "service.config")
+					if err := lsvd.SaveServiceConfig(svcConfigPath, svcConfig); err != nil {
+						log.Warn("Failed to write service config for lsvd-server", "error", err)
+					} else {
+						log.Info("Wrote service config for lsvd-server")
+					}
+				}
+			}
+		}
 
 		// Create and start lsvd component
 		lsvdComp := lsvd.NewComponent(log, dataPath)
-		r.lsvdComponent = lsvdComp
+
+		outboardPath := filepath.Join(r.DataPath, "outboard", "lsvd-server")
 
 		lsvdConfig := &lsvd.Config{
-			BinaryPath:       r.deps.LsvdServerBinary,
 			DataPath:         dataPath,
+			OutboardPath:     outboardPath,
 			EntityServerAddr: r.deps.EntityServerAddr,
 			NodeId:           r.Id,
 		}
 
 		if err := lsvdComp.Start(ctx, lsvdConfig); err != nil {
-			return nil, fmt.Errorf("failed to start lsvd-server: %w", err)
-		}
+			log.Warn("Failed to start lsvd-server, falling back to direct client mode",
+				"error", err)
+		} else {
+			// lsvd-server started successfully
+			r.lsvdComponent = lsvdComp
+			lsvdEntityModeEnabled = true
 
-		// Clean up lsvd-server if subsequent initialization fails
-		defer func() {
-			if retErr != nil {
-				_ = lsvdComp.Close()
+			// Clean up lsvd-server if subsequent initialization fails
+			defer func() {
+				if retErr != nil {
+					_ = lsvdComp.Close()
+				}
+			}()
+
+			r.closers = append(r.closers, lsvdComp)
+
+			// Use entity mode controllers
+			diskController = disk.NewDiskControllerWithEntityMode(log, eas, r.Id)
+			diskLeaseController = disk.NewDiskLeaseControllerWithEntityMode(log, eas, r.Id)
+		}
+	}
+
+	if !lsvdEntityModeEnabled {
+		// Fall back to direct client mode (used when entity mode fails or is disabled)
+		// Cloud auth is optional - without it, data is stored locally only
+		if r.CloudAuth != nil && r.CloudAuth.Enabled {
+			log.Info("Creating LSVD client with cloud replication",
+				"cloud_url", r.CloudAuth.CloudURL)
+
+			// Create auth client from cloud auth config
+			keyPair, err := cloudauth.LoadKeyPairFromPEM(r.CloudAuth.PrivateKey)
+			if err != nil {
+				return nil, fmt.Errorf("failed to load keypair from private key: %w", err)
 			}
-		}()
 
-		r.closers = append(r.closers, lsvdComp)
+			authClient, err := cloudauth.NewAuthClient(r.CloudAuth.CloudURL, keyPair)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create auth client: %w", err)
+			}
 
-		// Use entity mode controllers
-		diskController = disk.NewDiskControllerWithEntityMode(log, eas, r.Id)
-		diskLeaseController = disk.NewDiskLeaseControllerWithEntityMode(log, eas, r.Id)
-	} else if r.CloudAuth != nil && r.CloudAuth.Enabled {
-		log.Info("Creating LSVD client with cloud replication",
-			"cloud_url", r.CloudAuth.CloudURL)
+			// Create both local+replica and remote-only clients to support both modes
+			localReplicaClient := disk.NewLsvdClient(log, dataPath, disk.WithReplica(authClient, r.CloudAuth.CloudURL))
+			remoteOnlyClient := disk.NewLsvdClient(log, dataPath, disk.WithRemoteOnly(authClient, r.CloudAuth.CloudURL))
 
-		// Create auth client from cloud auth config
-		keyPair, err := cloudauth.LoadKeyPairFromPEM(r.CloudAuth.PrivateKey)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load keypair from private key: %w", err)
+			lsvdClient = localReplicaClient
+			diskController = disk.NewDiskControllerWithClients(log, eas, lsvdClient, localReplicaClient, remoteOnlyClient)
+			diskLeaseController = disk.NewDiskLeaseControllerWithClients(log, eas, lsvdClient, localReplicaClient, remoteOnlyClient)
+		} else {
+			log.Info("Creating LSVD client in direct mode (local storage only)")
+			lsvdClient = disk.NewLsvdClient(log, dataPath)
+			diskController = disk.NewDiskController(log, eas, lsvdClient)
+			diskLeaseController = disk.NewDiskLeaseController(log, eas, lsvdClient)
 		}
-
-		authClient, err := cloudauth.NewAuthClient(r.CloudAuth.CloudURL, keyPair)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create auth client: %w", err)
-		}
-
-		// Create both local+replica and remote-only clients to support both modes
-		localReplicaClient := disk.NewLsvdClient(log, dataPath, disk.WithReplica(authClient, r.CloudAuth.CloudURL))
-		remoteOnlyClient := disk.NewLsvdClient(log, dataPath, disk.WithRemoteOnly(authClient, r.CloudAuth.CloudURL))
-
-		lsvdClient = localReplicaClient
-		diskController = disk.NewDiskControllerWithClients(log, eas, lsvdClient, localReplicaClient, remoteOnlyClient)
-		diskLeaseController = disk.NewDiskLeaseControllerWithClients(log, eas, lsvdClient, localReplicaClient, remoteOnlyClient)
-	} else {
-		lsvdClient = disk.NewLsvdClient(log, dataPath)
-		diskController = disk.NewDiskController(log, eas, lsvdClient)
-		diskLeaseController = disk.NewDiskLeaseController(log, eas, lsvdClient)
 	}
 
 	// Add disk controller to closers list so it gets cleaned up on shutdown
@@ -560,17 +587,16 @@ func (r *Runner) SetupControllers(
 	)
 
 	// Add disk controller
-	cm.AddController(
-		controller.NewReconcileController(
-			"disk",
-			log,
-			entity.Ref(entity.EntityKind, storage_v1alpha.KindDisk),
-			eas,
-			controller.AdaptController(diskController),
-			time.Minute,
-			workers,
-		),
+	diskRC := controller.NewReconcileController(
+		"disk",
+		log,
+		entity.Ref(entity.EntityKind, storage_v1alpha.KindDisk),
+		eas,
+		controller.AdaptController(diskController),
+		time.Minute,
+		workers,
 	)
+	cm.AddController(diskRC)
 
 	// Add disk lease controller
 	diskLeaseRC := controller.NewReconcileController(
@@ -600,7 +626,22 @@ func (r *Runner) SetupControllers(
 			eas,
 			controller.AdaptController(diskWatchController),
 			time.Minute,
-			1, // Single worker sufficient
+			1,
+		),
+	)
+
+	// Add volume watch controller to trigger disk re-reconciliation when
+	// lsvd_volume entities change (e.g. volume becomes ready after provisioning)
+	volumeWatchController := disk.NewVolumeWatchController(log, eas, diskRC)
+	cm.AddController(
+		controller.NewReconcileController(
+			"volume-watch",
+			log,
+			entity.Ref(entity.EntityKind, storage_v1alpha.KindLsvdVolume),
+			eas,
+			controller.AdaptController(volumeWatchController),
+			0, // No periodic resync needed
+			1,
 		),
 	)
 

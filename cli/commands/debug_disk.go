@@ -19,7 +19,7 @@ import (
 func DebugDiskCreate(ctx *Context, opts struct {
 	ConfigCentric
 	Name       string `short:"n" long:"name" description:"Name for the disk" required:"true"`
-	Size       int64  `short:"s" long:"size" description:"Size of disk in GB" default:"10"`
+	Size       int    `short:"s" long:"size" description:"Size of disk in GB" default:"10"`
 	Filesystem string `short:"f" long:"filesystem" description:"Filesystem type (ext4, xfs, btrfs)" default:"ext4"`
 	CreatedBy  string `short:"c" long:"created-by" description:"Creator ID for the disk"`
 	RemoteOnly bool   `short:"r" long:"remote-only" description:"Store disk only in remote storage (no local replica)"`
@@ -54,7 +54,7 @@ func DebugDiskCreate(ctx *Context, opts struct {
 	// Create disk entity
 	disk := &storage_v1alpha.Disk{
 		Name:       opts.Name,
-		SizeGb:     opts.Size,
+		SizeGb:     int64(opts.Size),
 		Filesystem: fs,
 		Status:     storage_v1alpha.PROVISIONING,
 		RemoteOnly: opts.RemoteOnly,

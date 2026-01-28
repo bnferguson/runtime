@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"errors"
 	"log/slog"
 	"testing"
@@ -201,29 +200,19 @@ func TestServerMetricsConcurrency(t *testing.T) {
 	assert.Equal(t, int64(iterations/5), server.mountErrorCount)   // Every 5th is an error
 }
 
-func TestAddrFileName(t *testing.T) {
-	assert.Equal(t, "lsvd-server.addr", AddrFileName)
-}
-
-func TestReadyFileName(t *testing.T) {
-	assert.Equal(t, "lsvd-server.ready", ReadyFileName)
-}
-
 func TestNewServer(t *testing.T) {
 	log := slog.Default()
 	dataPath := t.TempDir()
 	nodeId := "test-node"
 	entityServerAddr := "localhost:9000"
-	debugAddr := "localhost:0"
 
-	srv, err := NewServer(log, dataPath, nodeId, entityServerAddr, debugAddr)
+	srv, err := NewServer(log, dataPath, nodeId, entityServerAddr)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, srv)
 	assert.Equal(t, dataPath, srv.dataPath)
 	assert.Equal(t, nodeId, srv.nodeId)
 	assert.Equal(t, entityServerAddr, srv.entityServerAddr)
-	assert.Equal(t, debugAddr, srv.debugAddr)
 }
 
 func TestServerReconcileWithSystem(t *testing.T) {
@@ -253,8 +242,8 @@ func TestServerReconcileWithSystem(t *testing.T) {
 	mockVolOps.existingPaths[dataPath+"/volumes/test-vol-id"] = true
 
 	// Create controllers with mock ops
-	srv.volumeController = NewVolumeController(log, dataPath, nodeId, nil, state, mockVolOps)
-	srv.mountController = NewMountController(log, dataPath, nodeId, nil, state, newMockMountOps())
+	srv.volumeController = NewVolumeController(log, dataPath, nodeId, state, mockVolOps)
+	srv.mountController = NewMountController(log, dataPath, nodeId, state, newMockMountOps())
 
 	// Run reconcileWithSystem
 	err := srv.reconcileWithSystem(ctx)
@@ -286,13 +275,15 @@ func TestServerReconcileWithEntities(t *testing.T) {
 	mockMntOps := newMockMountOps()
 
 	// Create controllers with mock ops and entity access client
-	srv.volumeController = NewVolumeController(log, dataPath, nodeId, es.EAC, state, mockVolOps)
-	srv.mountController = NewMountController(log, dataPath, nodeId, es.EAC, state, mockMntOps)
+	srv.volumeController = NewVolumeController(log, dataPath, nodeId, state, mockVolOps)
+	srv.volumeController.SetEAC(es.EAC)
+	srv.mountController = NewMountController(log, dataPath, nodeId, state, mockMntOps)
+	srv.mountController.SetEAC(es.EAC)
 
 	// Create a volume entity
 	vol := &storage_v1alpha.LsvdVolume{
 		ID:           "lsvd_volume/vol-ent",
-		NodeId:       entity.Id(nodeId),
+		NodeId:       entity.Id("node/" + nodeId),
 		SizeGb:       10,
 		Filesystem:   "ext4",
 		DesiredState: storage_v1alpha.VOL_PRESENT,
@@ -310,125 +301,3 @@ func TestServerReconcileWithEntities(t *testing.T) {
 	assert.Len(t, mockVolOps.initedVolumes, 1)
 }
 
-func TestServerWatchVolumes(t *testing.T) {
-	ctx := t.Context()
-	log := slog.Default()
-	dataPath := t.TempDir()
-	nodeId := "test-node"
-	state := NewState()
-
-	es, cleanup := testutils.NewInMemEntityServer(t)
-	defer cleanup()
-
-	mockVolOps := newMockVolumeOps()
-
-	// Create server with volume controller
-	srv := &Server{
-		log:      log,
-		dataPath: dataPath,
-		nodeId:   nodeId,
-		state:    state,
-	}
-	srv.volumeController = NewVolumeController(log, dataPath, nodeId, es.EAC, state, mockVolOps)
-
-	// Create a volume entity to reconcile
-	vol := &storage_v1alpha.LsvdVolume{
-		ID:           "lsvd_volume/vol-watch",
-		NodeId:       entity.Id(nodeId),
-		SizeGb:       10,
-		Filesystem:   "ext4",
-		DesiredState: storage_v1alpha.VOL_PRESENT,
-		ActualState:  storage_v1alpha.VOL_PENDING,
-	}
-	createLsvdVolumeEntity(ctx, t, es, vol)
-
-	// Start watchVolumes with a short-lived context
-	runCtx, cancel := context.WithCancel(ctx)
-
-	done := make(chan error, 1)
-	go func() {
-		done <- srv.watchVolumes(runCtx)
-	}()
-
-	// Wait for initial reconciliation
-	time.Sleep(100 * time.Millisecond)
-
-	// Cancel and wait for exit
-	cancel()
-
-	select {
-	case err := <-done:
-		assert.NoError(t, err)
-	case <-time.After(2 * time.Second):
-		t.Fatal("watchVolumes did not exit after context cancellation")
-	}
-
-	// Verify volume was reconciled
-	assert.Len(t, mockVolOps.createdDirs, 1)
-}
-
-func TestServerWatchMounts(t *testing.T) {
-	ctx := t.Context()
-	log := slog.Default()
-	dataPath := t.TempDir()
-	nodeId := "test-node"
-	state := NewState()
-
-	es, cleanup := testutils.NewInMemEntityServer(t)
-	defer cleanup()
-
-	// Pre-populate volume state (mount requires a volume)
-	state.SetVolume("lsvd_volume/vol-watch", &VolumeState{
-		EntityId:   "lsvd_volume/vol-watch",
-		VolumeId:   "watch-vol-id",
-		DiskPath:   "/data/volumes/watch-vol-id",
-		SizeBytes:  10 * 1024 * 1024 * 1024,
-		Filesystem: "ext4",
-	})
-
-	mockMntOps := newMockMountOps()
-
-	// Create server with mount controller
-	srv := &Server{
-		log:      log,
-		dataPath: dataPath,
-		nodeId:   nodeId,
-		state:    state,
-	}
-	srv.mountController = NewMountController(log, dataPath, nodeId, es.EAC, state, mockMntOps)
-
-	// Create a mount entity to reconcile
-	mount := &storage_v1alpha.LsvdMount{
-		ID:           "lsvd_mount/mnt-watch",
-		NodeId:       entity.Id(nodeId),
-		VolumeId:     "lsvd_volume/vol-watch",
-		MountPath:    "/mnt/watch",
-		DesiredState: storage_v1alpha.MNT_WANT_MOUNTED,
-		ActualState:  storage_v1alpha.MNT_PENDING,
-	}
-	createLsvdMountEntity(ctx, t, es, mount)
-
-	// Start watchMounts with a short-lived context
-	runCtx, cancel := context.WithCancel(ctx)
-
-	done := make(chan error, 1)
-	go func() {
-		done <- srv.watchMounts(runCtx)
-	}()
-
-	// Wait for initial reconciliation
-	time.Sleep(100 * time.Millisecond)
-
-	// Cancel and wait for exit
-	cancel()
-
-	select {
-	case err := <-done:
-		assert.NoError(t, err)
-	case <-time.After(2 * time.Second):
-		t.Fatal("watchMounts did not exit after context cancellation")
-	}
-
-	// Verify mount was reconciled
-	assert.Len(t, mockMntOps.nbdLoopbackCalls, 1)
-}

@@ -2,17 +2,26 @@ package server
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 )
+
+// newTestMountController creates a MountController with EAC pre-set for testing
+func newTestMountController(log *slog.Logger, dataPath, nodeId string, eac *entityserver_v1alpha.EntityAccessClient, state *State, ops MountOps) *MountController {
+	mc := NewMountController(log, dataPath, nodeId, state, ops)
+	mc.SetEAC(eac)
+	return mc
+}
 
 // mockMountOps implements MountOps for testing
 type mockMountOps struct {
@@ -200,7 +209,7 @@ func (m *mockMountOps) FormatDevice(ctx context.Context, device, filesystem stri
 	return nil
 }
 
-func (m *mockMountOps) OpenLSVDDisk(ctx context.Context, diskPath, volumeId string) (LSVDDisk, error) {
+func (m *mockMountOps) OpenLSVDDisk(ctx context.Context, diskPath, volumeId string, remoteOnly bool) (LSVDDisk, error) {
 	if m.openDiskErr != nil {
 		return nil, m.openDiskErr
 	}
@@ -265,12 +274,14 @@ func TestMountControllerReconcileMountMounted(t *testing.T) {
 		Filesystem: "ext4",
 	})
 
-	mc := NewMountController(log, dataPath, nodeId, es.EAC, state, ops)
+	mc := newTestMountController(log, dataPath, nodeId, es.EAC, state, ops)
 
 	// Create mount entity in PENDING state
+	// Note: NodeId must use full entity ID format "node/<name>"
+	fullNodeId := "node/" + nodeId
 	mount := &storage_v1alpha.LsvdMount{
 		ID:           "lsvd_mount/mnt-123",
-		NodeId:       entity.Id(nodeId),
+		NodeId:       entity.Id(fullNodeId),
 		VolumeId:     "lsvd_volume/vol-123",
 		MountPath:    "/mnt/data",
 		ReadOnly:     false,
@@ -287,15 +298,15 @@ func TestMountControllerReconcileMountMounted(t *testing.T) {
 	assert.Len(t, ops.nbdLoopbackCalls, 1)
 	assert.Equal(t, uint64(10*1024*1024*1024), ops.nbdLoopbackCalls[0].sizeBytes)
 
-	// Verify device node was created
-	assert.Len(t, ops.deviceNodes, 1)
-
-	// Verify filesystem was formatted (since it wasn't pre-formatted)
+	// Verify filesystem was formatted
+	expectedDevPath := filepath.Join(dataPath, "devices", "actual-vol-id")
 	assert.Len(t, ops.formattedDevices, 1)
 	assert.Equal(t, "ext4", ops.formattedDevices[0].filesystem)
+	assert.Equal(t, expectedDevPath, ops.formattedDevices[0].device)
 
-	// Verify mount was performed
+	// Verify mount was performed with the correct device path
 	assert.Len(t, ops.mounts, 1)
+	assert.Equal(t, expectedDevPath, ops.mounts[0].device)
 	assert.Equal(t, "/mnt/data", ops.mounts[0].mountPath)
 	assert.Equal(t, "ext4", ops.mounts[0].filesystem)
 	assert.False(t, ops.mounts[0].readOnly)
@@ -339,12 +350,12 @@ func TestMountControllerReconcileMountUnmounted(t *testing.T) {
 	ops.existingMounts["/mnt/data"] = true
 	ops.nbdStatuses[5] = nil // NBD is connected
 
-	mc := NewMountController(log, dataPath, nodeId, es.EAC, state, ops)
+	mc := newTestMountController(log, dataPath, nodeId, es.EAC, state, ops)
 
 	// Create mount entity requesting unmount
 	mount := &storage_v1alpha.LsvdMount{
 		ID:           "lsvd_mount/mnt-456",
-		NodeId:       entity.Id(nodeId),
+		NodeId:       entity.Id("node/" + nodeId),
 		VolumeId:     "lsvd_volume/vol-456",
 		MountPath:    "/mnt/data",
 		DesiredState: storage_v1alpha.MNT_WANT_UNMOUNTED,
@@ -389,7 +400,7 @@ func TestMountControllerReconcileSkipsOtherNodes(t *testing.T) {
 	state := NewState()
 	ops := newMockMountOps()
 
-	mc := NewMountController(log, dataPath, nodeId, es.EAC, state, ops)
+	mc := newTestMountController(log, dataPath, nodeId, es.EAC, state, ops)
 
 	// Create mount entity for a different node
 	mount := &storage_v1alpha.LsvdMount{
@@ -433,12 +444,12 @@ func TestMountControllerReconcileMountAlreadyMounted(t *testing.T) {
 		Mounted:    true,
 	})
 
-	mc := NewMountController(log, dataPath, nodeId, es.EAC, state, ops)
+	mc := newTestMountController(log, dataPath, nodeId, es.EAC, state, ops)
 
 	// Create mount entity that is already mounted
 	mount := &storage_v1alpha.LsvdMount{
 		ID:           "lsvd_mount/mnt-ready",
-		NodeId:       entity.Id(nodeId),
+		NodeId:       entity.Id("node/" + nodeId),
 		VolumeId:     "lsvd_volume/vol-ready",
 		MountPath:    "/mnt/ready",
 		DesiredState: storage_v1alpha.MNT_WANT_MOUNTED,
@@ -470,12 +481,12 @@ func TestMountControllerReconcileVolumeNotFound(t *testing.T) {
 
 	// Don't pre-populate volume state - volume doesn't exist
 
-	mc := NewMountController(log, dataPath, nodeId, es.EAC, state, ops)
+	mc := newTestMountController(log, dataPath, nodeId, es.EAC, state, ops)
 
 	// Create mount entity referencing non-existent volume
 	mount := &storage_v1alpha.LsvdMount{
 		ID:           "lsvd_mount/mnt-missing",
-		NodeId:       entity.Id(nodeId),
+		NodeId:       entity.Id("node/" + nodeId),
 		VolumeId:     "lsvd_volume/vol-missing",
 		MountPath:    "/mnt/missing",
 		DesiredState: storage_v1alpha.MNT_WANT_MOUNTED,
@@ -520,12 +531,12 @@ func TestMountControllerReconcileMountReadOnly(t *testing.T) {
 	// Pre-format the device to skip formatting
 	ops.formattedDisks[dataPath+"/devices/ro-vol-id"] = "xfs"
 
-	mc := NewMountController(log, dataPath, nodeId, es.EAC, state, ops)
+	mc := newTestMountController(log, dataPath, nodeId, es.EAC, state, ops)
 
 	// Create read-only mount request
 	mount := &storage_v1alpha.LsvdMount{
 		ID:           "lsvd_mount/mnt-ro",
-		NodeId:       entity.Id(nodeId),
+		NodeId:       entity.Id("node/" + nodeId),
 		VolumeId:     "lsvd_volume/vol-ro",
 		MountPath:    "/mnt/readonly",
 		ReadOnly:     true,
@@ -581,16 +592,13 @@ func TestMountControllerReconcileWithSystemNBDDisconnected(t *testing.T) {
 	})
 	// Note: ops.nbdStatuses[10] is NOT set, so NBD status will return error
 
-	mc := NewMountController(log, dataPath, nodeId, es.EAC, state, ops)
+	mc := newTestMountController(log, dataPath, nodeId, es.EAC, state, ops)
 
 	// Run system reconciliation
 	err := mc.ReconcileWithSystem(ctx)
 	require.NoError(t, err)
 
-	// Verify NBD status was checked
-	assert.Contains(t, ops.nbdStatusCalls, uint32(10))
-
-	// Verify reconnection was attempted (NBDLoopback called)
+	// Verify reconnection was attempted (no handler exists, so reconnect triggers)
 	assert.NotEmpty(t, ops.nbdLoopbackCalls)
 }
 
@@ -628,7 +636,7 @@ func TestMountControllerReconcileWithSystemMountMissing(t *testing.T) {
 	ops.nbdStatuses[15] = nil
 	// Note: ops.existingMounts doesn't contain /mnt/unmounted
 
-	mc := NewMountController(log, dataPath, nodeId, es.EAC, state, ops)
+	mc := newTestMountController(log, dataPath, nodeId, es.EAC, state, ops)
 
 	// Add a handler so reconnect isn't triggered
 	mc.handlers["lsvd_mount/mnt-unmounted"] = &nbdHandler{
@@ -671,13 +679,13 @@ func TestMountControllerMultipleMounts(t *testing.T) {
 		})
 	}
 
-	mc := NewMountController(log, dataPath, nodeId, es.EAC, state, ops)
+	mc := newTestMountController(log, dataPath, nodeId, es.EAC, state, ops)
 
 	// Create multiple mount entities
 	for i := 1; i <= 3; i++ {
 		mount := &storage_v1alpha.LsvdMount{
 			ID:           entity.Id("lsvd_mount/mnt-" + string(rune('0'+i))),
-			NodeId:       entity.Id(nodeId),
+			NodeId:       entity.Id("node/" + nodeId),
 			VolumeId:     entity.Id("lsvd_volume/vol-" + string(rune('0'+i))),
 			MountPath:    "/mnt/data" + string(rune('0'+i)),
 			DesiredState: storage_v1alpha.MNT_WANT_MOUNTED,
@@ -708,12 +716,12 @@ func TestMountControllerAlreadyDetached(t *testing.T) {
 	state := NewState()
 	ops := newMockMountOps()
 
-	mc := NewMountController(log, dataPath, nodeId, es.EAC, state, ops)
+	mc := newTestMountController(log, dataPath, nodeId, es.EAC, state, ops)
 
 	// Create mount entity already in DETACHED state
 	mount := &storage_v1alpha.LsvdMount{
 		ID:           "lsvd_mount/mnt-detached",
-		NodeId:       entity.Id(nodeId),
+		NodeId:       entity.Id("node/" + nodeId),
 		VolumeId:     "lsvd_volume/vol-detached",
 		MountPath:    "/mnt/detached",
 		DesiredState: storage_v1alpha.MNT_WANT_UNMOUNTED,
@@ -730,7 +738,53 @@ func TestMountControllerAlreadyDetached(t *testing.T) {
 	assert.Empty(t, ops.nbdDisconnectCalls)
 }
 
-func TestMountControllerRun(t *testing.T) {
+func TestMountControllerReconcileCleansUpOrphanedMounts(t *testing.T) {
+	ctx := t.Context()
+	log := testutils.TestLogger(t)
+
+	es, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	dataPath := t.TempDir()
+	nodeId := "test-node-1"
+	state := NewState()
+	ops := newMockMountOps()
+
+	// Pre-populate local state with a mount that has no corresponding entity
+	state.SetMount("lsvd_mount/mnt-orphan", &MountState{
+		EntityId:   "lsvd_mount/mnt-orphan",
+		VolumeId:   "lsvd_volume/vol-orphan",
+		NbdIndex:   7,
+		DevicePath: "/data/devices/orphan-vol-id",
+		MountPath:  "/mnt/orphan",
+		Mounted:    true,
+		ReadOnly:   false,
+	})
+	ops.existingMounts["/mnt/orphan"] = true
+	ops.nbdStatuses[7] = nil
+
+	mc := newTestMountController(log, dataPath, nodeId, es.EAC, state, ops)
+
+	// Do NOT create any entity in the entity server — making this mount an orphan
+
+	// Run reconciliation
+	err := mc.ReconcileWithEntities(ctx)
+	require.NoError(t, err)
+
+	// Verify unmount was called
+	assert.Contains(t, ops.unmounts, "/mnt/orphan")
+
+	// Verify NBD was disconnected
+	assert.Contains(t, ops.nbdDisconnectCalls, uint32(7))
+
+	// Verify device file was removed
+	assert.Contains(t, ops.removedFiles, "/data/devices/orphan-vol-id")
+
+	// Verify state was cleaned up
+	assert.Nil(t, state.GetMount("lsvd_mount/mnt-orphan"))
+}
+
+func TestMountControllerReconcileKeepsNonOrphanedMounts(t *testing.T) {
 	ctx := t.Context()
 	log := testutils.TestLogger(t)
 
@@ -743,62 +797,67 @@ func TestMountControllerRun(t *testing.T) {
 	ops := newMockMountOps()
 
 	// Pre-populate volume state
-	state.SetVolume("lsvd_volume/vol-run", &VolumeState{
-		EntityId:   "lsvd_volume/vol-run",
-		VolumeId:   "run-vol-id",
-		DiskPath:   "/data/volumes/run-vol-id",
+	state.SetVolume("lsvd_volume/vol-keep", &VolumeState{
+		EntityId:   "lsvd_volume/vol-keep",
+		VolumeId:   "keep-vol-id",
+		DiskPath:   "/data/volumes/keep-vol-id",
 		SizeBytes:  10 * 1024 * 1024 * 1024,
 		Filesystem: "ext4",
 	})
 
-	mc := NewMountController(log, dataPath, nodeId, es.EAC, state, ops)
+	// Pre-populate local state with a mount that HAS a corresponding entity
+	state.SetMount("lsvd_mount/mnt-keep", &MountState{
+		EntityId:   "lsvd_mount/mnt-keep",
+		VolumeId:   "lsvd_volume/vol-keep",
+		NbdIndex:   8,
+		DevicePath: "/data/devices/keep-vol-id",
+		MountPath:  "/mnt/keep",
+		Mounted:    true,
+		ReadOnly:   false,
+	})
+	ops.existingMounts["/mnt/keep"] = true
 
-	// Create a mount entity to reconcile
+	// Also add an orphan
+	state.SetMount("lsvd_mount/mnt-orphan2", &MountState{
+		EntityId:   "lsvd_mount/mnt-orphan2",
+		VolumeId:   "lsvd_volume/vol-orphan2",
+		NbdIndex:   9,
+		DevicePath: "/data/devices/orphan2-vol-id",
+		MountPath:  "/mnt/orphan2",
+		Mounted:    true,
+		ReadOnly:   false,
+	})
+	ops.existingMounts["/mnt/orphan2"] = true
+
+	mc := newTestMountController(log, dataPath, nodeId, es.EAC, state, ops)
+
+	// Create entity only for the kept mount
 	mount := &storage_v1alpha.LsvdMount{
-		ID:           "lsvd_mount/mnt-run-test",
-		NodeId:       entity.Id(nodeId),
-		VolumeId:     "lsvd_volume/vol-run",
-		MountPath:    "/mnt/run-test",
+		ID:           "lsvd_mount/mnt-keep",
+		NodeId:       entity.Id("node/" + nodeId),
+		VolumeId:     "lsvd_volume/vol-keep",
+		MountPath:    "/mnt/keep",
 		DesiredState: storage_v1alpha.MNT_WANT_MOUNTED,
-		ActualState:  storage_v1alpha.MNT_PENDING,
+		ActualState:  storage_v1alpha.MNT_MOUNTED,
 	}
 	createLsvdMountEntity(ctx, t, es, mount)
 
-	// Create a context that will be cancelled shortly
-	runCtx, cancel := context.WithCancel(ctx)
+	// Run reconciliation
+	err := mc.ReconcileWithEntities(ctx)
+	require.NoError(t, err)
 
-	// Start Run in a goroutine
-	done := make(chan error, 1)
-	go func() {
-		done <- mc.Run(runCtx)
-	}()
+	// The kept mount should still exist in state
+	assert.NotNil(t, state.GetMount("lsvd_mount/mnt-keep"))
 
-	// Give it time for initial reconciliation
-	time.Sleep(100 * time.Millisecond)
+	// The orphan should be cleaned up
+	assert.Nil(t, state.GetMount("lsvd_mount/mnt-orphan2"))
 
-	// Cancel the context to stop the controller
-	cancel()
-
-	// Wait for Run to return
-	select {
-	case err := <-done:
-		assert.NoError(t, err)
-	case <-time.After(2 * time.Second):
-		t.Fatal("Run did not exit after context cancellation")
-	}
-
-	// Verify initial reconciliation happened
-	assert.Len(t, ops.nbdLoopbackCalls, 1)
-	assert.Len(t, ops.mounts, 1)
-
-	// Verify state was updated
-	mountState := state.GetMount("lsvd_mount/mnt-run-test")
-	require.NotNil(t, mountState)
-	assert.Equal(t, "/mnt/run-test", mountState.MountPath)
+	// Only the orphan should have been unmounted
+	assert.Contains(t, ops.unmounts, "/mnt/orphan2")
+	assert.NotContains(t, ops.unmounts, "/mnt/keep")
 }
 
-func TestMountControllerRunImmediateCancellation(t *testing.T) {
-	ctx := t.Context()
+func TestMountControllerShutdownCleansUpHandlers(t *testing.T) {
 	log := testutils.TestLogger(t)
 
 	es, cleanup := testutils.NewInMemEntityServer(t)
@@ -809,72 +868,15 @@ func TestMountControllerRunImmediateCancellation(t *testing.T) {
 	state := NewState()
 	ops := newMockMountOps()
 
-	mc := NewMountController(log, dataPath, nodeId, es.EAC, state, ops)
+	mc := newTestMountController(log, dataPath, nodeId, es.EAC, state, ops)
 
-	// Create an already-cancelled context
-	runCtx, cancel := context.WithCancel(ctx)
-	cancel()
-
-	// Run should return immediately
-	err := mc.Run(runCtx)
-	assert.NoError(t, err)
-}
-
-func TestMountControllerRunCleansUpHandlers(t *testing.T) {
-	ctx := t.Context()
-	log := testutils.TestLogger(t)
-
-	es, cleanup := testutils.NewInMemEntityServer(t)
-	defer cleanup()
-
-	dataPath := t.TempDir()
-	nodeId := "test-node-1"
-	state := NewState()
-	ops := newMockMountOps()
-
-	// Pre-populate volume state
-	state.SetVolume("lsvd_volume/vol-cleanup", &VolumeState{
-		EntityId:   "lsvd_volume/vol-cleanup",
-		VolumeId:   "cleanup-vol-id",
-		DiskPath:   "/data/volumes/cleanup-vol-id",
-		SizeBytes:  10 * 1024 * 1024 * 1024,
-		Filesystem: "ext4",
-	})
-
-	mc := NewMountController(log, dataPath, nodeId, es.EAC, state, ops)
-
-	// Create a mount entity
-	mount := &storage_v1alpha.LsvdMount{
-		ID:           "lsvd_mount/mnt-cleanup",
-		NodeId:       entity.Id(nodeId),
-		VolumeId:     "lsvd_volume/vol-cleanup",
-		MountPath:    "/mnt/cleanup",
-		DesiredState: storage_v1alpha.MNT_WANT_MOUNTED,
-		ActualState:  storage_v1alpha.MNT_PENDING,
+	// Add a handler manually
+	cancelled := false
+	mc.handlers["test-entity"] = &nbdHandler{
+		cancel: func() { cancelled = true },
 	}
-	createLsvdMountEntity(ctx, t, es, mount)
 
-	runCtx, cancel := context.WithCancel(ctx)
+	mc.Shutdown()
 
-	done := make(chan error, 1)
-	go func() {
-		done <- mc.Run(runCtx)
-	}()
-
-	// Give it time for initial reconciliation
-	time.Sleep(100 * time.Millisecond)
-
-	// Verify handler was created
-	assert.NotNil(t, mc.handlers["lsvd_mount/mnt-cleanup"])
-
-	// Cancel to trigger cleanup
-	cancel()
-
-	// Wait for Run to return
-	select {
-	case err := <-done:
-		assert.NoError(t, err)
-	case <-time.After(2 * time.Second):
-		t.Fatal("Run did not exit after context cancellation")
-	}
+	assert.True(t, cancelled)
 }

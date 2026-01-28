@@ -2,11 +2,12 @@ package server
 
 import (
 	"context"
+	"log/slog"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
@@ -27,10 +28,11 @@ type mockVolumeOps struct {
 }
 
 type mockInitVolume struct {
-	path     string
-	volumeId string
-	size     units.Bytes
-	metadata map[string]any
+	path       string
+	volumeId   string
+	size       units.Bytes
+	metadata   map[string]any
+	remoteOnly bool
 }
 
 func newMockVolumeOps() *mockVolumeOps {
@@ -61,17 +63,25 @@ func (m *mockVolumeOps) VolumePathExists(path string) bool {
 	return m.existingPaths[path]
 }
 
-func (m *mockVolumeOps) InitLSVDVolume(ctx context.Context, path, volumeId string, size units.Bytes, metadata map[string]any) error {
+func (m *mockVolumeOps) InitLSVDVolume(ctx context.Context, path, volumeId string, size units.Bytes, metadata map[string]any, remoteOnly bool) (string, error) {
 	if m.initVolumeErr != nil {
-		return m.initVolumeErr
+		return "", m.initVolumeErr
 	}
 	m.initedVolumes = append(m.initedVolumes, mockInitVolume{
-		path:     path,
-		volumeId: volumeId,
-		size:     size,
-		metadata: metadata,
+		path:       path,
+		volumeId:   volumeId,
+		size:       size,
+		metadata:   metadata,
+		remoteOnly: remoteOnly,
 	})
-	return nil
+	return volumeId, nil
+}
+
+// newTestVolumeController creates a VolumeController with EAC pre-set for testing
+func newTestVolumeController(log *slog.Logger, dataPath, nodeId string, eac *entityserver_v1alpha.EntityAccessClient, state *State, ops VolumeOps) *VolumeController {
+	vc := NewVolumeController(log, dataPath, nodeId, state, ops)
+	vc.SetEAC(eac)
+	return vc
 }
 
 // createLsvdVolumeEntity creates an lsvd_volume entity in the test entity server
@@ -98,12 +108,12 @@ func TestVolumeControllerReconcileVolumePresent(t *testing.T) {
 	ops := newMockVolumeOps()
 
 	// Create the volume controller
-	vc := NewVolumeController(log, dataPath, nodeId, es.EAC, state, ops)
+	vc := newTestVolumeController(log, dataPath, nodeId, es.EAC, state, ops)
 
 	// Create a volume entity in PENDING state
 	vol := &storage_v1alpha.LsvdVolume{
 		ID:           "lsvd_volume/vol-123",
-		NodeId:       entity.Id(nodeId),
+		NodeId:       entity.Id("node/" + nodeId),
 		SizeGb:       10,
 		Filesystem:   "ext4",
 		RemoteOnly:   false,
@@ -161,12 +171,12 @@ func TestVolumeControllerReconcileVolumeAbsent(t *testing.T) {
 	})
 	ops.existingPaths["/data/volumes/actual-vol-id"] = true
 
-	vc := NewVolumeController(log, dataPath, nodeId, es.EAC, state, ops)
+	vc := newTestVolumeController(log, dataPath, nodeId, es.EAC, state, ops)
 
 	// Create volume entity requesting deletion
 	vol := &storage_v1alpha.LsvdVolume{
 		ID:           "lsvd_volume/vol-456",
-		NodeId:       entity.Id(nodeId),
+		NodeId:       entity.Id("node/" + nodeId),
 		SizeGb:       5,
 		Filesystem:   "xfs",
 		DesiredState: storage_v1alpha.VOL_ABSENT,
@@ -205,12 +215,12 @@ func TestVolumeControllerReconcileSkipsOtherNodes(t *testing.T) {
 	state := NewState()
 	ops := newMockVolumeOps()
 
-	vc := NewVolumeController(log, dataPath, nodeId, es.EAC, state, ops)
+	vc := newTestVolumeController(log, dataPath, nodeId, es.EAC, state, ops)
 
 	// Create volume entity for a different node
 	vol := &storage_v1alpha.LsvdVolume{
 		ID:           "lsvd_volume/vol-other",
-		NodeId:       entity.Id("other-node"),
+		NodeId:       entity.Id("node/other-node"),
 		SizeGb:       10,
 		DesiredState: storage_v1alpha.VOL_PRESENT,
 		ActualState:  storage_v1alpha.VOL_PENDING,
@@ -247,12 +257,12 @@ func TestVolumeControllerReconcileVolumeAlreadyReady(t *testing.T) {
 		Filesystem: "ext4",
 	})
 
-	vc := NewVolumeController(log, dataPath, nodeId, es.EAC, state, ops)
+	vc := newTestVolumeController(log, dataPath, nodeId, es.EAC, state, ops)
 
 	// Create volume entity that is already ready
 	vol := &storage_v1alpha.LsvdVolume{
 		ID:           "lsvd_volume/vol-ready",
-		NodeId:       entity.Id(nodeId),
+		NodeId:       entity.Id("node/" + nodeId),
 		SizeGb:       10,
 		Filesystem:   "ext4",
 		DesiredState: storage_v1alpha.VOL_PRESENT,
@@ -292,7 +302,7 @@ func TestVolumeControllerReconcileWithSystem(t *testing.T) {
 	// Mark path as existing
 	ops.existingPaths["/data/volumes/sys-vol-id"] = true
 
-	vc := NewVolumeController(log, dataPath, nodeId, es.EAC, state, ops)
+	vc := newTestVolumeController(log, dataPath, nodeId, es.EAC, state, ops)
 
 	// Run system reconciliation
 	err := vc.ReconcileWithSystem(ctx)
@@ -316,16 +326,126 @@ func TestVolumeControllerReconcileWithSystemMissingPath(t *testing.T) {
 
 	// Add volume to state but don't mark path as existing
 	state.SetVolume("vol-missing", &VolumeState{
-		EntityId: "vol-missing",
-		VolumeId: "missing-vol-id",
-		DiskPath: "/data/volumes/missing-vol-id",
+		EntityId:   "vol-missing",
+		VolumeId:   "missing-vol-id",
+		DiskPath:   "/data/volumes/missing-vol-id",
+		SizeBytes:  10 * 1024 * 1024 * 1024,
+		Filesystem: "ext4",
 	})
 
-	vc := NewVolumeController(log, dataPath, nodeId, es.EAC, state, ops)
+	vc := newTestVolumeController(log, dataPath, nodeId, es.EAC, state, ops)
 
-	// Run system reconciliation (should log warning but not error)
+	// Run system reconciliation — should recreate the volume directory
 	err := vc.ReconcileWithSystem(ctx)
 	require.NoError(t, err)
+
+	// Verify the volume directory was recreated
+	assert.Contains(t, ops.createdDirs, "/data/volumes/missing-vol-id")
+
+	// Verify the volume was reinitialized
+	require.Len(t, ops.initedVolumes, 1)
+	assert.Equal(t, "/data/volumes/missing-vol-id", ops.initedVolumes[0].path)
+	assert.Equal(t, "missing-vol-id", ops.initedVolumes[0].volumeId)
+	assert.Equal(t, units.Bytes(10*1024*1024*1024), ops.initedVolumes[0].size)
+	assert.Equal(t, map[string]any{"filesystem": "ext4"}, ops.initedVolumes[0].metadata)
+}
+
+func TestVolumeControllerReconcileCleansUpOrphanedVolumes(t *testing.T) {
+	ctx := t.Context()
+	log := testutils.TestLogger(t)
+
+	es, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	dataPath := t.TempDir()
+	nodeId := "test-node-1"
+	state := NewState()
+	ops := newMockVolumeOps()
+
+	// Pre-populate local state with a volume that has no corresponding entity
+	state.SetVolume("lsvd_volume/vol-orphan", &VolumeState{
+		EntityId:   "lsvd_volume/vol-orphan",
+		VolumeId:   "orphan-vol-id",
+		DiskPath:   "/data/volumes/orphan-vol-id",
+		SizeBytes:  10 * 1024 * 1024 * 1024,
+		Filesystem: "ext4",
+	})
+	ops.existingPaths["/data/volumes/orphan-vol-id"] = true
+
+	vc := newTestVolumeController(log, dataPath, nodeId, es.EAC, state, ops)
+
+	// Do NOT create any entity in the entity server — making this volume an orphan
+
+	// Run reconciliation
+	err := vc.ReconcileWithEntities(ctx)
+	require.NoError(t, err)
+
+	// Verify volume directory was removed
+	assert.Contains(t, ops.removedDirs, "/data/volumes/orphan-vol-id")
+
+	// Verify state was cleaned up
+	assert.Nil(t, state.GetVolume("lsvd_volume/vol-orphan"))
+}
+
+func TestVolumeControllerReconcileKeepsNonOrphanedVolumes(t *testing.T) {
+	ctx := t.Context()
+	log := testutils.TestLogger(t)
+
+	es, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	dataPath := t.TempDir()
+	nodeId := "test-node-1"
+	state := NewState()
+	ops := newMockVolumeOps()
+
+	// Pre-populate local state with a volume that HAS a corresponding entity
+	state.SetVolume("lsvd_volume/vol-keep", &VolumeState{
+		EntityId:   "lsvd_volume/vol-keep",
+		VolumeId:   "keep-vol-id",
+		DiskPath:   "/data/volumes/keep-vol-id",
+		SizeBytes:  10 * 1024 * 1024 * 1024,
+		Filesystem: "ext4",
+	})
+	ops.existingPaths["/data/volumes/keep-vol-id"] = true
+
+	// Also add an orphan
+	state.SetVolume("lsvd_volume/vol-orphan2", &VolumeState{
+		EntityId:   "lsvd_volume/vol-orphan2",
+		VolumeId:   "orphan2-vol-id",
+		DiskPath:   "/data/volumes/orphan2-vol-id",
+		SizeBytes:  5 * 1024 * 1024 * 1024,
+		Filesystem: "ext4",
+	})
+	ops.existingPaths["/data/volumes/orphan2-vol-id"] = true
+
+	vc := newTestVolumeController(log, dataPath, nodeId, es.EAC, state, ops)
+
+	// Create entity only for the kept volume
+	vol := &storage_v1alpha.LsvdVolume{
+		ID:           "lsvd_volume/vol-keep",
+		NodeId:       entity.Id("node/" + nodeId),
+		SizeGb:       10,
+		Filesystem:   "ext4",
+		DesiredState: storage_v1alpha.VOL_PRESENT,
+		ActualState:  storage_v1alpha.VOL_READY,
+		VolumeId:     "keep-vol-id",
+	}
+	createLsvdVolumeEntity(ctx, t, es, vol)
+
+	// Run reconciliation
+	err := vc.ReconcileWithEntities(ctx)
+	require.NoError(t, err)
+
+	// The kept volume should still exist in state
+	assert.NotNil(t, state.GetVolume("lsvd_volume/vol-keep"))
+
+	// The orphan should be cleaned up
+	assert.Nil(t, state.GetVolume("lsvd_volume/vol-orphan2"))
+
+	// Only the orphan directory should have been removed
+	assert.Contains(t, ops.removedDirs, "/data/volumes/orphan2-vol-id")
+	assert.NotContains(t, ops.removedDirs, "/data/volumes/keep-vol-id")
 }
 
 func TestVolumeControllerMultipleVolumes(t *testing.T) {
@@ -340,13 +460,13 @@ func TestVolumeControllerMultipleVolumes(t *testing.T) {
 	state := NewState()
 	ops := newMockVolumeOps()
 
-	vc := NewVolumeController(log, dataPath, nodeId, es.EAC, state, ops)
+	vc := newTestVolumeController(log, dataPath, nodeId, es.EAC, state, ops)
 
 	// Create multiple volume entities
 	for i := 1; i <= 3; i++ {
 		vol := &storage_v1alpha.LsvdVolume{
 			ID:           entity.Id("lsvd_volume/vol-" + string(rune('0'+i))),
-			NodeId:       entity.Id(nodeId),
+			NodeId:       entity.Id("node/" + nodeId),
 			SizeGb:       int64(i * 10),
 			Filesystem:   "ext4",
 			DesiredState: storage_v1alpha.VOL_PRESENT,
@@ -365,83 +485,3 @@ func TestVolumeControllerMultipleVolumes(t *testing.T) {
 	assert.Len(t, state.Volumes, 3)
 }
 
-func TestVolumeControllerRun(t *testing.T) {
-	ctx := t.Context()
-	log := testutils.TestLogger(t)
-
-	es, cleanup := testutils.NewInMemEntityServer(t)
-	defer cleanup()
-
-	dataPath := t.TempDir()
-	nodeId := "test-node-1"
-	state := NewState()
-	ops := newMockVolumeOps()
-
-	vc := NewVolumeController(log, dataPath, nodeId, es.EAC, state, ops)
-
-	// Create a volume entity to reconcile
-	vol := &storage_v1alpha.LsvdVolume{
-		ID:           "lsvd_volume/vol-run-test",
-		NodeId:       entity.Id(nodeId),
-		SizeGb:       10,
-		Filesystem:   "ext4",
-		DesiredState: storage_v1alpha.VOL_PRESENT,
-		ActualState:  storage_v1alpha.VOL_PENDING,
-	}
-	createLsvdVolumeEntity(ctx, t, es, vol)
-
-	// Create a context that will be cancelled shortly
-	runCtx, cancel := context.WithCancel(ctx)
-
-	// Start Run in a goroutine
-	done := make(chan error, 1)
-	go func() {
-		done <- vc.Run(runCtx)
-	}()
-
-	// Give it time for initial reconciliation
-	time.Sleep(100 * time.Millisecond)
-
-	// Cancel the context to stop the controller
-	cancel()
-
-	// Wait for Run to return
-	select {
-	case err := <-done:
-		assert.NoError(t, err)
-	case <-time.After(2 * time.Second):
-		t.Fatal("Run did not exit after context cancellation")
-	}
-
-	// Verify initial reconciliation happened
-	assert.Len(t, ops.createdDirs, 1)
-	assert.Len(t, ops.initedVolumes, 1)
-
-	// Verify state was updated
-	volState := state.GetVolume("lsvd_volume/vol-run-test")
-	require.NotNil(t, volState)
-	assert.Equal(t, "lsvd_volume/vol-run-test", volState.EntityId)
-}
-
-func TestVolumeControllerRunImmediateCancellation(t *testing.T) {
-	ctx := t.Context()
-	log := testutils.TestLogger(t)
-
-	es, cleanup := testutils.NewInMemEntityServer(t)
-	defer cleanup()
-
-	dataPath := t.TempDir()
-	nodeId := "test-node-1"
-	state := NewState()
-	ops := newMockVolumeOps()
-
-	vc := NewVolumeController(log, dataPath, nodeId, es.EAC, state, ops)
-
-	// Create an already-cancelled context
-	runCtx, cancel := context.WithCancel(ctx)
-	cancel()
-
-	// Run should return immediately
-	err := vc.Run(runCtx)
-	assert.NoError(t, err)
-}

@@ -16,6 +16,86 @@ import (
 	"miren.dev/runtime/pkg/entity"
 )
 
+// Init implements controller.ReconcileControllerI.
+func (c *MountController) Init(ctx context.Context) error {
+	return nil
+}
+
+// Reconcile implements controller.ReconcileControllerI.
+func (c *MountController) Reconcile(ctx context.Context, mount *storage_v1alpha.LsvdMount, meta *entity.Meta) error {
+	return c.reconcileMount(ctx, mount)
+}
+
+// Index returns the entity index attribute for watching mount entities on this node.
+func (c *MountController) Index() entity.Attr {
+	fullNodeId := "node/" + c.nodeId
+	return entity.Ref(storage_v1alpha.LsvdMountNodeIdId, entity.Id(fullNodeId))
+}
+
+// Shutdown unmounts filesystems, disconnects NBD devices, and cleans up handlers.
+func (c *MountController) Shutdown() {
+	// Snapshot and clear all handlers under lock
+	c.handlersMu.Lock()
+	handlers := make(map[string]*nbdHandler, len(c.handlers))
+	for entityId, h := range c.handlers {
+		handlers[entityId] = h
+	}
+	c.handlers = make(map[string]*nbdHandler)
+	c.handlersMu.Unlock()
+
+	// Use a fresh context for cleanup since the parent context is already cancelled
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	for entityId, h := range handlers {
+		c.log.Info("shutting down handler", "entity_id", entityId)
+
+		mountState := c.state.GetMount(entityId)
+
+		// Unmount filesystem first
+		if mountState != nil && mountState.Mounted && mountState.MountPath != "" {
+			c.log.Info("unmounting on shutdown", "entity_id", entityId, "mount_path", mountState.MountPath)
+			if err := c.ops.Unmount(mountState.MountPath); err != nil {
+				c.log.Warn("failed to unmount on shutdown", "entity_id", entityId, "error", err)
+			} else {
+				mountState.Mounted = false
+				c.state.SetMount(entityId, mountState)
+			}
+		}
+
+		// Cancel handler context to stop NBD goroutine
+		if h.cancel != nil {
+			h.cancel()
+		}
+
+		// Wait for handler goroutine to exit
+		if h.done != nil {
+			c.log.Info("waiting for NBD handler to exit", "entity_id", entityId)
+			<-h.done
+		}
+
+		// Close disk resources
+		if h.disk != nil {
+			h.disk.Close(ctx)
+		}
+
+		// Disconnect NBD device and remove device node
+		if mountState != nil && mountState.DevicePath != "" {
+			c.log.Info("disconnecting NBD on shutdown", "entity_id", entityId, "nbd_index", mountState.NbdIndex)
+			if err := c.ops.NBDDisconnect(mountState.NbdIndex); err != nil {
+				c.log.Warn("failed to disconnect NBD on shutdown", "entity_id", entityId, "error", err)
+			}
+			c.ops.RemoveFile(mountState.DevicePath)
+		}
+	}
+
+	if len(handlers) > 0 {
+		if err := c.state.Save(); err != nil {
+			c.log.Warn("failed to save state after shutdown cleanup", "error", err)
+		}
+	}
+}
+
 // MountController watches lsvd_mount entities and manages NBD devices and mounts
 type MountController struct {
 	log      *slog.Logger
@@ -36,59 +116,34 @@ type nbdHandler struct {
 	clientFile *os.File
 	cancel     context.CancelFunc
 	disk       LSVDDisk
+	done       chan struct{} // closed when handler goroutine exits
 }
 
-// NewMountController creates a new mount controller
-func NewMountController(log *slog.Logger, dataPath, nodeId string, eac *entityserver_v1alpha.EntityAccessClient, state *State, ops MountOps) *MountController {
+// NewMountController creates a new mount controller.
+// The controller is created without an EntityAccessClient so that local system
+// reconciliation (ReconcileWithSystem) can run immediately at startup, even if
+// the entity server is unavailable. Call SetEAC after establishing a connection
+// to the entity server to enable entity-based reconciliation.
+func NewMountController(log *slog.Logger, dataPath, nodeId string, state *State, ops MountOps) *MountController {
 	if ops == nil {
-		ops = NewRealMountOps(log)
+		ops = NewRealMountOps(log, nil, "")
 	}
 	return &MountController{
 		log:      log.With("module", "lsvd-mount"),
 		dataPath: dataPath,
 		nodeId:   nodeId,
-		eac:      eac,
 		state:    state,
 		ops:      ops,
 		handlers: make(map[string]*nbdHandler),
 	}
 }
 
-// Run starts the mount controller and blocks until context is cancelled
-func (c *MountController) Run(ctx context.Context) error {
-	c.log.Info("starting mount controller")
-
-	// Use polling-based reconciliation since WatchIndex over RPC uses streams
-	// which require different handling. Poll every 5 seconds.
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
-	c.log.Info("watching for lsvd_mount entities", "node_id", c.nodeId)
-
-	// Initial reconciliation
-	if err := c.ReconcileWithEntities(ctx); err != nil {
-		c.log.Error("initial mount reconciliation failed", "error", err)
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			// Cleanup handlers on shutdown
-			c.handlersMu.Lock()
-			for entityId, h := range c.handlers {
-				c.log.Info("cleaning up handler on shutdown", "entity_id", entityId)
-				if h.cancel != nil {
-					h.cancel()
-				}
-			}
-			c.handlersMu.Unlock()
-			return nil
-		case <-ticker.C:
-			if err := c.ReconcileWithEntities(ctx); err != nil {
-				c.log.Error("mount reconciliation failed", "error", err)
-			}
-		}
-	}
+// SetEAC sets the EntityAccessClient for entity server communication.
+// This is separate from construction because the controller must be usable
+// for local system reconciliation before the entity server connection is
+// established — ensuring disks remain available even during entity server outages.
+func (c *MountController) SetEAC(eac *entityserver_v1alpha.EntityAccessClient) {
+	c.eac = eac
 }
 
 // reconcileMount reconciles a single lsvd_mount entity
@@ -128,11 +183,22 @@ func (c *MountController) reconcileMountMounted(ctx context.Context, mount *stor
 		// Already mounting, wait
 		return nil
 	case storage_v1alpha.MNT_MOUNTED:
-		// Already mounted, nothing to do
+		// Verify the mount is actually present on the system
+		mountState := c.state.GetMount(entityId)
+		if mountState != nil && mountState.MountPath != "" && !c.ops.IsMounted(mountState.MountPath) {
+			c.log.Warn("entity reports mounted but mount not found on system, recovering",
+				"entity_id", entityId,
+				"mount_path", mountState.MountPath,
+			)
+			c.cleanupHandler(ctx, entityId)
+			return c.attachAndMount(ctx, mount)
+		}
 		return nil
 	case storage_v1alpha.MNT_ERROR:
 		// Error state, try to recover
 		c.log.Info("mount in error state, attempting recovery", "entity_id", entityId)
+		// Clean up any existing handler before retrying to avoid leaking NBD devices
+		c.cleanupHandler(ctx, entityId)
 		return c.attachAndMount(ctx, mount)
 	default:
 		c.log.Warn("unexpected actual state for mounted", "actual_state", mount.ActualState)
@@ -165,6 +231,15 @@ func (c *MountController) attachAndMount(ctx context.Context, mount *storage_v1a
 	entityId := string(mount.ID)
 	volumeId := string(mount.VolumeId)
 
+	// Check if we already have a handler for this mount (attach already in progress or done)
+	c.handlersMu.Lock()
+	_, hasHandler := c.handlers[entityId]
+	c.handlersMu.Unlock()
+	if hasHandler {
+		c.log.Info("handler already exists, skipping attach", "entity_id", entityId)
+		return nil
+	}
+
 	c.log.Info("attaching and mounting volume",
 		"entity_id", entityId,
 		"volume_id", volumeId,
@@ -184,7 +259,7 @@ func (c *MountController) attachAndMount(ctx context.Context, mount *storage_v1a
 	}
 
 	// Open LSVD disk
-	disk, err := c.ops.OpenLSVDDisk(ctx, volState.DiskPath, volState.VolumeId)
+	disk, err := c.ops.OpenLSVDDisk(ctx, volState.DiskPath, volState.VolumeId, volState.RemoteOnly)
 	if err != nil {
 		c.setMountError(ctx, mount.ID, fmt.Sprintf("failed to open disk: %v", err))
 		return fmt.Errorf("failed to open disk: %w", err)
@@ -192,6 +267,11 @@ func (c *MountController) attachAndMount(ctx context.Context, mount *storage_v1a
 
 	// Attach NBD device
 	sizeBytes := uint64(disk.Size())
+	c.log.Info("attaching NBD device",
+		"entity_id", entityId,
+		"size_bytes", sizeBytes,
+		"size_gb", sizeBytes/(1024*1024*1024),
+	)
 	idx, conn, clientFile, cleanup, err := c.ops.NBDLoopback(ctx, sizeBytes)
 	if err != nil {
 		disk.Close(ctx)
@@ -218,7 +298,8 @@ func (c *MountController) attachAndMount(ctx context.Context, mount *storage_v1a
 
 	// Start NBD handler
 	handlerCtx, handlerCancel := context.WithCancel(ctx)
-	go c.runNBDHandler(handlerCtx, entityId, disk, conn, clientFile)
+	handlerDone := make(chan struct{})
+	go c.runNBDHandler(handlerCtx, entityId, disk, conn, clientFile, handlerDone)
 
 	// Wait for NBD device to be ready
 	deadline := time.Now().Add(10 * time.Second)
@@ -231,6 +312,7 @@ func (c *MountController) attachAndMount(ctx context.Context, mount *storage_v1a
 		select {
 		case <-ctx.Done():
 			handlerCancel()
+			<-handlerDone // wait for handler to exit
 			cleanup()
 			disk.Close(ctx)
 			return ctx.Err()
@@ -240,6 +322,7 @@ func (c *MountController) attachAndMount(ctx context.Context, mount *storage_v1a
 
 	if !nbdReady {
 		handlerCancel()
+		<-handlerDone // wait for handler to exit
 		cleanup()
 		disk.Close(ctx)
 		c.setMountError(ctx, mount.ID, "NBD device did not become ready: timeout")
@@ -264,6 +347,7 @@ func (c *MountController) attachAndMount(ctx context.Context, mount *storage_v1a
 		clientFile: clientFile,
 		cancel:     handlerCancel,
 		disk:       disk,
+		done:       handlerDone,
 	}
 	c.handlersMu.Unlock()
 
@@ -288,6 +372,12 @@ func (c *MountController) mountVolume(ctx context.Context, mount *storage_v1alph
 	mountState := c.state.GetMount(entityId)
 	if mountState == nil {
 		return fmt.Errorf("mount state not found for %s", entityId)
+	}
+
+	// Already mounted per local state, nothing to do
+	if mountState.Mounted {
+		c.log.Info("already mounted, skipping", "entity_id", entityId)
+		return nil
 	}
 
 	c.log.Info("mounting filesystem",
@@ -324,9 +414,44 @@ func (c *MountController) mountVolume(ctx context.Context, mount *storage_v1alph
 
 	if !formatted {
 		c.log.Info("formatting device", "device", mountState.DevicePath, "filesystem", filesystem)
-		if err := c.ops.FormatDevice(ctx, mountState.DevicePath, filesystem); err != nil {
-			c.setMountError(ctx, mount.ID, fmt.Sprintf("failed to format device: %v", err))
-			return fmt.Errorf("failed to format device: %w", err)
+
+		// Retry formatting with exponential backoff for up to 10 minutes
+		formatDeadline := time.Now().Add(10 * time.Minute)
+		backoff := 1 * time.Second
+		maxBackoff := 30 * time.Second
+		attempt := 0
+
+		for {
+			attempt++
+			err := c.ops.FormatDevice(ctx, mountState.DevicePath, filesystem)
+			if err == nil {
+				c.log.Info("device formatted successfully", "device", mountState.DevicePath, "attempt", attempt)
+				break
+			}
+
+			c.log.Error("format device failed, will retry",
+				"device", mountState.DevicePath,
+				"filesystem", filesystem,
+				"attempt", attempt,
+				"error", err,
+			)
+
+			if time.Now().After(formatDeadline) {
+				c.setMountError(ctx, mount.ID, fmt.Sprintf("failed to format device after 10 minutes: %v", err))
+				return fmt.Errorf("failed to format device after 10 minutes: %w", err)
+			}
+
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+
+			// Exponential backoff with cap
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
 		}
 	}
 
@@ -400,26 +525,28 @@ func (c *MountController) unmountAndDetach(ctx context.Context, mount *storage_v
 
 	// Stop NBD handler
 	c.handlersMu.Lock()
-	if h, ok := c.handlers[entityId]; ok {
+	h, hasHandler := c.handlers[entityId]
+	if hasHandler {
 		if h.cancel != nil {
 			h.cancel()
-		}
-		if h.disk != nil {
-			h.disk.Close(ctx)
 		}
 		delete(c.handlers, entityId)
 	}
 	c.handlersMu.Unlock()
 
-	// Disconnect NBD device
-	if mountState.NbdIndex > 0 {
+	// Wait for handler goroutine to exit before closing disk
+	if hasHandler && h.done != nil {
+		<-h.done
+	}
+	if hasHandler && h.disk != nil {
+		h.disk.Close(ctx)
+	}
+
+	// Disconnect NBD device and remove device node
+	if mountState.DevicePath != "" {
 		if err := c.ops.NBDDisconnect(mountState.NbdIndex); err != nil {
 			c.log.Warn("failed to disconnect NBD", "error", err)
 		}
-	}
-
-	// Remove device node
-	if mountState.DevicePath != "" {
 		c.ops.RemoveFile(mountState.DevicePath)
 	}
 
@@ -442,9 +569,46 @@ func (c *MountController) unmountAndDetach(ctx context.Context, mount *storage_v
 	return nil
 }
 
+// cleanupHandler cleans up any existing NBD handler for the given entity.
+// This should be called before retrying a failed mount to avoid leaking NBD devices.
+func (c *MountController) cleanupHandler(ctx context.Context, entityId string) {
+	c.handlersMu.Lock()
+	h, ok := c.handlers[entityId]
+	if ok {
+		c.log.Info("cleaning up existing handler before retry", "entity_id", entityId)
+		if h.cancel != nil {
+			h.cancel()
+		}
+		delete(c.handlers, entityId)
+	}
+	c.handlersMu.Unlock()
+
+	// Wait for handler goroutine to exit before closing disk
+	if ok && h.done != nil {
+		c.log.Info("waiting for NBD handler to exit", "entity_id", entityId)
+		<-h.done
+	}
+
+	// Now safe to close the disk
+	if ok && h.disk != nil {
+		h.disk.Close(ctx)
+	}
+
+	// Also clean up the NBD device if we have mount state with an assigned device
+	mountState := c.state.GetMount(entityId)
+	if mountState != nil && mountState.DevicePath != "" {
+		c.log.Info("disconnecting stale NBD device", "entity_id", entityId, "nbd_index", mountState.NbdIndex)
+		_ = c.ops.NBDDisconnect(mountState.NbdIndex)
+	}
+
+	// Clean up state so attachAndMount starts fresh
+	c.state.DeleteMount(entityId)
+}
+
 // runNBDHandler runs the NBD handler for a mounted volume
-func (c *MountController) runNBDHandler(ctx context.Context, entityId string, disk LSVDDisk, conn net.Conn, clientFile *os.File) {
+func (c *MountController) runNBDHandler(ctx context.Context, entityId string, disk LSVDDisk, conn net.Conn, clientFile *os.File, done chan struct{}) {
 	c.log.Info("starting NBD handler", "entity_id", entityId)
+	defer close(done)
 	defer c.log.Info("NBD handler stopped", "entity_id", entityId)
 	defer clientFile.Close()
 	defer conn.Close()
@@ -466,23 +630,17 @@ func (c *MountController) ReconcileWithSystem(ctx context.Context) error {
 	// Use thread-safe accessor to get a snapshot of mounts
 	for _, mountState := range c.state.ListMounts() {
 		entityId := mountState.EntityId
-		// Check if we have an active handler for this mount
+		// Check if we have an active handler for this mount.
+		// If we have a handler, the NBD device is managed by us — no reconnection needed.
+		// If we don't have a handler, it means the process restarted and we need to
+		// reconnect the NBD device.
 		c.handlersMu.RLock()
 		_, hasHandler := c.handlers[entityId]
 		c.handlersMu.RUnlock()
 
-		// Check if NBD device is still connected
-		nbdConnected := false
-		if mountState.NbdIndex > 0 {
-			err := c.ops.NBDStatus(mountState.NbdIndex)
-			nbdConnected = (err == nil)
-		}
-
-		if !hasHandler || !nbdConnected {
-			c.log.Info("NBD handler needs reconnection",
+		if !hasHandler {
+			c.log.Info("no NBD handler found, reconnecting",
 				"entity_id", entityId,
-				"has_handler", hasHandler,
-				"nbd_connected", nbdConnected,
 				"nbd_index", mountState.NbdIndex,
 			)
 
@@ -553,12 +711,12 @@ func (c *MountController) reconnectNBD(ctx context.Context, entityId string, mou
 	c.handlersMu.Unlock()
 
 	// Disconnect old NBD device if still partially connected
-	if mountState.NbdIndex > 0 {
+	if mountState.DevicePath != "" {
 		_ = c.ops.NBDDisconnect(mountState.NbdIndex)
 	}
 
 	// Open LSVD disk
-	disk, err := c.ops.OpenLSVDDisk(ctx, volState.DiskPath, volState.VolumeId)
+	disk, err := c.ops.OpenLSVDDisk(ctx, volState.DiskPath, volState.VolumeId, volState.RemoteOnly)
 	if err != nil {
 		return fmt.Errorf("failed to open disk: %w", err)
 	}
@@ -588,7 +746,8 @@ func (c *MountController) reconnectNBD(ctx context.Context, entityId string, mou
 
 	// Start NBD handler
 	handlerCtx, handlerCancel := context.WithCancel(ctx)
-	go c.runNBDHandler(handlerCtx, entityId, disk, conn, clientFile)
+	handlerDone := make(chan struct{})
+	go c.runNBDHandler(handlerCtx, entityId, disk, conn, clientFile, handlerDone)
 
 	// Wait for NBD device to be ready
 	deadline := time.Now().Add(10 * time.Second)
@@ -601,6 +760,7 @@ func (c *MountController) reconnectNBD(ctx context.Context, entityId string, mou
 		select {
 		case <-ctx.Done():
 			handlerCancel()
+			<-handlerDone // wait for handler to exit
 			cleanup()
 			disk.Close(ctx)
 			return ctx.Err()
@@ -609,6 +769,7 @@ func (c *MountController) reconnectNBD(ctx context.Context, entityId string, mou
 	}
 	if !nbdReady {
 		handlerCancel()
+		<-handlerDone // wait for handler to exit
 		cleanup()
 		disk.Close(ctx)
 		return fmt.Errorf("NBD device did not become ready after reconnect: timeout")
@@ -625,6 +786,7 @@ func (c *MountController) reconnectNBD(ctx context.Context, entityId string, mou
 		clientFile: clientFile,
 		cancel:     handlerCancel,
 		disk:       disk,
+		done:       handlerDone,
 	}
 	c.handlersMu.Unlock()
 
@@ -677,10 +839,10 @@ func (c *MountController) remountFilesystem(ctx context.Context, entityId string
 
 // ReconcileWithEntities reconciles local state with entity server
 func (c *MountController) ReconcileWithEntities(ctx context.Context) error {
-	c.log.Debug("reconciling mounts with entity server")
-
 	// List all lsvd_mount entities for this node
-	nodeIdRef := entity.Id(c.nodeId)
+	// Node ID in entities uses full entity path format: "node/<name>"
+	fullNodeId := "node/" + c.nodeId
+	nodeIdRef := entity.Id(fullNodeId)
 	indexAttr := entity.Ref(storage_v1alpha.LsvdMountNodeIdId, nodeIdRef)
 
 	resp, err := c.eac.List(ctx, indexAttr)
@@ -689,14 +851,18 @@ func (c *MountController) ReconcileWithEntities(ctx context.Context) error {
 	}
 
 	values := resp.Values()
-	c.log.Debug("found mount entities", "count", len(values))
+
+	// Build set of entity IDs from the server response
+	entityIds := make(map[string]struct{}, len(values))
 
 	for _, entResp := range values {
 		var mount storage_v1alpha.LsvdMount
 		mount.Decode(entResp.Entity())
 
+		entityIds[string(mount.ID)] = struct{}{}
+
 		// Skip if not for this node
-		if string(mount.NodeId) != c.nodeId {
+		if string(mount.NodeId) != fullNodeId {
 			continue
 		}
 
@@ -706,6 +872,41 @@ func (c *MountController) ReconcileWithEntities(ctx context.Context) error {
 				"entity_id", mount.ID,
 				"error", err,
 			)
+		}
+	}
+
+	// Clean up orphaned mounts: local state entries with no corresponding entity
+	orphanCleaned := false
+	for _, mountState := range c.state.ListMounts() {
+		if _, exists := entityIds[mountState.EntityId]; exists {
+			continue
+		}
+
+		c.log.Info("cleaning up orphaned mount", "entity_id", mountState.EntityId)
+
+		// Unmount filesystem before tearing down handler
+		if mountState.Mounted && mountState.MountPath != "" {
+			if err := c.ops.Unmount(mountState.MountPath); err != nil {
+				c.log.Warn("failed to unmount orphaned mount", "entity_id", mountState.EntityId, "error", err)
+			}
+		}
+
+		devicePath := mountState.DevicePath
+
+		// cleanupHandler tears down the NBD handler, disconnects NBD, and deletes mount state
+		c.cleanupHandler(ctx, mountState.EntityId)
+
+		// Remove the device node (not handled by cleanupHandler)
+		if devicePath != "" {
+			c.ops.RemoveFile(devicePath)
+		}
+
+		orphanCleaned = true
+	}
+
+	if orphanCleaned {
+		if err := c.state.Save(); err != nil {
+			c.log.Warn("failed to save state after orphan cleanup", "error", err)
 		}
 	}
 

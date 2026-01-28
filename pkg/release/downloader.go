@@ -71,7 +71,7 @@ func (d *assetDownloader) Download(ctx context.Context, artifact Artifact, opts 
 			// Download checksum file
 			checksum, err := d.downloadChecksum(ctx, artifact)
 			if err != nil {
-				return nil, fmt.Errorf("failed to download checksum: %w", err)
+				return nil, fmt.Errorf("failed to download checksum from %s: %w", artifact.GetChecksumURL(), err)
 			}
 			expectedChecksum = checksum
 		}

@@ -51,7 +51,7 @@ RUN chmod +x /entrypoint.sh
 RUN mkdir -p /var/lib/miren
 
 # Download the components to run the server
-RUN miren download release -g
+RUN miren download release -g -b main
 
 # Declare volume for data persistence
 VOLUME /var/lib/miren

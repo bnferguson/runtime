@@ -4,46 +4,6 @@ imports:
     import: miren.dev/runtime/pkg/rpc/standard
 
 types:
-  - type: HealthStatus
-    doc: Health status of lsvd-server
-    fields:
-      - name: healthy
-        type: bool
-        index: 0
-        doc: Whether the server is healthy
-      - name: timestamp
-        type: standard.Timestamp
-        index: 1
-        doc: When this status was generated
-      - name: pid
-        type: int32
-        index: 2
-        doc: Process ID of lsvd-server
-      - name: entity_server_connected
-        type: bool
-        index: 3
-        doc: Whether connected to entity server
-      - name: volume_count
-        type: int32
-        index: 4
-        doc: Number of volumes
-      - name: mount_count
-        type: int32
-        index: 5
-        doc: Number of mounts
-      - name: last_volume_reconcile
-        type: standard.Timestamp
-        index: 6
-        doc: Time of last volume reconciliation
-      - name: last_mount_reconcile
-        type: standard.Timestamp
-        index: 7
-        doc: Time of last mount reconciliation
-      - name: last_error
-        type: string
-        index: 8
-        doc: Last error message if any
-
   - type: VolumeInfo
     doc: Information about an LSVD volume
     fields:
@@ -136,33 +96,10 @@ types:
         index: 5
         doc: Duration of last mount reconciliation
 
-  - type: VersionCheckResult
-    doc: Result of a version check
-    fields:
-      - name: current_version
-        type: uint64
-        index: 0
-        doc: The version currently running
-      - name: needs_restart
-        type: bool
-        index: 1
-        doc: True if the server will exit for upgrade
-      - name: pid
-        type: int32
-        index: 2
-        doc: Process ID of the server (for waiting on exit)
-
 interfaces:
   - name: LsvdDebug
     doc: Debug interface for lsvd-server inspection
     methods:
-      - name: health
-        doc: Get current health status
-        results:
-          - name: status
-            type: HealthStatus
-            doc: Current health status
-
       - name: listVolumes
         doc: List all volumes
         results:
@@ -185,14 +122,3 @@ interfaces:
           - name: metrics
             type: ReconcileMetrics
             doc: Reconciliation metrics
-
-      - name: checkVersion
-        doc: Check if server version matches expected, triggers graceful restart if outdated
-        parameters:
-          - name: expected_version
-            type: uint64
-            doc: The version the caller expects
-        results:
-          - name: result
-            type: VersionCheckResult
-            doc: Version check result with restart indicator

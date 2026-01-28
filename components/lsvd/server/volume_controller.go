@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -25,47 +24,46 @@ type VolumeController struct {
 	ops      VolumeOps
 }
 
-// NewVolumeController creates a new volume controller
-func NewVolumeController(log *slog.Logger, dataPath, nodeId string, eac *entityserver_v1alpha.EntityAccessClient, state *State, ops VolumeOps) *VolumeController {
+// NewVolumeController creates a new volume controller.
+// The controller is created without an EntityAccessClient so that local system
+// reconciliation (ReconcileWithSystem) can run immediately at startup, even if
+// the entity server is unavailable. Call SetEAC after establishing a connection
+// to the entity server to enable entity-based reconciliation.
+func NewVolumeController(log *slog.Logger, dataPath, nodeId string, state *State, ops VolumeOps) *VolumeController {
 	if ops == nil {
-		ops = NewRealVolumeOps()
+		ops = NewRealVolumeOps(log, nil, "")
 	}
 	return &VolumeController{
 		log:      log.With("module", "lsvd-volume"),
 		dataPath: dataPath,
 		nodeId:   nodeId,
-		eac:      eac,
 		state:    state,
 		ops:      ops,
 	}
 }
 
-// Run starts the volume controller and blocks until context is cancelled
-func (c *VolumeController) Run(ctx context.Context) error {
-	c.log.Info("starting volume controller")
+// SetEAC sets the EntityAccessClient for entity server communication.
+// This is separate from construction because the controller must be usable
+// for local system reconciliation before the entity server connection is
+// established — ensuring disks remain available even during entity server outages.
+func (c *VolumeController) SetEAC(eac *entityserver_v1alpha.EntityAccessClient) {
+	c.eac = eac
+}
 
-	// Use polling-based reconciliation since WatchIndex over RPC uses streams
-	// which require different handling. Poll every 5 seconds.
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
+// Init implements controller.ReconcileControllerI.
+func (c *VolumeController) Init(ctx context.Context) error {
+	return nil
+}
 
-	c.log.Info("watching for lsvd_volume entities", "node_id", c.nodeId)
+// Reconcile implements controller.ReconcileControllerI.
+func (c *VolumeController) Reconcile(ctx context.Context, volume *storage_v1alpha.LsvdVolume, meta *entity.Meta) error {
+	return c.reconcileVolume(ctx, volume)
+}
 
-	// Initial reconciliation
-	if err := c.ReconcileWithEntities(ctx); err != nil {
-		c.log.Error("initial volume reconciliation failed", "error", err)
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
-			if err := c.ReconcileWithEntities(ctx); err != nil {
-				c.log.Error("volume reconciliation failed", "error", err)
-			}
-		}
-	}
+// Index returns the entity index attribute for watching volume entities on this node.
+func (c *VolumeController) Index() entity.Attr {
+	fullNodeId := "node/" + c.nodeId
+	return entity.Ref(storage_v1alpha.LsvdVolumeNodeIdId, entity.Id(fullNodeId))
 }
 
 // reconcileVolume reconciles a single lsvd_volume entity
@@ -179,20 +177,37 @@ func (c *VolumeController) createVolume(ctx context.Context, volume *storage_v1a
 	}
 	volumeId := u.String()
 
-	// Create volume directory
-	volumePath := c.getVolumePath(volumeId)
-	if err := c.ops.CreateVolumeDir(volumePath); err != nil {
-		c.setVolumeError(ctx, volume.ID, fmt.Sprintf("failed to create volume directory: %v", err))
-		return fmt.Errorf("failed to create volume directory: %w", err)
+	// Create volume directory (skip for remote-only volumes which have no local storage)
+	var volumePath string
+	if !volume.RemoteOnly {
+		volumePath = c.getVolumePath(volumeId)
+		if err := c.ops.CreateVolumeDir(volumePath); err != nil {
+			c.setVolumeError(ctx, volume.ID, fmt.Sprintf("failed to create volume directory: %v", err))
+			return fmt.Errorf("failed to create volume directory: %w", err)
+		}
 	}
 
 	// Initialize LSVD volume
 	metadata := map[string]any{
 		"filesystem": volume.Filesystem,
 	}
-	if err := c.ops.InitLSVDVolume(ctx, volumePath, volumeId, units.GigaBytes(volume.SizeGb).Bytes(), metadata); err != nil {
+	actualVolumeId, err := c.ops.InitLSVDVolume(ctx, volumePath, volumeId, units.GigaBytes(volume.SizeGb).Bytes(), metadata, volume.RemoteOnly)
+	if err != nil {
 		c.setVolumeError(ctx, volume.ID, fmt.Sprintf("failed to init volume: %v", err))
 		return fmt.Errorf("failed to init volume: %w", err)
+	}
+
+	// Use the actual volume ID returned by InitLSVDVolume, which may differ
+	// from the locally generated one when cloud auth is configured.
+	if actualVolumeId != volumeId {
+		c.log.Info("using server-generated volume ID",
+			"local_id", volumeId,
+			"server_id", actualVolumeId,
+		)
+		volumeId = actualVolumeId
+		if !volume.RemoteOnly {
+			volumePath = c.getVolumePath(volumeId)
+		}
 	}
 
 	// Update state
@@ -280,13 +295,30 @@ func (c *VolumeController) ReconcileWithSystem(ctx context.Context) error {
 	for _, volState := range c.state.ListVolumes() {
 		entityId := volState.EntityId
 		// Verify volume directory exists
-		if volState.DiskPath != "" {
-			if !c.ops.VolumePathExists(volState.DiskPath) {
-				c.log.Warn("volume directory missing",
+		if volState.DiskPath != "" && !c.ops.VolumePathExists(volState.DiskPath) {
+			c.log.Warn("volume directory missing, recreating",
+				"entity_id", entityId,
+				"path", volState.DiskPath,
+			)
+
+			if err := c.ops.CreateVolumeDir(volState.DiskPath); err != nil {
+				c.log.Error("failed to recreate volume directory",
 					"entity_id", entityId,
 					"path", volState.DiskPath,
+					"error", err,
 				)
-				// TODO: Mark as error in etcd
+				continue
+			}
+
+			metadata := map[string]any{
+				"filesystem": volState.Filesystem,
+			}
+			if _, err := c.ops.InitLSVDVolume(ctx, volState.DiskPath, volState.VolumeId, units.Bytes(volState.SizeBytes), metadata, volState.RemoteOnly); err != nil {
+				c.log.Error("failed to reinitialize volume",
+					"entity_id", entityId,
+					"volume_id", volState.VolumeId,
+					"error", err,
+				)
 			}
 		}
 	}
@@ -296,10 +328,10 @@ func (c *VolumeController) ReconcileWithSystem(ctx context.Context) error {
 
 // ReconcileWithEntities reconciles local state with entity server
 func (c *VolumeController) ReconcileWithEntities(ctx context.Context) error {
-	c.log.Debug("reconciling volumes with entity server")
-
 	// List all lsvd_volume entities for this node
-	nodeIdRef := entity.Id(c.nodeId)
+	// Node ID in entities uses full entity path format: "node/<name>"
+	fullNodeId := "node/" + c.nodeId
+	nodeIdRef := entity.Id(fullNodeId)
 	indexAttr := entity.Ref(storage_v1alpha.LsvdVolumeNodeIdId, nodeIdRef)
 
 	resp, err := c.eac.List(ctx, indexAttr)
@@ -308,14 +340,18 @@ func (c *VolumeController) ReconcileWithEntities(ctx context.Context) error {
 	}
 
 	values := resp.Values()
-	c.log.Debug("found volume entities", "count", len(values))
+
+	// Build set of entity IDs from the server response
+	entityIds := make(map[string]struct{}, len(values))
 
 	for _, entResp := range values {
 		var volume storage_v1alpha.LsvdVolume
 		volume.Decode(entResp.Entity())
 
+		entityIds[string(volume.ID)] = struct{}{}
+
 		// Skip if not for this node
-		if string(volume.NodeId) != c.nodeId {
+		if string(volume.NodeId) != fullNodeId {
 			continue
 		}
 
@@ -325,6 +361,31 @@ func (c *VolumeController) ReconcileWithEntities(ctx context.Context) error {
 				"entity_id", volume.ID,
 				"error", err,
 			)
+		}
+	}
+
+	// Clean up orphaned volumes: local state entries with no corresponding entity
+	orphanCleaned := false
+	for _, volState := range c.state.ListVolumes() {
+		if _, exists := entityIds[volState.EntityId]; exists {
+			continue
+		}
+
+		c.log.Info("cleaning up orphaned volume", "entity_id", volState.EntityId)
+
+		if volState.DiskPath != "" {
+			if err := c.ops.RemoveVolumeDir(volState.DiskPath); err != nil {
+				c.log.Warn("failed to remove orphaned volume directory", "entity_id", volState.EntityId, "error", err)
+			}
+		}
+
+		c.state.DeleteVolume(volState.EntityId)
+		orphanCleaned = true
+	}
+
+	if orphanCleaned {
+		if err := c.state.Save(); err != nil {
+			c.log.Warn("failed to save state after orphan cleanup", "error", err)
 		}
 	}
 

@@ -719,6 +719,9 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		DisableLocalNet: false,
 		Resolver:        res,
 		SandboxMetrics:  ctx.ServerState.SandboxMetrics,
+		// LSVD entity mode - use lsvd-server for disk management
+		LsvdEntityMode:   true,
+		EntityServerAddr: normalizeServerAddr(srvaddr),
 	}
 
 	rc.DataPath = cfg.Server.GetDataPath()
@@ -1061,4 +1064,16 @@ func stopAllSandboxContainers(ctx context.Context, log *slog.Logger, cc *contain
 
 	log.Info("stopped sandbox containers", "count", stoppedCount)
 	return nil
+}
+
+// normalizeServerAddr converts a server address to a form usable for local connections.
+// Addresses like ":8443" become "localhost:8443" and "0.0.0.0:8443" becomes "localhost:8443".
+func normalizeServerAddr(addr string) string {
+	if strings.HasPrefix(addr, ":") {
+		return "localhost" + addr
+	}
+	if strings.HasPrefix(addr, "0.0.0.0:") {
+		return strings.Replace(addr, "0.0.0.0:", "localhost:", 1)
+	}
+	return addr
 }

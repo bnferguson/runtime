@@ -1012,7 +1012,7 @@ func (d *DiskLeaseController) handlePendingLeaseViaEntity(ctx context.Context, l
 		ReadOnly:     lease.Mount.ReadOnly,
 		DesiredState: storage_v1alpha.MNT_WANT_MOUNTED,
 		ActualState:  storage_v1alpha.MNT_PENDING,
-		NodeId:       entity.Id(d.NodeId),
+		NodeId:       entity.Id("node/" + d.NodeId),
 	}
 
 	d.Log.Info("Creating lsvd_mount entity",

@@ -2,10 +2,13 @@ package server
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"net"
 	"os"
 
 	"miren.dev/runtime/lsvd"
+	"miren.dev/runtime/pkg/cloudauth"
 	"miren.dev/runtime/pkg/units"
 )
 
@@ -21,8 +24,12 @@ type VolumeOps interface {
 	// VolumePathExists checks if a volume path exists
 	VolumePathExists(path string) bool
 
-	// InitLSVDVolume initializes an LSVD volume at the given path
-	InitLSVDVolume(ctx context.Context, path, volumeId string, size units.Bytes, metadata map[string]any) error
+	// InitLSVDVolume initializes an LSVD volume at the given path.
+	// Returns the actual volume ID used (which may differ from the input when
+	// cloud auth is configured and the server generates the ID).
+	// If remoteOnly is true, the volume is only initialized on the remote cloud
+	// (no local storage).
+	InitLSVDVolume(ctx context.Context, path, volumeId string, size units.Bytes, metadata map[string]any, remoteOnly bool) (string, error)
 }
 
 // MountOps abstracts OS operations for mount management.
@@ -62,8 +69,9 @@ type MountOps interface {
 	// FormatDevice formats a device with the specified filesystem
 	FormatDevice(ctx context.Context, device, filesystem string) error
 
-	// OpenLSVDDisk opens an LSVD disk for the given volume
-	OpenLSVDDisk(ctx context.Context, diskPath, volumeId string) (LSVDDisk, error)
+	// OpenLSVDDisk opens an LSVD disk for the given volume.
+	// If remoteOnly is true, the disk uses only remote cloud storage (no local).
+	OpenLSVDDisk(ctx context.Context, diskPath, volumeId string, remoteOnly bool) (LSVDDisk, error)
 }
 
 // LSVDDisk abstracts LSVD disk operations for NBD handling
@@ -79,11 +87,20 @@ type LSVDDisk interface {
 }
 
 // realVolumeOps implements VolumeOps with real OS/LSVD operations
-type realVolumeOps struct{}
+type realVolumeOps struct {
+	log        *slog.Logger
+	authClient *cloudauth.AuthClient
+	cloudURL   string
+}
 
-// NewRealVolumeOps creates a VolumeOps that performs real OS operations
-func NewRealVolumeOps() VolumeOps {
-	return &realVolumeOps{}
+// NewRealVolumeOps creates a VolumeOps that performs real OS operations.
+// If authClient is non-nil, volumes are also initialized on the remote cloud.
+func NewRealVolumeOps(log *slog.Logger, authClient *cloudauth.AuthClient, cloudURL string) VolumeOps {
+	return &realVolumeOps{
+		log:        log,
+		authClient: authClient,
+		cloudURL:   cloudURL,
+	}
 }
 
 func (r *realVolumeOps) CreateVolumeDir(path string) error {
@@ -99,13 +116,7 @@ func (r *realVolumeOps) VolumePathExists(path string) bool {
 	return err == nil
 }
 
-func (r *realVolumeOps) InitLSVDVolume(ctx context.Context, path, volumeId string, size units.Bytes, metadata map[string]any) error {
-	sa := &lsvd.LocalFileAccess{Dir: path}
-
-	if err := sa.InitContainer(ctx); err != nil {
-		return err
-	}
-
+func (r *realVolumeOps) InitLSVDVolume(ctx context.Context, path, volumeId string, size units.Bytes, metadata map[string]any, remoteOnly bool) (string, error) {
 	volInfo := &lsvd.VolumeInfo{
 		Name:     volumeId,
 		Size:     size,
@@ -113,5 +124,48 @@ func (r *realVolumeOps) InitLSVDVolume(ctx context.Context, path, volumeId strin
 		Metadata: metadata,
 	}
 
-	return sa.InitVolume(ctx, volInfo)
+	// Remote-only mode: only init on the cloud, no local storage
+	if remoteOnly {
+		if r.authClient == nil {
+			return "", fmt.Errorf("remote-only volume requires cloud auth")
+		}
+
+		remoteSA := lsvd.NewDiskAPISegmentAccess(r.log, r.cloudURL, r.authClient)
+		serverVolumeId, err := remoteSA.InitVolumeWithID(ctx, volInfo)
+		if err != nil {
+			return "", fmt.Errorf("failed to init remote volume: %w", err)
+		}
+		return serverVolumeId, nil
+	}
+
+	// Local or replica mode
+	localSA := &lsvd.LocalFileAccess{Dir: path, Log: r.log}
+
+	if err := localSA.InitContainer(ctx); err != nil {
+		return "", err
+	}
+
+	if r.authClient != nil {
+		remoteSA := lsvd.NewDiskAPISegmentAccess(r.log, r.cloudURL, r.authClient)
+
+		// Init on remote first to get server-generated volume ID
+		serverVolumeId, err := remoteSA.InitVolumeWithID(ctx, volInfo)
+		if err != nil {
+			return "", fmt.Errorf("failed to init remote volume: %w", err)
+		}
+
+		// Use the server-generated ID for local init
+		volInfo.Name = serverVolumeId
+		volInfo.UUID = serverVolumeId
+		if err := localSA.InitVolume(ctx, volInfo); err != nil {
+			return "", fmt.Errorf("failed to init local volume: %w", err)
+		}
+
+		return serverVolumeId, nil
+	}
+
+	if err := localSA.InitVolume(ctx, volInfo); err != nil {
+		return "", err
+	}
+	return volumeId, nil
 }

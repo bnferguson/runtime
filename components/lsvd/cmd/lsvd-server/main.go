@@ -18,7 +18,6 @@ var (
 	nodeId           = flag.String("node-id", "", "Node ID for filtering entities")
 	entityServerAddr = flag.String("entity-server", "", "Entity server RPC address (e.g., localhost:9000)")
 	logLevel         = flag.String("log-level", "info", "Log level (debug, info, warn, error)")
-	debugAddr        = flag.String("debug-addr", "localhost:0", "Address for debug RPC server (localhost:0 for random port)")
 )
 
 func main() {
@@ -67,7 +66,7 @@ func main() {
 	}
 
 	// Create server
-	srv, err := server.NewServer(log, *dataPath, *nodeId, *entityServerAddr, *debugAddr)
+	srv, err := server.NewServer(log, *dataPath, *nodeId, *entityServerAddr)
 	if err != nil {
 		log.Error("failed to create server", "error", err)
 		os.Exit(1)

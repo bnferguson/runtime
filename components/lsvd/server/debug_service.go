@@ -2,8 +2,6 @@ package server
 
 import (
 	"context"
-	"os"
-	"time"
 
 	"miren.dev/runtime/api/lsvd/lsvd_v1alpha"
 	"miren.dev/runtime/pkg/rpc/standard"
@@ -17,43 +15,6 @@ type DebugService struct {
 // NewDebugService creates a new debug service
 func NewDebugService(server *Server) *DebugService {
 	return &DebugService{server: server}
-}
-
-// Health returns the current health status
-func (d *DebugService) Health(ctx context.Context, state *lsvd_v1alpha.LsvdDebugHealth) error {
-	status := &lsvd_v1alpha.HealthStatus{}
-
-	d.server.healthMu.RLock()
-	healthy := d.server.entityServerConnected
-	entityServerConnected := d.server.entityServerConnected
-	lastVolumeReconcile := d.server.lastVolumeReconcile
-	lastMountReconcile := d.server.lastMountReconcile
-	lastError := d.server.lastError
-	d.server.healthMu.RUnlock()
-
-	status.SetHealthy(healthy)
-	status.SetTimestamp(standard.ToTimestamp(time.Now()))
-	status.SetPid(int32(os.Getpid()))
-	status.SetEntityServerConnected(entityServerConnected)
-
-	if d.server.state != nil {
-		// Use thread-safe helper methods to access counts
-		status.SetVolumeCount(int32(len(d.server.state.ListVolumes())))
-		status.SetMountCount(int32(len(d.server.state.ListMounts())))
-	}
-
-	if !lastVolumeReconcile.IsZero() {
-		status.SetLastVolumeReconcile(standard.ToTimestamp(lastVolumeReconcile))
-	}
-	if !lastMountReconcile.IsZero() {
-		status.SetLastMountReconcile(standard.ToTimestamp(lastMountReconcile))
-	}
-	if lastError != "" {
-		status.SetLastError(lastError)
-	}
-
-	state.Results().SetStatus(status)
-	return nil
 }
 
 // ListVolumes returns all volumes
@@ -128,37 +89,5 @@ func (d *DebugService) GetMetrics(ctx context.Context, state *lsvd_v1alpha.LsvdD
 	d.server.metricsMu.RUnlock()
 
 	state.Results().SetMetrics(metrics)
-	return nil
-}
-
-// CheckVersion checks if the server version matches the expected version.
-// If the expected version is greater than the current version, the server
-// will initiate a graceful shutdown to allow for an upgrade.
-func (d *DebugService) CheckVersion(ctx context.Context, state *lsvd_v1alpha.LsvdDebugCheckVersion) error {
-	expectedVersion := state.Args().ExpectedVersion()
-	currentVersion := ServerVersion
-
-	result := &lsvd_v1alpha.VersionCheckResult{}
-	result.SetCurrentVersion(currentVersion)
-	result.SetPid(int32(os.Getpid()))
-
-	if expectedVersion > currentVersion {
-		d.server.log.Info("version upgrade requested",
-			"current_version", currentVersion,
-			"expected_version", expectedVersion,
-		)
-		result.SetNeedsRestart(true)
-
-		// Trigger graceful shutdown in a goroutine so the RPC can return first
-		go func() {
-			// Small delay to ensure RPC response is sent
-			time.Sleep(100 * time.Millisecond)
-			d.server.triggerShutdown()
-		}()
-	} else {
-		result.SetNeedsRestart(false)
-	}
-
-	state.Results().SetResult(result)
 	return nil
 }
