@@ -244,6 +244,24 @@ func (s *Server) Run(ctx context.Context) error {
 		return s.mountController.ReconcileWithSystem(ctx)
 	})
 
+	// Periodically reconcile with entities to clean up orphaned local state.
+	// This runs on a slower interval since it's more expensive.
+	// Uses a goroutine since SetPeriodic only supports one callback per controller.
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := s.reconcileWithEntities(ctx); err != nil {
+					s.log.Error("failed periodic entity reconciliation", "error", err)
+				}
+			}
+		}
+	}()
+
 	if err := s.volumeRC.Start(ctx); err != nil {
 		return fmt.Errorf("starting volume controller: %w", err)
 	}

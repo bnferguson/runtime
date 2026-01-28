@@ -185,7 +185,26 @@ func (c *MountController) reconcileMountMounted(ctx context.Context, mount *stor
 	case storage_v1alpha.MNT_MOUNTED:
 		// Verify the mount is actually present on the system
 		mountState := c.state.GetMount(entityId)
-		if mountState != nil && mountState.MountPath != "" && !c.ops.IsMounted(mountState.MountPath) {
+		if mountState == nil {
+			c.log.Warn("entity says MNT_MOUNTED but no local state found", "entity_id", entityId)
+			return nil
+		}
+
+		// Check NBD is still connected
+		if mountState.DevicePath != "" {
+			if err := c.ops.NBDStatus(mountState.NbdIndex); err != nil {
+				c.log.Warn("entity reports mounted but NBD disconnected, recovering",
+					"entity_id", entityId,
+					"nbd_index", mountState.NbdIndex,
+					"error", err,
+				)
+				c.cleanupHandler(ctx, entityId)
+				return c.attachAndMount(ctx, mount)
+			}
+		}
+
+		// Check mount is still present
+		if mountState.MountPath != "" && !c.ops.IsMounted(mountState.MountPath) {
 			c.log.Warn("entity reports mounted but mount not found on system, recovering",
 				"entity_id", entityId,
 				"mount_path", mountState.MountPath,

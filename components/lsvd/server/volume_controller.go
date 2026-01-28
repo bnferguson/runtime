@@ -95,6 +95,15 @@ func (c *VolumeController) reconcileVolumePresent(ctx context.Context, volume *s
 	if existing := c.state.GetVolume(entityId); existing != nil {
 		// Volume already exists, verify it's in a good state
 		if volume.ActualState == storage_v1alpha.VOL_READY {
+			// Verify the volume directory still exists (for non-remote volumes)
+			if existing.DiskPath != "" && !c.ops.VolumePathExists(existing.DiskPath) {
+				c.log.Warn("volume directory missing, setting error state",
+					"entity_id", entityId,
+					"disk_path", existing.DiskPath,
+				)
+				c.setVolumeError(ctx, volume.ID, "volume directory missing")
+				return fmt.Errorf("volume directory missing: %s", existing.DiskPath)
+			}
 			c.log.Debug("volume already ready", "entity_id", entityId)
 			return nil
 		}
@@ -122,7 +131,11 @@ func (c *VolumeController) reconcileVolumePresent(ctx context.Context, volume *s
 		c.log.Debug("volume is being created", "entity_id", entityId)
 		return nil
 	case storage_v1alpha.VOL_READY:
-		// Volume is ready, nothing to do
+		// Entity says ready but we have no local state - this is inconsistent
+		c.log.Warn("entity says VOL_READY but no local state found",
+			"entity_id", entityId,
+			"volume_id", volume.VolumeId,
+		)
 		return nil
 	case storage_v1alpha.VOL_ERROR:
 		// Volume is in error state, try to recreate
