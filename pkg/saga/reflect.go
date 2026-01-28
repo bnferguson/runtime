@@ -43,6 +43,10 @@ func extractMappings(t reflect.Type) ([]fieldMapping, error) {
 		} else {
 			parts := strings.Split(tag, ",")
 			sagaKey = parts[0]
+			if sagaKey == "" {
+				// Tag like ",optional" - use default key name
+				sagaKey = strings.ToLower(field.Name)
+			}
 			for _, opt := range parts[1:] {
 				if opt == "optional" {
 					optional = true

@@ -3,6 +3,9 @@ package saga
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"runtime"
+	"strings"
 	"sync"
 )
 
@@ -90,7 +93,33 @@ type ActionBuilder struct {
 
 // Action adds an action to the saga using a typed execute function.
 // The function signature must be: func(ctx context.Context, in InType) (OutType, error)
-func (b *Builder) Action(name string, execute any) *ActionBuilder {
+//
+// Can be called two ways:
+//   - Action(GetBread) - name derived from function name ("getbread")
+//   - Action("custom-name", GetBread) - explicit name
+func (b *Builder) Action(args ...any) *ActionBuilder {
+	var name string
+	var execute any
+
+	switch len(args) {
+	case 1:
+		// Action(fn) - derive name from function
+		execute = args[0]
+		name = funcName(execute)
+	case 2:
+		// Action("name", fn) - explicit name
+		var ok bool
+		name, ok = args[0].(string)
+		if !ok {
+			b.err = fmt.Errorf("Action first argument must be a string name or a function")
+			return &ActionBuilder{builder: b, pending: &pendingAction{}}
+		}
+		execute = args[1]
+	default:
+		b.err = fmt.Errorf("Action requires 1 or 2 arguments")
+		return &ActionBuilder{builder: b, pending: &pendingAction{}}
+	}
+
 	pending := &pendingAction{
 		name:    name,
 		execute: execute,
@@ -100,6 +129,45 @@ func (b *Builder) Action(name string, execute any) *ActionBuilder {
 		builder: b,
 		pending: pending,
 	}
+}
+
+// funcName extracts a clean function name for use as an action name.
+// "github.com/foo/bar.GetBread" -> "get-bread"
+// "github.com/foo/bar.(*Type).Method" -> "method"
+func funcName(fn any) string {
+	ptr := reflect.ValueOf(fn).Pointer()
+	fullName := runtime.FuncForPC(ptr).Name()
+
+	// Get just the function/method name after the last dot
+	name := fullName
+	if idx := strings.LastIndex(fullName, "."); idx >= 0 {
+		name = fullName[idx+1:]
+	}
+
+	// Handle method receivers: "(*Type).Method" or "Type.Method"
+	if idx := strings.LastIndex(name, ")"); idx >= 0 {
+		name = name[idx+1:]
+		name = strings.TrimPrefix(name, ".")
+	}
+
+	// Strip "-fm" suffix that Go adds for method values
+	name = strings.TrimSuffix(name, "-fm")
+
+	return camelToKebab(name)
+}
+
+// camelToKebab converts CamelCase to kebab-case.
+// "GetBread" -> "get-bread"
+// "AddHTTPHeader" -> "add-http-header"
+func camelToKebab(s string) string {
+	var result strings.Builder
+	for i, r := range s {
+		if i > 0 && r >= 'A' && r <= 'Z' {
+			result.WriteByte('-')
+		}
+		result.WriteRune(r)
+	}
+	return strings.ToLower(result.String())
 }
 
 // Undo sets the undo function for the action.
