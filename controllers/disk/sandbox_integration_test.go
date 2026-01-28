@@ -18,11 +18,14 @@ import (
 func TestSandboxDiskIntegration(t *testing.T) {
 	t.Run("complete sandbox disk provisioning workflow", func(t *testing.T) {
 		ctx := context.Background()
+		tempDir := t.TempDir()
 		log := slog.Default()
 
-		// Create controllers
-		diskController := NewDiskController(log, nil, nil)
-		leaseController := NewDiskLeaseController(log, nil, nil)
+		// Create controllers with temp directory for test mode
+		diskController := NewDiskController(log, nil, "test-node")
+		diskController.mountBasePath = tempDir
+		leaseController := NewDiskLeaseController(log, nil, "test-node")
+		leaseController.mountBasePath = tempDir
 
 		// Step 1: Create and provision a disk
 		disk := &storage_v1alpha.Disk{
@@ -190,10 +193,13 @@ func TestSandboxDiskIntegration(t *testing.T) {
 
 	t.Run("sandbox with multiple disks", func(t *testing.T) {
 		ctx := context.Background()
+		tempDir := t.TempDir()
 		log := slog.Default()
 
-		diskController := NewDiskController(log, nil, nil)
-		leaseController := NewDiskLeaseController(log, nil, nil)
+		diskController := NewDiskController(log, nil, "test-node")
+		diskController.mountBasePath = tempDir
+		leaseController := NewDiskLeaseController(log, nil, "test-node")
+		leaseController.mountBasePath = tempDir
 
 		// Create multiple disks
 		disks := []storage_v1alpha.Disk{

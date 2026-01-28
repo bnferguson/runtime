@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -26,11 +25,12 @@ type leaseInfo struct {
 	leaseNonce string // Volume lease nonce from remote Disk API
 }
 
-// DiskLeaseController manages disk lease entities and exclusive access
+// DiskLeaseController manages disk lease entities and exclusive access.
+// It uses lsvd_mount entities to coordinate with lsvd-server for mount operations.
 //
 // Operational flow:
-// 1. Disks are created in SegmentAccess when provisioned
-// 2. When a lease is bound, the disk is initialized (lsvd.NewDisk), attached to NBD, formatted, and mounted
+// 1. Disks are created via lsvd_volume entities when provisioned
+// 2. When a lease is bound, an lsvd_mount entity is created for lsvd-server to mount
 // 3. Leases control exclusive access to these mounted volumes
 // 4. The lease.Mount.Path specifies where to mount within the sandbox's filesystem
 type DiskLeaseController struct {
@@ -39,13 +39,6 @@ type DiskLeaseController struct {
 
 	// NodeId is the ID of this node, used for creating lsvd_mount entities
 	NodeId string
-
-	// LSVD client for volume operations (default client)
-	lsvdClient LsvdClient
-
-	// Separate clients for local+replica vs remote-only modes
-	localReplicaClient LsvdClient
-	remoteOnlyClient   LsvdClient
 
 	// Base path for disk mounts (e.g., /var/lib/miren/disks)
 	mountBasePath string
@@ -60,53 +53,11 @@ type DiskLeaseController struct {
 
 	// directoryMode is enabled when NBD is unavailable - leases bind to simple directories
 	directoryMode bool
-
-	// entityMode uses lsvd_mount entities instead of direct LsvdClient calls
-	entityMode bool
 }
 
-// NewDiskLeaseController creates a new disk lease controller
-func NewDiskLeaseController(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, lsvdClient LsvdClient) *DiskLeaseController {
-	return &DiskLeaseController{
-		Log:           log.With("module", "disk-lease"),
-		EAC:           eac,
-		lsvdClient:    lsvdClient,
-		mountBasePath: "/var/lib/miren/disks", // Default mount base path
-		activeLeases:  make(map[string]string),
-		leaseDetails:  make(map[string]*leaseInfo),
-	}
-}
-
-// NewDiskLeaseControllerWithClients creates a new disk lease controller with separate clients for local and remote-only modes
-func NewDiskLeaseControllerWithClients(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, defaultClient, localReplicaClient, remoteOnlyClient LsvdClient) *DiskLeaseController {
-	return &DiskLeaseController{
-		Log:                log.With("module", "disk-lease"),
-		EAC:                eac,
-		lsvdClient:         defaultClient,
-		localReplicaClient: localReplicaClient,
-		remoteOnlyClient:   remoteOnlyClient,
-		mountBasePath:      "/var/lib/miren/disks", // Default mount base path
-		activeLeases:       make(map[string]string),
-		leaseDetails:       make(map[string]*leaseInfo),
-	}
-}
-
-// NewDiskLeaseControllerWithMountPath creates a new disk lease controller with custom mount path
-func NewDiskLeaseControllerWithMountPath(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, lsvdClient LsvdClient, mountPath string) *DiskLeaseController {
-	return &DiskLeaseController{
-		Log:           log.With("module", "disk-lease"),
-		EAC:           eac,
-		lsvdClient:    lsvdClient,
-		mountBasePath: mountPath,
-		activeLeases:  make(map[string]string),
-		leaseDetails:  make(map[string]*leaseInfo),
-	}
-}
-
-// NewDiskLeaseControllerWithEntityMode creates a disk lease controller that uses lsvd_mount entities
-// instead of direct LsvdClient calls. The lsvd-server process watches these entities
-// and performs the actual mount/unmount operations.
-func NewDiskLeaseControllerWithEntityMode(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, nodeId string) *DiskLeaseController {
+// NewDiskLeaseController creates a disk lease controller that uses lsvd_mount entities.
+// The lsvd-server process watches these entities and performs the actual mount/unmount operations.
+func NewDiskLeaseController(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, nodeId string) *DiskLeaseController {
 	return &DiskLeaseController{
 		Log:           log.With("module", "disk-lease"),
 		EAC:           eac,
@@ -114,7 +65,6 @@ func NewDiskLeaseControllerWithEntityMode(log *slog.Logger, eac *entityserver_v1
 		mountBasePath: "/var/lib/miren/disks",
 		activeLeases:  make(map[string]string),
 		leaseDetails:  make(map[string]*leaseInfo),
-		entityMode:    true,
 	}
 }
 
@@ -146,17 +96,6 @@ func (d *DiskLeaseController) Init(ctx context.Context) error {
 	return nil
 }
 
-// getClientForDisk returns the appropriate LSVD client based on disk's remote_only flag
-func (d *DiskLeaseController) getClientForDisk(disk *storage_v1alpha.Disk) LsvdClient {
-	if disk.RemoteOnly && d.remoteOnlyClient != nil {
-		return d.remoteOnlyClient
-	}
-	if !disk.RemoteOnly && d.localReplicaClient != nil {
-		return d.localReplicaClient
-	}
-	return d.lsvdClient
-}
-
 // Create handles creation of a new disk lease entity
 func (d *DiskLeaseController) Create(ctx context.Context, lease *storage_v1alpha.DiskLease, meta *entity.Meta) error {
 	d.Log.Info("Processing lease creation",
@@ -181,99 +120,58 @@ func (d *DiskLeaseController) Update(ctx context.Context, lease *storage_v1alpha
 func (d *DiskLeaseController) Delete(ctx context.Context, id entity.Id) error {
 	d.Log.Info("Processing lease deletion", "lease", id)
 
-	// In entity mode, delete the lsvd_mount entity
-	if d.entityMode {
-		return d.deleteLeaseViaEntity(ctx, id)
-	}
+	leaseId := id.String()
 
 	// Get lease details before cleaning up
 	d.mu.Lock()
-	details, hasDetails := d.leaseDetails[id.String()]
+	details, hasDetails := d.leaseDetails[leaseId]
 	d.mu.Unlock()
 
-	// If we have details and lsvdClient is available, unmount the disk
-	if hasDetails && d.lsvdClient != nil {
-		volumeId := details.volumeId
+	// Find and clean up the lsvd_mount entity
+	mount, err := d.getLsvdMountForLease(ctx, id)
+	if err != nil {
+		d.Log.Warn("Error looking up lsvd_mount for deleted lease", "lease", leaseId, "error", err)
+	}
 
-		// Only fetch disk info if we don't have the volumeId stored
-		if volumeId == "" {
-			// Try to get from test cache (for testing)
-			disk := d.GetTestDisk(entity.Id(details.diskId))
-			if disk != nil && disk.LsvdVolumeId != "" {
-				volumeId = disk.LsvdVolumeId
-			} else if d.EAC != nil {
-				// Try to fetch from EAS
-				diskEntity, err := d.EAC.Get(ctx, details.diskId)
-				if err != nil {
-					d.Log.Warn("Failed to fetch disk during delete",
-						"lease", id,
-						"disk", details.diskId,
+	if mount != nil {
+		// Set desired_state to unmounted if not already detached
+		if mount.ActualState != storage_v1alpha.MNT_DETACHED {
+			if mount.DesiredState != storage_v1alpha.MNT_WANT_UNMOUNTED {
+				d.Log.Info("Setting lsvd_mount desired_state to unmounted for deleted lease",
+					"lease", leaseId,
+					"lsvd_mount", mount.ID)
+
+				updateAttrs := []entity.Attr{
+					entity.Ref(entity.DBId, mount.ID),
+					entity.Ref(storage_v1alpha.LsvdMountDesiredStateId, storage_v1alpha.LsvdMountDesiredStateMntWantUnmountedId),
+				}
+				if _, err := d.EAC.Patch(ctx, updateAttrs, 0); err != nil {
+					d.Log.Warn("Failed to update lsvd_mount desired_state",
+						"lsvd_mount", mount.ID,
 						"error", err)
-				} else {
-					var disk storage_v1alpha.Disk
-					disk.Decode(diskEntity.Entity().Entity())
-					if disk.LsvdVolumeId != "" {
-						volumeId = disk.LsvdVolumeId
-					}
 				}
 			}
-		}
+		} else {
+			// Already detached, delete the mount entity
+			d.Log.Info("Deleting lsvd_mount entity for deleted lease",
+				"lease", leaseId,
+				"lsvd_mount", mount.ID)
 
-		if volumeId != "" {
-			// Check if volume is mounted
-			mounted, err := d.lsvdClient.IsVolumeMounted(ctx, volumeId)
-			if err != nil {
-				d.Log.Warn("Failed to check mount status during delete",
-					"lease", id,
-					"disk", details.diskId,
-					"volume", volumeId,
+			if _, err := d.EAC.Delete(ctx, mount.ID.String()); err != nil {
+				d.Log.Warn("Failed to delete lsvd_mount entity",
+					"lsvd_mount", mount.ID,
 					"error", err)
-			} else if mounted {
-				// Unmount the volume
-				d.Log.Info("Unmounting disk for deleted lease",
-					"lease", id,
-					"disk", details.diskId,
-					"volume", volumeId)
-
-				if err := d.lsvdClient.UnmountVolume(ctx, volumeId); err != nil {
-					d.Log.Error("Failed to unmount volume during lease deletion",
-						"lease", id,
-						"disk", details.diskId,
-						"volume", volumeId,
-						"error", err)
-					// Continue with cleanup even if unmount fails
-				} else {
-					d.Log.Info("Successfully unmounted disk",
-						"lease", id,
-						"disk", details.diskId,
-						"volume", volumeId)
-				}
-			}
-
-			// Release the volume lease from remote Disk API
-			if details.leaseNonce != "" {
-				if err := d.lsvdClient.ReleaseVolumeLease(ctx, volumeId, details.leaseNonce); err != nil {
-					d.Log.Error("Failed to release volume lease",
-						"lease", id,
-						"volume", volumeId,
-						"error", err)
-					// Continue with cleanup even if release fails
-				} else {
-					d.Log.Info("Released volume lease",
-						"lease", id,
-						"volume", volumeId)
-				}
 			}
 		}
 	}
 
-	// Release the lease
+	// Release the lease from local tracking
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	if details, exists := d.leaseDetails[id.String()]; exists {
+	if hasDetails {
 		delete(d.activeLeases, details.diskId)
-		delete(d.leaseDetails, id.String())
+		delete(d.leaseDetails, leaseId)
 		d.Log.Info("Lease released and cleaned up", "lease", id, "disk", details.diskId)
 	}
 
@@ -323,18 +221,13 @@ func (d *DiskLeaseController) cleanupLeaseReservation(diskId string) {
 	delete(d.activeLeases, diskId)
 }
 
-// handlePendingLease attempts to bind a pending lease
+// handlePendingLease attempts to bind a pending lease via lsvd_mount entity
 func (d *DiskLeaseController) handlePendingLease(ctx context.Context, lease *storage_v1alpha.DiskLease) error {
-	// Note: We don't hold the lock for the entire operation since disk operations can be slow
-	// We'll lock/unlock as needed for state management
-
 	diskId := lease.DiskId.String()
 	leaseId := lease.ID.String()
 
 	// Check if disk is already leased (with lock)
 	d.mu.Lock()
-	// TODO when we have clustering, we can't do this so we'll need a distributed lock
-	// or a CAS in EAS.
 	if existingLease, exists := d.activeLeases[diskId]; exists {
 		if existingLease != leaseId {
 			// Conflict - disk is already leased
@@ -353,7 +246,6 @@ func (d *DiskLeaseController) handlePendingLease(ctx context.Context, lease *sto
 	}
 
 	// Reserve the lease immediately to prevent races
-	// We'll update with full details after mounting
 	d.activeLeases[diskId] = leaseId
 	d.mu.Unlock()
 
@@ -426,13 +318,8 @@ func (d *DiskLeaseController) handlePendingLease(ctx context.Context, lease *sto
 		return nil
 	}
 
-	// In entity mode, create lsvd_mount entity and let lsvd-server handle mounting
-	if d.entityMode {
-		return d.handlePendingLeaseViaEntity(ctx, lease, disk, volumeId)
-	}
-
-	// In directory mode, just verify the directory exists
-	if d.directoryMode {
+	// In directory mode or when EAC is nil (test mode), just verify the directory exists
+	if d.directoryMode || d.EAC == nil {
 		diskDataPath := filepath.Join(d.mountBasePath, "disk-data", volumeId)
 		if _, err := os.Stat(diskDataPath); err != nil {
 			d.Log.Error("Failed to find directory for disk", "volume", volumeId, "path", diskDataPath, "error", err)
@@ -448,472 +335,23 @@ func (d *DiskLeaseController) handlePendingLease(ctx context.Context, lease *sto
 			"disk", diskId,
 			"volume", volumeId,
 			"path", diskDataPath)
-	} else {
-		// Get the appropriate client for this disk
-		client := d.getClientForDisk(disk)
 
-		// Initialize disk and mount if we have an LSVD client
-		if client != nil {
-			// Acquire volume lease from remote Disk API before initializing disk
-			leaseNonce, err := client.AcquireVolumeLease(ctx, volumeId, lease.NodeId.String(), lease.AppId.String())
-			if err != nil {
-				d.Log.Error("Failed to acquire volume lease", "volume", volumeId, "error", err)
-				d.cleanupLeaseReservation(diskId)
-
-				lease.Status = storage_v1alpha.FAILED
-				lease.ErrorMessage = fmt.Sprintf("Failed to acquire volume lease: %v", err)
-
-				return nil
-			}
-
-			// Store the nonce for later use
-			d.mu.Lock()
-			if info, exists := d.leaseDetails[leaseId]; exists {
-				info.leaseNonce = leaseNonce
-			} else {
-				// Pre-populate leaseDetails with the nonce
-				d.leaseDetails[leaseId] = &leaseInfo{
-					leaseId:    leaseId,
-					diskId:     diskId,
-					sandboxId:  lease.SandboxId.String(),
-					volumeId:   volumeId,
-					leaseNonce: leaseNonce,
-				}
-			}
-			d.mu.Unlock()
-
-			// Initialize disk (calls lsvd.NewDisk)
-			filesystem := strings.TrimPrefix(string(disk.Filesystem), "filesystem.")
-			if err := client.InitializeDisk(ctx, volumeId, filesystem); err != nil {
-				d.Log.Error("Failed to initialize disk", "volume", volumeId, "error", err)
-				d.cleanupLeaseReservation(diskId)
-
-				// Release the volume lease on failure
-				if leaseNonce != "" {
-					if releaseErr := client.ReleaseVolumeLease(ctx, volumeId, leaseNonce); releaseErr != nil {
-						d.Log.Warn("Failed to release volume lease after init failure", "volume", volumeId, "error", releaseErr)
-					}
-				}
-
-				lease.Status = storage_v1alpha.FAILED
-				lease.ErrorMessage = fmt.Sprintf("Failed to initialize disk: %v", err)
-
-				return nil
-			}
-
-			// Mount the volume
-			mountPath := d.getDiskMountPath(volumeId)
-			readOnly := lease.Mount.ReadOnly
-			if err := client.MountVolume(ctx, volumeId, mountPath, readOnly); err != nil {
-				d.Log.Error("Failed to mount volume", "volume", volumeId, "error", err)
-				d.cleanupLeaseReservation(diskId)
-
-				// Release the volume lease on failure
-				if leaseNonce != "" {
-					if releaseErr := client.ReleaseVolumeLease(ctx, volumeId, leaseNonce); releaseErr != nil {
-						d.Log.Warn("Failed to release volume lease after mount failure", "volume", volumeId, "error", releaseErr)
-					}
-				}
-
-				lease.Status = storage_v1alpha.FAILED
-				lease.ErrorMessage = fmt.Sprintf("Failed to mount volume: %v", err)
-
-				return nil
-			}
-
-			d.Log.Info("Successfully mounted disk volume",
-				"disk", diskId,
-				"volume", volumeId,
-				"mount_path", mountPath,
-				"read_only", readOnly)
-		}
-	}
-
-	// Bind the lease (with lock)
-	d.mu.Lock()
-	// Double-check that our reservation is still valid
-	if existingLease, exists := d.activeLeases[diskId]; exists && existingLease != leaseId {
-		// Get the lease nonce before unlocking
-		var conflictNonce string
-		if info, ok := d.leaseDetails[leaseId]; ok {
-			conflictNonce = info.leaseNonce
-		}
-
-		d.mu.Unlock()
-		// Someone else bound it (shouldn't happen with our reservation), need to clean up
-		if !d.directoryMode {
-			client := d.getClientForDisk(disk)
-			if client != nil && volumeId != "" {
-				if err := client.UnmountVolume(ctx, volumeId); err != nil {
-					d.Log.Warn("Failed to unmount volume after lease conflict", "volume", volumeId, "error", err)
-				}
-				// Release the volume lease if we acquired one
-				if conflictNonce != "" {
-					if err := client.ReleaseVolumeLease(ctx, volumeId, conflictNonce); err != nil {
-						d.Log.Warn("Failed to release volume lease after conflict", "volume", volumeId, "error", err)
-					}
-				}
-			}
-		}
-
-		lease.Status = storage_v1alpha.FAILED
-		lease.ErrorMessage = fmt.Sprintf("Disk %s is already leased by %s", diskId, existingLease)
-
-		return nil
-	}
-
-	// Update or create lease details, preserving the nonce if already set
-	if existing, ok := d.leaseDetails[leaseId]; ok {
-		// Update existing entry, preserving the nonce
-		existing.leaseId = leaseId
-		existing.diskId = diskId
-		existing.sandboxId = lease.SandboxId.String()
-		existing.volumeId = volumeId
-	} else {
-		// Create new entry (for directory mode or when nonce wasn't set)
+		// Bind the lease
+		d.mu.Lock()
 		d.leaseDetails[leaseId] = &leaseInfo{
 			leaseId:   leaseId,
 			diskId:    diskId,
 			sandboxId: lease.SandboxId.String(),
 			volumeId:  volumeId,
 		}
-	}
-	d.mu.Unlock()
+		d.mu.Unlock()
 
-	d.Log.Info("Lease bound successfully",
-		"lease", leaseId,
-		"disk", diskId,
-		"sandbox", lease.SandboxId)
+		lease.Status = storage_v1alpha.BOUND
+		lease.ErrorMessage = ""
+		lease.AcquiredAt = time.Now()
 
-	lease.Status = storage_v1alpha.BOUND
-	lease.ErrorMessage = ""
-	lease.AcquiredAt = time.Now()
-
-	return nil
-}
-
-// handleBoundLease verifies a bound lease has its disk mounted and mounts if necessary
-func (d *DiskLeaseController) handleBoundLease(ctx context.Context, lease *storage_v1alpha.DiskLease) error {
-	// In entity mode, check lsvd_mount entity state
-	if d.entityMode {
-		return d.handleBoundLeaseViaEntity(ctx, lease)
-	}
-
-	diskId := lease.DiskId.String()
-	leaseId := lease.ID.String()
-
-	// First, ensure this bound lease is tracked as active (EAS is source of truth)
-	d.mu.Lock()
-	currentLease, hasLease := d.activeLeases[diskId]
-	var needsSetup bool
-	var existingVolumeId string
-
-	if !hasLease || currentLease != leaseId {
-		// Either no lease is tracked or a different lease is tracked
-		// Since EAS says this lease is BOUND, we should track it
-		d.Log.Info("Tracking bound lease from EAS",
-			"lease", leaseId,
-			"disk", diskId,
-			"previous_lease", currentLease)
-
-		// Clean up the old lease details if there was a different lease
-		if hasLease && currentLease != leaseId {
-			// Rather than try to press on in this precarious situation, let's
-			// error out here instead.
-			d.mu.Unlock() // Must unlock before returning
-
-			lease.Status = storage_v1alpha.FAILED
-			lease.ErrorMessage = fmt.Sprintf("Lease conflict detected, disk %s was leased by %s but now bound to %s", diskId, currentLease, leaseId)
-
-			d.Log.Error("Lease conflict detected when tracking bound lease",
-				"disk", diskId,
-				"requested_lease", leaseId,
-				"existing_lease", currentLease)
-
-			return nil
-		}
-
-		d.activeLeases[diskId] = leaseId
-		d.leaseDetails[leaseId] = &leaseInfo{
-			leaseId:   leaseId,
-			diskId:    diskId,
-			sandboxId: lease.SandboxId.String(),
-			volumeId:  "", // Will be filled in below when we get the disk info
-		}
-		needsSetup = true
-	} else {
-		// Lease is already tracked - check if we have volume ID and it's mounted
-		if details, exists := d.leaseDetails[leaseId]; exists && details.volumeId != "" {
-			existingVolumeId = details.volumeId
-		}
-	}
-	d.mu.Unlock()
-
-	// In directory mode, just verify directory exists
-	if d.directoryMode {
-		// If lease was already tracked and we have a volume ID, verify directory exists
-		if !needsSetup && existingVolumeId != "" {
-			diskDataPath := filepath.Join(d.mountBasePath, "disk-data", existingVolumeId)
-			if _, err := os.Stat(diskDataPath); err == nil {
-				d.Log.Debug("Bound lease already properly set up (directory mode)",
-					"lease", leaseId,
-					"disk", diskId,
-					"volume", existingVolumeId,
-					"path", diskDataPath)
-				return nil
-			}
-		}
-		// Directory mode doesn't need further verification
 		return nil
 	}
-
-	// If lease was already tracked and we have a volume ID, check if it's mounted
-	// This makes the function idempotent - if everything is already set up, we do nothing
-	if !needsSetup && existingVolumeId != "" && d.lsvdClient != nil {
-		mounted, err := d.lsvdClient.IsVolumeMounted(ctx, existingVolumeId)
-		if err != nil {
-			d.Log.Warn("Failed to check mount status for existing lease",
-				"volume", existingVolumeId,
-				"lease", leaseId,
-				"error", err)
-			// Continue to recheck setup
-		} else if mounted {
-			// Everything is already set up correctly, nothing to do
-			d.Log.Debug("Bound lease already properly set up",
-				"lease", leaseId,
-				"disk", diskId,
-				"volume", existingVolumeId)
-			return nil
-		}
-		// If not mounted, we'll continue to mount it
-		d.Log.Info("Bound lease exists but disk not mounted, will remount",
-			"lease", leaseId,
-			"disk", diskId,
-			"volume", existingVolumeId)
-	}
-
-	// If we don't have an LSVD client, we can't verify/fix mounting
-	if d.lsvdClient == nil {
-		return nil
-	}
-
-	// Get the disk entity to find the volume ID
-	var disk *storage_v1alpha.Disk
-
-	// Check test cache first (for unit tests)
-	if d.testDiskCache != nil {
-		if cachedDisk, ok := d.testDiskCache[diskId]; ok {
-			disk = cachedDisk
-		}
-	}
-
-	// If not in test cache, get from EAC
-	if disk == nil && d.EAC != nil {
-		diskEntity, err := d.EAC.Get(ctx, diskId)
-		if err != nil {
-			d.Log.Error("Failed to get disk entity for bound lease", "disk", diskId, "error", err)
-			return nil // Don't fail the lease, just log
-		}
-
-		// Decode disk entity
-		disk = &storage_v1alpha.Disk{}
-		disk.Decode(diskEntity.Entity().Entity())
-		if disk.ID == "" {
-			d.Log.Error("Failed to decode disk entity for bound lease", "disk", diskId)
-			return nil // Don't fail the lease, just log
-		}
-	}
-
-	if disk == nil {
-		d.Log.Warn("Unable to get disk info for bound lease", "disk", diskId)
-		return nil
-	}
-
-	volumeId := disk.LsvdVolumeId
-	if volumeId == "" {
-		d.Log.Warn("Bound lease has disk with no volume ID", "disk", diskId)
-		return nil
-	}
-
-	// Update the volume ID in lease details if we have it
-	d.mu.Lock()
-	if details, exists := d.leaseDetails[leaseId]; exists {
-		details.volumeId = volumeId
-	}
-	d.mu.Unlock()
-
-	// Get the appropriate client for this disk
-	client := d.getClientForDisk(disk)
-
-	// Check if the volume is mounted
-	mounted, err := client.IsVolumeMounted(ctx, volumeId)
-	if err != nil {
-		d.Log.Error("Failed to check mount status", "volume", volumeId, "error", err)
-		return nil // Don't fail the lease
-	}
-
-	if !mounted {
-		d.Log.Info("Bound lease has unmounted disk, mounting now",
-			"lease", leaseId,
-			"disk", diskId,
-			"volume", volumeId)
-
-		// Acquire volume lease from remote Disk API before initializing disk
-		leaseNonce, err := client.AcquireVolumeLease(ctx, volumeId, lease.NodeId.String(), lease.AppId.String())
-		if err != nil {
-			d.Log.Error("Failed to acquire volume lease for bound lease", "volume", volumeId, "error", err)
-
-			lease.Status = storage_v1alpha.FAILED
-			lease.ErrorMessage = fmt.Sprintf("Failed to acquire volume lease: %v", err)
-
-			return nil
-		}
-
-		// Store the nonce for later use
-		if leaseNonce != "" {
-			d.mu.Lock()
-			if details, exists := d.leaseDetails[leaseId]; exists {
-				details.leaseNonce = leaseNonce
-			}
-			d.mu.Unlock()
-		}
-
-		// Initialize disk (calls lsvd.NewDisk) if needed
-		filesystem := strings.TrimPrefix(string(disk.Filesystem), "filesystem.")
-		if err := client.InitializeDisk(ctx, volumeId, filesystem); err != nil {
-			d.Log.Error("Failed to initialize disk for bound lease", "volume", volumeId, "error", err)
-
-			lease.Status = storage_v1alpha.FAILED
-			lease.ErrorMessage = fmt.Sprintf("Failed to initialize disk: %v", err)
-
-			return nil
-		}
-
-		// Mount the volume
-		mountPath := d.getDiskMountPath(volumeId)
-		readOnly := lease.Mount.ReadOnly
-		if err := client.MountVolume(ctx, volumeId, mountPath, readOnly); err != nil {
-			d.Log.Error("Failed to mount volume for bound lease", "volume", volumeId, "error", err)
-			lease.Status = storage_v1alpha.FAILED
-			lease.ErrorMessage = fmt.Sprintf("Failed to mount volume: %v", err)
-
-			return nil
-		}
-
-		d.Log.Info("Successfully remounted disk volume for bound lease",
-			"disk", diskId,
-			"volume", volumeId,
-			"mount_path", mountPath,
-			"read_only", readOnly)
-	}
-
-	return nil
-}
-
-// handleReleasedLease processes explicit lease release
-func (d *DiskLeaseController) handleReleasedLease(ctx context.Context, lease *storage_v1alpha.DiskLease) error {
-	// In entity mode, update lsvd_mount entity state
-	if d.entityMode {
-		return d.handleReleasedLeaseViaEntity(ctx, lease)
-	}
-
-	leaseId := lease.ID.String()
-	diskId := lease.DiskId.String()
-
-	// Check if this lease is currently active
-	d.mu.Lock()
-	currentLease, exists := d.activeLeases[diskId]
-	isActiveForThisLease := exists && currentLease == leaseId
-
-	// Get volumeId and leaseNonce from leaseDetails if available
-	var volumeId string
-	var leaseNonce string
-	if details, hasDetails := d.leaseDetails[leaseId]; hasDetails {
-		volumeId = details.volumeId
-		leaseNonce = details.leaseNonce
-	}
-	d.mu.Unlock()
-
-	// If this lease is not currently active, it's already been released - nothing to do
-	if !isActiveForThisLease {
-		return nil
-	}
-
-	// If we don't have volumeId from leaseDetails, try to get disk info to find volume ID
-	if volumeId == "" && d.EAC != nil {
-		diskEntity, err := d.EAC.Get(ctx, diskId)
-		if err == nil {
-			disk := &storage_v1alpha.Disk{}
-			disk.Decode(diskEntity.Entity().Entity())
-			if disk.ID != "" {
-				volumeId = disk.LsvdVolumeId
-			}
-		}
-	}
-
-	// Unmount the volume if we have one (skip in directory mode)
-	if !d.directoryMode && volumeId != "" && d.lsvdClient != nil {
-		// Check if volume is actually mounted before trying to unmount
-		mounted, err := d.lsvdClient.IsVolumeMounted(ctx, volumeId)
-		if err != nil {
-			d.Log.Warn("Failed to check mount status on lease release", "volume", volumeId, "error", err)
-		} else if mounted {
-			d.Log.Info("Unmounting disk volume on lease release", "volume", volumeId, "lease", leaseId)
-			if err := d.lsvdClient.UnmountVolume(ctx, volumeId); err != nil {
-				// Log but don't fail - best effort unmount
-				d.Log.Warn("Failed to unmount volume on lease release", "volume", volumeId, "error", err)
-			}
-		}
-
-		// Release the volume lease from remote Disk API if we have one
-		if leaseNonce != "" {
-			d.Log.Info("Releasing volume lease from Disk API", "volume", volumeId, "lease", leaseId)
-			if err := d.lsvdClient.ReleaseVolumeLease(ctx, volumeId, leaseNonce); err != nil {
-				// Log but don't fail - best effort lease release
-				d.Log.Warn("Failed to release volume lease on lease release", "volume", volumeId, "error", err)
-			}
-		}
-	} else if d.directoryMode && volumeId != "" {
-		d.Log.Info("Releasing directory lease (NBD unavailable)", "volume", volumeId, "lease", leaseId)
-	}
-
-	// Release the lease
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	d.releaseLease(leaseId, diskId)
-	return nil
-}
-
-// releaseLease removes a lease from active tracking (must be called with lock held)
-func (d *DiskLeaseController) releaseLease(leaseId, diskId string) {
-	if currentLease, exists := d.activeLeases[diskId]; exists && currentLease == leaseId {
-		delete(d.activeLeases, diskId)
-		delete(d.leaseDetails, leaseId)
-		d.Log.Info("Lease released", "lease", leaseId, "disk", diskId)
-	}
-}
-
-// updateLeaseDetails updates lease information
-func (d *DiskLeaseController) updateLeaseDetails(lease *storage_v1alpha.DiskLease) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	// Currently just ensures the lease is tracked
-	// Could be extended to update other lease details if needed
-	_ = d.leaseDetails[lease.ID.String()]
-}
-
-// getDiskMountPath returns the standard mount path for a disk volume
-func (d *DiskLeaseController) getDiskMountPath(volumeId string) string {
-	return filepath.Join(d.mountBasePath, volumeId)
-}
-
-// handlePendingLeaseViaEntity creates an lsvd_mount entity for the lease.
-// The lsvd-server watches these entities and performs the actual mount operations.
-func (d *DiskLeaseController) handlePendingLeaseViaEntity(ctx context.Context, lease *storage_v1alpha.DiskLease, disk *storage_v1alpha.Disk, volumeId string) error {
-	diskId := lease.DiskId.String()
-	leaseId := lease.ID.String()
 
 	// Check if an lsvd_mount entity already exists for this lease
 	existingMount, err := d.getLsvdMountForLease(ctx, lease.ID)
@@ -1047,52 +485,8 @@ func (d *DiskLeaseController) handlePendingLeaseViaEntity(ctx context.Context, l
 	return nil
 }
 
-// getLsvdMountForLease finds the lsvd_mount entity for a lease
-func (d *DiskLeaseController) getLsvdMountForLease(ctx context.Context, leaseId entity.Id) (*storage_v1alpha.LsvdMount, error) {
-	// Query by disk_lease_id index
-	indexAttr := entity.Ref(storage_v1alpha.LsvdMountDiskLeaseIdId, leaseId)
-
-	resp, err := d.EAC.List(ctx, indexAttr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list lsvd_mount entities: %w", err)
-	}
-
-	values := resp.Values()
-	if len(values) == 0 {
-		return nil, nil
-	}
-
-	// Return the first matching entity
-	var mount storage_v1alpha.LsvdMount
-	mount.Decode(values[0].Entity())
-
-	return &mount, nil
-}
-
-// getLsvdVolumeForDisk finds the lsvd_volume entity for a disk
-func (d *DiskLeaseController) getLsvdVolumeForDisk(ctx context.Context, diskId entity.Id) (*storage_v1alpha.LsvdVolume, error) {
-	// Query by disk_id index
-	indexAttr := entity.Ref(storage_v1alpha.LsvdVolumeDiskIdId, diskId)
-
-	resp, err := d.EAC.List(ctx, indexAttr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list lsvd_volume entities: %w", err)
-	}
-
-	values := resp.Values()
-	if len(values) == 0 {
-		return nil, nil
-	}
-
-	// Return the first matching entity
-	var volume storage_v1alpha.LsvdVolume
-	volume.Decode(values[0].Entity())
-
-	return &volume, nil
-}
-
-// handleBoundLeaseViaEntity verifies a bound lease has a mounted lsvd_mount entity
-func (d *DiskLeaseController) handleBoundLeaseViaEntity(ctx context.Context, lease *storage_v1alpha.DiskLease) error {
+// handleBoundLease verifies a bound lease has a mounted lsvd_mount entity
+func (d *DiskLeaseController) handleBoundLease(ctx context.Context, lease *storage_v1alpha.DiskLease) error {
 	leaseId := lease.ID.String()
 	diskId := lease.DiskId.String()
 
@@ -1123,6 +517,26 @@ func (d *DiskLeaseController) handleBoundLeaseViaEntity(ctx context.Context, lea
 		}
 	}
 	d.mu.Unlock()
+
+	// In directory mode, just verify directory exists
+	if d.directoryMode {
+		d.mu.RLock()
+		details := d.leaseDetails[leaseId]
+		d.mu.RUnlock()
+
+		if details != nil && details.volumeId != "" {
+			diskDataPath := filepath.Join(d.mountBasePath, "disk-data", details.volumeId)
+			if _, err := os.Stat(diskDataPath); err == nil {
+				d.Log.Debug("Bound lease already properly set up (directory mode)",
+					"lease", leaseId,
+					"disk", diskId,
+					"volume", details.volumeId,
+					"path", diskDataPath)
+				return nil
+			}
+		}
+		return nil
+	}
 
 	// Check the lsvd_mount entity's state
 	mount, err := d.getLsvdMountForLease(ctx, lease.ID)
@@ -1162,8 +576,8 @@ func (d *DiskLeaseController) handleBoundLeaseViaEntity(ctx context.Context, lea
 	return nil
 }
 
-// handleReleasedLeaseViaEntity sets desired_state=MNT_WANT_UNMOUNTED on the lsvd_mount entity
-func (d *DiskLeaseController) handleReleasedLeaseViaEntity(ctx context.Context, lease *storage_v1alpha.DiskLease) error {
+// handleReleasedLease sets desired_state=MNT_WANT_UNMOUNTED on the lsvd_mount entity
+func (d *DiskLeaseController) handleReleasedLease(ctx context.Context, lease *storage_v1alpha.DiskLease) error {
 	leaseId := lease.ID.String()
 	diskId := lease.DiskId.String()
 
@@ -1174,6 +588,14 @@ func (d *DiskLeaseController) handleReleasedLeaseViaEntity(ctx context.Context, 
 	d.mu.Unlock()
 
 	if !isActiveForThisLease {
+		return nil
+	}
+
+	// In directory mode, just release the lease
+	if d.directoryMode {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		d.releaseLease(leaseId, diskId)
 		return nil
 	}
 
@@ -1232,64 +654,82 @@ func (d *DiskLeaseController) handleReleasedLeaseViaEntity(ctx context.Context, 
 	return nil
 }
 
-// deleteLeaseViaEntity handles lease deletion in entity mode
-func (d *DiskLeaseController) deleteLeaseViaEntity(ctx context.Context, id entity.Id) error {
-	leaseId := id.String()
-
-	// Get lease details before cleaning up
-	d.mu.Lock()
-	details, hasDetails := d.leaseDetails[leaseId]
-	d.mu.Unlock()
-
-	// Find the lsvd_mount entity
-	mount, err := d.getLsvdMountForLease(ctx, id)
-	if err != nil {
-		d.Log.Warn("Error looking up lsvd_mount for deleted lease", "lease", leaseId, "error", err)
+// releaseLease removes a lease from active tracking (must be called with lock held)
+func (d *DiskLeaseController) releaseLease(leaseId, diskId string) {
+	if currentLease, exists := d.activeLeases[diskId]; exists && currentLease == leaseId {
+		delete(d.activeLeases, diskId)
+		delete(d.leaseDetails, leaseId)
+		d.Log.Info("Lease released", "lease", leaseId, "disk", diskId)
 	}
+}
 
-	if mount != nil {
-		// Set desired_state to unmounted if not already detached
-		if mount.ActualState != storage_v1alpha.MNT_DETACHED {
-			if mount.DesiredState != storage_v1alpha.MNT_WANT_UNMOUNTED {
-				d.Log.Info("Setting lsvd_mount desired_state to unmounted for deleted lease",
-					"lease", leaseId,
-					"lsvd_mount", mount.ID)
-
-				updateAttrs := []entity.Attr{
-					entity.Ref(entity.DBId, mount.ID),
-					entity.Ref(storage_v1alpha.LsvdMountDesiredStateId, storage_v1alpha.LsvdMountDesiredStateMntWantUnmountedId),
-				}
-				if _, err := d.EAC.Patch(ctx, updateAttrs, 0); err != nil {
-					d.Log.Warn("Failed to update lsvd_mount desired_state",
-						"lsvd_mount", mount.ID,
-						"error", err)
-				}
-			}
-		} else {
-			// Already detached, delete the mount entity
-			d.Log.Info("Deleting lsvd_mount entity for deleted lease",
-				"lease", leaseId,
-				"lsvd_mount", mount.ID)
-
-			if _, err := d.EAC.Delete(ctx, mount.ID.String()); err != nil {
-				d.Log.Warn("Failed to delete lsvd_mount entity",
-					"lsvd_mount", mount.ID,
-					"error", err)
-			}
-		}
-	}
-
-	// Release the lease from local tracking
+// updateLeaseDetails updates lease information
+func (d *DiskLeaseController) updateLeaseDetails(lease *storage_v1alpha.DiskLease) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	if hasDetails {
-		delete(d.activeLeases, details.diskId)
-		delete(d.leaseDetails, leaseId)
-		d.Log.Info("Lease released and cleaned up", "lease", id, "disk", details.diskId)
+	// Currently just ensures the lease is tracked
+	// Could be extended to update other lease details if needed
+	_ = d.leaseDetails[lease.ID.String()]
+}
+
+// getDiskMountPath returns the standard mount path for a disk volume
+func (d *DiskLeaseController) getDiskMountPath(volumeId string) string {
+	return filepath.Join(d.mountBasePath, volumeId)
+}
+
+// getLsvdMountForLease finds the lsvd_mount entity for a lease
+func (d *DiskLeaseController) getLsvdMountForLease(ctx context.Context, leaseId entity.Id) (*storage_v1alpha.LsvdMount, error) {
+	// No EAC in test mode
+	if d.EAC == nil {
+		return nil, nil
 	}
 
-	return nil
+	// Query by disk_lease_id index
+	indexAttr := entity.Ref(storage_v1alpha.LsvdMountDiskLeaseIdId, leaseId)
+
+	resp, err := d.EAC.List(ctx, indexAttr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list lsvd_mount entities: %w", err)
+	}
+
+	values := resp.Values()
+	if len(values) == 0 {
+		return nil, nil
+	}
+
+	// Return the first matching entity
+	var mount storage_v1alpha.LsvdMount
+	mount.Decode(values[0].Entity())
+
+	return &mount, nil
+}
+
+// getLsvdVolumeForDisk finds the lsvd_volume entity for a disk
+func (d *DiskLeaseController) getLsvdVolumeForDisk(ctx context.Context, diskId entity.Id) (*storage_v1alpha.LsvdVolume, error) {
+	// No EAC in test mode
+	if d.EAC == nil {
+		return nil, nil
+	}
+
+	// Query by disk_id index
+	indexAttr := entity.Ref(storage_v1alpha.LsvdVolumeDiskIdId, diskId)
+
+	resp, err := d.EAC.List(ctx, indexAttr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list lsvd_volume entities: %w", err)
+	}
+
+	values := resp.Values()
+	if len(values) == 0 {
+		return nil, nil
+	}
+
+	// Return the first matching entity
+	var volume storage_v1alpha.LsvdVolume
+	volume.Decode(values[0].Entity())
+
+	return &volume, nil
 }
 
 // CleanupOldReleasedLeases deletes released leases that haven't been updated for over 1 hour

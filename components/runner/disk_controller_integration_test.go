@@ -19,17 +19,12 @@ func TestDiskControllersCanBeCreated(t *testing.T) {
 		ctx := context.Background()
 		log := slog.Default()
 
-		// Create a mock LSVD client
-		dataPath := "/tmp/test-disks"
-		lsvdClient := disk.NewLsvdClient(log, dataPath)
-		r.NotNil(lsvdClient)
-
-		// Create disk controller
-		diskController := disk.NewDiskController(log, nil, lsvdClient)
+		// Create disk controller (entity-only mode)
+		diskController := disk.NewDiskController(log, nil, "test-node")
 		r.NotNil(diskController)
 
-		// Create disk lease controller
-		diskLeaseController := disk.NewDiskLeaseController(log, nil, nil)
+		// Create disk lease controller (entity-only mode)
+		diskLeaseController := disk.NewDiskLeaseController(log, nil, "test-node")
 		r.NotNil(diskLeaseController)
 
 		// Verify controllers can be initialized
@@ -44,11 +39,9 @@ func TestDiskControllersCanBeCreated(t *testing.T) {
 		r := require.New(t)
 		log := slog.Default()
 
-		// Create controllers
-		dataPath := "/tmp/test-disks"
-		lsvdClient := disk.NewLsvdClient(log, dataPath)
-		diskController := disk.NewDiskController(log, nil, lsvdClient)
-		diskLeaseController := disk.NewDiskLeaseController(log, nil, nil)
+		// Create controllers (entity-only mode)
+		diskController := disk.NewDiskController(log, nil, "test-node")
+		diskLeaseController := disk.NewDiskLeaseController(log, nil, "test-node")
 
 		// Verify they can be adapted for the controller manager
 		diskAdapter := controller.AdaptController(diskController)

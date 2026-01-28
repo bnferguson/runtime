@@ -717,10 +717,8 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		IPv4Routable:    ctx.ServerState.IPv4Routable,
 		ServicePrefixes: ctx.ServerState.ServicePrefixes,
 		DisableLocalNet: false,
-		Resolver:        res,
-		SandboxMetrics:  ctx.ServerState.SandboxMetrics,
-		// LSVD entity mode - use lsvd-server for disk management
-		LsvdEntityMode:   true,
+		Resolver:         res,
+		SandboxMetrics:   ctx.ServerState.SandboxMetrics,
 		EntityServerAddr: normalizeServerAddr(srvaddr),
 	}
 

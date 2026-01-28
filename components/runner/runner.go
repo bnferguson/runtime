@@ -30,7 +30,6 @@ import (
 	"miren.dev/runtime/controllers/service"
 	"miren.dev/runtime/network"
 	"miren.dev/runtime/observability"
-	"miren.dev/runtime/pkg/cloudauth"
 	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
@@ -82,12 +81,11 @@ type RunnerDeps struct {
 	// Sandbox metrics
 	SandboxMetrics *sandbox.Metrics
 
-	// LSVD entity mode configuration
-	// When enabled, uses lsvd_volume/lsvd_mount entities instead of direct LsvdClient calls
-	LsvdEntityMode bool
-
-	// Entity server address for lsvd-server (required when LsvdEntityMode is true)
+	// Entity server address for lsvd-server (required for disk operations)
 	EntityServerAddr string
+
+	// SkipLSVD skips starting the lsvd-server component (for tests that don't need disk)
+	SkipLSVD bool
 }
 
 const (
@@ -375,26 +373,24 @@ func (r *Runner) SetupControllers(
 	defaultRouteAppController := ingress.NewDefaultRouteAppController(log, eas)
 	defaultRouteController := ingress.NewDefaultRouteController(log, eas)
 
-	// Initialize disk controllers
-	// Create LSVD client for disk operations
+	// Initialize disk controllers with LSVD entity mode
+	// Entity mode uses lsvd-server as an outboard process for disk operations
 	dataPath := filepath.Join(r.DataPath, "disk-data")
 	err = os.MkdirAll(dataPath, 0700)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create disk data path: %w", err)
 	}
 
-	// Create LSVD client with optional replication support
-	var lsvdClient disk.LsvdClient
 	var diskController *disk.DiskController
 	var diskLeaseController *disk.DiskLeaseController
 
-	// Try to use LSVD entity mode if configured
-	// Entity mode works entirely locally without cloud auth - data is stored on disk
-	lsvdEntityModeEnabled := false
-	if r.deps.LsvdEntityMode && r.deps.EntityServerAddr != "" {
-		// Entity mode: start lsvd-server and use entity-based controllers
-		// This mode does not require cloud auth - all data is stored locally
-		log.Info("Using LSVD entity mode with lsvd-server (local storage)",
+	// Start lsvd component unless explicitly skipped (for tests)
+	if !r.deps.SkipLSVD {
+		if r.deps.EntityServerAddr == "" {
+			return nil, fmt.Errorf("entity server address is required for LSVD entity mode")
+		}
+
+		log.Info("Using LSVD entity mode with lsvd-server",
 			"node_id", r.Id)
 
 		// Write service config with credentials if available
@@ -432,60 +428,26 @@ func (r *Runner) SetupControllers(
 		}
 
 		if err := lsvdComp.Start(ctx, lsvdConfig); err != nil {
-			log.Warn("Failed to start lsvd-server, falling back to direct client mode",
-				"error", err)
-		} else {
-			// lsvd-server started successfully
-			r.lsvdComponent = lsvdComp
-			lsvdEntityModeEnabled = true
-
-			// Clean up lsvd-server if subsequent initialization fails
-			defer func() {
-				if retErr != nil {
-					_ = lsvdComp.Close()
-				}
-			}()
-
-			r.closers = append(r.closers, lsvdComp)
-
-			// Use entity mode controllers
-			diskController = disk.NewDiskControllerWithEntityMode(log, eas, r.Id)
-			diskLeaseController = disk.NewDiskLeaseControllerWithEntityMode(log, eas, r.Id)
+			return nil, fmt.Errorf("failed to start lsvd-server: %w", err)
 		}
+
+		r.lsvdComponent = lsvdComp
+
+		// Clean up lsvd-server if subsequent initialization fails
+		defer func() {
+			if retErr != nil {
+				_ = lsvdComp.Close()
+			}
+		}()
+
+		r.closers = append(r.closers, lsvdComp)
+	} else {
+		log.Info("Skipping LSVD component (test mode)")
 	}
 
-	if !lsvdEntityModeEnabled {
-		// Fall back to direct client mode (used when entity mode fails or is disabled)
-		// Cloud auth is optional - without it, data is stored locally only
-		if r.CloudAuth != nil && r.CloudAuth.Enabled {
-			log.Info("Creating LSVD client with cloud replication",
-				"cloud_url", r.CloudAuth.CloudURL)
-
-			// Create auth client from cloud auth config
-			keyPair, err := cloudauth.LoadKeyPairFromPEM(r.CloudAuth.PrivateKey)
-			if err != nil {
-				return nil, fmt.Errorf("failed to load keypair from private key: %w", err)
-			}
-
-			authClient, err := cloudauth.NewAuthClient(r.CloudAuth.CloudURL, keyPair)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create auth client: %w", err)
-			}
-
-			// Create both local+replica and remote-only clients to support both modes
-			localReplicaClient := disk.NewLsvdClient(log, dataPath, disk.WithReplica(authClient, r.CloudAuth.CloudURL))
-			remoteOnlyClient := disk.NewLsvdClient(log, dataPath, disk.WithRemoteOnly(authClient, r.CloudAuth.CloudURL))
-
-			lsvdClient = localReplicaClient
-			diskController = disk.NewDiskControllerWithClients(log, eas, lsvdClient, localReplicaClient, remoteOnlyClient)
-			diskLeaseController = disk.NewDiskLeaseControllerWithClients(log, eas, lsvdClient, localReplicaClient, remoteOnlyClient)
-		} else {
-			log.Info("Creating LSVD client in direct mode (local storage only)")
-			lsvdClient = disk.NewLsvdClient(log, dataPath)
-			diskController = disk.NewDiskController(log, eas, lsvdClient)
-			diskLeaseController = disk.NewDiskLeaseController(log, eas, lsvdClient)
-		}
-	}
+	// Use entity mode controllers
+	diskController = disk.NewDiskController(log, eas, r.Id)
+	diskLeaseController = disk.NewDiskLeaseController(log, eas, r.Id)
 
 	// Add disk controller to closers list so it gets cleaned up on shutdown
 	r.closers = append(r.closers, diskController)

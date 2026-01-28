@@ -75,20 +75,21 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 	sbMetrics.MemUsage = testDeps.Mem
 
 	deps := RunnerDeps{
-		CC:              testDeps.CC,
-		Namespace:       testDeps.Namespace,
-		Bridge:          testDeps.Bridge,
-		Tempdir:         tempDir,
-		Subnet:          testDeps.Subnet,
-		NetServ:         network.NewServiceManager(testDeps.Log, nil),
-		LogsMaintainer:  testDeps.LogsMaintainer,
-		LogWriter:       testDeps.LogWriter,
-		StatusMon:       testDeps.StatusMon,
-		IPv4Routable:    testDeps.IPv4Routable,
-		ServicePrefixes: testDeps.ServicePrefixes,
+		CC:               testDeps.CC,
+		Namespace:        testDeps.Namespace,
+		Bridge:           testDeps.Bridge,
+		Tempdir:          tempDir,
+		Subnet:           testDeps.Subnet,
+		NetServ:          network.NewServiceManager(testDeps.Log, nil),
+		LogsMaintainer:   testDeps.LogsMaintainer,
+		LogWriter:        testDeps.LogWriter,
+		StatusMon:        testDeps.StatusMon,
+		IPv4Routable:     testDeps.IPv4Routable,
+		ServicePrefixes:  testDeps.ServicePrefixes,
 		DisableLocalNet: false,
 		Resolver:        res,
 		SandboxMetrics:  sbMetrics,
+		SkipLSVD:        true, // Skip lsvd-server for this test
 	}
 
 	// Create and start runner
