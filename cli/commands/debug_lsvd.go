@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"miren.dev/runtime/api/lsvd/lsvd_v1alpha"
 	"miren.dev/runtime/pkg/outboard"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/standard"
+	"miren.dev/runtime/pkg/ui"
 )
 
 // connectLsvdDebug connects to the lsvd-server outboard process and returns an LsvdDebugClient.
@@ -55,6 +57,15 @@ func connectLsvdDebug(ctx *Context, dataPath string) (*lsvd_v1alpha.LsvdDebugCli
 	}
 
 	return debugClient, cleanup, nil
+}
+
+const lsvdPathPrefix = "/var/lib/miren/"
+
+func lsvdTrimPath(path string) string {
+	if trimmed, ok := strings.CutPrefix(path, lsvdPathPrefix); ok {
+		return trimmed
+	}
+	return path
 }
 
 func lsvdFormatBytes(b int64) string {
@@ -215,23 +226,27 @@ func DebugLsvdInfo(ctx *Context, opts struct {
 	}
 
 	volumes := volResult.Volumes()
-	ctx.Info("Volumes (%d):", len(volumes))
+	ctx.Printf("Volumes (%d):\n", len(volumes))
 	if len(volumes) > 0 {
 		headers := []string{"ENTITY ID", "VOLUME ID", "SIZE", "FS", "REMOTE", "DISK PATH"}
-		rows := make([][]string, 0, len(volumes))
+		rows := make([]ui.Row, 0, len(volumes))
 		for _, v := range volumes {
-			rows = append(rows, []string{
+			rows = append(rows, ui.Row{
 				v.EntityId(),
 				v.VolumeId(),
 				lsvdFormatBytes(v.SizeBytes()),
 				v.Filesystem(),
 				fmt.Sprintf("%v", v.RemoteOnly()),
-				v.DiskPath(),
+				lsvdTrimPath(v.DiskPath()),
 			})
 		}
-		ctx.DisplayTable(headers, rows)
+		columns := ui.AutoSizeColumns(headers, rows, nil)
+		table := ui.NewTable(ui.WithColumns(columns), ui.WithRows(rows))
+		ctx.Printf("%s\n", table.Render())
+	} else {
+		ctx.Printf("  (none)\n")
 	}
-	fmt.Fprintln(ctx.Stdout)
+	ctx.Printf("\n")
 
 	// Mounts
 	mntResult, err := client.ListMounts(ctx)
@@ -240,24 +255,28 @@ func DebugLsvdInfo(ctx *Context, opts struct {
 	}
 
 	mounts := mntResult.Mounts()
-	ctx.Info("Mounts (%d):", len(mounts))
+	ctx.Printf("Mounts (%d):\n", len(mounts))
 	if len(mounts) > 0 {
 		headers := []string{"ENTITY ID", "VOLUME ID", "NBD", "MOUNTED", "RO", "DEVICE", "MOUNT PATH"}
-		rows := make([][]string, 0, len(mounts))
+		rows := make([]ui.Row, 0, len(mounts))
 		for _, m := range mounts {
-			rows = append(rows, []string{
+			rows = append(rows, ui.Row{
 				m.EntityId(),
 				m.VolumeId(),
 				fmt.Sprintf("%d", m.NbdIndex()),
 				fmt.Sprintf("%v", m.Mounted()),
 				fmt.Sprintf("%v", m.ReadOnly()),
-				m.DevicePath(),
-				m.MountPath(),
+				lsvdTrimPath(m.DevicePath()),
+				lsvdTrimPath(m.MountPath()),
 			})
 		}
-		ctx.DisplayTable(headers, rows)
+		columns := ui.AutoSizeColumns(headers, rows, nil)
+		table := ui.NewTable(ui.WithColumns(columns), ui.WithRows(rows))
+		ctx.Printf("%s\n", table.Render())
+	} else {
+		ctx.Printf("  (none)\n")
 	}
-	fmt.Fprintln(ctx.Stdout)
+	ctx.Printf("\n")
 
 	// Metrics
 	metricsResult, err := client.GetMetrics(ctx)
@@ -267,14 +286,14 @@ func DebugLsvdInfo(ctx *Context, opts struct {
 
 	metrics := metricsResult.Metrics()
 	if metrics != nil {
-		ctx.Info("Metrics:")
-		ctx.Info("  Volume reconciliations: %d (%d errors)", metrics.VolumeReconcileCount(), metrics.VolumeErrorCount())
-		ctx.Info("  Mount reconciliations:  %d (%d errors)", metrics.MountReconcileCount(), metrics.MountErrorCount())
+		ctx.Printf("Metrics:\n")
+		ctx.Printf("  Volume reconciliations: %d (%d errors)\n", metrics.VolumeReconcileCount(), metrics.VolumeErrorCount())
+		ctx.Printf("  Mount reconciliations:  %d (%d errors)\n", metrics.MountReconcileCount(), metrics.MountErrorCount())
 		if metrics.HasLastVolumeDuration() {
-			ctx.Info("  Last volume duration:   %s", standard.FromDuration(metrics.LastVolumeDuration()))
+			ctx.Printf("  Last volume duration:   %s\n", standard.FromDuration(metrics.LastVolumeDuration()))
 		}
 		if metrics.HasLastMountDuration() {
-			ctx.Info("  Last mount duration:    %s", standard.FromDuration(metrics.LastMountDuration()))
+			ctx.Printf("  Last mount duration:    %s\n", standard.FromDuration(metrics.LastMountDuration()))
 		}
 	}
 
