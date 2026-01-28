@@ -168,6 +168,7 @@ func TestServer(t *testing.T) error {
 		DisableLocalNet: false,
 		Resolver:        res,
 		SandboxMetrics:  sbMetrics,
+		SkipLSVD:        true,
 	}
 
 	r, err := runner.NewRunner(log, deps, runner.RunnerConfig{
