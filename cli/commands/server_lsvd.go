@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -13,80 +14,20 @@ import (
 )
 
 // ServerLsvd runs the LSVD server for managing disk volumes and mounts.
-// This is typically invoked by the main server process, not directly by users.
+// This command is only meant to be invoked as an outboard process by the main
+// miren server. It will error if OUTBOARD_CONFIG is not set.
 func ServerLsvd(ctx *Context, opts struct {
 	DataPath         string `long:"data-path" description:"Path for LSVD data" default:"/var/lib/miren/disk-data"`
 	NodeId           string `long:"node-id" description:"Node ID for filtering entities" required:"true"`
 	EntityServerAddr string `long:"entity-server" description:"Entity server RPC address" required:"true"`
 	SkipVerify       bool   `long:"skip-verify" description:"Skip TLS verification"`
 }) error {
-	// Check for outboard mode
-	if configPath := os.Getenv("OUTBOARD_CONFIG"); configPath != "" {
-		return runOutboardLsvd(ctx, configPath, opts.DataPath, opts.NodeId, opts.EntityServerAddr, opts.SkipVerify)
+	configPath := os.Getenv("OUTBOARD_CONFIG")
+	if configPath == "" {
+		return fmt.Errorf("lsvd server must be run as an outboard process (OUTBOARD_CONFIG not set)")
 	}
 
-	log := ctx.Log.With("module", "lsvd-server")
-
-	log.Info("starting lsvd-server",
-		"data_path", opts.DataPath,
-		"node_id", opts.NodeId,
-		"entity_server", opts.EntityServerAddr,
-	)
-
-	// Create data directory
-	if err := os.MkdirAll(opts.DataPath, 0755); err != nil {
-		return err
-	}
-
-	// Load service config if it exists
-	var svcConfig *server.ServiceConfig
-	svcConfigPath := filepath.Join(opts.DataPath, "service.config")
-	if cfg, err := server.LoadServiceConfig(svcConfigPath); err == nil {
-		svcConfig = cfg
-		log.Info("loaded service config")
-	} else if !os.IsNotExist(err) {
-		log.Warn("failed to load service config", "error", err)
-	}
-
-	// Build server options
-	serverOpts := []server.ServerOption{
-		server.WithSkipVerify(opts.SkipVerify),
-	}
-	if svcConfig != nil {
-		serverOpts = append(serverOpts, server.WithClientCredentials(svcConfig.ClientCert, svcConfig.ClientKey))
-		if svcConfig.CloudURL != "" && svcConfig.PrivateKey != "" {
-			serverOpts = append(serverOpts, server.WithCloudAuth(svcConfig.CloudURL, svcConfig.PrivateKey))
-		}
-	}
-
-	// Create server
-	srv, err := server.NewServer(log, opts.DataPath, opts.NodeId, opts.EntityServerAddr,
-		serverOpts...,
-	)
-	if err != nil {
-		return err
-	}
-
-	// Setup signal handling
-	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-
-	go func() {
-		sig := <-sigCh
-		log.Info("received signal, shutting down", "signal", sig)
-		cancel()
-	}()
-
-	// Run the server
-	if err := srv.Run(runCtx); err != nil {
-		return err
-	}
-
-	log.Info("lsvd-server stopped")
-	return nil
+	return runOutboardLsvd(ctx, configPath, opts.DataPath, opts.NodeId, opts.EntityServerAddr, opts.SkipVerify)
 }
 
 // runOutboardLsvd runs lsvd-server in outboard mode, managed by the parent

@@ -196,9 +196,20 @@ func ServerUninstallDocker(ctx *Context, opts struct {
 			}
 		}
 
-		// Stop and remove container
+		// Stop container gracefully if running
+		if isRunning {
+			ctx.Info("Stopping container '%s' (waiting for graceful shutdown)...", opts.Name)
+			if err := dockerStopContainer(opts.Name, 30); err != nil {
+				ctx.Warn("Graceful stop failed: %v", err)
+				ctx.Info("Forcing container removal...")
+			} else {
+				ctx.Completed("Container stopped")
+			}
+		}
+
+		// Remove container
 		ctx.Info("Removing container '%s'...", opts.Name)
-		if err := dockerRemoveContainer(opts.Name, opts.Force); err != nil {
+		if err := dockerRemoveContainer(opts.Name, true); err != nil {
 			return fmt.Errorf("failed to remove container: %w", err)
 		}
 		ctx.Completed("Container removed")
@@ -357,7 +368,27 @@ func dockerStartContainer(name string) error {
 	return cmd.Run()
 }
 
+func dockerStopContainer(name string, timeout int) error {
+	args := []string{"stop", "-t", fmt.Sprintf("%d", timeout), name}
+	cmd := exec.Command("docker", args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, output)
+	}
+	return nil
+}
+
 func dockerRemoveContainer(name string, force bool) error {
+	// If force is requested, first try to stop gracefully, then force remove
+	if force {
+		// Check if container is running
+		isRunning, err := dockerContainerIsRunning(name)
+		if err == nil && isRunning {
+			// Try graceful stop first (30 second timeout)
+			_ = dockerStopContainer(name, 30)
+		}
+	}
+
 	args := []string{"rm"}
 	if force {
 		args = append(args, "-f")

@@ -263,10 +263,18 @@ func (s *Server) Run(ctx context.Context) error {
 	}()
 
 	if err := s.volumeRC.Start(ctx); err != nil {
+		s.mountController.Shutdown()
+		if s.rpcState != nil {
+			s.rpcState.Close()
+		}
 		return fmt.Errorf("starting volume controller: %w", err)
 	}
 	if err := s.mountRC.Start(ctx); err != nil {
 		s.volumeRC.Stop()
+		s.mountController.Shutdown()
+		if s.rpcState != nil {
+			s.rpcState.Close()
+		}
 		return fmt.Errorf("starting mount controller: %w", err)
 	}
 

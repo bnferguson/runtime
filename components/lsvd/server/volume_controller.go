@@ -4,10 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
-
-	"github.com/google/uuid"
+	"strings"
 
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
@@ -183,18 +181,16 @@ func (c *VolumeController) createVolume(ctx context.Context, volume *storage_v1a
 		c.log.Warn("failed to update volume state to creating", "error", err)
 	}
 
-	// Generate volume ID
-	u, err := uuid.NewV7()
-	if err != nil {
-		c.setVolumeError(ctx, volume.ID, fmt.Sprintf("failed to generate volume UUID: %v", err))
-		return fmt.Errorf("failed to generate volume UUID: %w", err)
+	// Use the entity ID suffix as the volume ID
+	volumeId := entityId
+	if idx := strings.LastIndex(entityId, "/"); idx != -1 {
+		volumeId = entityId[idx+1:]
 	}
-	volumeId := u.String()
 
-	// Create volume directory (skip for remote-only volumes which have no local storage)
+	// Create volume directory using entity ID (skip for remote-only volumes which have no local storage)
 	var volumePath string
 	if !volume.RemoteOnly {
-		volumePath = c.getVolumePath(volumeId)
+		volumePath = c.getVolumePath(entityId)
 		if err := c.ops.CreateVolumeDir(volumePath); err != nil {
 			c.setVolumeError(ctx, volume.ID, fmt.Sprintf("failed to create volume directory: %v", err))
 			return fmt.Errorf("failed to create volume directory: %w", err)
@@ -213,21 +209,12 @@ func (c *VolumeController) createVolume(ctx context.Context, volume *storage_v1a
 
 	// Use the actual volume ID returned by InitLSVDVolume, which may differ
 	// from the locally generated one when cloud auth is configured.
+	// Note: The volume path is based on entity ID, not volume ID, so no renaming is needed.
 	if actualVolumeId != volumeId {
 		c.log.Info("using server-generated volume ID",
 			"local_id", volumeId,
 			"server_id", actualVolumeId,
 		)
-		if !volume.RemoteOnly {
-			// Rename the directory to match the server-generated ID
-			oldPath := volumePath
-			newPath := c.getVolumePath(actualVolumeId)
-			if err := os.Rename(oldPath, newPath); err != nil {
-				c.setVolumeError(ctx, volume.ID, fmt.Sprintf("failed to rename volume directory: %v", err))
-				return fmt.Errorf("failed to rename volume directory from %s to %s: %w", oldPath, newPath, err)
-			}
-			volumePath = newPath
-		}
 		volumeId = actualVolumeId
 	}
 
@@ -303,9 +290,15 @@ func (c *VolumeController) deleteVolume(ctx context.Context, volume *storage_v1a
 	return nil
 }
 
-// getVolumePath returns the path to a volume's data directory
-func (c *VolumeController) getVolumePath(volumeId string) string {
-	return filepath.Join(c.dataPath, "volumes", volumeId)
+// getVolumePath returns the path to a volume's data directory based on the volume entity ID.
+// It extracts the part after "/" in the entity ID (e.g., "lsvd_volume/abc123" -> "abc123").
+func (c *VolumeController) getVolumePath(volumeEntityId string) string {
+	// Extract the ID part after the "/"
+	dirName := volumeEntityId
+	if idx := strings.LastIndex(volumeEntityId, "/"); idx != -1 {
+		dirName = volumeEntityId[idx+1:]
+	}
+	return filepath.Join(c.dataPath, "volumes", dirName)
 }
 
 // ReconcileWithSystem reconciles volume state with the actual system

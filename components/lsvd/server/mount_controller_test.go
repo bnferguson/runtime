@@ -307,8 +307,8 @@ func TestMountControllerReconcileMountMounted(t *testing.T) {
 	assert.Len(t, ops.nbdLoopbackCalls, 1)
 	assert.Equal(t, uint64(10*1024*1024*1024), ops.nbdLoopbackCalls[0].sizeBytes)
 
-	// Verify filesystem was formatted
-	expectedDevPath := filepath.Join(dataPath, "devices", "actual-vol-id")
+	// Verify filesystem was formatted (device path uses mount entity ID, not volume ID)
+	expectedDevPath := filepath.Join(dataPath, "devices", "mnt-123")
 	assert.Len(t, ops.formattedDevices, 1)
 	assert.Equal(t, "ext4", ops.formattedDevices[0].filesystem)
 	assert.Equal(t, expectedDevPath, ops.formattedDevices[0].device)

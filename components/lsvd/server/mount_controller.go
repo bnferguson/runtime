@@ -63,12 +63,20 @@ func (c *MountController) Shutdown() {
 			}
 		}
 
-		// Cancel handler context to stop NBD goroutine
+		// Cancel handler context to signal NBD goroutine to stop
 		if h.cancel != nil {
 			h.cancel()
 		}
 
-		// Wait for handler goroutine to exit
+		// Disconnect NBD device BEFORE waiting for handler - this unblocks HandleNBD
+		if mountState != nil && mountState.DevicePath != "" {
+			c.log.Info("disconnecting NBD on shutdown", "entity_id", entityId, "nbd_index", mountState.NbdIndex)
+			if err := c.ops.NBDDisconnect(mountState.NbdIndex); err != nil {
+				c.log.Warn("failed to disconnect NBD on shutdown", "entity_id", entityId, "error", err)
+			}
+		}
+
+		// Wait for handler goroutine to exit (now unblocked by NBD disconnect)
 		if h.done != nil {
 			c.log.Info("waiting for NBD handler to exit", "entity_id", entityId)
 			<-h.done
@@ -79,12 +87,8 @@ func (c *MountController) Shutdown() {
 			h.disk.Close(ctx)
 		}
 
-		// Disconnect NBD device and remove device node
+		// Remove device node
 		if mountState != nil && mountState.DevicePath != "" {
-			c.log.Info("disconnecting NBD on shutdown", "entity_id", entityId, "nbd_index", mountState.NbdIndex)
-			if err := c.ops.NBDDisconnect(mountState.NbdIndex); err != nil {
-				c.log.Warn("failed to disconnect NBD on shutdown", "entity_id", entityId, "error", err)
-			}
 			c.ops.RemoveFile(mountState.DevicePath)
 		}
 	}
@@ -298,8 +302,8 @@ func (c *MountController) attachAndMount(ctx context.Context, mount *storage_v1a
 		return fmt.Errorf("failed to setup NBD loopback: %w", err)
 	}
 
-	// Create device node
-	devicePath := c.getDevicePath(volState.VolumeId)
+	// Create device node using mount entity ID
+	devicePath := c.getDevicePath(entityId)
 	dir := filepath.Dir(devicePath)
 	if err := c.ops.CreateDir(dir, 0755); err != nil {
 		cleanup()
@@ -637,9 +641,15 @@ func (c *MountController) runNBDHandler(ctx context.Context, entityId string, di
 	}
 }
 
-// getDevicePath returns the path to a device node
-func (c *MountController) getDevicePath(volumeId string) string {
-	return filepath.Join(c.dataPath, "devices", strings.ReplaceAll(volumeId, "/", "-"))
+// getDevicePath returns the path to a device node based on the mount entity ID.
+// It extracts the part after "/" in the entity ID (e.g., "lsvd_mount/abc123" -> "abc123").
+func (c *MountController) getDevicePath(mountEntityId string) string {
+	// Extract the ID part after the "/"
+	deviceId := mountEntityId
+	if idx := strings.LastIndex(mountEntityId, "/"); idx != -1 {
+		deviceId = mountEntityId[idx+1:]
+	}
+	return filepath.Join(c.dataPath, "devices", deviceId)
 }
 
 // ReconcileWithSystem reconciles mount state with the actual system
@@ -718,16 +728,22 @@ func (c *MountController) reconnectNBD(ctx context.Context, entityId string, mou
 
 	// Clean up old handler if exists
 	c.handlersMu.Lock()
-	if h, ok := c.handlers[entityId]; ok {
+	h, hasHandler := c.handlers[entityId]
+	if hasHandler {
 		if h.cancel != nil {
 			h.cancel()
-		}
-		if h.disk != nil {
-			h.disk.Close(ctx)
 		}
 		delete(c.handlers, entityId)
 	}
 	c.handlersMu.Unlock()
+
+	// Wait for handler goroutine to exit before closing disk
+	if hasHandler && h.done != nil {
+		<-h.done
+	}
+	if hasHandler && h.disk != nil {
+		h.disk.Close(context.Background())
+	}
 
 	// Disconnect old NBD device if still partially connected
 	if mountState.DevicePath != "" {
@@ -748,8 +764,8 @@ func (c *MountController) reconnectNBD(ctx context.Context, entityId string, mou
 		return fmt.Errorf("failed to setup NBD loopback: %w", err)
 	}
 
-	// Create device node
-	devicePath := c.getDevicePath(volState.VolumeId)
+	// Create device node using mount entity ID
+	devicePath := c.getDevicePath(entityId)
 	dir := filepath.Dir(devicePath)
 	if err := c.ops.CreateDir(dir, 0755); err != nil {
 		cleanup()

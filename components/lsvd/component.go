@@ -93,9 +93,9 @@ func (c *Component) Start(ctx context.Context, config *Config) error {
 		return fmt.Errorf("failed to get executable path: %w", err)
 	}
 
-	// Build command arguments for "miren server lsvd"
+	// Build command arguments for "miren internal lsvd"
 	args := []string{
-		"server", "lsvd",
+		"internal", "lsvd",
 		"-vv",
 		"--data-path", config.DataPath,
 		"--node-id", config.NodeId,

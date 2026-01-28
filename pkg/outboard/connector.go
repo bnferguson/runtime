@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 
 	"miren.dev/runtime/api/outboard/outboard_v1alpha"
@@ -169,6 +170,8 @@ func (c *Connector) startLocked(ctx context.Context) error {
 	cmd.Stderr = stderrW
 	cmd.Env = append(os.Environ(), c.cfg.Env...)
 	cmd.Env = append(cmd.Env, "OUTBOARD_CONFIG="+c.configPath)
+	// Put child in its own process group so signals to parent don't kill it
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	c.log.Info("starting outboard process",
 		"binary", c.cfg.BinaryPath,

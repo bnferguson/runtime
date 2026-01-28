@@ -77,7 +77,6 @@ func RegisterAll(d *mflags.Dispatcher) {
 	d.Dispatch("server config validate", Infer("server config validate", "Validate a server configuration file", ServerConfigValidate))
 	d.Dispatch("server upgrade", Infer("server upgrade", "Upgrade miren server", ServerUpgrade))
 	d.Dispatch("server upgrade rollback", Infer("server upgrade rollback", "Rollback server to previous version", ServerUpgradeRollback))
-	d.Dispatch("server lsvd", Infer("server lsvd", "Run LSVD server for disk management (internal)", ServerLsvd))
 	d.Dispatch("server docker", Section("server docker", "Docker-based server management commands", ""))
 	d.Dispatch("server docker install", Infer("server docker install", "Install miren server using Docker", ServerInstallDocker))
 	d.Dispatch("server docker uninstall", Infer("server docker uninstall", "Uninstall miren server Docker container", ServerUninstallDocker))
@@ -148,6 +147,10 @@ Warning: These commands are intended for advanced users and developers. They may
 	d.Dispatch("debug netdb status", Infer("debug netdb status", "Show IP allocation status by subnet", DebugNetDBStatus))
 	d.Dispatch("debug netdb release", Infer("debug netdb release", "Manually release IP leases", DebugNetDBRelease))
 	d.Dispatch("debug netdb gc", Infer("debug netdb gc", "Find and release orphaned IP leases", DebugNetDBGC))
+
+	// Internal commands (hidden from help, used by miren internals)
+	d.Dispatch("internal", Section("internal", "Internal commands used by miren components", ""))
+	d.Dispatch("internal lsvd", Infer("internal lsvd", "Run LSVD server for disk management", ServerLsvd))
 
 	addCommands(d)
 }

@@ -173,6 +173,7 @@ func (r *realMountOps) findMountPoint(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to get absolute path: %w", err)
 	}
+	absPath = filepath.Clean(absPath)
 
 	// Parse mount points from mountinfo (field 5 is the mount point)
 	var bestMatch string
@@ -181,8 +182,12 @@ func (r *realMountOps) findMountPoint(path string) (string, error) {
 		if len(fields) < 5 {
 			continue
 		}
-		mp := fields[4]
-		if strings.HasPrefix(absPath, mp) && len(mp) > len(bestMatch) {
+		mp := filepath.Clean(fields[4])
+
+		// Check for exact match or proper prefix (followed by path separator)
+		// to avoid "/mnt/vol" matching "/mnt/vol2"
+		isMatch := absPath == mp || strings.HasPrefix(absPath, mp+string(os.PathSeparator))
+		if isMatch && len(mp) > len(bestMatch) {
 			bestMatch = mp
 		}
 	}
