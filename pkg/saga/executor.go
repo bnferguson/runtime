@@ -322,6 +322,8 @@ func (e *Executor) runUndo(ctx context.Context, def *Definition, exec *Execution
 		if len(result.Output) > 0 {
 			if err := json.Unmarshal(result.Output, &output); err != nil {
 				log.Warn("failed to deserialize output for undo", "action", actionName, "error", err)
+				undoErrors = append(undoErrors, fmt.Errorf("deserialize output for undo %q: %w", actionName, err))
+				continue
 			}
 		}
 

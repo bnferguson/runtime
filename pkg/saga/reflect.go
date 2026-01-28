@@ -12,10 +12,13 @@ import (
 type fieldMapping struct {
 	fieldName string
 	sagaKey   string
+	optional  bool
 }
 
 // extractMappings extracts saga key mappings from a struct type's tags.
-// Uses the "saga" tag to specify the key name.
+// Uses the "saga" tag to specify the key name and options.
+// Format: `saga:"keyname"` or `saga:"keyname,optional"`
+// Use `saga:"-"` to skip a field.
 func extractMappings(t reflect.Type) ([]fieldMapping, error) {
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
@@ -28,16 +31,29 @@ func extractMappings(t reflect.Type) ([]fieldMapping, error) {
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
 		tag := field.Tag.Get("saga")
+
+		// Parse tag: "keyname" or "keyname,optional"
+		var sagaKey string
+		var optional bool
 		if tag == "" {
 			// Use lowercase field name as default
-			tag = strings.ToLower(field.Name)
-		}
-		if tag == "-" {
+			sagaKey = strings.ToLower(field.Name)
+		} else if tag == "-" {
 			continue // Skip this field
+		} else {
+			parts := strings.Split(tag, ",")
+			sagaKey = parts[0]
+			for _, opt := range parts[1:] {
+				if opt == "optional" {
+					optional = true
+				}
+			}
 		}
+
 		mappings = append(mappings, fieldMapping{
 			fieldName: field.Name,
-			sagaKey:   tag,
+			sagaKey:   sagaKey,
+			optional:  optional,
 		})
 	}
 	return mappings, nil
@@ -64,13 +80,17 @@ func (a *typedAction) Execute(ctx context.Context, inputs ActionInputs) (any, er
 			continue
 		}
 
+		// Check if the input exists
+		if !inputs.Has(m.sagaKey) {
+			if m.optional {
+				continue // Skip missing optional inputs
+			}
+			return nil, fmt.Errorf("missing required input %q for field %q", m.sagaKey, m.fieldName)
+		}
+
 		// Create a pointer to the field type for unmarshaling
 		target := reflect.New(field.Type()).Interface()
 		if err := inputs.Get(m.sagaKey, target); err != nil {
-			// Check if the field is optional (has omitempty or similar)
-			if !inputs.Has(m.sagaKey) {
-				continue // Skip missing optional inputs
-			}
 			return nil, fmt.Errorf("getting input %q for field %q: %w", m.sagaKey, m.fieldName, err)
 		}
 		field.Set(reflect.ValueOf(target).Elem())
@@ -103,11 +123,16 @@ func (a *typedAction) Undo(ctx context.Context, inputs ActionInputs, output any)
 			continue
 		}
 
+		// Check if the input exists
+		if !inputs.Has(m.sagaKey) {
+			if m.optional {
+				continue // Skip missing optional inputs
+			}
+			return fmt.Errorf("missing required input %q for field %q", m.sagaKey, m.fieldName)
+		}
+
 		target := reflect.New(field.Type()).Interface()
 		if err := inputs.Get(m.sagaKey, target); err != nil {
-			if !inputs.Has(m.sagaKey) {
-				continue
-			}
 			return fmt.Errorf("getting input %q for field %q: %w", m.sagaKey, m.fieldName, err)
 		}
 		field.Set(reflect.ValueOf(target).Elem())

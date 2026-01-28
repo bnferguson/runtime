@@ -148,17 +148,16 @@ func (m *memoryStorage) ListIncomplete(ctx context.Context) ([]*Execution, error
 }
 
 func TestBuilder_SingleAction(t *testing.T) {
-	// Clean up global registry
-	globalRegistry = &Registry{definitions: make(map[string]*Definition)}
+	registry := NewRegistry()
 
 	ctrl := &testController{}
 	err := Define("single-action").
 		With(ctrl).
 		Action("add", AddNumbers).Undo(UndoAddNumbers).
-		Register()
+		RegisterTo(registry)
 	require.NoError(t, err)
 
-	def, ok := GetDefinition("single-action")
+	def, ok := registry.Get("single-action")
 	require.True(t, ok)
 	assert.Equal(t, "single-action", def.Name)
 	assert.Len(t, def.Actions, 1)
@@ -166,17 +165,17 @@ func TestBuilder_SingleAction(t *testing.T) {
 }
 
 func TestBuilder_MultipleActionsWithDependencies(t *testing.T) {
-	globalRegistry = &Registry{definitions: make(map[string]*Definition)}
+	registry := NewRegistry()
 
 	ctrl := &testController{}
 	err := Define("calc").
 		With(ctrl).
 		Action("add", AddNumbers).Undo(UndoAddNumbers).
 		Action("multiply", Multiply).Undo(UndoMultiply).
-		Register()
+		RegisterTo(registry)
 	require.NoError(t, err)
 
-	def, ok := GetDefinition("calc")
+	def, ok := registry.Get("calc")
 	require.True(t, ok)
 	assert.Len(t, def.Actions, 2)
 
@@ -199,8 +198,6 @@ func TestBuilder_MultipleActionsWithDependencies(t *testing.T) {
 }
 
 func TestBuilder_DuplicateOutputsError(t *testing.T) {
-	globalRegistry = &Registry{definitions: make(map[string]*Definition)}
-
 	ctrl := &testController{}
 	// Both actions produce "sum"
 	_, err := Define("duplicate").
@@ -254,18 +251,18 @@ func TestExecutor_Success(t *testing.T) {
 }
 
 func TestExecutor_FailureAndUndo(t *testing.T) {
-	globalRegistry = &Registry{definitions: make(map[string]*Definition)}
+	registry := NewRegistry()
 
 	ctrl := &testController{failMultiply: true}
 	err := Define("calc-fail").
 		With(ctrl).
 		Action("add", AddNumbers).Undo(UndoAddNumbers).
 		Action("multiply", Multiply).Undo(UndoMultiply).
-		Register()
+		RegisterTo(registry)
 	require.NoError(t, err)
 
 	storage := newMemoryStorage()
-	executor := NewExecutor(storage)
+	executor := NewExecutor(storage, WithRegistry(registry))
 
 	ctx := context.Background()
 	err = executor.Start("calc-fail").
@@ -296,19 +293,20 @@ func TestExecutor_FailureAndUndo(t *testing.T) {
 }
 
 func TestExecutor_Recovery(t *testing.T) {
-	globalRegistry = &Registry{definitions: make(map[string]*Definition)}
+	registry := NewRegistry()
 
 	ctrl := &testController{}
 	err := Define("recoverable").
 		With(ctrl).
 		Action("add", AddNumbers).Undo(UndoAddNumbers).
 		Action("multiply", Multiply).Undo(UndoMultiply).
-		Register()
+		RegisterTo(registry)
 	require.NoError(t, err)
 
 	storage := newMemoryStorage()
 
 	// Simulate a crashed execution
+	// Note: Output uses uppercase "Sum" because Go's json.Marshal uses field names as-is
 	crashedExec := &Execution{
 		ID:                "crashed-exec",
 		DefinitionName:    "recoverable",
@@ -317,7 +315,7 @@ func TestExecutor_Recovery(t *testing.T) {
 		Status:            StatusRunning,
 		ExecutedActions: map[string]*ActionResult{
 			"add": {
-				Output:     []byte(`{"sum":5}`),
+				Output:     []byte(`{"Sum":5}`),
 				ExecutedAt: time.Now(),
 			},
 		},
@@ -328,7 +326,7 @@ func TestExecutor_Recovery(t *testing.T) {
 	storage.Save(context.Background(), crashedExec)
 
 	// Create new executor and recover
-	executor := NewExecutor(storage)
+	executor := NewExecutor(storage, WithRegistry(registry))
 	err = executor.Recover(context.Background())
 	require.NoError(t, err)
 
@@ -343,18 +341,18 @@ func TestExecutor_Recovery(t *testing.T) {
 }
 
 func TestExecutor_ContextCancellation(t *testing.T) {
-	globalRegistry = &Registry{definitions: make(map[string]*Definition)}
+	registry := NewRegistry()
 
 	ctrl := &testController{}
 	err := Define("cancellable").
 		With(ctrl).
 		Action("add", AddNumbers).Undo(UndoAddNumbers).
 		Action("multiply", Multiply).Undo(UndoMultiply).
-		Register()
+		RegisterTo(registry)
 	require.NoError(t, err)
 
 	storage := newMemoryStorage()
-	executor := NewExecutor(storage)
+	executor := NewExecutor(storage, WithRegistry(registry))
 
 	// Create an already-cancelled context
 	ctx, cancel := context.WithCancel(context.Background())
@@ -456,4 +454,75 @@ func TestInputs_Keys(t *testing.T) {
 	assert.Contains(t, keys, "a")
 	assert.Contains(t, keys, "b")
 	assert.Contains(t, keys, "c")
+}
+
+// Test types for optional input testing
+type OptionalIn struct {
+	Required int `saga:"required"`
+	Optional int `saga:"optional,optional"`
+}
+
+type OptionalOut struct {
+	Result int `saga:"result"`
+}
+
+func OptionalAction(ctx context.Context, in OptionalIn) (OptionalOut, error) {
+	return OptionalOut{Result: in.Required + in.Optional}, nil
+}
+
+func UndoOptionalAction(ctx context.Context, in OptionalIn, out OptionalOut) error {
+	return nil
+}
+
+func TestExecutor_MissingRequiredInput(t *testing.T) {
+	registry := NewRegistry()
+
+	err := Define("required-test").
+		Action("optional-action", OptionalAction).Undo(UndoOptionalAction).
+		RegisterTo(registry)
+	require.NoError(t, err)
+
+	storage := newMemoryStorage()
+	executor := NewExecutor(storage, WithRegistry(registry))
+
+	ctx := context.Background()
+	// Missing "required" input should cause an error
+	err = executor.Start("required-test").
+		With("optional", 10).
+		WithID("missing-required").
+		Execute(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing required input")
+	assert.Contains(t, err.Error(), "required")
+}
+
+func TestExecutor_OptionalInput(t *testing.T) {
+	registry := NewRegistry()
+
+	err := Define("optional-test").
+		Action("optional-action", OptionalAction).Undo(UndoOptionalAction).
+		RegisterTo(registry)
+	require.NoError(t, err)
+
+	storage := newMemoryStorage()
+	executor := NewExecutor(storage, WithRegistry(registry))
+
+	ctx := context.Background()
+	// Missing "optional" input should use zero value (0)
+	err = executor.Start("optional-test").
+		With("required", 5).
+		WithID("optional-missing").
+		Execute(ctx)
+	require.NoError(t, err)
+
+	// Verify execution completed
+	exec, err := storage.Get(ctx, "optional-missing")
+	require.NoError(t, err)
+	assert.Equal(t, StatusCompleted, exec.Status)
+
+	// Result should be 5 + 0 = 5
+	var output OptionalOut
+	err = json.Unmarshal(exec.ExecutedActions["optional-action"].Output, &output)
+	require.NoError(t, err)
+	assert.Equal(t, 5, output.Result)
 }
