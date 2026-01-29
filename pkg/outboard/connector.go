@@ -69,6 +69,9 @@ type Connector struct {
 	// Channels for coordinating shutdown
 	exitCh chan struct{}
 	stopCh chan struct{}
+
+	// stopSignaled indicates a graceful stop was requested (guarded by mu)
+	stopSignaled bool
 }
 
 // NewConnector creates a new Connector for managing an outboard process.
@@ -76,8 +79,15 @@ func NewConnector(log *slog.Logger, cfg ConnectorConfig) *Connector {
 	if cfg.ReadyTimeout == 0 {
 		cfg.ReadyTimeout = 60 * time.Second
 	}
+	// Apply defaults per-field to preserve caller-set values like MaxRestarts
 	if cfg.RestartPolicy.BackoffBase == 0 {
-		cfg.RestartPolicy = DefaultRestartPolicy()
+		cfg.RestartPolicy.BackoffBase = 2 * time.Second
+	}
+	if cfg.RestartPolicy.BackoffMax == 0 {
+		cfg.RestartPolicy.BackoffMax = 60 * time.Second
+	}
+	if cfg.RestartPolicy.ResetWindow == 0 {
+		cfg.RestartPolicy.ResetWindow = 5 * time.Minute
 	}
 
 	return &Connector{
@@ -120,6 +130,7 @@ func (c *Connector) startLocked(ctx context.Context) error {
 		return fmt.Errorf("creating stdout FIFO: %w", err)
 	}
 	if err := createFIFO(stderrFIFO); err != nil {
+		os.Remove(stdoutFIFO)
 		return fmt.Errorf("creating stderr FIFO: %w", err)
 	}
 
@@ -131,6 +142,8 @@ func (c *Connector) startLocked(ctx context.Context) error {
 		FIFOStderr: stderrFIFO,
 	}
 	if err := WriteConfig(c.configPath, cfg); err != nil {
+		os.Remove(stdoutFIFO)
+		os.Remove(stderrFIFO)
 		return fmt.Errorf("writing outboard config: %w", err)
 	}
 
@@ -190,6 +203,7 @@ func (c *Connector) startLocked(ctx context.Context) error {
 	c.cmd = cmd
 	c.exitCh = make(chan struct{})
 	c.stopCh = make(chan struct{})
+	c.stopSignaled = false
 
 	// Close our write ends of the FIFOs now that the child has inherited them.
 	// The child writes to them via its stdout/stderr.
@@ -298,14 +312,13 @@ func (c *Connector) monitorExit(ctx context.Context, cmd *exec.Cmd, stdoutDone, 
 	c.mu.Lock()
 	c.running = false
 	close(c.exitCh)
+	stopSignaled := c.stopSignaled
 	c.mu.Unlock()
 
-	select {
-	case <-c.stopCh:
+	if stopSignaled {
 		// Graceful stop requested, don't restart
 		c.log.Info("outboard process stopped gracefully")
 		return
-	default:
 	}
 
 	if err != nil {
@@ -374,9 +387,9 @@ func (c *Connector) Stop(ctx context.Context) error {
 	}
 
 	// Signal to monitor that this is a graceful stop
+	c.stopSignaled = true
 	if c.stopCh != nil {
 		close(c.stopCh)
-		c.stopCh = nil
 	}
 
 	cmd := c.cmd

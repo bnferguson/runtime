@@ -293,10 +293,7 @@ func (d *DiskController) handleProvisioned(ctx context.Context, disk *storage_v1
 	// Verify via lsvd_volume entity
 	volume, err := d.getLsvdVolumeForDisk(ctx, disk.ID)
 	if err != nil {
-		d.Log.Warn("Error looking up lsvd_volume for provisioned disk",
-			"disk", disk.ID,
-			"error", err)
-		return nil
+		return fmt.Errorf("error looking up lsvd_volume for provisioned disk %s: %w", disk.ID, err)
 	}
 
 	if volume == nil {
