@@ -197,6 +197,9 @@ func (c *Connector) startLocked(ctx context.Context) error {
 		// Wait for FIFO goroutines to exit (they'll get EOF since we closed the writers)
 		<-stdoutDone
 		<-stderrDone
+		os.Remove(stdoutFIFO)
+		os.Remove(stderrFIFO)
+		os.Remove(c.configPath)
 		return fmt.Errorf("starting outboard process: %w", err)
 	}
 
@@ -212,31 +215,33 @@ func (c *Connector) startLocked(ctx context.Context) error {
 
 	c.log.Info("outboard process started", "pid", cmd.Process.Pid)
 
-	// Wait for ready
-	if err := c.waitForReady(ctx); err != nil {
+	// Helper to clean up on late failures
+	cleanupOnError := func() {
 		cmd.Process.Kill()
 		cmd.Wait() // This closes child's FDs, triggering EOF for FIFO goroutines
 		<-stdoutDone
 		<-stderrDone
+		os.Remove(stdoutFIFO)
+		os.Remove(stderrFIFO)
+		os.Remove(c.configPath)
+	}
+
+	// Wait for ready
+	if err := c.waitForReady(ctx); err != nil {
+		cleanupOnError()
 		return fmt.Errorf("waiting for outboard process to be ready: %w", err)
 	}
 
 	// Read back the updated config with RPC address
 	updatedCfg, err := ReadConfig(c.configPath)
 	if err != nil {
-		cmd.Process.Kill()
-		cmd.Wait()
-		<-stdoutDone
-		<-stderrDone
+		cleanupOnError()
 		return fmt.Errorf("reading updated config: %w", err)
 	}
 
 	// Connect RPC
 	if err := c.connectRPC(ctx, updatedCfg.RPCAddr); err != nil {
-		cmd.Process.Kill()
-		cmd.Wait()
-		<-stdoutDone
-		<-stderrDone
+		cleanupOnError()
 		return fmt.Errorf("connecting to outboard RPC: %w", err)
 	}
 
@@ -313,6 +318,12 @@ func (c *Connector) monitorExit(ctx context.Context, cmd *exec.Cmd, stdoutDone, 
 	c.running = false
 	close(c.exitCh)
 	stopSignaled := c.stopSignaled
+	// Close RPC state immediately on process exit to avoid leaks
+	if c.rpcState != nil {
+		c.rpcState.Close()
+		c.rpcState = nil
+		c.controlClient = nil
+	}
 	c.mu.Unlock()
 
 	if stopSignaled {
@@ -363,13 +374,6 @@ func (c *Connector) monitorExit(ctx context.Context, cmd *exec.Cmd, stdoutDone, 
 	}
 
 	c.mu.Lock()
-	// Close old RPC state before restarting
-	if c.rpcState != nil {
-		c.rpcState.Close()
-		c.rpcState = nil
-		c.controlClient = nil
-	}
-
 	err = c.startLocked(ctx)
 	c.mu.Unlock()
 
