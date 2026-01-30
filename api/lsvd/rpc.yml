@@ -1,0 +1,124 @@
+imports:
+  standard:
+    path: ../../pkg/rpc/standard/standard.yml
+    import: miren.dev/runtime/pkg/rpc/standard
+
+types:
+  - type: VolumeInfo
+    doc: Information about an LSVD volume
+    fields:
+      - name: entity_id
+        type: string
+        index: 0
+        doc: Entity ID of the lsvd_volume
+      - name: volume_id
+        type: string
+        index: 1
+        doc: LSVD volume identifier
+      - name: disk_path
+        type: string
+        index: 2
+        doc: Path to volume data directory
+      - name: size_bytes
+        type: int64
+        index: 3
+        doc: Volume size in bytes
+      - name: filesystem
+        type: string
+        index: 4
+        doc: Filesystem type (ext4, xfs, btrfs)
+      - name: remote_only
+        type: bool
+        index: 5
+        doc: Whether this uses only remote storage
+
+  - type: MountInfo
+    doc: Information about an LSVD mount
+    fields:
+      - name: entity_id
+        type: string
+        index: 0
+        doc: Entity ID of the lsvd_mount
+      - name: volume_id
+        type: string
+        index: 1
+        doc: Entity ID of the lsvd_volume
+      - name: nbd_index
+        type: uint32
+        index: 2
+        doc: NBD device index
+      - name: device_path
+        type: string
+        index: 3
+        doc: Path to NBD device node
+      - name: mount_path
+        type: string
+        index: 4
+        doc: Where the volume is mounted
+      - name: mounted
+        type: bool
+        index: 5
+        doc: Whether the volume is mounted
+      - name: read_only
+        type: bool
+        index: 6
+        doc: Whether the mount is read-only
+      - name: lease_nonce
+        type: string
+        index: 7
+        doc: Volume lease nonce from remote Disk API
+
+  - type: ReconcileMetrics
+    doc: Metrics about reconciliation operations
+    fields:
+      - name: volume_reconcile_count
+        type: int64
+        index: 0
+        doc: Total volume reconciliations
+      - name: mount_reconcile_count
+        type: int64
+        index: 1
+        doc: Total mount reconciliations
+      - name: volume_error_count
+        type: int64
+        index: 2
+        doc: Total volume errors
+      - name: mount_error_count
+        type: int64
+        index: 3
+        doc: Total mount errors
+      - name: last_volume_duration
+        type: standard.Duration
+        index: 4
+        doc: Duration of last volume reconciliation
+      - name: last_mount_duration
+        type: standard.Duration
+        index: 5
+        doc: Duration of last mount reconciliation
+
+interfaces:
+  - name: LsvdDebug
+    doc: Debug interface for lsvd-server inspection
+    methods:
+      - name: listVolumes
+        doc: List all volumes
+        results:
+          - name: volumes
+            type: list
+            element: VolumeInfo
+            doc: List of volumes
+
+      - name: listMounts
+        doc: List all mounts
+        results:
+          - name: mounts
+            type: list
+            element: MountInfo
+            doc: List of mounts
+
+      - name: getMetrics
+        doc: Get reconciliation metrics
+        results:
+          - name: metrics
+            type: ReconcileMetrics
+            doc: Reconciliation metrics

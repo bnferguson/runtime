@@ -45,7 +45,8 @@ var (
 		slog.LevelError: color.New(color.FgHiRed),
 	}
 
-	moduleColor = color.New(color.Faint)
+	outboardColor = color.New(color.Faint, color.FgCyan)
+	moduleColor   = color.New(color.Faint)
 )
 
 // TextHandler is a [Handler] that writes Records to an [io.Writer] as a
@@ -53,7 +54,8 @@ var (
 type TextHandler struct {
 	*commonHandler
 
-	module string
+	outboard string
+	module   string
 }
 
 // NewTextHandler creates a [TextHandler] that writes to w,
@@ -80,12 +82,14 @@ func (h *TextHandler) Enabled(_ context.Context, level slog.Level) bool {
 }
 
 const ModuleKey = "module"
+const OutboardKey = "outboard"
 
 // WithAttrs returns a new [TextHandler] whose attributes consists
 // of h's attributes followed by attrs.
 func (h *TextHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	var (
 		goodAttrs []slog.Attr
+		outboard  = h.outboard
 		module    = h.module
 	)
 
@@ -96,16 +100,18 @@ func (h *TextHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 			} else {
 				module += "." + a.Value.String()
 			}
+		} else if a.Key == OutboardKey && a.Value.Kind() == slog.KindString {
+			outboard = a.Value.String()
 		} else {
 			goodAttrs = append(goodAttrs, a)
 		}
 	}
 
-	return &TextHandler{commonHandler: h.withAttrs(goodAttrs), module: module}
+	return &TextHandler{commonHandler: h.withAttrs(goodAttrs), outboard: outboard, module: module}
 }
 
 func (h *TextHandler) WithGroup(name string) slog.Handler {
-	return &TextHandler{commonHandler: h.withGroup(name), module: h.module}
+	return &TextHandler{commonHandler: h.withGroup(name), outboard: h.outboard, module: h.module}
 }
 
 // Handle formats its argument [Record] as a single line of space-separated
@@ -145,7 +151,23 @@ func (h *TextHandler) WithGroup(name string) slog.Handler {
 // Each call to Handle results in a single serialized call to
 // io.Writer.Write.
 func (h *TextHandler) Handle(_ context.Context, r slog.Record) error {
-	return h.handle(r, h.module)
+	outboard := h.outboard
+	module := h.module
+
+	r.Attrs(func(a slog.Attr) bool {
+		if a.Key == ModuleKey && a.Value.Kind() == slog.KindString {
+			if module == "" {
+				module = a.Value.String()
+			} else {
+				module += "." + a.Value.String()
+			}
+		} else if a.Key == OutboardKey && a.Value.Kind() == slog.KindString {
+			outboard = a.Value.String()
+		}
+		return true
+	})
+
+	return h.handle(r, outboard, module)
 }
 
 type commonHandler struct {
@@ -238,7 +260,7 @@ func recordSource(r slog.Record) *slog.Source {
 
 // handle is the internal implementation of Handler.Handle
 // used by TextHandler and JSONHandler.
-func (h *commonHandler) handle(r slog.Record, module string) error {
+func (h *commonHandler) handle(r slog.Record, outboard, module string) error {
 	state := h.newHandleState(NewBuffer(), true, "")
 	defer state.free()
 	// Built-in attributes. They are not in a group.
@@ -286,6 +308,11 @@ func (h *commonHandler) handle(r slog.Record, module string) error {
 		state.appendRawString(" ")
 	}
 
+	if outboard != "" {
+		state.appendRawString(outboardColor.Sprint(outboard))
+		state.appendRawString(" ")
+	}
+
 	if module != "" {
 		state.appendRawString(moduleColor.Sprint(module))
 		state.appendRawString(" ")
@@ -295,14 +322,20 @@ func (h *commonHandler) handle(r slog.Record, module string) error {
 	msg := r.Message
 	if rep == nil {
 		state.appendRawString(msg)
-		if r.NumAttrs() > 0 || len(state.h.preformattedAttrs) > 0 {
-			state.appendRawString(" │ ")
-		}
 	} else {
 		state.appendAttr(slog.String(key, msg))
 	}
 	state.groups = stateGroups // Restore groups passed to ReplaceAttrs.
+	pos := state.buf.Len()
 	state.appendNonBuiltIns(r)
+	if state.buf.Len() > pos {
+		// Attrs were written — insert separator between message and attrs.
+		tail := make([]byte, state.buf.Len()-pos)
+		copy(tail, (*state.buf)[pos:])
+		state.buf.SetLen(pos)
+		state.appendRawString(" │ ")
+		state.buf.Write(tail)
+	}
 	state.buf.WriteNewLine()
 
 	h.mu.Lock()
@@ -463,6 +496,9 @@ func isEmpty(a slog.Attr) bool {
 // It handles replacement and checking for an empty key.
 // It reports whether something was appended.
 func (s *handleState) appendAttr(a slog.Attr) bool {
+	if a.Value.Kind() == slog.KindString && (a.Key == ModuleKey || a.Key == OutboardKey) {
+		return false
+	}
 	a.Value = a.Value.Resolve()
 	if rep := s.h.opts.ReplaceAttr; rep != nil && a.Value.Kind() != slog.KindGroup {
 		var gs []string

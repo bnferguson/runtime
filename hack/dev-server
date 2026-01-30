@@ -114,7 +114,32 @@ case "${1:-}" in
     ;;
 
   restart)
-    $0 stop
+    # Use SIGUSR1 for restart to preserve outboard processes (like lsvd-server)
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+      PID=$(cat "$PIDFILE")
+      echo "Sending SIGUSR1 to server (PID $PID) for graceful restart..."
+      kill -USR1 "$PID"
+      # Wait for graceful shutdown
+      for i in {1..30}; do
+        if ! kill -0 "$PID" 2>/dev/null; then
+          break
+        fi
+        sleep 0.5
+      done
+      # Check if it's still running
+      if kill -0 "$PID" 2>/dev/null; then
+        echo "Warning: Server did not exit after SIGUSR1, forcing stop..."
+        kill "$PID"
+        sleep 1
+        if kill -0 "$PID" 2>/dev/null; then
+          kill -9 "$PID" 2>/dev/null || true
+        fi
+      fi
+      rm -f "$PIDFILE"
+      echo "Server stopped (restart mode)"
+    else
+      echo "Server not running"
+    fi
     sleep 1
     $0 start
     ;;

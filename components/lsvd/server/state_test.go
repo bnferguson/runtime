@@ -1,0 +1,243 @@
+package server
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestStateNewState(t *testing.T) {
+	state := NewState()
+
+	assert.NotNil(t, state.Volumes)
+	assert.NotNil(t, state.Mounts)
+	assert.Empty(t, state.Volumes)
+	assert.Empty(t, state.Mounts)
+}
+
+func TestStateLoadNonExistent(t *testing.T) {
+	tempDir := t.TempDir()
+
+	state, err := LoadState(tempDir)
+	require.NoError(t, err)
+	assert.NotNil(t, state)
+	assert.Empty(t, state.Volumes)
+	assert.Empty(t, state.Mounts)
+	assert.Equal(t, filepath.Join(tempDir, stateFileName), state.path)
+}
+
+func TestStateSaveAndLoad(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Create state and add data
+	state, err := LoadState(tempDir)
+	require.NoError(t, err)
+
+	state.SetVolume("vol-1", &VolumeState{
+		EntityId:   "vol-1",
+		VolumeId:   "uuid-1234",
+		DiskPath:   "/var/lib/data/volumes/uuid-1234",
+		SizeBytes:  1073741824, // 1GB
+		Filesystem: "ext4",
+		RemoteOnly: false,
+	})
+
+	state.SetMount("mount-1", &MountState{
+		EntityId:   "mount-1",
+		VolumeId:   "vol-1",
+		NbdIndex:   1,
+		DevicePath: "/dev/nbd1",
+		MountPath:  "/mnt/data",
+		Mounted:    true,
+		ReadOnly:   false,
+		LeaseNonce: "nonce-abc",
+	})
+
+	// Save state
+	err = state.Save()
+	require.NoError(t, err)
+
+	// Verify file exists
+	statePath := filepath.Join(tempDir, stateFileName)
+	_, err = os.Stat(statePath)
+	require.NoError(t, err)
+
+	// Load state in new instance
+	loaded, err := LoadState(tempDir)
+	require.NoError(t, err)
+
+	// Verify volumes
+	assert.Len(t, loaded.Volumes, 1)
+	vol := loaded.GetVolume("vol-1")
+	require.NotNil(t, vol)
+	assert.Equal(t, "vol-1", vol.EntityId)
+	assert.Equal(t, "uuid-1234", vol.VolumeId)
+	assert.Equal(t, "/var/lib/data/volumes/uuid-1234", vol.DiskPath)
+	assert.Equal(t, int64(1073741824), vol.SizeBytes)
+	assert.Equal(t, "ext4", vol.Filesystem)
+	assert.False(t, vol.RemoteOnly)
+
+	// Verify mounts
+	assert.Len(t, loaded.Mounts, 1)
+	mnt := loaded.GetMount("mount-1")
+	require.NotNil(t, mnt)
+	assert.Equal(t, "mount-1", mnt.EntityId)
+	assert.Equal(t, "vol-1", mnt.VolumeId)
+	assert.Equal(t, uint32(1), mnt.NbdIndex)
+	assert.Equal(t, "/dev/nbd1", mnt.DevicePath)
+	assert.Equal(t, "/mnt/data", mnt.MountPath)
+	assert.True(t, mnt.Mounted)
+	assert.False(t, mnt.ReadOnly)
+	assert.Equal(t, "nonce-abc", mnt.LeaseNonce)
+}
+
+func TestStateDeleteVolume(t *testing.T) {
+	state := NewState()
+
+	state.SetVolume("vol-1", &VolumeState{EntityId: "vol-1"})
+	state.SetVolume("vol-2", &VolumeState{EntityId: "vol-2"})
+
+	assert.Len(t, state.Volumes, 2)
+	assert.NotNil(t, state.GetVolume("vol-1"))
+
+	state.DeleteVolume("vol-1")
+
+	assert.Len(t, state.Volumes, 1)
+	assert.Nil(t, state.GetVolume("vol-1"))
+	assert.NotNil(t, state.GetVolume("vol-2"))
+}
+
+func TestStateDeleteMount(t *testing.T) {
+	state := NewState()
+
+	state.SetMount("mount-1", &MountState{EntityId: "mount-1"})
+	state.SetMount("mount-2", &MountState{EntityId: "mount-2"})
+
+	assert.Len(t, state.Mounts, 2)
+	assert.NotNil(t, state.GetMount("mount-1"))
+
+	state.DeleteMount("mount-1")
+
+	assert.Len(t, state.Mounts, 1)
+	assert.Nil(t, state.GetMount("mount-1"))
+	assert.NotNil(t, state.GetMount("mount-2"))
+}
+
+func TestStateGetVolumeByVolumeId(t *testing.T) {
+	state := NewState()
+
+	state.SetVolume("vol-1", &VolumeState{EntityId: "vol-1", VolumeId: "uuid-1"})
+	state.SetVolume("vol-2", &VolumeState{EntityId: "vol-2", VolumeId: "uuid-2"})
+
+	vol := state.GetVolumeByVolumeId("uuid-2")
+	require.NotNil(t, vol)
+	assert.Equal(t, "vol-2", vol.EntityId)
+
+	vol = state.GetVolumeByVolumeId("nonexistent")
+	assert.Nil(t, vol)
+}
+
+func TestStateListVolumes(t *testing.T) {
+	state := NewState()
+
+	state.SetVolume("vol-1", &VolumeState{EntityId: "vol-1"})
+	state.SetVolume("vol-2", &VolumeState{EntityId: "vol-2"})
+	state.SetVolume("vol-3", &VolumeState{EntityId: "vol-3"})
+
+	volumes := state.ListVolumes()
+	assert.Len(t, volumes, 3)
+
+	entityIds := make(map[string]bool)
+	for _, v := range volumes {
+		entityIds[v.EntityId] = true
+	}
+	assert.True(t, entityIds["vol-1"])
+	assert.True(t, entityIds["vol-2"])
+	assert.True(t, entityIds["vol-3"])
+}
+
+func TestStateListMounts(t *testing.T) {
+	state := NewState()
+
+	state.SetMount("mount-1", &MountState{EntityId: "mount-1"})
+	state.SetMount("mount-2", &MountState{EntityId: "mount-2"})
+
+	mounts := state.ListMounts()
+	assert.Len(t, mounts, 2)
+
+	entityIds := make(map[string]bool)
+	for _, m := range mounts {
+		entityIds[m.EntityId] = true
+	}
+	assert.True(t, entityIds["mount-1"])
+	assert.True(t, entityIds["mount-2"])
+}
+
+func TestStateAtomicSave(t *testing.T) {
+	tempDir := t.TempDir()
+
+	state, err := LoadState(tempDir)
+	require.NoError(t, err)
+
+	// Add data
+	state.SetVolume("vol-1", &VolumeState{EntityId: "vol-1"})
+	err = state.Save()
+	require.NoError(t, err)
+
+	// Modify and save again
+	state.SetVolume("vol-2", &VolumeState{EntityId: "vol-2"})
+	err = state.Save()
+	require.NoError(t, err)
+
+	// Load and verify both exist
+	loaded, err := LoadState(tempDir)
+	require.NoError(t, err)
+	assert.Len(t, loaded.Volumes, 2)
+
+	// Verify no temp files left behind
+	entries, err := os.ReadDir(tempDir)
+	require.NoError(t, err)
+
+	for _, entry := range entries {
+		assert.NotContains(t, entry.Name(), ".tmp", "temp file should not exist after save")
+	}
+}
+
+func TestStateConcurrentAccess(t *testing.T) {
+	state := NewState()
+
+	// Simulate concurrent access
+	done := make(chan bool, 10)
+
+	for i := 0; i < 5; i++ {
+		go func(idx int) {
+			for j := 0; j < 100; j++ {
+				state.SetVolume("vol-1", &VolumeState{EntityId: "vol-1"})
+				_ = state.GetVolume("vol-1")
+			}
+			done <- true
+		}(i)
+	}
+
+	for i := 0; i < 5; i++ {
+		go func(idx int) {
+			for j := 0; j < 100; j++ {
+				state.SetMount("mount-1", &MountState{EntityId: "mount-1"})
+				_ = state.GetMount("mount-1")
+			}
+			done <- true
+		}(i)
+	}
+
+	// Wait for all goroutines
+	for i := 0; i < 10; i++ {
+		<-done
+	}
+
+	// State should still be valid
+	assert.NotNil(t, state.GetVolume("vol-1"))
+	assert.NotNil(t, state.GetMount("mount-1"))
+}

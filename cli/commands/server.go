@@ -709,20 +709,21 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 
 	// Build RunnerDeps from ServerState (all dependencies already initialized)
 	deps := runner.RunnerDeps{
-		CC:              ctx.ServerState.CC,
-		Namespace:       ctx.ServerState.Namespace,
-		Bridge:          ctx.ServerState.Bridge,
-		Tempdir:         ctx.ServerState.Tempdir,
-		Subnet:          ctx.ServerState.Subnet,
-		NetServ:         ctx.ServerState.NetServ,
-		LogsMaintainer:  ctx.ServerState.LogsMaintainer,
-		LogWriter:       logWriter,
-		StatusMon:       ctx.ServerState.StatusMon,
-		IPv4Routable:    ctx.ServerState.IPv4Routable,
-		ServicePrefixes: ctx.ServerState.ServicePrefixes,
-		DisableLocalNet: false,
-		Resolver:        res,
-		SandboxMetrics:  ctx.ServerState.SandboxMetrics,
+		CC:               ctx.ServerState.CC,
+		Namespace:        ctx.ServerState.Namespace,
+		Bridge:           ctx.ServerState.Bridge,
+		Tempdir:          ctx.ServerState.Tempdir,
+		Subnet:           ctx.ServerState.Subnet,
+		NetServ:          ctx.ServerState.NetServ,
+		LogsMaintainer:   ctx.ServerState.LogsMaintainer,
+		LogWriter:        logWriter,
+		StatusMon:        ctx.ServerState.StatusMon,
+		IPv4Routable:     ctx.ServerState.IPv4Routable,
+		ServicePrefixes:  ctx.ServerState.ServicePrefixes,
+		DisableLocalNet:  false,
+		Resolver:         res,
+		SandboxMetrics:   ctx.ServerState.SandboxMetrics,
+		EntityServerAddr: normalizeServerAddr(srvaddr),
 	}
 
 	rc.DataPath = cfg.Server.GetDataPath()
@@ -848,28 +849,39 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	ctx.Info("Miren server started successfully! You can now connect to the cluster using `-C %s`\n", cfg.Server.GetConfigClusterName())
 	ctx.Info("For example: cd my-app && miren deploy -C %s", cfg.Server.GetConfigClusterName())
 
-	// Set up signal handling for graceful drain on SIGUSR2
+	// Set up signal handling for graceful drain (SIGUSR2) and restart mode (SIGUSR1)
 	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGUSR2)
+	signal.Notify(sigChan, syscall.SIGUSR1, syscall.SIGUSR2)
 
 	eg.Go(func() error {
-		select {
-		case <-sub.Done():
-			return nil
-		case sig := <-sigChan:
-			ctx.Log.Info("received signal, draining runner", "signal", sig)
+		for {
+			select {
+			case <-sub.Done():
+				return nil
+			case sig := <-sigChan:
+				switch sig {
+				case syscall.SIGUSR1:
+					// Restart mode - preserve outboard processes like lsvd-server
+					ctx.Log.Info("SIGUSR1 received - restart mode (preserving outboard processes)")
+					r.SetRestartMode(true)
+					return fmt.Errorf("restart requested via SIGUSR1")
 
-			// Drain the runner
-			drainCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-			defer cancel()
+				case syscall.SIGUSR2:
+					// Drain mode - stop all sandboxes before shutdown
+					ctx.Log.Info("SIGUSR2 received - draining runner")
 
-			if err := r.Drain(drainCtx); err != nil {
-				ctx.Log.Error("failed to drain runner", "error", err)
-				return err
+					drainCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+					defer cancel()
+
+					if err := r.Drain(drainCtx); err != nil {
+						ctx.Log.Error("failed to drain runner", "error", err)
+						return err
+					}
+
+					ctx.Log.Info("runner drained successfully, shutting down")
+					return fmt.Errorf("runner drained, shutting down")
+				}
 			}
-
-			ctx.Log.Info("runner drained successfully, shutting down")
-			return fmt.Errorf("runner drained, shutting down")
 		}
 	})
 
@@ -1065,4 +1077,17 @@ func stopAllSandboxContainers(ctx context.Context, log *slog.Logger, cc *contain
 
 	log.Info("stopped sandbox containers", "count", stoppedCount)
 	return nil
+}
+
+// normalizeServerAddr converts a server address to a form usable for local connections.
+// Addresses like ":8443", "0.0.0.0:8443", and "[::]:8443" become "localhost:8443".
+func normalizeServerAddr(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		return net.JoinHostPort("localhost", port)
+	}
+	return addr
 }

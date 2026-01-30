@@ -131,11 +131,26 @@ Warning: These commands are intended for advanced users and developers. They may
 	d.Dispatch("debug disk lease-status", Infer("debug disk lease-status", "Show detailed status of a disk lease", DebugDiskLeaseStatus))
 	d.Dispatch("debug disk mounts", Infer("debug disk mounts", "List all mounted disks from /proc/mounts", DebugDiskMounts))
 
+	// Debug LSVD commands
+	d.Dispatch("debug lsvd", Section("debug lsvd", "LSVD server debug commands", ""))
+	d.Dispatch("debug lsvd info", Infer("debug lsvd info", "Show combined LSVD server volumes, mounts, and metrics", DebugLsvdInfo))
+	d.Dispatch("debug lsvd volumes", Infer("debug lsvd volumes", "List volumes managed by LSVD server", DebugLsvdVolumes))
+	d.Dispatch("debug lsvd mounts", Infer("debug lsvd mounts", "List mounts managed by LSVD server", DebugLsvdMounts))
+	d.Dispatch("debug lsvd metrics", Infer("debug lsvd metrics", "Show LSVD reconciliation metrics", DebugLsvdMetrics))
+
+	// Debug outboard commands
+	d.Dispatch("debug outboard", Section("debug outboard", "Outboard process debug commands", ""))
+	d.Dispatch("debug outboard health", Infer("debug outboard health", "Check health of an outboard process", DebugOutboardHealth))
+
 	// Debug netdb commands
 	d.Dispatch("debug netdb list", Infer("debug netdb list", "List all IP leases from netdb", DebugNetDBList))
 	d.Dispatch("debug netdb status", Infer("debug netdb status", "Show IP allocation status by subnet", DebugNetDBStatus))
 	d.Dispatch("debug netdb release", Infer("debug netdb release", "Manually release IP leases", DebugNetDBRelease))
 	d.Dispatch("debug netdb gc", Infer("debug netdb gc", "Find and release orphaned IP leases", DebugNetDBGC))
+
+	// Internal commands (hidden from help, used by miren internals)
+	d.Dispatch("internal", Section("internal", "Internal commands used by miren components", ""))
+	d.Dispatch("internal lsvd", Infer("internal lsvd", "Run LSVD server for disk management", ServerLsvd))
 
 	addCommands(d)
 }

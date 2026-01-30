@@ -1,0 +1,63 @@
+imports:
+  standard:
+    path: ../../pkg/rpc/standard/standard.yml
+    import: miren.dev/runtime/pkg/rpc/standard
+
+types:
+  - type: OutboardHealthStatus
+    doc: Health status of an outboard process
+    fields:
+      - name: healthy
+        type: bool
+        index: 0
+        doc: Whether the process is healthy
+      - name: timestamp
+        type: standard.Timestamp
+        index: 1
+        doc: When this status was generated
+      - name: pid
+        type: int32
+        index: 2
+        doc: Process ID of the outboard process
+      - name: uptime
+        type: standard.Duration
+        index: 3
+        doc: How long the process has been running
+      - name: last_error
+        type: string
+        index: 4
+        doc: Last error message if any
+
+  - type: OutboardVersionResult
+    doc: Result of a version check
+    fields:
+      - name: current_version
+        type: uint64
+        index: 0
+        doc: The version currently running
+      - name: needs_restart
+        type: bool
+        index: 1
+        doc: True if the process will exit for upgrade
+
+interfaces:
+  - name: OutboardControl
+    doc: Common control interface for outboard processes
+    methods:
+      - name: health
+        doc: Get current health status
+        results:
+          - name: status
+            type: OutboardHealthStatus
+            doc: Current health status
+
+      - name: checkVersion
+        doc: Check if process version matches expected, triggers graceful restart if outdated
+        parameters:
+          - name: expected_version
+            type: uint64
+            doc: The version the caller expects
+        results:
+          - name: result
+            type: OutboardVersionResult
+            doc: Version check result with restart indicator

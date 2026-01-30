@@ -90,7 +90,7 @@ func PerformDownloadRelease(ctx *Context, opts DownloadReleaseOptions) error {
 	shaPath := filepath.Join(tempDir, "release.tar.gz.sha256")
 	if err := downloadFile(shaPath, shaURL); err != nil {
 		os.RemoveAll(releaseDir)
-		return fmt.Errorf("failed to download checksum: %w", err)
+		return fmt.Errorf("failed to download checksum from %s: %w", shaURL, err)
 	}
 
 	// Read expected checksum
