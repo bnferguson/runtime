@@ -282,10 +282,11 @@ type ImageConfig struct {
 }
 
 type BuildResult struct {
-	Entrypoint     string // The entrypoint (from stack or image ENTRYPOINT)
-	Command        string // The command (from image CMD)
-	ManifestDigest string
-	WorkingDir     string
+	Entrypoint      string // The entrypoint (from stack or image ENTRYPOINT)
+	Command         string // The command (from image CMD)
+	ManifestDigest  string
+	WorkingDir      string
+	DetectionEvents []stackbuild.DetectionEvent
 }
 
 // fetchImageConfigFromRegistry fetches the image config JSON from a registry using the config digest.
@@ -413,6 +414,7 @@ func (b *Buildkit) BuildImage(
 		}
 
 		res.Entrypoint = stack.Entrypoint()
+		res.DetectionEvents = stack.Events()
 
 		if wc := stack.WebCommand(); wc != "" {
 			res.Command = wc

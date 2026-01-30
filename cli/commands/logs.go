@@ -35,6 +35,16 @@ func buildFilterWithService(userFilter, service string) string {
 	return serviceFilter + " " + userFilter
 }
 
+// buildBuildFilter creates a filter for build logs of a specific version.
+// Combines source:build with the version filter.
+func buildBuildFilter(version, userFilter string) string {
+	buildFilter := fmt.Sprintf("source:build version:%q", version)
+	if userFilter == "" {
+		return buildFilter
+	}
+	return buildFilter + " " + userFilter
+}
+
 func Logs(ctx *Context, opts struct {
 	ConfigCentric
 
@@ -42,6 +52,7 @@ func Logs(ctx *Context, opts struct {
 	Dir     string         `short:"d" long:"dir" description:"Directory to run from" default:"."`
 	Last    *time.Duration `short:"l" long:"last" description:"Show logs from the last duration"`
 	Sandbox string         `short:"s" long:"sandbox" description:"Show logs for a specific sandbox ID"`
+	Build   string         `short:"b" long:"build" description:"Show build logs for a specific version"`
 	Follow  bool           `short:"f" long:"follow" description:"Follow log output (live tail)"`
 	Filter  string         `short:"g" long:"grep" description:"Filter logs (e.g., 'error', '\"exact phrase\"', 'error -debug', '/regex/')"`
 	Service string         `long:"service" description:"Filter logs by service name (e.g., 'web', 'worker')"`
@@ -49,6 +60,9 @@ func Logs(ctx *Context, opts struct {
 	// Check for conflicting options
 	if opts.App != "" && opts.Sandbox != "" {
 		return fmt.Errorf("cannot specify both --app and --sandbox")
+	}
+	if opts.Build != "" && opts.Sandbox != "" {
+		return fmt.Errorf("cannot specify both --build and --sandbox")
 	}
 
 	// If neither is specified, try to load app from directory context
@@ -89,8 +103,13 @@ func Logs(ctx *Context, opts struct {
 		}
 	}
 
-	// Build combined filter with service filter for server-side filtering
-	combinedFilter := buildFilterWithService(opts.Filter, opts.Service)
+	// Build combined filter for server-side filtering
+	var combinedFilter string
+	if opts.Build != "" {
+		combinedFilter = buildBuildFilter(opts.Build, opts.Filter)
+	} else {
+		combinedFilter = buildFilterWithService(opts.Filter, opts.Service)
+	}
 
 	// Check if server supports streaming (prefer chunked for efficiency)
 	if cl.HasMethod(ctx, "streamLogChunks") {
@@ -98,9 +117,12 @@ func Logs(ctx *Context, opts struct {
 	}
 
 	// Older server - warn about upgrade and limited functionality
-	ctx.Printf("Warning: server does not support optimized log streaming. Upgrade your server for better performance and --service filtering.\n")
+	ctx.Printf("Warning: server does not support optimized log streaming. Upgrade your server for better performance and --service/--build filtering.\n")
 	if opts.Service != "" {
 		return fmt.Errorf("--service filtering requires a newer server version")
+	}
+	if opts.Build != "" {
+		return fmt.Errorf("--build filtering requires a newer server version")
 	}
 
 	if cl.HasMethod(ctx, "streamLogs") {
