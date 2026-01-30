@@ -711,6 +711,21 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		WithBuildArg("MIREN_VERSION", mrv.Version),
 	)
 
+	// Always persist build logs to VictoriaLogs, regardless of status stream
+	tos = append(tos, WithStatusUpdates(func(ss *client.SolveStatus, _ []byte) {
+		for _, log := range ss.Logs {
+			if log.Data != nil {
+				lines := strings.Split(string(log.Data), "\n")
+				for _, line := range lines {
+					line = strings.TrimSpace(line)
+					if line != "" {
+						buildLog.write(line)
+					}
+				}
+			}
+		}
+	}))
+
 	if status != nil {
 		tos = append(tos, WithPhaseUpdates(func(phase string) {
 			switch phase {
@@ -729,25 +744,12 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 			}
 		}))
 
-		tos = append(tos, WithStatusUpdates(func(ss *client.SolveStatus, sj []byte) {
+		tos = append(tos, WithStatusUpdates(func(_ *client.SolveStatus, sj []byte) {
 			so := new(build_v1alpha.Status)
 			so.Update().SetBuildkit(sj)
 			_, err := status.Send(ctx, so)
 			if err != nil {
 				b.Log.Warn("error sending status update", "error", err)
-			}
-
-			// Log command output from RUN steps to VictoriaLogs
-			for _, log := range ss.Logs {
-				if log.Data != nil {
-					lines := strings.Split(string(log.Data), "\n")
-					for _, line := range lines {
-						line = strings.TrimSpace(line)
-						if line != "" {
-							buildLog.write(line)
-						}
-					}
-				}
 			}
 		}))
 	}
