@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,29 +15,22 @@ func Upgrade(ctx *Context, opts struct {
 	Channel string `long:"channel" description:"Channel to use: 'latest' (stable releases, default) or 'main' (bleeding edge)"`
 	Check   bool   `short:"c" long:"check" description:"Check for available updates only"`
 	Force   bool   `short:"f" long:"force" description:"Force upgrade even if already up to date or server running"`
+	User    bool   `short:"u" long:"user" description:"Install to user directory (~/.miren/release/miren) instead of system location"`
 }) error {
-	// Check if server is running (unless forced or just checking)
-	if !opts.Force && !opts.Check && release.IsServerRunning() {
-		return fmt.Errorf("miren server is running. Use 'sudo miren server upgrade' to upgrade the server, or use --force to upgrade the CLI anyway")
-	}
-
-	// Determine installation path
+	// Determine current binary path for version checking
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("failed to determine current binary path: %w", err)
 	}
-
-	// Resolve any symlinks
 	exe, err = filepath.EvalSymlinks(exe)
 	if err != nil {
 		return fmt.Errorf("failed to resolve binary path: %w", err)
 	}
 
-	// Create manager with appropriate install path
+	// Create manager for version checking
 	mgrOpts := release.DefaultManagerOptions()
 	mgrOpts.InstallPath = exe
 	mgrOpts.SkipHealthCheck = true // CLI doesn't need health check
-	mgr := release.NewManager(mgrOpts)
 
 	// Check mode - just report if update is available
 	if opts.Check {
@@ -47,7 +41,6 @@ func Upgrade(ctx *Context, opts struct {
 
 		PrintVersionComparison(current, latest)
 
-		// Use proper version comparison with build dates
 		if latest.IsNewer(current) {
 			fmt.Println("\nAn update is available! Run 'miren upgrade' to install it.")
 		} else {
@@ -55,6 +48,72 @@ func Upgrade(ctx *Context, opts struct {
 		}
 		return nil
 	}
+
+	// From here on, we're doing an actual upgrade
+
+	// Check if server is running (unless forced)
+	if !opts.Force && release.IsServerRunning() {
+		return fmt.Errorf("miren server is running. Use 'sudo miren server upgrade' to upgrade the server, or use --force to upgrade the CLI anyway")
+	}
+
+	// Determine installation path
+	var installPath string
+
+	if opts.User {
+		// User explicitly requested user directory installation
+		userPath, err := getUserMirenPath()
+		if err != nil {
+			return fmt.Errorf("failed to determine user install path: %w", err)
+		}
+		installPath = userPath
+	} else {
+		installPath = exe
+	}
+
+	// Check permissions before downloading
+	if err := checkInstallPermissions(installPath); err != nil {
+		var permErr *permissionError
+		if errors.As(err, &permErr) {
+			option, handleErr := handlePermissionError(ctx, installPath, permErr)
+			if handleErr != nil {
+				return handleErr
+			}
+
+			switch option {
+			case upgradeOptionSudo:
+				ctx.Info("")
+				ctx.Info("Please re-run with: sudo miren upgrade")
+				return nil
+			case upgradeOptionUser:
+				userPath, err := getUserMirenPath()
+				if err != nil {
+					return fmt.Errorf("failed to determine user install path: %w", err)
+				}
+				installPath = userPath
+			case upgradeOptionCancel:
+				return nil
+			}
+		} else {
+			return fmt.Errorf("permission check failed: %w", err)
+		}
+	}
+
+	// Ensure the install directory exists for user installs
+	needsPathUpdate, err := ensureUserInstallDir(installPath)
+	if err != nil {
+		return err
+	}
+
+	if needsPathUpdate {
+		ctx.Warn("Note: %s is not in your PATH", filepath.Dir(installPath))
+		ctx.Info("Add it to your shell configuration to use 'miren' directly:")
+		ctx.Info("  export PATH=\"%s:$PATH\"", filepath.Dir(installPath))
+		ctx.Info("")
+	}
+
+	// Update manager with final install path
+	mgrOpts.InstallPath = installPath
+	mgr := release.NewManager(mgrOpts)
 
 	// Determine version/channel
 	version := opts.Version

@@ -8,6 +8,7 @@ import (
 
 const (
 	systemReleasePath = "/var/lib/miren/release"
+	userMirenPath     = ".miren/release"
 )
 
 // FindReleasePath looks for an existing miren release directory.
@@ -56,4 +57,14 @@ func getUserHomeDir() (string, error) {
 		return u.HomeDir, nil
 	}
 	return "", nil
+}
+
+// getUserMirenPath returns the miren-specific user path (~/.miren/release/miren).
+// This is the standard location for user-installed miren binaries.
+func getUserMirenPath() (string, error) {
+	homeDir, err := getUserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(homeDir, userMirenPath, "miren"), nil
 }
