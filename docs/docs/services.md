@@ -109,14 +109,13 @@ command = "npm start"
 [services.postgres]
 image = "postgres:16"
 
+[[services.postgres.env]]
+key = "PGDATA"
+value = "/miren/data/local/pgdata"
+
 [services.postgres.concurrency]
 mode = "fixed"
 num_instances = 1
-
-[[services.postgres.disks]]
-name = "postgres-data"
-mount_path = "/var/lib/postgresql/data"
-size_gb = 20
 ```
 
 When you specify an `image`, Miren pulls that container image instead of using your app's built image. This lets you run standard database images alongside your application code.
@@ -145,16 +144,15 @@ image = "postgres:16"
 key = "POSTGRES_PASSWORD"
 value = "secret"
 
+[[services.postgres.env]]
+key = "PGDATA"
+value = "/miren/data/local/pgdata"
+
 [services.postgres.concurrency]
 mode = "fixed"
 num_instances = 1
 
-[[services.postgres.disks]]
-name = "pg-data"
-mount_path = "/var/lib/postgresql/data"
-size_gb = 50
-
-# Redis cache
+# Redis cache (data stored in memory, no persistence needed for caching)
 [services.redis]
 image = "redis:7-alpine"
 
@@ -175,7 +173,7 @@ Each service can configure:
 | `env` | Service-specific environment variables | (none) |
 | `concurrency` | Scaling configuration | See [Scaling](/scaling) |
 | `concurrency.shutdown_timeout` | Time to wait for graceful shutdown during redeploy | `10s` |
-| `disks` | Persistent disk attachments | (none) |
+| `disks` | Persistent disk attachments (experimental, see [Disks](/disks)) | (none) |
 
 ### Environment Variables
 
@@ -229,6 +227,10 @@ image = "postgres:16"
 [[services.postgres.env]]
 key = "POSTGRES_PASSWORD"
 value = "pass"
+
+[[services.postgres.env]]
+key = "PGDATA"
+value = "/miren/data/local/pgdata"
 
 [services.postgres.concurrency]
 mode = "fixed"
@@ -287,23 +289,24 @@ For detailed scaling configuration, see [Application Scaling](/scaling).
 
 ## Persistent Storage
 
-Services can attach persistent disks. This is required for databases and other stateful workloads:
+For stateful services like databases, use [Local Shared Storage](/disks#local-shared-storage)—persistent storage automatically available at `/miren/data/local`. Configure your database to store data there:
 
 ```toml
 [services.postgres]
 image = "postgres:16"
 
+[[services.postgres.env]]
+key = "PGDATA"
+value = "/miren/data/local/pgdata"
+
 [services.postgres.concurrency]
 mode = "fixed"
 num_instances = 1
-
-[[services.postgres.disks]]
-name = "postgres-data"
-mount_path = "/var/lib/postgresql/data"
-size_gb = 20
 ```
 
-Disks require fixed mode with exactly 1 instance because only one process can mount a disk at a time.
+The `PGDATA` environment variable tells PostgreSQL where to store its data. Using a subdirectory (`pgdata`) under `/miren/data/local` is required because PostgreSQL expects to own its data directory.
+
+For cloud-synced storage that travels with your app, see [Miren Disks](/disks#miren-disks) (experimental).
 
 ## Sandbox Pools
 
@@ -390,14 +393,13 @@ image = "postgres:16"
 key = "POSTGRES_PASSWORD"
 value = "pass"
 
+[[services.postgres.env]]
+key = "PGDATA"
+value = "/miren/data/local/pgdata"
+
 [services.postgres.concurrency]
 mode = "fixed"
 num_instances = 1
-
-[[services.postgres.disks]]
-name = "pgdata"
-mount_path = "/var/lib/postgresql/data"
-size_gb = 10
 ```
 
 ### Go Service with PostgreSQL
@@ -432,14 +434,13 @@ value = "changeme"
 key = "POSTGRES_DB"
 value = "goapp"
 
+[[services.postgres.env]]
+key = "PGDATA"
+value = "/miren/data/local/pgdata"
+
 [services.postgres.concurrency]
 mode = "fixed"
 num_instances = 1
-
-[[services.postgres.disks]]
-name = "pgdata"
-mount_path = "/var/lib/postgresql/data"
-size_gb = 10
 ```
 
 ### Python App with Redis Queue
@@ -476,6 +477,7 @@ num_instances = 1
 
 ## Next Steps
 
+- [Persistent Storage](/disks) — Local storage and disk options for databases
 - [Application Scaling](/scaling) — Configure how each service scales
 - [Getting Started](/getting-started) — Deploy your first app
 - [CLI Reference](/cli-reference) — All available commands
