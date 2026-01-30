@@ -35,6 +35,7 @@ import (
 
 // buildLogWriter writes build log entries to VictoriaLogs with version metadata
 type buildLogWriter struct {
+	log      *slog.Logger
 	writer   observability.LogWriter
 	entityID string
 	version  string
@@ -44,7 +45,7 @@ func (w *buildLogWriter) write(msg string) {
 	if w.writer == nil || w.entityID == "" {
 		return
 	}
-	w.writer.WriteEntry(w.entityID, observability.LogEntry{
+	err := w.writer.WriteEntry(w.entityID, observability.LogEntry{
 		Timestamp: time.Now(),
 		Stream:    observability.UserOOB,
 		Body:      msg,
@@ -53,6 +54,9 @@ func (w *buildLogWriter) write(msg string) {
 			"version": w.version,
 		},
 	})
+	if err != nil {
+		w.log.Warn("failed to write build log entry", "error", err)
+	}
 }
 
 type Builder struct {
@@ -695,6 +699,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 
 	// Initialize build log writer for persisting build output to VictoriaLogs
 	buildLog := &buildLogWriter{
+		log:      b.Log,
 		writer:   b.LogWriter,
 		entityID: appRec.ID.String(),
 		version:  mrv.Version,
