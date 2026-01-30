@@ -354,9 +354,11 @@ func (e *Executor) runUndo(ctx context.Context, def *Definition, exec *Execution
 			log.Error("undo failed", "action", actionName, "error", err)
 			undoErrors = append(undoErrors, fmt.Errorf("undo %q: %w", actionName, err))
 			// Continue with other undos even on failure
+			// Don't mark as undone - recovery should retry this action
+			continue
 		}
 
-		// Record undo
+		// Record successful undo
 		now := time.Now()
 		result.UndoneAt = &now
 		exec.UpdatedAt = now

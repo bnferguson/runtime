@@ -40,6 +40,7 @@ type testController struct {
 	undoMultCalls []MultiplyOut
 	failAdd       bool
 	failMultiply  bool
+	failUndoAdd   bool
 }
 
 func (c *testController) recordAdd(in AddNumbersIn) {
@@ -79,6 +80,9 @@ func AddNumbers(ctx context.Context, in AddNumbersIn) (AddNumbersOut, error) {
 func UndoAddNumbers(ctx context.Context, in AddNumbersIn, out AddNumbersOut) error {
 	ctrl := Get[*testController](ctx)
 	ctrl.recordUndoAdd(out)
+	if ctrl.failUndoAdd {
+		return errors.New("undo add failed")
+	}
 	return nil
 }
 
@@ -632,4 +636,49 @@ func TestExecutor_StorageFailureTriggersUndo(t *testing.T) {
 	// where an action executed but wasn't recorded.
 	assert.Len(t, ctrl.undoMultCalls, 1, "multiply should be undone")
 	assert.Len(t, ctrl.undoAddCalls, 1, "add should be undone")
+}
+
+func TestExecutor_FailedUndoNotMarkedAsUndone(t *testing.T) {
+	registry := NewRegistry()
+
+	ctrl := &testController{
+		failMultiply: true, // multiply fails, triggering undo
+		failUndoAdd:  true, // undo of add also fails
+	}
+	err := Define("undo-fail-test").
+		Using(ctrl).
+		Action("add", AddNumbers).Undo(UndoAddNumbers).
+		Action("multiply", Multiply).Undo(UndoMultiply).
+		RegisterTo(registry)
+	require.NoError(t, err)
+
+	storage := newMemoryStorage()
+	executor := NewExecutor(storage, WithRegistry(registry))
+
+	err = executor.Start("undo-fail-test").
+		Input("a", 2).
+		Input("b", 3).
+		Input("factor", 4).
+		WithID("undo-fail-exec").
+		Execute(context.Background())
+
+	// Saga should return an error (with undo errors)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "undo errors")
+
+	// Add executed, multiply was attempted
+	assert.Len(t, ctrl.addCalls, 1)
+	assert.Len(t, ctrl.multiplyCalls, 1)
+
+	// Undo was attempted for add (multiply failed so no output to undo)
+	assert.Len(t, ctrl.undoAddCalls, 1)
+
+	// KEY ASSERTION: The "add" action should NOT be marked as undone
+	// because its undo failed. This ensures recovery will retry the undo.
+	exec, err := storage.Get(context.Background(), "undo-fail-exec")
+	require.NoError(t, err)
+
+	addResult := exec.ExecutedActions["add"]
+	require.NotNil(t, addResult)
+	assert.Nil(t, addResult.UndoneAt, "add should NOT be marked as undone since undo failed")
 }
