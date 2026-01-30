@@ -15,7 +15,7 @@ func AppDelete(ctx *Context, opts struct {
 }) error {
 	appName := opts.AppName
 	if appName == "" {
-		if ac, err := appconfig.LoadAppConfig(); err == nil && ac.Name != "" {
+		if ac, err := appconfig.LoadAppConfig(); err == nil && ac != nil && ac.Name != "" {
 			appName = ac.Name
 		}
 	}
