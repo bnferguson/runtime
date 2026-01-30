@@ -64,6 +64,9 @@ func Logs(ctx *Context, opts struct {
 	if opts.Build != "" && opts.Sandbox != "" {
 		return fmt.Errorf("cannot specify both --build and --sandbox")
 	}
+	if opts.Build != "" && opts.Service != "" {
+		return fmt.Errorf("cannot specify both --build and --service")
+	}
 
 	// If neither is specified, try to load app from directory context
 	if opts.App == "" && opts.Sandbox == "" {
