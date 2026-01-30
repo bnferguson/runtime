@@ -5,6 +5,15 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *main*
 
+**Features**
+
+- **Preserve disk mounts during server restart** - The LSVD disk manager now survives server restarts, keeping disk mounts active. Use `systemctl reload miren` for a soft restart that preserves mounts, or `systemctl restart miren` for a full restart. This significantly reduces disruption when updating the miren server.
+
+  **For existing installations:** To enable this feature, either re-run `sudo miren server install --force` to regenerate the systemd unit file, or manually add the following line to `/etc/systemd/system/miren.service` under the `[Service]` section and run `systemctl daemon-reload`:
+  ```
+  ExecReload=/bin/kill -USR1 $MAINPID
+  ```
+
 ---
 
 ## v0.3.0

@@ -39,7 +39,9 @@ func runOutboardLsvd(ctx *Context, configPath, dataPath, nodeId, entityServerAdd
 
 	obs, err := outboard.NewServer(runCtx, configPath,
 		outboard.WithVersion(server.ServerVersion),
-		outboard.WithShutdownFunc(cancel),
+		outboard.WithShutdownFunc(func() {
+			cancel()
+		}),
 	)
 	if err != nil {
 		return err

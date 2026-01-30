@@ -147,6 +147,14 @@ func (r *Runner) Close() error {
 	return err
 }
 
+// SetRestartMode sets whether outboard processes should be preserved when closing.
+// When true, processes like lsvd-server will continue running during server restart.
+func (r *Runner) SetRestartMode(v bool) {
+	if r.lsvdComponent != nil {
+		r.lsvdComponent.SetRestartMode(v)
+	}
+}
+
 // Drain sets the runner's node status to disabled and stops all running sandboxes
 func (r *Runner) Drain(ctx context.Context) error {
 	if r.ec == nil || r.Id == "" {
@@ -427,7 +435,7 @@ func (r *Runner) SetupControllers(
 			NodeId:           r.Id,
 		}
 
-		if err := lsvdComp.Start(ctx, lsvdConfig); err != nil {
+		if err := lsvdComp.StartOrReconnect(ctx, lsvdConfig); err != nil {
 			return nil, fmt.Errorf("failed to start lsvd-server: %w", err)
 		}
 

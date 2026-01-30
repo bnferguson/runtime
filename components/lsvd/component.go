@@ -48,10 +48,11 @@ type Component struct {
 	olog     *slog.Logger
 	dataPath string
 
-	mu        sync.Mutex
-	config    *Config
-	connector *outboard.Connector
-	running   bool
+	mu          sync.Mutex
+	config      *Config
+	connector   *outboard.Connector
+	running     bool
+	restartMode bool // If true, Close() will detach instead of stopping
 
 	// RPC client for debug interface
 	debugClient *lsvd_v1alpha.LsvdDebugClient
@@ -171,11 +172,143 @@ func (c *Component) Stop(ctx context.Context) error {
 	return nil
 }
 
-// Close implements io.Closer for use in closers list
+// Close implements io.Closer for use in closers list.
+// If restart mode is set, it detaches from the process instead of stopping it.
 func (c *Component) Close() error {
+	c.mu.Lock()
+	restartMode := c.restartMode
+	c.mu.Unlock()
+
+	if restartMode {
+		c.log.Info("restart mode - detaching from lsvd-server (keeping it running)")
+		return c.Detach()
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	return c.Stop(ctx)
+}
+
+// SetRestartMode sets whether the component should detach (preserve process)
+// instead of stopping when Close() is called.
+func (c *Component) SetRestartMode(v bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.restartMode = v
+}
+
+// Detach disconnects from lsvd-server without stopping it.
+// The process keeps running and can be reconnected later.
+func (c *Component) Detach() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.debugClient = nil
+
+	if c.connector != nil {
+		if err := c.connector.Detach(); err != nil {
+			return err
+		}
+	}
+
+	c.running = false
+	return nil
+}
+
+// StartOrReconnect tries to reconnect to an existing lsvd-server, falling back to start.
+func (c *Component) StartOrReconnect(ctx context.Context, config *Config) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.running {
+		return fmt.Errorf("lsvd-server is already running")
+	}
+
+	c.config = config
+
+	// Create directories
+	if err := os.MkdirAll(config.DataPath, 0755); err != nil {
+		return fmt.Errorf("failed to create data directory: %w", err)
+	}
+	if err := os.MkdirAll(config.OutboardPath, 0755); err != nil {
+		return fmt.Errorf("failed to create outboard directory: %w", err)
+	}
+
+	// Get the path to the current executable (miren binary)
+	execPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("failed to get executable path: %w", err)
+	}
+
+	// Build command arguments for "miren internal lsvd"
+	args := []string{
+		"internal", "lsvd",
+		"-vv",
+		"--data-path", config.DataPath,
+		"--node-id", config.NodeId,
+		"--entity-server", config.EntityServerAddr,
+		"--skip-verify",
+	}
+
+	connCfg := outboard.ConnectorConfig{
+		Name:          "lsvd-server",
+		BinaryPath:    execPath,
+		Args:          args,
+		Env:           config.Env,
+		DataPath:      config.OutboardPath,
+		RestartPolicy: outboard.DefaultRestartPolicy(),
+		ReadyTimeout:  60 * time.Second,
+	}
+
+	conn := outboard.NewConnector(c.olog, connCfg)
+
+	// Try to reconnect to existing process first
+	if err := conn.Reconnect(ctx); err == nil {
+		c.connector = conn
+		c.running = true
+		c.log.Info("reconnected to existing lsvd-server",
+			"data_path", config.DataPath,
+			"node_id", config.NodeId,
+		)
+
+		// Reconnect debug RPC
+		if err := c.connectDebugRPC(); err != nil {
+			c.log.Warn("failed to connect debug RPC after reconnect", "error", err)
+		}
+
+		return nil
+	} else {
+		c.log.Info("no existing lsvd-server to reconnect, starting fresh", "reason", err)
+	}
+
+	// Start fresh
+	if err := conn.Start(ctx); err != nil {
+		return fmt.Errorf("failed to start lsvd-server: %w", err)
+	}
+
+	c.connector = conn
+	c.running = true
+
+	c.log.Info("lsvd-server started via outboard connector",
+		"data_path", config.DataPath,
+		"node_id", config.NodeId,
+	)
+
+	// Connect to the debug RPC interface
+	if err := c.connectDebugRPC(); err != nil {
+		c.log.Warn("failed to connect to debug RPC", "error", err)
+	}
+
+	// Check if the running server needs to be upgraded
+	upgraded, err := c.checkAndUpgradeVersion(ctx, config)
+	if err != nil {
+		c.log.Warn("failed to check version", "error", err)
+	} else if upgraded {
+		c.log.Info("lsvd-server was upgraded")
+	}
+
+	c.log.Info("lsvd-server ready", "data_path", config.DataPath)
+	return nil
 }
 
 // IsRunning returns whether lsvd-server is running

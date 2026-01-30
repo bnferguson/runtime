@@ -5,7 +5,7 @@ FROM golang:1.25 AS builder
 RUN apt-get update && apt-get install -y \
     build-essential \
     git \
-    make \
+    make strace \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
@@ -37,7 +37,7 @@ RUN apt-get update && apt-get install -y \
     iproute2 \
     netcat-openbsd \
     nftables \
-    util-linux \
+    util-linux strace \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy miren binary from builder

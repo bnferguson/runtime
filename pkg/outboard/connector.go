@@ -444,6 +444,212 @@ func (c *Connector) Close() error {
 	return nil
 }
 
+// Detach disconnects from the outboard process without stopping it.
+// Call this during restart - the process keeps running and can be reconnected later.
+func (c *Connector) Detach() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if !c.running {
+		return nil
+	}
+
+	// Cancel exit monitor so it doesn't try to restart the process
+	if c.cancel != nil {
+		c.cancel()
+		c.cancel = nil
+	}
+
+	// Close RPC cleanly without waiting for process exit
+	if c.rpcState != nil {
+		c.rpcState.Close()
+		c.rpcState = nil
+		c.controlClient = nil
+	}
+
+	// Clear state but DON'T signal the process
+	c.cmd = nil
+	c.running = false
+
+	c.log.Info("detached from outboard process (process still running)")
+	return nil
+}
+
+// Reconnect attempts to connect to an existing outboard process.
+// Returns error if no process is running or reconnection fails.
+func (c *Connector) Reconnect(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.running {
+		return fmt.Errorf("already connected")
+	}
+
+	// Read existing config
+	c.configPath = filepath.Join(c.cfg.DataPath, "outboard.json")
+	cfg, err := ReadConfig(c.configPath)
+	if err != nil {
+		return fmt.Errorf("no existing config: %w", err)
+	}
+
+	if cfg.PID == 0 || cfg.RPCAddr == "" || !cfg.Ready {
+		return fmt.Errorf("invalid config state: pid=%d, addr=%s, ready=%v", cfg.PID, cfg.RPCAddr, cfg.Ready)
+	}
+
+	// Check if process is still running
+	if err := syscall.Kill(cfg.PID, 0); err != nil {
+		return fmt.Errorf("process not running (pid %d): %w", cfg.PID, err)
+	}
+
+	// Store token for RPC auth
+	c.token = cfg.Token
+
+	// Connect RPC
+	if err := c.connectRPC(ctx, cfg.RPCAddr); err != nil {
+		return fmt.Errorf("RPC connection failed: %w", err)
+	}
+
+	// Verify with health check
+	_, err = c.controlClient.Health(ctx)
+	if err != nil {
+		c.rpcState.Close()
+		c.rpcState = nil
+		c.controlClient = nil
+		return fmt.Errorf("health check failed: %w", err)
+	}
+
+	c.running = true
+	c.exitCh = make(chan struct{})
+	c.stopCh = make(chan struct{})
+	c.stopSignaled = false
+
+	// Restart FIFO forwarding for logs
+	// The outboard process still has the FIFOs open for writing, so we can
+	// start new readers to continue receiving logs after server restart.
+	stdoutDone := make(chan struct{})
+	stderrDone := make(chan struct{})
+	rlog := c.rlog.With("outboard", c.cfg.Name)
+
+	if cfg.FIFOStdout != "" {
+		go forwardFIFO(cfg.FIFOStdout, rlog, stdoutDone)
+	} else {
+		close(stdoutDone)
+	}
+	if cfg.FIFOStderr != "" {
+		go forwardFIFO(cfg.FIFOStderr, rlog, stderrDone)
+	} else {
+		close(stderrDone)
+	}
+
+	// Start monitoring via PID since we don't have the cmd
+	monitorCtx, cancel := context.WithCancel(ctx)
+	c.cancel = cancel
+	go c.monitorExistingProcess(monitorCtx, cfg.PID, stdoutDone, stderrDone)
+
+	c.log.Info("reconnected to existing outboard process", "pid", cfg.PID, "rpc_addr", cfg.RPCAddr)
+	return nil
+}
+
+// StartOrReconnect tries to reconnect to an existing outboard process first,
+// falling back to starting a fresh process if reconnection fails.
+func (c *Connector) StartOrReconnect(ctx context.Context) error {
+	if err := c.Reconnect(ctx); err == nil {
+		return nil
+	} else {
+		c.log.Info("could not reconnect to existing process, starting fresh", "reason", err)
+	}
+	return c.Start(ctx)
+}
+
+// monitorExistingProcess monitors an adopted process and waits for FIFO goroutines on exit.
+func (c *Connector) monitorExistingProcess(ctx context.Context, pid int, stdoutDone, stderrDone chan struct{}) {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := syscall.Kill(pid, 0); err != nil {
+				// Process died - wait for FIFO readers to finish draining
+				if stdoutDone != nil {
+					<-stdoutDone
+				}
+				if stderrDone != nil {
+					<-stderrDone
+				}
+
+				c.mu.Lock()
+				wasRunning := c.running
+				c.running = false
+				if c.exitCh != nil {
+					close(c.exitCh)
+				}
+				// Close RPC state immediately on process exit
+				if c.rpcState != nil {
+					c.rpcState.Close()
+					c.rpcState = nil
+					c.controlClient = nil
+				}
+				c.mu.Unlock()
+
+				if wasRunning {
+					c.log.Warn("adopted outboard process exited", "pid", pid)
+					// Attempt restart with backoff (same logic as monitorExit)
+					c.handleUnexpectedExit(ctx)
+				}
+				return
+			}
+		}
+	}
+}
+
+// handleUnexpectedExit handles restart logic when a monitored process exits unexpectedly.
+func (c *Connector) handleUnexpectedExit(ctx context.Context) {
+	c.mu.Lock()
+	now := time.Now()
+	if !c.lastRestart.IsZero() && now.Sub(c.lastRestart) > c.cfg.RestartPolicy.ResetWindow {
+		c.restartCount = 0
+	}
+
+	maxRestarts := c.cfg.RestartPolicy.MaxRestarts
+	if maxRestarts > 0 && c.restartCount >= maxRestarts {
+		c.mu.Unlock()
+		c.log.Error("outboard process exceeded max restarts", "max", maxRestarts)
+		return
+	}
+
+	backoff := c.cfg.RestartPolicy.BackoffBase
+	for i := 0; i < c.restartCount; i++ {
+		backoff *= 2
+		if backoff > c.cfg.RestartPolicy.BackoffMax {
+			backoff = c.cfg.RestartPolicy.BackoffMax
+			break
+		}
+	}
+
+	c.restartCount++
+	c.lastRestart = now
+	c.mu.Unlock()
+
+	c.log.Info("restarting outboard process", "backoff", backoff, "restart_count", c.restartCount)
+
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(backoff):
+	}
+
+	c.mu.Lock()
+	err := c.startLocked(ctx)
+	c.mu.Unlock()
+
+	if err != nil {
+		c.log.Error("failed to restart outboard process", "error", err)
+	}
+}
+
 // IsRunning returns whether the outboard process is currently running.
 func (c *Connector) IsRunning() bool {
 	c.mu.Lock()

@@ -311,6 +311,7 @@ Wants=network-online.target
 Type=simple
 Environment="NO_COLOR=1"
 ExecStart=%s
+ExecReload=/bin/kill -USR1 $MAINPID
 Restart=always
 RestartSec=10
 StandardOutput=journal

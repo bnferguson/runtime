@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"miren.dev/runtime/api/outboard/outboard_v1alpha"
@@ -47,6 +49,12 @@ func WithShutdownFunc(fn func()) ServerOption {
 // It creates a JSON slog handler writing to stdout (which the connector reads via FIFO),
 // starts an RPC server with token authentication, and exposes the OutboardControl interface.
 func NewServer(ctx context.Context, configPath string, opts ...ServerOption) (*Server, error) {
+	// Ignore SIGPIPE to survive parent restarts. Outboard processes have their
+	// stdout/stderr connected to FIFOs. When the parent exits, the FIFO reader
+	// closes, and writes would trigger SIGPIPE. Go's default behavior is to
+	// kill the process on SIGPIPE to fd 1/2, so we must explicitly ignore it.
+	signal.Ignore(syscall.SIGPIPE)
+
 	cfg, err := ReadConfig(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("reading outboard config: %w", err)

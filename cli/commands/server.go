@@ -849,28 +849,39 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	ctx.Info("Miren server started successfully! You can now connect to the cluster using `-C %s`\n", cfg.Server.GetConfigClusterName())
 	ctx.Info("For example: cd my-app && miren deploy -C %s", cfg.Server.GetConfigClusterName())
 
-	// Set up signal handling for graceful drain on SIGUSR2
+	// Set up signal handling for graceful drain (SIGUSR2) and restart mode (SIGUSR1)
 	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGUSR2)
+	signal.Notify(sigChan, syscall.SIGUSR1, syscall.SIGUSR2)
 
 	eg.Go(func() error {
-		select {
-		case <-sub.Done():
-			return nil
-		case sig := <-sigChan:
-			ctx.Log.Info("received signal, draining runner", "signal", sig)
+		for {
+			select {
+			case <-sub.Done():
+				return nil
+			case sig := <-sigChan:
+				switch sig {
+				case syscall.SIGUSR1:
+					// Restart mode - preserve outboard processes like lsvd-server
+					ctx.Log.Info("SIGUSR1 received - restart mode (preserving outboard processes)")
+					r.SetRestartMode(true)
+					return fmt.Errorf("restart requested via SIGUSR1")
 
-			// Drain the runner
-			drainCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-			defer cancel()
+				case syscall.SIGUSR2:
+					// Drain mode - stop all sandboxes before shutdown
+					ctx.Log.Info("SIGUSR2 received - draining runner")
 
-			if err := r.Drain(drainCtx); err != nil {
-				ctx.Log.Error("failed to drain runner", "error", err)
-				return err
+					drainCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+					defer cancel()
+
+					if err := r.Drain(drainCtx); err != nil {
+						ctx.Log.Error("failed to drain runner", "error", err)
+						return err
+					}
+
+					ctx.Log.Info("runner drained successfully, shutting down")
+					return fmt.Errorf("runner drained, shutting down")
+				}
 			}
-
-			ctx.Log.Info("runner drained successfully, shutting down")
-			return fmt.Errorf("runner drained, shutting down")
 		}
 	})
 
