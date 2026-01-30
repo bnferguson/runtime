@@ -681,4 +681,92 @@ func TestExecutor_FailedUndoNotMarkedAsUndone(t *testing.T) {
 	addResult := exec.ExecutedActions["add"]
 	require.NotNil(t, addResult)
 	assert.Nil(t, addResult.UndoneAt, "add should NOT be marked as undone since undo failed")
+
+	// KEY ASSERTION: Status should be Undoing (not Failed) so recovery can retry
+	assert.Equal(t, StatusUndoing, exec.Status, "saga should stay in Undoing status when undo fails")
+}
+
+// trackingStorage wraps memoryStorage and records the status at each Save call.
+type trackingStorage struct {
+	*memoryStorage
+	mu            sync.Mutex
+	statusHistory []Status
+}
+
+func newTrackingStorage() *trackingStorage {
+	return &trackingStorage{
+		memoryStorage: newMemoryStorage(),
+		statusHistory: []Status{},
+	}
+}
+
+func (t *trackingStorage) Save(ctx context.Context, exec *Execution) error {
+	t.mu.Lock()
+	t.statusHistory = append(t.statusHistory, exec.Status)
+	t.mu.Unlock()
+	return t.memoryStorage.Save(ctx, exec)
+}
+
+func (t *trackingStorage) getStatusHistory() []Status {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	result := make([]Status, len(t.statusHistory))
+	copy(result, t.statusHistory)
+	return result
+}
+
+func TestExecutor_RecoveryAfterActionFailure(t *testing.T) {
+	// This test simulates a crash after an action fails but before undo starts.
+	// Without the fix, recovery would incorrectly complete the saga instead of undoing.
+
+	registry := NewRegistry()
+
+	ctrl := &testController{}
+	err := Define("recovery-after-fail").
+		Using(ctrl).
+		Action("add", AddNumbers).Undo(UndoAddNumbers).
+		Action("multiply", Multiply).Undo(UndoMultiply).
+		RegisterTo(registry)
+	require.NoError(t, err)
+
+	storage := newMemoryStorage()
+
+	// Simulate a crashed execution where multiply failed but undo never started.
+	// This is the state we'd have if we crashed after recording the failure
+	// but before runUndo set StatusUndoing.
+	crashedExec := &Execution{
+		ID:                "crashed-after-fail",
+		DefinitionName:    "recovery-after-fail",
+		DefinitionVersion: 1,
+		InitialInputs:     map[string]any{"a": float64(2), "b": float64(3), "factor": float64(4)},
+		Status:            StatusRunning, // BUG: should be Undoing
+		Error:             "action \"multiply\" failed: multiply failed",
+		ExecutedActions: map[string]*ActionResult{
+			"add": {
+				Output:     []byte(`{"Sum":5}`),
+				ExecutedAt: time.Now(),
+			},
+			"multiply": {
+				ExecutedAt: time.Now(),
+				Error:      "multiply failed",
+			},
+		},
+		ExecutionOrder: []string{"add", "multiply"},
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	storage.Save(context.Background(), crashedExec)
+
+	// Recover
+	executor := NewExecutor(storage, WithRegistry(registry))
+	err = executor.Recover(context.Background())
+
+	// The saga had a failed action - recovery should have triggered undo
+	exec, _ := storage.Get(context.Background(), "crashed-after-fail")
+
+	// KEY ASSERTION: After recovery, the saga should be Failed (undone),
+	// not Completed. The "add" action should be undone.
+	assert.Equal(t, StatusFailed, exec.Status,
+		"Saga with failed action should be Failed after recovery, not %s", exec.Status)
+	assert.Len(t, ctrl.undoAddCalls, 1, "add should have been undone during recovery")
 }

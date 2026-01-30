@@ -210,7 +210,13 @@ func (e *Executor) runExecution(ctx context.Context, def *Definition, exec *Exec
 				log.Error("failed to persist failure state", "error", saveErr)
 			}
 
-			// Start compensation
+			// Set StatusUndoing before compensation so recovery knows to undo
+			exec.Status = StatusUndoing
+			exec.UpdatedAt = time.Now()
+			if saveErr := e.storage.Save(ctx, exec); saveErr != nil {
+				log.Error("failed to persist undoing state", "error", saveErr)
+			}
+
 			return e.runUndo(ctx, def, exec)
 		}
 
@@ -238,6 +244,14 @@ func (e *Executor) runExecution(ctx context.Context, def *Definition, exec *Exec
 			if saveErr := e.storage.Save(ctx, exec); saveErr != nil {
 				log.Error("failed to persist state after serialization error", "error", saveErr)
 			}
+
+			// Set StatusUndoing before compensation so recovery knows to undo
+			exec.Status = StatusUndoing
+			exec.UpdatedAt = time.Now()
+			if saveErr := e.storage.Save(ctx, exec); saveErr != nil {
+				log.Error("failed to persist undoing state", "error", saveErr)
+			}
+
 			return e.runUndo(ctx, def, exec)
 		}
 
@@ -254,6 +268,14 @@ func (e *Executor) runExecution(ctx context.Context, def *Definition, exec *Exec
 		if err := e.storage.Save(ctx, exec); err != nil {
 			log.Error("failed to persist action result, triggering undo", "action", actionName, "error", err)
 			exec.Error = fmt.Sprintf("failed to persist action %q result: %v", actionName, err)
+
+			// Try to set StatusUndoing before compensation (may fail if storage is down)
+			exec.Status = StatusUndoing
+			exec.UpdatedAt = time.Now()
+			if saveErr := e.storage.Save(ctx, exec); saveErr != nil {
+				log.Error("failed to persist undoing state", "error", saveErr)
+			}
+
 			return e.runUndo(ctx, def, exec)
 		}
 
@@ -370,18 +392,24 @@ func (e *Executor) runUndo(ctx context.Context, def *Definition, exec *Execution
 		log.Info("action undone", "action", actionName)
 	}
 
-	// Mark as failed
+	if len(undoErrors) > 0 {
+		// Keep StatusUndoing so recovery can retry failed undos
+		exec.UpdatedAt = time.Now()
+		if err := e.storage.Save(ctx, exec); err != nil {
+			log.Error("failed to persist undoing state", "error", err)
+		}
+		log.Info("saga undo incomplete, will retry on recovery", "undo_errors", len(undoErrors))
+		return fmt.Errorf("saga failed with %d undo errors: %v", len(undoErrors), undoErrors)
+	}
+
+	// All undos succeeded - mark as failed (terminal state)
 	exec.Status = StatusFailed
 	exec.UpdatedAt = time.Now()
 	if err := e.storage.Save(ctx, exec); err != nil {
 		log.Error("failed to persist failed state", "error", err)
 	}
 
-	log.Info("saga failed and rolled back", "undo_errors", len(undoErrors))
-
-	if len(undoErrors) > 0 {
-		return fmt.Errorf("saga failed with %d undo errors: %v", len(undoErrors), undoErrors)
-	}
+	log.Info("saga failed and rolled back")
 	return fmt.Errorf("saga failed: %s", exec.Error)
 }
 
@@ -413,9 +441,20 @@ func (e *Executor) Recover(ctx context.Context) error {
 
 		switch exec.Status {
 		case StatusPending, StatusRunning:
-			// Resume execution (pending means crashed before first action started)
-			if err := e.runExecution(ctx, def, exec); err != nil {
-				recoverErrors = append(recoverErrors, err)
+			// Check if there's a failed action that needs compensation.
+			// This handles the edge case where we crashed after recording failure
+			// but before persisting StatusUndoing.
+			if exec.Error != "" {
+				e.log.Info("found failed action during recovery, starting undo",
+					"saga", exec.DefinitionName, "error", exec.Error)
+				if err := e.runUndo(ctx, def, exec); err != nil {
+					recoverErrors = append(recoverErrors, err)
+				}
+			} else {
+				// Resume execution (pending means crashed before first action started)
+				if err := e.runExecution(ctx, def, exec); err != nil {
+					recoverErrors = append(recoverErrors, err)
+				}
 			}
 		case StatusUndoing:
 			// Resume undo
