@@ -100,6 +100,9 @@ func RunnerJoin(ctx *Context, opts struct {
 		ClientCert:         string(res.CertPem()),
 		ClientKey:          string(res.KeyPem()),
 		Labels:             labels,
+		EtcdEndpoints:      res.EtcdEndpoints(),
+		EtcdPrefix:         res.EtcdPrefix(),
+		NetworkBackend:     res.NetworkBackend(),
 	}
 
 	if err := cfg.Save(opts.ConfigPath); err != nil {

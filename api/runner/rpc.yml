@@ -67,6 +67,16 @@ interfaces:
           - name: runner_id
             type: string
             doc: The assigned or confirmed runner ID
+          - name: etcd_endpoints
+            type: list
+            element: string
+            doc: etcd endpoints for Flannel coordination
+          - name: etcd_prefix
+            type: string
+            doc: etcd prefix for Flannel network
+          - name: network_backend
+            type: string
+            doc: Network backend type (vxlan or wireguard)
           - name: error
             type: string
             doc: Error message if join failed

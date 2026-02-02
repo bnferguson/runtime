@@ -179,7 +179,7 @@ func TestServer(t *testing.T) error {
 		return err
 	}
 
-	err = r.Start(sub)
+	err = r.Start(sub, eg)
 	if err != nil {
 		ctxCancel()
 		return err

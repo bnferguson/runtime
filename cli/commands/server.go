@@ -559,6 +559,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		Address:            srvaddr,
 		EtcdEndpoints:      cfg.Etcd.Endpoints,
 		Prefix:             cfg.Etcd.GetPrefix(),
+		NetworkBackend:     cfg.Server.GetNetworkBackend(),
 		DataPath:           cfg.Server.GetDataPath(),
 		AdditionalNames:    cfg.TLS.AdditionalNames,
 		AdditionalIPs:      additionalIps,
@@ -593,6 +594,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	gn, err := grunge.NewNetwork(ctx.Log, grunge.NetworkOptions{
 		EtcdEndpoints: cfg.Etcd.Endpoints,
 		EtcdPrefix:    cfg.Etcd.GetPrefix() + "/sub/flannel",
+		BackendType:   cfg.Server.GetNetworkBackend(),
 	})
 	if err != nil {
 		ctx.Log.Error("failed to create grunge network", "error", err)
@@ -723,8 +725,8 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		return err
 	}
 
-	// Start runner
-	err = r.Start(sub)
+	// Start runner (pass errgroup for network background tasks)
+	err = r.Start(sub, eg)
 	if err != nil {
 		return err
 	}

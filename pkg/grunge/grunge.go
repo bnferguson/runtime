@@ -69,11 +69,16 @@ func NewNetwork(log *slog.Logger, opts NetworkOptions) (*Network, error) {
 }
 
 func (n *Network) SetupConfig(ctx context.Context, v4, v6 netip.Prefix) error {
-	var vxlanBackend struct {
+	var backend struct {
 		Type string
 	}
 
-	vxlanBackend.Type = "vxlan"
+	// Use configured backend type, defaulting to vxlan for backward compatibility
+	backendType := n.BackendType
+	if backendType == "" {
+		backendType = "vxlan"
+	}
+	backend.Type = backendType
 
 	var config subnet.Config
 	config.EnableIPv4 = true
@@ -82,7 +87,7 @@ func (n *Network) SetupConfig(ctx context.Context, v4, v6 netip.Prefix) error {
 	config.Network = ip.FromIPNet(netipx.PrefixIPNet(v4))
 	//config.IPv6Network = ip.FromIP6Net(netipx.PrefixIPNet(v6))
 
-	data, err := json.Marshal(vxlanBackend)
+	data, err := json.Marshal(backend)
 	if err != nil {
 		n.log.Error("Failed to marshal config", "error", err)
 		return err
@@ -237,9 +242,16 @@ func (n *Network) Start(ctx context.Context, eg *errgroup.Group) error {
 	}
 
 	bm := backend.NewManager(ctx, sm, extIface)
-	be, err := bm.GetBackend("vxlan")
+
+	// Use configured backend type, defaulting to vxlan for backward compatibility
+	backendType := n.BackendType
+	if backendType == "" {
+		backendType = "vxlan"
+	}
+
+	be, err := bm.GetBackend(backendType)
 	if err != nil {
-		n.log.Error("Failed to get backend", "error", err)
+		n.log.Error("Failed to get backend", "backend", backendType, "error", err)
 		return err
 	}
 

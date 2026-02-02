@@ -66,6 +66,7 @@ type CoordinatorConfig struct {
 	Address         string              `json:"address" yaml:"address"`
 	EtcdEndpoints   []string            `json:"etcd_endpoints" yaml:"etcd_endpoints"`
 	Prefix          string              `json:"prefix" yaml:"prefix"`
+	NetworkBackend  string              `json:"network_backend" yaml:"network_backend"`
 	Resolver        netresolve.Resolver `json:"resolver" yaml:"resolver"`
 	TempDir         string              `json:"temp_dir" yaml:"temp_dir"`
 	DataPath        string              `json:"data_path" yaml:"data_path"`
@@ -733,7 +734,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		server.ExposeValue("dev.miren.runtime/admin", admin_v1alpha.AdaptAdmin(adminServer))
 	}
 
-	runnerReg := runnerserver.NewRegistrationServer(c.Log, c.authority, eac, c.Address)
+	runnerReg := runnerserver.NewRegistrationServer(c.Log, c.authority, eac, c.Address, c.EtcdEndpoints, c.Prefix, c.NetworkBackend)
 	server.ExposeValue(rpc.ServiceRunner, runner_v1alpha.AdaptRunnerRegistration(runnerReg))
 
 	c.Log.Info("started RPC server")

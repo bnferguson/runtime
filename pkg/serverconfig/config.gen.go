@@ -233,6 +233,7 @@ type ServerConfig struct {
 	ConfigClusterName       *string `toml:"config_cluster_name" env:"MIREN_SERVER_CONFIG_CLUSTER_NAME"`
 	DataPath                *string `toml:"data_path" env:"MIREN_SERVER_DATA_PATH"`
 	HTTPRequestTimeout      *int    `toml:"http_request_timeout" env:"MIREN_SERVER_HTTP_REQUEST_TIMEOUT"`
+	NetworkBackend          *string `toml:"network_backend" env:"MIREN_SERVER_NETWORK_BACKEND"`
 	ReleasePath             *string `toml:"release_path" env:"MIREN_SERVER_RELEASE_PATH"`
 	RunnerAddress           *string `toml:"runner_address" env:"MIREN_SERVER_RUNNER_ADDRESS"`
 	RunnerID                *string `toml:"runner_id" env:"MIREN_SERVER_RUNNER_ID"`
@@ -290,6 +291,19 @@ func (c *ServerConfig) GetHTTPRequestTimeout() int {
 // SetHTTPRequestTimeout sets the value of HTTPRequestTimeout
 func (c *ServerConfig) SetHTTPRequestTimeout(v int) {
 	c.HTTPRequestTimeout = &v
+}
+
+// GetNetworkBackend returns the value of NetworkBackend or its zero value if nil
+func (c *ServerConfig) GetNetworkBackend() string {
+	if c.NetworkBackend != nil {
+		return *c.NetworkBackend
+	}
+	return ""
+}
+
+// SetNetworkBackend sets the value of NetworkBackend
+func (c *ServerConfig) SetNetworkBackend(v string) {
+	c.NetworkBackend = &v
 }
 
 // GetReleasePath returns the value of ReleasePath or its zero value if nil

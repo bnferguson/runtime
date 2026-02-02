@@ -8,6 +8,8 @@ import (
 	"math/big"
 	"regexp"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 const alphanumChars = "abcdefghjkmnpqrstuvwxyz23456789"
@@ -62,4 +64,12 @@ func randomAlphanumeric(length int) (string, error) {
 		result[i] = alphanumChars[n.Int64()]
 	}
 	return string(result), nil
+}
+
+// IsUUID checks if the string is a valid UUID.
+// This is used to distinguish coordinator nodes (non-UUID runner_id like "miren")
+// from runner nodes (UUID runner_id generated during join).
+func IsUUID(s string) bool {
+	_, err := uuid.Parse(s)
+	return err == nil
 }

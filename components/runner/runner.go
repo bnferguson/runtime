@@ -11,6 +11,7 @@ import (
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
+	"golang.org/x/sync/errgroup"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
@@ -33,6 +34,7 @@ import (
 	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
+	"miren.dev/runtime/pkg/grunge"
 	"miren.dev/runtime/pkg/multierror"
 	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/rpc"
@@ -86,6 +88,12 @@ type RunnerDeps struct {
 
 	// SkipLSVD skips starting the lsvd-server component (for tests that don't need disk)
 	SkipLSVD bool
+
+	// Flannel network configuration (for distributed runners)
+	// If EtcdEndpoints is non-empty, the runner will join the Flannel network
+	EtcdEndpoints  []string
+	EtcdPrefix     string
+	NetworkBackend string
 }
 
 const (
@@ -231,8 +239,18 @@ func (r *Runner) ContainerdContainerForSandbox(ctx context.Context, id entity.Id
 	return nil, nil
 }
 
-func (r *Runner) Start(ctx context.Context) error {
+// Start initializes and starts the runner.
+// The optional errgroup parameter is used for running background tasks like the Flannel network.
+// If eg is nil and the runner needs to join a Flannel network, an internal errgroup will be created.
+func (r *Runner) Start(ctx context.Context, eg ...*errgroup.Group) error {
 	r.Log.Info("Starting runner", "id", r.Id)
+
+	// Initialize Flannel/WireGuard network if distributed runner configuration is provided
+	if len(r.deps.EtcdEndpoints) > 0 {
+		if err := r.initializeNetwork(ctx, eg...); err != nil {
+			return fmt.Errorf("failed to initialize network: %w", err)
+		}
+	}
 
 	var (
 		rs     *rpc.State
@@ -289,6 +307,46 @@ func (r *Runner) Start(ctx context.Context) error {
 	}
 
 	r.Log.Info("Runner running", "id", r.Id)
+
+	return nil
+}
+
+// initializeNetwork sets up the Flannel network for distributed runners.
+// This is only called when EtcdEndpoints are configured (distributed runner mode).
+func (r *Runner) initializeNetwork(ctx context.Context, eg ...*errgroup.Group) error {
+	r.Log.Info("Initializing distributed runner network",
+		"etcd_endpoints", r.deps.EtcdEndpoints,
+		"etcd_prefix", r.deps.EtcdPrefix,
+		"backend", r.deps.NetworkBackend)
+
+	gn, err := grunge.NewNetwork(r.Log, grunge.NetworkOptions{
+		EtcdEndpoints: r.deps.EtcdEndpoints,
+		EtcdPrefix:    r.deps.EtcdPrefix,
+		BackendType:   r.deps.NetworkBackend,
+		PrevIPv4:      r.deps.IPv4Routable,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create grunge network: %w", err)
+	}
+
+	// Get or create an errgroup for running the network
+	var runGroup *errgroup.Group
+	if len(eg) > 0 && eg[0] != nil {
+		runGroup = eg[0]
+	} else {
+		runGroup, ctx = errgroup.WithContext(ctx)
+	}
+
+	// Start the network (joins the Flannel mesh, doesn't setup config - coordinator did that)
+	if err := gn.Start(ctx, runGroup); err != nil {
+		return fmt.Errorf("failed to start grunge network: %w", err)
+	}
+
+	// Update deps with the leased IP
+	lease := gn.Lease()
+	r.deps.IPv4Routable = lease.IPv4()
+
+	r.Log.Info("Joined Flannel network", "ipv4", lease.IPv4().String())
 
 	return nil
 }
