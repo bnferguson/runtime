@@ -1763,6 +1763,10 @@ func (c *SandboxController) buildSubContainerSpec(
 	[]containerd.NewContainerOpts,
 	error,
 ) {
+	if co.Image == "" {
+		return nil, fmt.Errorf("container %q has no image configured", co.Name)
+	}
+
 	img, err := c.CC.GetImage(ctx, co.Image)
 	if err != nil {
 		// If the image is not found, we can try to pull it.

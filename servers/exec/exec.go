@@ -271,6 +271,10 @@ func (e *Server) spec(opts *exec_v1alpha.ShellOptions, spec *oci.Spec, ver *core
 // into a container. Service containers with custom images (like postgres) should
 // not have the app's entrypoint applied.
 func imageMatchesAppVersion(containerImage, appVersionImage string) bool {
+	// If app version has no image, it can't match
+	if appVersionImage == "" {
+		return false
+	}
 	// Exact match
 	if containerImage == appVersionImage {
 		return true

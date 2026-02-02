@@ -329,6 +329,9 @@ func (s *Server) buildSandboxSpec(
 	}
 
 	image := ver.ImageUrl
+	if image == "" {
+		return nil, fmt.Errorf("app has no deployed image; run 'miren deploy' first")
+	}
 
 	appCont := compute_v1alpha.SandboxSpecContainer{
 		Name:  "app",

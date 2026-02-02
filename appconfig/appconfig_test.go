@@ -527,6 +527,39 @@ value = "8080"
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "service web: env[0] key is required")
 	})
+
+	t.Run("env var with empty value succeeds (secrets stored server-side)", func(t *testing.T) {
+		config := `
+name = "test-app"
+
+[[env]]
+key = "DATABASE_URL"
+`
+		ac, err := Parse([]byte(config))
+		require.NoError(t, err)
+		assert.NotNil(t, ac)
+		assert.Len(t, ac.EnvVars, 1)
+		assert.Equal(t, "DATABASE_URL", ac.EnvVars[0].Key)
+		assert.Empty(t, ac.EnvVars[0].Value)
+	})
+
+	t.Run("service env var with empty value succeeds (secrets stored server-side)", func(t *testing.T) {
+		config := `
+name = "test-app"
+
+[services.web]
+command = "server"
+
+[[services.web.env]]
+key = "API_KEY"
+`
+		ac, err := Parse([]byte(config))
+		require.NoError(t, err)
+		assert.NotNil(t, ac)
+		assert.Len(t, ac.Services["web"].EnvVars, 1)
+		assert.Equal(t, "API_KEY", ac.Services["web"].EnvVars[0].Key)
+		assert.Empty(t, ac.Services["web"].EnvVars[0].Value)
+	})
 }
 
 func TestValidateDiskConcurrencyRequirement(t *testing.T) {

@@ -11,7 +11,7 @@ import (
 
 type AppEnvVar struct {
 	Key   string `json:"key" toml:"key"`
-	Value string `json:"value" toml:"value"`
+	Value string `json:"value,omitempty" toml:"value,omitempty"`
 }
 
 type BuildConfig struct {
@@ -55,12 +55,12 @@ type ServiceConfig struct {
 
 type AppConfig struct {
 	Name        string                    `toml:"name"`
-	PostImport  string                    `toml:"post_import"`
-	EnvVars     []AppEnvVar               `toml:"env"`
-	Concurrency *int                      `toml:"concurrency"`
-	Services    map[string]*ServiceConfig `toml:"services"`
-	Build       *BuildConfig              `toml:"build"`
-	Include     []string                  `toml:"include"`
+	PostImport  string                    `toml:"post_import,omitempty"`
+	EnvVars     []AppEnvVar               `toml:"env,omitempty"`
+	Concurrency *int                      `toml:"concurrency,omitempty"`
+	Services    map[string]*ServiceConfig `toml:"services,omitempty"`
+	Build       *BuildConfig              `toml:"build,omitempty"`
+	Include     []string                  `toml:"include,omitempty"`
 }
 
 const AppConfigPath = ".miren/app.toml"
@@ -137,9 +137,22 @@ func Parse(data []byte) (*AppConfig, error) {
 	return &ac, nil
 }
 
+// ParseWithoutValidation parses app config TOML without running validation.
+// Use this when you need to read a config that may have incomplete values
+// (e.g., for updating with new detected env vars).
+func ParseWithoutValidation(data []byte) (*AppConfig, error) {
+	var ac AppConfig
+	err := toml.Unmarshal(data, &ac)
+	if err != nil {
+		return nil, err
+	}
+	return &ac, nil
+}
+
 // Validate checks that the AppConfig has valid values
 func (ac *AppConfig) Validate() error {
 	// Validate global environment variables
+	// Note: empty values are allowed - secrets may be stored server-side
 	for i, ev := range ac.EnvVars {
 		if ev.Key == "" {
 			return fmt.Errorf("env[%d]: key is required", i)
@@ -198,6 +211,7 @@ func (ac *AppConfig) Validate() error {
 		}
 
 		// Validate service environment variables
+		// Note: empty values are allowed - secrets may be stored server-side
 		for i, ev := range svcConfig.EnvVars {
 			if ev.Key == "" {
 				return fmt.Errorf("service %s: env[%d] key is required", serviceName, i)
