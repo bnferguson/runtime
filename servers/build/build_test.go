@@ -1417,3 +1417,47 @@ func TestMergeCliEnvVars(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateServicesExist(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  core_v1alpha.Config
+		wantErr bool
+	}{
+		{
+			name:    "no services returns error",
+			config:  core_v1alpha.Config{Services: nil},
+			wantErr: true,
+		},
+		{
+			name:    "empty services returns error",
+			config:  core_v1alpha.Config{Services: []core_v1alpha.Services{}},
+			wantErr: true,
+		},
+		{
+			name: "one service passes",
+			config: core_v1alpha.Config{
+				Services: []core_v1alpha.Services{{Name: "web"}},
+			},
+			wantErr: false,
+		},
+		{
+			name: "multiple services passes",
+			config: core_v1alpha.Config{
+				Services: []core_v1alpha.Services{{Name: "web"}, {Name: "worker"}},
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateServicesExist(tt.config)
+			if tt.wantErr {
+				assert.ErrorIs(t, err, errNoServices)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}

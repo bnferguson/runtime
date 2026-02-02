@@ -23,6 +23,16 @@ Services can be defined in two ways:
 1. **Procfile** — Simple format for defining commands per service
 2. **`.miren/app.toml`** — Full configuration with scaling, env vars, and images
 
+### Service Detection
+
+Miren detects services in this order:
+
+1. **`.miren/app.toml`** — Services defined in the `[services.*]` sections
+2. **`Procfile`** — Services inferred from Procfile entries
+3. **Dockerfile `CMD`/`ENTRYPOINT`** — If no services are defined above, but your image has a default command, Miren creates a `web` service using that command
+
+If none of these provide a service definition, the deploy will fail with an error.
+
 ### Using a Procfile
 
 If your app has a `Procfile`, Miren automatically infers services from it:

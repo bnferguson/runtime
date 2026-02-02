@@ -141,6 +141,18 @@ func mergeServiceEnvVars(existingEnvs []core_v1alpha.Env, newEnvs []core_v1alpha
 	return result
 }
 
+// errNoServices is returned when a build produces no services
+var errNoServices = errors.New("no services defined: please define at least one service in a Procfile or .miren/app.toml")
+
+// validateServicesExist checks that at least one service is defined in the config.
+// Returns an error if no services are found.
+func validateServicesExist(cfg core_v1alpha.Config) error {
+	if len(cfg.Services) == 0 {
+		return errNoServices
+	}
+	return nil
+}
+
 // buildServicesConfig collects services from app config and procfile,
 // resolves defaults, and returns the final service configurations.
 // This is the core logic for determining which services exist in an app_version
@@ -814,6 +826,13 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		ExistingConfig:   mrv.Config,
 		CliEnvVars:       args.EnvVars(),
 	})
+
+	// Fail the deploy if no services are defined - this prevents deploying an app
+	// that can't serve any traffic
+	if err := validateServicesExist(mrv.Config); err != nil {
+		b.sendErrorStatus(ctx, status, "%s. See https://miren.md/services", err)
+		return err
+	}
 
 	if len(args.EnvVars()) > 0 {
 		b.Log.Info("applied CLI env vars", "count", len(args.EnvVars()))
