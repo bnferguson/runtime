@@ -116,7 +116,7 @@ func mergeServiceEnvVars(existingEnvs []core_v1alpha.Env, newEnvs []core_v1alpha
 }
 
 // errNoServices is returned when a build produces no services
-var errNoServices = errors.New("no services defined: please define at least one service in a Procfile or miren.toml")
+var errNoServices = errors.New("no services defined: please define at least one service in a Procfile or .miren/app.toml")
 
 // validateServicesExist checks that at least one service is defined in the config.
 // Returns an error if no services are found.
