@@ -3,6 +3,7 @@ package coordinate
 import (
 	"context"
 	"crypto/sha1"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
@@ -62,6 +63,13 @@ import (
 	"miren.dev/runtime/version"
 )
 
+// EtcdTLSConfig holds TLS configuration for connecting to etcd with mTLS.
+type EtcdTLSConfig struct {
+	CertPEM []byte // Client certificate PEM
+	KeyPEM  []byte // Client private key PEM
+	CACert  []byte // CA certificate PEM for verifying server
+}
+
 type CoordinatorConfig struct {
 	Address         string              `json:"address" yaml:"address"`
 	EtcdEndpoints   []string            `json:"etcd_endpoints" yaml:"etcd_endpoints"`
@@ -82,6 +90,10 @@ type CoordinatorConfig struct {
 
 	// NoAuth disables authentication entirely (for testing only)
 	NoAuth bool `json:"no_auth" yaml:"no_auth"`
+
+	// EtcdTLS holds mTLS configuration for etcd connections (optional).
+	// When set, the coordinator will use mTLS to connect to etcd.
+	EtcdTLS *EtcdTLSConfig `json:"etcd_tls" yaml:"etcd_tls"`
 
 	Mem       *metrics.MemoryUsage
 	Cpu       *metrics.CPUUsage
@@ -110,6 +122,119 @@ const (
 	DefaultProjectOwner = "miren.system@miren.dev"
 	DefaultCloudURL     = "https://api.miren.cloud"
 )
+
+// EtcdTLSSetupResult contains the results of setting up etcd TLS.
+type EtcdTLSSetupResult struct {
+	// CertsDir is the directory containing etcd server certs (ca.crt, server.crt, server.key)
+	CertsDir string
+	// ClientTLS is the TLS config for clients connecting to etcd
+	ClientTLS *EtcdTLSConfig
+}
+
+// SetupEtcdTLS loads or creates the CA and issues certificates for etcd mTLS.
+// This must be called before starting the etcd component when TLS is desired.
+// The dataPath should be the same path used for CoordinatorConfig.DataPath.
+func SetupEtcdTLS(log *slog.Logger, dataPath string) (*EtcdTLSSetupResult, error) {
+	// Load or create CA (same logic as Coordinator.LoadCA)
+	certPath := filepath.Join(dataPath, "server", "ca.crt")
+	keyPath := filepath.Join(dataPath, "server", "ca.key")
+
+	var ca *caauth.Authority
+
+	if data, err := os.ReadFile(certPath); err == nil {
+		log.Info("loading existing CA for etcd TLS", "path", certPath)
+
+		key, err := os.ReadFile(keyPath)
+		if err != nil {
+			return nil, fmt.Errorf("missing key for CA: %w", err)
+		}
+
+		ca, err = caauth.LoadFromPEM(data, key)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load CA: %w", err)
+		}
+	} else {
+		log.Info("generating new CA for etcd TLS", "path", certPath)
+
+		var err error
+		ca, err = caauth.New(caauth.Options{
+			CommonName:   "miren-server",
+			Organization: "miren",
+			ValidFor:     10 * year,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate CA: %w", err)
+		}
+
+		err = os.MkdirAll(filepath.Dir(certPath), 0755)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create CA directory: %w", err)
+		}
+
+		cd, kd, err := ca.ExportPEM()
+		if err != nil {
+			return nil, fmt.Errorf("failed to export CA: %w", err)
+		}
+
+		if err := os.WriteFile(certPath, cd, 0644); err != nil {
+			return nil, fmt.Errorf("failed to write CA cert: %w", err)
+		}
+
+		if err := os.WriteFile(keyPath, kd, 0600); err != nil {
+			return nil, fmt.Errorf("failed to write CA key: %w", err)
+		}
+	}
+
+	// Create etcd certs directory
+	certsDir := filepath.Join(dataPath, "etcd-certs")
+	if err := os.MkdirAll(certsDir, 0700); err != nil {
+		return nil, fmt.Errorf("failed to create etcd certs directory: %w", err)
+	}
+
+	// Issue etcd server certificate
+	serverCert, err := ca.IssueCertificate(caauth.Options{
+		CommonName:   "etcd-server",
+		Organization: "miren",
+		ValidFor:     1 * year,
+		DNSNames:     []string{"localhost"},
+		IPs:          []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to issue etcd server certificate: %w", err)
+	}
+
+	// Write etcd server certs
+	if err := os.WriteFile(filepath.Join(certsDir, "ca.crt"), ca.GetCACertificate(), 0644); err != nil {
+		return nil, fmt.Errorf("failed to write etcd CA cert: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(certsDir, "server.crt"), serverCert.CertPEM, 0644); err != nil {
+		return nil, fmt.Errorf("failed to write etcd server cert: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(certsDir, "server.key"), serverCert.KeyPEM, 0600); err != nil {
+		return nil, fmt.Errorf("failed to write etcd server key: %w", err)
+	}
+
+	// Issue coordinator client certificate
+	clientCert, err := ca.IssueCertificate(caauth.Options{
+		CommonName:   "etcd-client-coordinator",
+		Organization: "miren",
+		ValidFor:     1 * year,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to issue etcd client certificate: %w", err)
+	}
+
+	log.Info("etcd TLS certificates ready", "certs_dir", certsDir)
+
+	return &EtcdTLSSetupResult{
+		CertsDir: certsDir,
+		ClientTLS: &EtcdTLSConfig{
+			CertPEM: clientCert.CertPEM,
+			KeyPEM:  clientCert.KeyPEM,
+			CACert:  ca.GetCACertificate(),
+		},
+	}, nil
+}
 
 func NewCoordinator(log *slog.Logger, cfg CoordinatorConfig) *Coordinator {
 	return &Coordinator{
@@ -324,6 +449,30 @@ regen:
 	return nil
 }
 
+// buildEtcdTLSConfig creates a tls.Config from the EtcdTLS configuration.
+func (c *Coordinator) buildEtcdTLSConfig() (*tls.Config, error) {
+	if c.EtcdTLS == nil {
+		return nil, fmt.Errorf("etcd TLS config not set")
+	}
+
+	// Load client certificate
+	cert, err := tls.X509KeyPair(c.EtcdTLS.CertPEM, c.EtcdTLS.KeyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load etcd client certificate: %w", err)
+	}
+
+	// Create CA cert pool
+	caCertPool := x509.NewCertPool()
+	if !caCertPool.AppendCertsFromPEM(c.EtcdTLS.CACert) {
+		return nil, fmt.Errorf("failed to parse etcd CA certificate")
+	}
+
+	return &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		RootCAs:      caCertPool,
+	}, nil
+}
+
 func (c *Coordinator) LocalConfig() (*clientconfig.Config, error) {
 	return c.NamedConfig("miren-user")
 }
@@ -524,10 +673,24 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	server := rs.Server()
 
-	client, err := clientv3.New(clientv3.Config{
+	// Build etcd client config
+	etcdConfig := clientv3.Config{
 		Endpoints:        c.EtcdEndpoints,
 		AutoSyncInterval: time.Minute,
-	})
+	}
+
+	// Add TLS config if configured
+	if c.EtcdTLS != nil {
+		tlsConfig, err := c.buildEtcdTLSConfig()
+		if err != nil {
+			c.Log.Error("failed to build etcd TLS config", "error", err)
+			return err
+		}
+		etcdConfig.TLS = tlsConfig
+		c.Log.Info("etcd client using mTLS")
+	}
+
+	client, err := clientv3.New(etcdConfig)
 	if err != nil {
 		c.Log.Error("failed to create etcd client", "error", err)
 		return err

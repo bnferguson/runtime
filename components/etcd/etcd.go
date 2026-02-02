@@ -32,6 +32,12 @@ var (
 	etcdImage = imagerefs.Etcd
 )
 
+// TLSConfig holds TLS certificate paths for etcd mTLS.
+// When configured, etcd will require client certificate authentication.
+type TLSConfig struct {
+	CertsDir string // Directory containing ca.crt, server.crt, server.key
+}
+
 type EtcdConfig struct {
 	Name           string
 	DataDir        string
@@ -40,6 +46,7 @@ type EtcdConfig struct {
 	PeerPort       int
 	InitialToken   string
 	ClusterState   string
+	TLS            *TLSConfig // If set, enables mTLS for client connections
 }
 
 type EtcdComponent struct {
@@ -47,6 +54,7 @@ type EtcdComponent struct {
 
 	clientPort int
 	peerPort   int
+	tlsEnabled bool
 	config     EtcdConfig
 }
 
@@ -134,12 +142,13 @@ func (e *EtcdComponent) Start(ctx context.Context, config EtcdConfig) error {
 		config.ClusterState = "new"
 	}
 
-	// Store ports for later use
+	// Store ports and TLS state for later use
 	e.clientPort = config.ClientPort
 	e.peerPort = config.PeerPort
+	e.tlsEnabled = config.TLS != nil
 	e.config = config
 
-	e.Log.Info("starting etcd with host networking", "client_port", config.ClientPort, "peer_port", config.PeerPort)
+	e.Log.Info("starting etcd with host networking", "client_port", config.ClientPort, "peer_port", config.PeerPort, "tls", e.tlsEnabled)
 
 	// Create container
 	container, err := e.createContainer(ctx, image, config)
@@ -179,8 +188,17 @@ func (e *EtcdComponent) Start(ctx context.Context, config EtcdConfig) error {
 
 func (e *EtcdComponent) ClientEndpoint() string {
 	return e.IfRunning(func() string {
-		return fmt.Sprintf("http://localhost:%d", e.clientPort)
+		scheme := "http"
+		if e.tlsEnabled {
+			scheme = "https"
+		}
+		return fmt.Sprintf("%s://localhost:%d", scheme, e.clientPort)
 	})
+}
+
+// TLSEnabled returns whether TLS is enabled for client connections.
+func (e *EtcdComponent) TLSEnabled() bool {
+	return e.tlsEnabled
 }
 
 func (e *EtcdComponent) PeerEndpoint() string {
@@ -193,9 +211,10 @@ func (e *EtcdComponent) restartExistingContainer(ctx context.Context, container 
 	e.SetContainer(container)
 	e.config = config
 
-	// Store ports for later use
+	// Store ports and TLS state for later use
 	e.clientPort = config.ClientPort
 	e.peerPort = config.PeerPort
+	e.tlsEnabled = config.TLS != nil
 
 	// Check if there's already a running task
 	task, err := container.Task(ctx, nil)
@@ -261,13 +280,20 @@ func (e *EtcdComponent) restartExistingContainer(ctx context.Context, container 
 
 func (e *EtcdComponent) createContainer(ctx context.Context, image containerd.Image, config EtcdConfig) (containerd.Container, error) {
 	dataPath := filepath.Join(e.DataPath, "etcd")
+
+	// Determine URL scheme based on TLS config
+	scheme := "http"
+	if config.TLS != nil {
+		scheme = "https"
+	}
+
 	args := []string{
 		"/usr/local/bin/etcd",
 		"--name", config.Name,
 		"--data-dir", config.DataDir,
-		"--listen-client-urls", fmt.Sprintf("http://0.0.0.0:%d", config.ClientPort),
+		"--listen-client-urls", fmt.Sprintf("%s://0.0.0.0:%d", scheme, config.ClientPort),
 		"--listen-client-http-urls", fmt.Sprintf("http://0.0.0.0:%d", config.HTTPClientPort),
-		"--advertise-client-urls", fmt.Sprintf("http://localhost:%d", config.ClientPort),
+		"--advertise-client-urls", fmt.Sprintf("%s://localhost:%d", scheme, config.ClientPort),
 		"--listen-peer-urls", fmt.Sprintf("http://0.0.0.0:%d", config.PeerPort),
 		"--initial-advertise-peer-urls", fmt.Sprintf("http://localhost:%d", config.PeerPort),
 		"--initial-cluster", fmt.Sprintf("%s=http://localhost:%d", config.Name, config.PeerPort),
@@ -276,6 +302,36 @@ func (e *EtcdComponent) createContainer(ctx context.Context, image containerd.Im
 
 	if config.InitialToken != "" {
 		args = append(args, "--initial-cluster-token", config.InitialToken)
+	}
+
+	// Add TLS flags when configured
+	if config.TLS != nil {
+		args = append(args,
+			"--cert-file", "/certs/server.crt",
+			"--key-file", "/certs/server.key",
+			"--client-cert-auth",
+			"--trusted-ca-file", "/certs/ca.crt",
+		)
+	}
+
+	// Build mounts list
+	mounts := []specs.Mount{
+		{
+			Destination: config.DataDir,
+			Type:        "bind",
+			Source:      dataPath,
+			Options:     []string{"rbind", "rw"},
+		},
+	}
+
+	// Add certs mount when TLS is configured
+	if config.TLS != nil {
+		mounts = append(mounts, specs.Mount{
+			Destination: "/certs",
+			Type:        "bind",
+			Source:      config.TLS.CertsDir,
+			Options:     []string{"rbind", "ro"},
+		})
 	}
 
 	// Create container spec with etcd configuration using host networking
@@ -289,14 +345,7 @@ func (e *EtcdComponent) createContainer(ctx context.Context, image containerd.Im
 			"ETCD_AUTO_COMPACTION_MODE=periodic",
 			"ETCD_AUTO_COMPACTION_RETENTION=1h",
 		}),
-		oci.WithMounts([]specs.Mount{
-			{
-				Destination: config.DataDir,
-				Type:        "bind",
-				Source:      dataPath,
-				Options:     []string{"rbind", "rw"},
-			},
-		}),
+		oci.WithMounts(mounts),
 	}
 
 	// Create container

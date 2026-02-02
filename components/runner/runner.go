@@ -94,6 +94,11 @@ type RunnerDeps struct {
 	EtcdEndpoints  []string
 	EtcdPrefix     string
 	NetworkBackend string
+
+	// TLS configuration for etcd mTLS (for distributed runners)
+	EtcdTLSCert   []byte // Client certificate PEM
+	EtcdTLSKey    []byte // Client private key PEM
+	EtcdTLSCACert []byte // CA certificate PEM
 }
 
 const (
@@ -319,12 +324,21 @@ func (r *Runner) initializeNetwork(ctx context.Context, eg ...*errgroup.Group) e
 		"etcd_prefix", r.deps.EtcdPrefix,
 		"backend", r.deps.NetworkBackend)
 
-	gn, err := grunge.NewNetwork(r.Log, grunge.NetworkOptions{
+	grungeOpts := grunge.NetworkOptions{
 		EtcdEndpoints: r.deps.EtcdEndpoints,
 		EtcdPrefix:    r.deps.EtcdPrefix,
 		BackendType:   r.deps.NetworkBackend,
 		PrevIPv4:      r.deps.IPv4Routable,
-	})
+	}
+
+	// Add TLS config if provided
+	if r.deps.EtcdTLSCert != nil && r.deps.EtcdTLSKey != nil && r.deps.EtcdTLSCACert != nil {
+		grungeOpts.TLSCert = r.deps.EtcdTLSCert
+		grungeOpts.TLSKey = r.deps.EtcdTLSKey
+		grungeOpts.TLSCACert = r.deps.EtcdTLSCACert
+	}
+
+	gn, err := grunge.NewNetwork(r.Log, grungeOpts)
 	if err != nil {
 		return fmt.Errorf("failed to create grunge network: %w", err)
 	}

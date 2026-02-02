@@ -2,6 +2,8 @@ package grunge
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -51,12 +53,29 @@ type NetworkOptions struct {
 
 	PrevIPv4 netip.Prefix
 	PrevIPv6 netip.Prefix
+
+	// TLS configuration for etcd mTLS (optional)
+	TLSCert   []byte // Client certificate PEM
+	TLSKey    []byte // Client private key PEM
+	TLSCACert []byte // CA certificate PEM
 }
 
 func NewNetwork(log *slog.Logger, opts NetworkOptions) (*Network, error) {
-	ec, err := clientv3.New(clientv3.Config{
+	etcdConfig := clientv3.Config{
 		Endpoints: opts.EtcdEndpoints,
-	})
+	}
+
+	// Configure TLS if certificates are provided
+	if opts.TLSCert != nil && opts.TLSKey != nil && opts.TLSCACert != nil {
+		tlsConfig, err := buildTLSConfig(opts.TLSCert, opts.TLSKey, opts.TLSCACert)
+		if err != nil {
+			return nil, fmt.Errorf("failed to build etcd TLS config: %w", err)
+		}
+		etcdConfig.TLS = tlsConfig
+		log.Info("grunge using mTLS for etcd connection")
+	}
+
+	ec, err := clientv3.New(etcdConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -65,6 +84,24 @@ func NewNetwork(log *slog.Logger, opts NetworkOptions) (*Network, error) {
 		NetworkOptions: opts,
 		log:            log,
 		ec:             ec,
+	}, nil
+}
+
+// buildTLSConfig creates a tls.Config from PEM-encoded certificates.
+func buildTLSConfig(certPEM, keyPEM, caCertPEM []byte) (*tls.Config, error) {
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load client certificate: %w", err)
+	}
+
+	caCertPool := x509.NewCertPool()
+	if !caCertPool.AppendCertsFromPEM(caCertPEM) {
+		return nil, fmt.Errorf("failed to parse CA certificate")
+	}
+
+	return &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		RootCAs:      caCertPool,
 	}, nil
 }
 

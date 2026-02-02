@@ -254,6 +254,9 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		return err
 	}
 
+	// etcdTLSSetup holds etcd TLS configuration when distributed runners is enabled
+	var etcdTLSSetup *coordinate.EtcdTLSSetupResult
+
 	// Start embedded etcd server if requested
 	if cfg.Etcd.GetStartEmbedded() {
 		ctx.Log.Info("starting embedded etcd server", "client-port", cfg.Etcd.GetClientPort(), "peer-port", cfg.Etcd.GetPeerPort())
@@ -266,6 +269,20 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 			HTTPClientPort: cfg.Etcd.GetHTTPClientPort(),
 			PeerPort:       cfg.Etcd.GetPeerPort(),
 			ClusterState:   "new",
+		}
+
+		// Set up etcd TLS when distributed runners feature is enabled
+		if labs.DistributedRunners() {
+			ctx.Log.Info("setting up etcd mTLS for distributed runners")
+			var err error
+			etcdTLSSetup, err = coordinate.SetupEtcdTLS(ctx.Log, cfg.Server.GetDataPath())
+			if err != nil {
+				ctx.Log.Error("failed to set up etcd TLS", "error", err)
+				return err
+			}
+			etcdConfig.TLS = &etcd.TLSConfig{
+				CertsDir: etcdTLSSetup.CertsDir,
+			}
 		}
 
 		err = etcdComponent.Start(sub, etcdConfig)
@@ -554,8 +571,8 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		}
 	}
 
-	// Create coordinator
-	co := coordinate.NewCoordinator(ctx.Log, coordinate.CoordinatorConfig{
+	// Build coordinator config
+	coordConfig := coordinate.CoordinatorConfig{
 		Address:            srvaddr,
 		EtcdEndpoints:      cfg.Etcd.Endpoints,
 		Prefix:             cfg.Etcd.GetPrefix(),
@@ -575,7 +592,15 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		LogWriter:          logWriter,
 		BuildKit:           buildkitComponent,
 		HTTPRequestTimeout: cfg.Server.HTTPRequestTimeoutDuration(),
-	})
+	}
+
+	// Pass etcd TLS config when distributed runners is enabled
+	if etcdTLSSetup != nil {
+		coordConfig.EtcdTLS = etcdTLSSetup.ClientTLS
+	}
+
+	// Create coordinator
+	co := coordinate.NewCoordinator(ctx.Log, coordConfig)
 
 	err = co.Start(sub)
 	if err != nil {
@@ -591,11 +616,20 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		netip.MustParsePrefix("fd47:cafe:d00d::/64"),
 	}
 
-	gn, err := grunge.NewNetwork(ctx.Log, grunge.NetworkOptions{
+	grungeOpts := grunge.NetworkOptions{
 		EtcdEndpoints: cfg.Etcd.Endpoints,
 		EtcdPrefix:    cfg.Etcd.GetPrefix() + "/sub/flannel",
 		BackendType:   cfg.Server.GetNetworkBackend(),
-	})
+	}
+
+	// Add TLS config when distributed runners is enabled
+	if etcdTLSSetup != nil {
+		grungeOpts.TLSCert = etcdTLSSetup.ClientTLS.CertPEM
+		grungeOpts.TLSKey = etcdTLSSetup.ClientTLS.KeyPEM
+		grungeOpts.TLSCACert = etcdTLSSetup.ClientTLS.CACert
+	}
+
+	gn, err := grunge.NewNetwork(ctx.Log, grungeOpts)
 	if err != nil {
 		ctx.Log.Error("failed to create grunge network", "error", err)
 		return err
