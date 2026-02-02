@@ -30,9 +30,10 @@ func RunnerRevoke(ctx *Context, opts struct {
 		return fmt.Errorf("revoke failed: %s", res.Error())
 	}
 
-	if res.Success() {
-		ctx.Printf("Invite revoked.\n")
+	if !res.Success() {
+		return fmt.Errorf("revoke failed")
 	}
 
+	ctx.Printf("Invite revoked.\n")
 	return nil
 }

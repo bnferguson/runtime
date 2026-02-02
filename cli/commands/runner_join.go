@@ -3,6 +3,7 @@ package commands
 import (
 	"bufio"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 
@@ -32,8 +33,8 @@ func RunnerJoin(ctx *Context, opts struct {
 		return fmt.Errorf("coordinator address is required")
 	}
 
-	if !strings.Contains(coordinator, ":") {
-		coordinator = coordinator + ":8443"
+	if _, _, err := net.SplitHostPort(coordinator); err != nil {
+		coordinator = net.JoinHostPort(coordinator, "8443")
 	}
 
 	if runnerconfig.Exists(opts.ConfigPath) {

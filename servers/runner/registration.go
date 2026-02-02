@@ -154,18 +154,8 @@ func (s *RegistrationServer) Join(ctx context.Context, req *runner_v1alpha.Runne
 		version = args.Version()
 	}
 
-	certName := fmt.Sprintf("runner-%s", runnerID[:8])
-	cc, err := s.Authority.IssueCertificate(caauth.Options{
-		CommonName:   certName,
-		Organization: "miren",
-		ValidFor:     365 * 24 * time.Hour,
-	})
-	if err != nil {
-		s.Log.Error("Failed to issue certificate", "error", err, "runner_id", runnerID)
-		results.SetError("failed to issue certificate")
-		return nil
-	}
-
+	// Claim the invite first (with CAS via revision) to prevent concurrent joins
+	// from minting multiple valid certificates for the same invite
 	invite.Status = runner_v1alpha.CLAIMED
 	invite.ClaimedBy = runnerID
 	invite.ClaimedAt = time.Now()
@@ -180,6 +170,23 @@ func (s *RegistrationServer) Join(ctx context.Context, req *runner_v1alpha.Runne
 	if err != nil {
 		s.Log.Error("Failed to update invite status", "error", err, "invite_id", invite.ID)
 		results.SetError("failed to complete registration")
+		return nil
+	}
+
+	// Now that invite is claimed, issue the certificate
+	runnerIDPrefix := runnerID
+	if len(runnerIDPrefix) > 8 {
+		runnerIDPrefix = runnerIDPrefix[:8]
+	}
+	certName := fmt.Sprintf("runner-%s", runnerIDPrefix)
+	cc, err := s.Authority.IssueCertificate(caauth.Options{
+		CommonName:   certName,
+		Organization: "miren",
+		ValidFor:     365 * 24 * time.Hour,
+	})
+	if err != nil {
+		s.Log.Error("Failed to issue certificate", "error", err, "runner_id", runnerID)
+		results.SetError("failed to issue certificate")
 		return nil
 	}
 

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math/big"
 	"regexp"
 	"strings"
 )
@@ -43,23 +44,22 @@ func Validate(code string) bool {
 }
 
 func randomIndex(max int) (int, error) {
-	buf := make([]byte, 1)
-	_, err := rand.Read(buf)
+	n, err := rand.Int(rand.Reader, big.NewInt(int64(max)))
 	if err != nil {
 		return 0, err
 	}
-	return int(buf[0]) % max, nil
+	return int(n.Int64()), nil
 }
 
 func randomAlphanumeric(length int) (string, error) {
 	result := make([]byte, length)
+	max := big.NewInt(int64(len(alphanumChars)))
 	for i := range result {
-		buf := make([]byte, 1)
-		_, err := rand.Read(buf)
+		n, err := rand.Int(rand.Reader, max)
 		if err != nil {
 			return "", err
 		}
-		result[i] = alphanumChars[int(buf[0])%len(alphanumChars)]
+		result[i] = alphanumChars[n.Int64()]
 	}
 	return string(result), nil
 }
