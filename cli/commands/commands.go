@@ -76,6 +76,7 @@ func RegisterAll(d *mflags.Dispatcher) {
 		d.Dispatch("runner", Section("runner", "Runner management commands", ""))
 		d.Dispatch("runner invite", Infer("runner invite", "Create a join code for a new runner", RunnerInvite))
 		d.Dispatch("runner join", Infer("runner join", "Join this machine to a coordinator as a runner", RunnerJoin))
+		d.Dispatch("runner start", Infer("runner start", "Start this machine as a distributed runner", RunnerStart))
 		d.Dispatch("runner list", Infer("runner list", "List all registered runners", RunnerList))
 		d.Dispatch("runner revoke", Infer("runner revoke", "Revoke a runner invitation", RunnerRevoke))
 		d.Dispatch("runner invite list", Infer("runner invite list", "List all runner invitations", RunnerInviteList))

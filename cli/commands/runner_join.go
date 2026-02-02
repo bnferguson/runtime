@@ -111,7 +111,7 @@ func RunnerJoin(ctx *Context, opts struct {
 
 	ctx.Printf("Config saved to %s\n", opts.ConfigPath)
 	ctx.Printf("\nTo start this runner, run:\n")
-	ctx.Printf("  miren server --runner\n")
+	ctx.Printf("  miren runner start\n")
 
 	return nil
 }
