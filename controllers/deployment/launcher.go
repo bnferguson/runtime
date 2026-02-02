@@ -353,6 +353,17 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 		}
 	}
 
+	// Validate that we have an image to use. Versions can exist without an
+	// image during init-time config setup (config + secrets created before
+	// the first deploy). Skip pool creation in that case.
+	if image == "" {
+		l.Log.Debug("app version has no image, skipping pool creation",
+			"app", app.ID,
+			"version", ver.Version,
+			"service", serviceName)
+		return "", nil
+	}
+
 	// Get app metadata for label
 	appResp, err := l.EAC.Get(ctx, app.ID.String())
 	if err != nil {

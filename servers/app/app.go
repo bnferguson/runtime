@@ -83,17 +83,20 @@ func (r *AppInfo) New(ctx context.Context, state *app_v1alpha.CrudNew) error {
 
 	err := r.EC.Get(ctx, name, &appRec)
 	if err == nil {
-		state.Results().SetId(name)
+		// App already exists, return its ID
+		state.Results().SetId(string(appRec.ID))
 		return nil
 	}
 
-	_, err = r.EC.Create(ctx, name, &appRec)
+	// Set default project to match the build server behavior
+	appRec.Project = "project/default"
+
+	id, err := r.EC.Create(ctx, name, &appRec)
 	if err != nil {
 		return err
 	}
 
-	// TODO this is a bad id.
-	state.Results().SetId(name)
+	state.Results().SetId(string(id))
 
 	return nil
 }

@@ -1233,7 +1233,7 @@ var (
 
 	analyzeLabelStyle = lipgloss.NewStyle().
 				Faint(true).
-				Width(10).
+				Width(12).
 				Align(lipgloss.Right)
 
 	analyzeValueStyle = lipgloss.NewStyle().
@@ -1380,13 +1380,82 @@ func analyzeApp(ctx *Context, bc *build_v1alpha.BuilderClient, dir string) error
 		}
 	}
 
-	// Environment variables (keys only)
+	// Environment variables with local detection
 	if analysisResult.HasEnvVars() && analysisResult.EnvVars() != nil {
 		envVars := *analysisResult.EnvVars()
 		if len(envVars) > 0 {
+			// Cross-reference with local environment
+			localDetection := DetectLocalEnvVars(envVars)
+
 			ctx.Printf("\n%s\n", analyzeTitleStyle.Render("Environment Variables"))
-			for _, key := range envVars {
-				ctx.Printf("  • %s\n", key)
+
+			// Show available (detected + found locally)
+			if len(localDetection.Available) > 0 {
+				ctx.Printf("  %s\n", lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render("Available locally:"))
+				for _, ev := range localDetection.Available {
+					valueDisplay := MaskValue(ev.Value, ev.Sensitive)
+					if ev.Sensitive {
+						ctx.Printf("    %s %s=%s\n",
+							lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render("✓"),
+							ev.Key,
+							lipgloss.NewStyle().Faint(true).Render(valueDisplay))
+					} else {
+						ctx.Printf("    %s %s=%s\n",
+							lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render("✓"),
+							ev.Key,
+							valueDisplay)
+					}
+				}
+			}
+
+			// Show missing (detected but not found locally)
+			if len(localDetection.Missing) > 0 {
+				ctx.Printf("  %s\n", lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render("Not set locally:"))
+				for _, ev := range localDetection.Missing {
+					ctx.Printf("    %s %s\n",
+						lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render("○"),
+						ev.Key)
+				}
+			}
+
+			// Show additional app-related env vars found locally
+			if len(localDetection.Additional) > 0 {
+				ctx.Printf("  %s\n", lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Render("Also found locally (may be relevant):"))
+				for _, ev := range localDetection.Additional {
+					valueDisplay := MaskValue(ev.Value, ev.Sensitive)
+					if ev.Sensitive {
+						ctx.Printf("    %s %s=%s\n",
+							lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Render("?"),
+							ev.Key,
+							lipgloss.NewStyle().Faint(true).Render(valueDisplay))
+					} else {
+						ctx.Printf("    %s %s=%s\n",
+							lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Render("?"),
+							ev.Key,
+							valueDisplay)
+					}
+				}
+			}
+		}
+	} else {
+		// No detected env vars - still scan local environment for suggestions
+		localDetection := DetectLocalEnvVars(nil)
+		if len(localDetection.Additional) > 0 {
+			ctx.Printf("\n%s\n", analyzeTitleStyle.Render("Environment Variables"))
+			ctx.Printf("  %s\n", lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Render("Found locally (may be relevant):"))
+			for _, ev := range localDetection.Additional {
+				valueDisplay := MaskValue(ev.Value, ev.Sensitive)
+				if ev.Sensitive {
+					ctx.Printf("    %s %s=%s\n",
+						lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Render("?"),
+						ev.Key,
+						lipgloss.NewStyle().Faint(true).Render(valueDisplay))
+				} else {
+					ctx.Printf("    %s %s=%s\n",
+						lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Render("?"),
+						ev.Key,
+						valueDisplay)
+				}
 			}
 		}
 	}
