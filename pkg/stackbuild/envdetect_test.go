@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -807,4 +808,472 @@ func TestConfigEnvPatterns(t *testing.T) {
 			assert.Equal(t, tc.expected, found)
 		})
 	}
+}
+
+func TestPythonEnvPatterns(t *testing.T) {
+	testCases := []struct {
+		name     string
+		input    string
+		expected []string
+	}{
+		{
+			name:     "os.getenv with single quotes",
+			input:    `api_key = os.getenv('API_KEY')`,
+			expected: []string{"API_KEY"},
+		},
+		{
+			name:     "os.getenv with double quotes",
+			input:    `db_url = os.getenv("DATABASE_URL")`,
+			expected: []string{"DATABASE_URL"},
+		},
+		{
+			name:     "os.environ bracket access single quotes",
+			input:    `secret = os.environ['SECRET_KEY']`,
+			expected: []string{"SECRET_KEY"},
+		},
+		{
+			name:     "os.environ bracket access double quotes",
+			input:    `token = os.environ["AUTH_TOKEN"]`,
+			expected: []string{"AUTH_TOKEN"},
+		},
+		{
+			name:     "os.environ.get with single quotes",
+			input:    `redis = os.environ.get('REDIS_URL')`,
+			expected: []string{"REDIS_URL"},
+		},
+		{
+			name:     "os.environ.get with double quotes",
+			input:    `host = os.environ.get("DB_HOST")`,
+			expected: []string{"DB_HOST"},
+		},
+		{
+			name:     "multiple env vars on one line",
+			input:    `conn = f"{os.getenv('DB_HOST')}:{os.getenv('DB_PORT')}"`,
+			expected: []string{"DB_HOST", "DB_PORT"},
+		},
+		{
+			name:     "no matches",
+			input:    `regular = "just a string"`,
+			expected: nil,
+		},
+		{
+			name:     "lowercase env var ignored",
+			input:    `os.getenv('lowercase')`,
+			expected: nil,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var found []string
+			for _, pattern := range pythonEnvPatterns {
+				matches := pattern.FindAllStringSubmatch(tc.input, -1)
+				for _, match := range matches {
+					if len(match) > 1 {
+						found = append(found, match[1])
+					}
+				}
+			}
+			assert.Equal(t, tc.expected, found)
+		})
+	}
+}
+
+func TestNodeEnvPatterns(t *testing.T) {
+	testCases := []struct {
+		name     string
+		input    string
+		expected []string
+	}{
+		{
+			name:     "process.env.VAR",
+			input:    `const apiKey = process.env.API_KEY`,
+			expected: []string{"API_KEY"},
+		},
+		{
+			name:     "process.env bracket single quotes",
+			input:    `const dbUrl = process.env['DATABASE_URL']`,
+			expected: []string{"DATABASE_URL"},
+		},
+		{
+			name:     "process.env bracket double quotes",
+			input:    `const secret = process.env["SECRET_KEY"]`,
+			expected: []string{"SECRET_KEY"},
+		},
+		{
+			name:     "multiple env vars",
+			input:    `const url = process.env.DB_HOST + ":" + process.env.DB_PORT`,
+			expected: []string{"DB_HOST", "DB_PORT"},
+		},
+		{
+			name:     "no matches",
+			input:    `const regular = "just a string"`,
+			expected: nil,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var found []string
+			for _, pattern := range nodeEnvPatterns {
+				matches := pattern.FindAllStringSubmatch(tc.input, -1)
+				for _, match := range matches {
+					if len(match) > 1 {
+						found = append(found, match[1])
+					}
+				}
+			}
+			assert.Equal(t, tc.expected, found)
+		})
+	}
+}
+
+func TestGoEnvPatterns(t *testing.T) {
+	testCases := []struct {
+		name     string
+		input    string
+		expected []string
+	}{
+		{
+			name:     "os.Getenv with double quotes",
+			input:    `apiKey := os.Getenv("API_KEY")`,
+			expected: []string{"API_KEY"},
+		},
+		{
+			name:     "os.LookupEnv with double quotes",
+			input:    `dbUrl, ok := os.LookupEnv("DATABASE_URL")`,
+			expected: []string{"DATABASE_URL"},
+		},
+		{
+			name:     "multiple env vars",
+			input:    `host := os.Getenv("DB_HOST") + ":" + os.Getenv("DB_PORT")`,
+			expected: []string{"DB_HOST", "DB_PORT"},
+		},
+		{
+			name:     "no matches",
+			input:    `regular := "just a string"`,
+			expected: nil,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var found []string
+			for _, pattern := range goEnvPatterns {
+				matches := pattern.FindAllStringSubmatch(tc.input, -1)
+				for _, match := range matches {
+					if len(match) > 1 {
+						found = append(found, match[1])
+					}
+				}
+			}
+			assert.Equal(t, tc.expected, found)
+		})
+	}
+}
+
+func TestRustEnvPatterns(t *testing.T) {
+	testCases := []struct {
+		name     string
+		input    string
+		expected []string
+	}{
+		{
+			name:     "std::env::var",
+			input:    `let api_key = std::env::var("API_KEY").unwrap();`,
+			expected: []string{"API_KEY"},
+		},
+		{
+			name:     "env::var with use",
+			input:    `let db_url = env::var("DATABASE_URL")?;`,
+			expected: []string{"DATABASE_URL"},
+		},
+		{
+			name:     "std::env::var_os",
+			input:    `let path = std::env::var_os("CUSTOM_PATH");`,
+			expected: []string{"CUSTOM_PATH"},
+		},
+		{
+			name:     "env! macro",
+			input:    `const VERSION: &str = env!("CARGO_PKG_VERSION");`,
+			expected: []string{"CARGO_PKG_VERSION"},
+		},
+		{
+			name:     "option_env! macro",
+			input:    `const DEBUG: Option<&str> = option_env!("DEBUG_MODE");`,
+			expected: []string{"DEBUG_MODE"},
+		},
+		{
+			name:     "multiple env vars",
+			input:    `let url = format!("{}:{}", env::var("HOST")?, env::var("PORT")?);`,
+			expected: []string{"HOST", "PORT"},
+		},
+		{
+			name:     "no matches",
+			input:    `let regular = "just a string";`,
+			expected: nil,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Use a map to deduplicate matches (some patterns overlap)
+			seen := make(map[string]bool)
+			var found []string
+			for _, pattern := range rustEnvPatterns {
+				matches := pattern.FindAllStringSubmatch(tc.input, -1)
+				for _, match := range matches {
+					if len(match) > 1 && !seen[match[1]] {
+						seen[match[1]] = true
+						found = append(found, match[1])
+					}
+				}
+			}
+			assert.Equal(t, tc.expected, found)
+		})
+	}
+}
+
+func TestScanSourceFilesForEnvVars_AllFileTypes(t *testing.T) {
+	// Create a temporary directory with various source file types
+	tmpDir, err := os.MkdirTemp("", "source-scan-test-")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	// Create .js file
+	jsContent := `const apiKey = process.env.JS_API_KEY;`
+	err = os.WriteFile(filepath.Join(tmpDir, "app.js"), []byte(jsContent), 0644)
+	require.NoError(t, err)
+
+	// Create .ts file
+	tsContent := `const dbUrl: string = process.env.TS_DATABASE_URL || '';`
+	err = os.WriteFile(filepath.Join(tmpDir, "config.ts"), []byte(tsContent), 0644)
+	require.NoError(t, err)
+
+	// Create .jsx file
+	jsxContent := `
+function App() {
+  const apiUrl = process.env.JSX_API_URL;
+  return <div>{apiUrl}</div>;
+}
+`
+	err = os.WriteFile(filepath.Join(tmpDir, "App.jsx"), []byte(jsxContent), 0644)
+	require.NoError(t, err)
+
+	// Create .tsx file
+	tsxContent := `
+interface Props {}
+const Component: React.FC<Props> = () => {
+  const secret = process.env.TSX_SECRET_KEY;
+  return <span>{secret}</span>;
+};
+`
+	err = os.WriteFile(filepath.Join(tmpDir, "Component.tsx"), []byte(tsxContent), 0644)
+	require.NoError(t, err)
+
+	// Create .mjs file
+	mjsContent := `export const config = { key: process.env.MJS_CONFIG_KEY };`
+	err = os.WriteFile(filepath.Join(tmpDir, "module.mjs"), []byte(mjsContent), 0644)
+	require.NoError(t, err)
+
+	// Create .cjs file
+	cjsContent := `module.exports = { token: process.env.CJS_AUTH_TOKEN };`
+	err = os.WriteFile(filepath.Join(tmpDir, "common.cjs"), []byte(cjsContent), 0644)
+	require.NoError(t, err)
+
+	// Scan all Node/Bun file types
+	found := scanSourceFilesForEnvVars(tmpDir, []string{".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs"}, nodeEnvPatterns, nodeOptionalEnvPatterns)
+
+	// Build a map for easier assertions
+	foundNames := make(map[string]bool)
+	for _, v := range found {
+		foundNames[v.name] = true
+	}
+
+	// Verify all file types were scanned
+	assert.True(t, foundNames["JS_API_KEY"], ".js file should be scanned")
+	assert.True(t, foundNames["TS_DATABASE_URL"], ".ts file should be scanned")
+	assert.True(t, foundNames["JSX_API_URL"], ".jsx file should be scanned")
+	assert.True(t, foundNames["TSX_SECRET_KEY"], ".tsx file should be scanned")
+	assert.True(t, foundNames["MJS_CONFIG_KEY"], ".mjs file should be scanned")
+	assert.True(t, foundNames["CJS_AUTH_TOKEN"], ".cjs file should be scanned")
+}
+
+func TestScanSourceFilesForEnvVars_Python(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "python-scan-test-")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	// Create Python files
+	mainContent := `
+import os
+
+API_KEY = os.getenv('PY_API_KEY')
+DB_URL = os.environ['PY_DATABASE_URL']
+REDIS = os.environ.get('PY_REDIS_URL')
+`
+	err = os.WriteFile(filepath.Join(tmpDir, "main.py"), []byte(mainContent), 0644)
+	require.NoError(t, err)
+
+	// Create a subdirectory
+	err = os.MkdirAll(filepath.Join(tmpDir, "lib"), 0755)
+	require.NoError(t, err)
+
+	libContent := `
+import os
+SECRET = os.environ.get('PY_SECRET_TOKEN')
+`
+	err = os.WriteFile(filepath.Join(tmpDir, "lib", "config.py"), []byte(libContent), 0644)
+	require.NoError(t, err)
+
+	// Create a __pycache__ directory that should be skipped
+	err = os.MkdirAll(filepath.Join(tmpDir, "__pycache__"), 0755)
+	require.NoError(t, err)
+	cacheContent := `IGNORED = os.getenv('SHOULD_BE_IGNORED')`
+	err = os.WriteFile(filepath.Join(tmpDir, "__pycache__", "cached.py"), []byte(cacheContent), 0644)
+	require.NoError(t, err)
+
+	found := scanSourceFilesForEnvVars(tmpDir, []string{".py"}, pythonEnvPatterns, pythonOptionalEnvPatterns)
+
+	foundNames := make(map[string]bool)
+	for _, v := range found {
+		foundNames[v.name] = true
+	}
+
+	assert.True(t, foundNames["PY_API_KEY"])
+	assert.True(t, foundNames["PY_DATABASE_URL"])
+	assert.True(t, foundNames["PY_REDIS_URL"])
+	assert.True(t, foundNames["PY_SECRET_TOKEN"])
+	assert.False(t, foundNames["SHOULD_BE_IGNORED"], "__pycache__ should be skipped")
+}
+
+func TestScanSourceFilesForEnvVars_Go(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "go-scan-test-")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	mainContent := `
+package main
+
+import "os"
+
+func main() {
+	apiKey := os.Getenv("GO_API_KEY")
+	dbUrl, _ := os.LookupEnv("GO_DATABASE_URL")
+	_ = apiKey + dbUrl
+}
+`
+	err = os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte(mainContent), 0644)
+	require.NoError(t, err)
+
+	// Create cmd subdirectory
+	err = os.MkdirAll(filepath.Join(tmpDir, "cmd"), 0755)
+	require.NoError(t, err)
+
+	cmdContent := `
+package main
+
+import "os"
+
+var secret = os.Getenv("GO_SECRET_TOKEN")
+`
+	err = os.WriteFile(filepath.Join(tmpDir, "cmd", "server.go"), []byte(cmdContent), 0644)
+	require.NoError(t, err)
+
+	// Create vendor directory that should be skipped
+	err = os.MkdirAll(filepath.Join(tmpDir, "vendor", "pkg"), 0755)
+	require.NoError(t, err)
+	vendorContent := `var ignored = os.Getenv("GO_VENDOR_VAR")`
+	err = os.WriteFile(filepath.Join(tmpDir, "vendor", "pkg", "dep.go"), []byte(vendorContent), 0644)
+	require.NoError(t, err)
+
+	found := scanSourceFilesForEnvVars(tmpDir, []string{".go"}, goEnvPatterns, goOptionalEnvPatterns)
+
+	foundNames := make(map[string]bool)
+	for _, v := range found {
+		foundNames[v.name] = true
+	}
+
+	assert.True(t, foundNames["GO_API_KEY"])
+	assert.True(t, foundNames["GO_DATABASE_URL"])
+	assert.True(t, foundNames["GO_SECRET_TOKEN"])
+	assert.False(t, foundNames["GO_VENDOR_VAR"], "vendor should be skipped")
+}
+
+func TestScanSourceFilesForEnvVars_Rust(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "rust-scan-test-")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	mainContent := `
+use std::env;
+
+fn main() {
+    let api_key = env::var("RUST_API_KEY").unwrap();
+    let db_url = std::env::var("RUST_DATABASE_URL").expect("DB URL required");
+    println!("{} {}", api_key, db_url);
+}
+`
+	err = os.WriteFile(filepath.Join(tmpDir, "main.rs"), []byte(mainContent), 0644)
+	require.NoError(t, err)
+
+	// Create src subdirectory
+	err = os.MkdirAll(filepath.Join(tmpDir, "src"), 0755)
+	require.NoError(t, err)
+
+	libContent := `
+use std::env;
+
+pub fn get_secret() -> String {
+    env::var("RUST_SECRET_TOKEN").unwrap_or_default()
+}
+`
+	err = os.WriteFile(filepath.Join(tmpDir, "src", "lib.rs"), []byte(libContent), 0644)
+	require.NoError(t, err)
+
+	// Create target directory that should be skipped
+	err = os.MkdirAll(filepath.Join(tmpDir, "target", "debug"), 0755)
+	require.NoError(t, err)
+	targetContent := `let ignored = env::var("RUST_TARGET_VAR");`
+	err = os.WriteFile(filepath.Join(tmpDir, "target", "debug", "build.rs"), []byte(targetContent), 0644)
+	require.NoError(t, err)
+
+	found := scanSourceFilesForEnvVars(tmpDir, []string{".rs"}, rustEnvPatterns, rustOptionalEnvPatterns)
+
+	foundNames := make(map[string]bool)
+	for _, v := range found {
+		foundNames[v.name] = true
+	}
+
+	assert.True(t, foundNames["RUST_API_KEY"])
+	assert.True(t, foundNames["RUST_DATABASE_URL"])
+	assert.True(t, foundNames["RUST_SECRET_TOKEN"])
+	assert.False(t, foundNames["RUST_TARGET_VAR"], "target should be skipped")
+}
+
+func TestElevateToRequired(t *testing.T) {
+	sourceVars := []detectedEnvVar{
+		{name: "DATABASE_URL", optional: false},
+		{name: "OPTIONAL_VAR", optional: true},
+		{name: "API_KEY", optional: false},
+	}
+
+	// Non-optional vars should elevate
+	assert.True(t, elevateToRequired("DATABASE_URL", sourceVars))
+	assert.True(t, elevateToRequired("API_KEY", sourceVars))
+
+	// Optional vars should not elevate
+	assert.False(t, elevateToRequired("OPTIONAL_VAR", sourceVars))
+
+	// Vars not in source should not elevate
+	assert.False(t, elevateToRequired("NOT_IN_SOURCE", sourceVars))
+}
+
+func TestScanTimeout(t *testing.T) {
+	// Verify the scan timeout is configured to 10 seconds
+	assert.Equal(t, 10*time.Second, scanTimeout, "scan timeout should be 10 seconds")
+
+	// Verify errScanTimeout is defined
+	assert.NotNil(t, errScanTimeout)
+	assert.Equal(t, "scan timeout exceeded", errScanTimeout.Error())
 }

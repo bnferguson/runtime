@@ -2,6 +2,7 @@ package stackbuild
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/moby/buildkit/client/llb"
@@ -10,6 +11,55 @@ import (
 	"miren.dev/runtime/pkg/imagerefs"
 )
 
+// rustCrateEnvVars maps Rust crate names to the environment variables they typically require
+var rustCrateEnvVars = map[string][]packageEnvVarDef{
+	// Database drivers - sqlx is special because it requires DATABASE_URL at compile time
+	"sqlx":           {{name: "DATABASE_URL", confidence: "required"}}, // compile-time requirement
+	"diesel":         {{name: "DATABASE_URL", confidence: "recommended"}},
+	"tokio-postgres": {{name: "DATABASE_URL", confidence: "recommended"}},
+	"postgres":       {{name: "DATABASE_URL", confidence: "recommended"}},
+	"mongodb":        {{name: "MONGODB_URI", confidence: "recommended"}},
+	"redis":          {{name: "REDIS_URL", confidence: "recommended"}},
+
+	// Cloud services - rusoto is the older SDK, aws-sdk-* is the newer one
+	"rusoto_core":      {{name: "AWS_ACCESS_KEY_ID", confidence: "recommended"}, {name: "AWS_SECRET_ACCESS_KEY", confidence: "recommended"}},
+	"rusoto_s3":        {{name: "AWS_ACCESS_KEY_ID", confidence: "recommended"}, {name: "AWS_SECRET_ACCESS_KEY", confidence: "recommended"}},
+	"aws-sdk-s3":       {{name: "AWS_ACCESS_KEY_ID", confidence: "recommended"}, {name: "AWS_SECRET_ACCESS_KEY", confidence: "recommended"}},
+	"aws-sdk-dynamodb": {{name: "AWS_ACCESS_KEY_ID", confidence: "recommended"}, {name: "AWS_SECRET_ACCESS_KEY", confidence: "recommended"}},
+	"aws-config":       {{name: "AWS_ACCESS_KEY_ID", confidence: "recommended"}, {name: "AWS_SECRET_ACCESS_KEY", confidence: "recommended"}},
+
+	// Third-party services
+	"sentry": {{name: "SENTRY_DSN", confidence: "recommended"}},
+}
+
+// rustEnvPatterns are regex patterns to find env var usage in Rust source code
+var rustEnvPatterns = []*regexp.Regexp{
+	// std::env::var("VAR")
+	regexp.MustCompile(`std::env::var\(['"]([A-Z][A-Z0-9_]+)['"]\)`),
+	// env::var("VAR") - with use std::env
+	regexp.MustCompile(`env::var\(['"]([A-Z][A-Z0-9_]+)['"]\)`),
+	// std::env::var_os("VAR")
+	regexp.MustCompile(`std::env::var_os\(['"]([A-Z][A-Z0-9_]+)['"]\)`),
+	// env::var_os("VAR")
+	regexp.MustCompile(`env::var_os\(['"]([A-Z][A-Z0-9_]+)['"]\)`),
+	// env!("VAR") - compile-time macro
+	regexp.MustCompile(`env!\(['"]([A-Z][A-Z0-9_]+)['"]\)`),
+	// option_env!("VAR") - optional compile-time macro
+	regexp.MustCompile(`option_env!\(['"]([A-Z][A-Z0-9_]+)['"]\)`),
+}
+
+// rustOptionalEnvPatterns detect patterns where env var has a fallback
+var rustOptionalEnvPatterns = []*regexp.Regexp{
+	// env::var("VAR").unwrap_or(...)
+	regexp.MustCompile(`env::var\(['"]([A-Z][A-Z0-9_]+)['"]\)\.unwrap_or`),
+	// env::var("VAR").unwrap_or_else(...)
+	regexp.MustCompile(`env::var\(['"]([A-Z][A-Z0-9_]+)['"]\)\.unwrap_or_else`),
+	// env::var("VAR").ok()
+	regexp.MustCompile(`env::var\(['"]([A-Z][A-Z0-9_]+)['"]\)\.ok\(`),
+	// option_env!("VAR") is always optional
+	regexp.MustCompile(`option_env!\(['"]([A-Z][A-Z0-9_]+)['"]\)`),
+}
+
 // RustStack implements Stack for Rust
 type RustStack struct {
 	MetaStack
@@ -17,6 +67,12 @@ type RustStack struct {
 	// Detection state set in Init()
 	packageName string
 	edition     string
+
+	// Cached Cargo.toml for dependency detection
+	cargoTomlContent []byte
+
+	// Detected environment variable requirements
+	requiredEnvVars []EnvVarRequirement
 }
 
 func (s *RustStack) Name() string {
@@ -33,6 +89,9 @@ func (s *RustStack) Detect() bool {
 
 func (s *RustStack) Init(opts BuildOptions) {
 	s.SetCwd("/app")
+
+	// Cache Cargo.toml content
+	s.cargoTomlContent, _ = s.readFile("Cargo.toml")
 
 	// Parse Cargo.toml once and extract all info
 	cargo := s.parseCargoToml()
@@ -51,6 +110,12 @@ func (s *RustStack) Init(opts BuildOptions) {
 	// Check for Cargo.lock
 	if s.hasFile("Cargo.lock") {
 		s.Event("file", "Cargo.lock", "Found Cargo.lock")
+	}
+
+	// Detect required environment variables
+	s.requiredEnvVars = s.detectEnvVars()
+	for _, ev := range s.requiredEnvVars {
+		s.Event("env_var", ev.Name, ev.Reason)
 	}
 }
 
@@ -141,4 +206,118 @@ func (s *RustStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 
 func (s *RustStack) WebCommand() string {
 	return "/bin/app"
+}
+
+// RequiredEnvVars returns the detected environment variable requirements
+func (s *RustStack) RequiredEnvVars() []EnvVarRequirement {
+	return s.requiredEnvVars
+}
+
+// detectEnvVars analyzes the app to find required environment variables
+func (s *RustStack) detectEnvVars() []EnvVarRequirement {
+	var results []EnvVarRequirement
+
+	// 1. Scan source code first to know what env vars are actually used
+	sourceVars := scanSourceFilesForEnvVars(s.dir, []string{".rs"}, rustEnvPatterns, rustOptionalEnvPatterns)
+
+	// 2. Framework defaults - RUST_LOG is commonly used for logging
+	results = append(results, EnvVarRequirement{
+		Name:         "RUST_LOG",
+		Source:       "rust_core",
+		Confidence:   "recommended",
+		Reason:       "Rust logging level (common convention)",
+		DefaultValue: "info",
+	})
+
+	// 3. Crate-based inference with elevation logic
+	crateVars := s.detectCrateEnvVars()
+	for _, cv := range crateVars {
+		confidence := cv.Confidence
+		// Elevate to required if source code references this var
+		// Note: sqlx is already marked as required since it needs DATABASE_URL at compile time
+		if confidence == "recommended" && elevateToRequired(cv.Name, sourceVars) {
+			confidence = "required"
+		}
+		if !hasEnvVar(results, cv.Name) {
+			results = append(results, EnvVarRequirement{
+				Name:       cv.Name,
+				Source:     cv.Source,
+				Confidence: confidence,
+				Reason:     cv.Reason,
+			})
+		}
+	}
+
+	// 4. Add remaining source-detected vars not covered by crates
+	for _, v := range sourceVars {
+		if !hasEnvVar(results, v.name) {
+			confidence := "recommended"
+			reason := "Referenced in application code"
+			if v.optional {
+				confidence = "optional"
+				reason = "Referenced in application code (has fallback)"
+			}
+			results = append(results, EnvVarRequirement{
+				Name:       v.name,
+				Source:     "code",
+				Confidence: confidence,
+				Reason:     reason,
+			})
+		}
+	}
+
+	// 5. Config file parsing (.env.sample, .env.example)
+	for _, filename := range []string{".env.sample", ".env.example"} {
+		sampleVars := parseEnvSampleFile(s.dir, filename)
+		for _, v := range sampleVars {
+			if !hasEnvVar(results, v) {
+				results = append(results, EnvVarRequirement{
+					Name:       v,
+					Source:     "config",
+					Confidence: "required",
+					Reason:     "Declared in " + filename,
+				})
+			}
+		}
+	}
+
+	return results
+}
+
+// detectCrateEnvVars analyzes Cargo.toml to infer required env vars from dependencies
+func (s *RustStack) detectCrateEnvVars() []EnvVarRequirement {
+	var results []EnvVarRequirement
+	seen := make(map[string]bool)
+
+	if s.cargoTomlContent == nil {
+		return results
+	}
+
+	content := string(s.cargoTomlContent)
+
+	// Also check Cargo.lock for more accurate dependency detection
+	cargoLock, _ := s.readFile("Cargo.lock")
+	if cargoLock != nil {
+		content += "\n" + string(cargoLock)
+	}
+
+	for crate, vars := range rustCrateEnvVars {
+		// Check if the crate appears in Cargo.toml or Cargo.lock
+		// Look for patterns like: crate = "version" or name = "crate"
+		if strings.Contains(content, crate) {
+			for _, v := range vars {
+				if !seen[v.name] {
+					seen[v.name] = true
+					results = append(results, EnvVarRequirement{
+						Name:       v.name,
+						Source:     "crate",
+						Confidence: v.confidence,
+						Reason:     crate + " crate detected",
+					})
+				}
+			}
+		}
+	}
+
+	return results
 }

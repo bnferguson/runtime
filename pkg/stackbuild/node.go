@@ -2,11 +2,60 @@ package stackbuild
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 
 	"github.com/moby/buildkit/client/llb"
 	"miren.dev/runtime/pkg/imagerefs"
 )
+
+// nodePackageEnvVars maps npm package names to the environment variables they typically require
+var nodePackageEnvVars = map[string][]packageEnvVarDef{
+	// Database drivers
+	"pg":                     {{name: "DATABASE_URL", confidence: "recommended"}},
+	"mysql2":                 {{name: "DATABASE_URL", confidence: "recommended"}},
+	"mysql":                  {{name: "DATABASE_URL", confidence: "recommended"}},
+	"mongodb":                {{name: "MONGODB_URI", confidence: "recommended"}},
+	"mongoose":               {{name: "MONGODB_URI", confidence: "recommended"}},
+	"redis":                  {{name: "REDIS_URL", confidence: "recommended"}},
+	"ioredis":                {{name: "REDIS_URL", confidence: "recommended"}},
+	"@prisma/client":         {{name: "DATABASE_URL", confidence: "recommended"}},
+	"@elastic/elasticsearch": {{name: "ELASTICSEARCH_URL", confidence: "recommended"}},
+
+	// Cloud services
+	"aws-sdk":                  {{name: "AWS_ACCESS_KEY_ID", confidence: "recommended"}, {name: "AWS_SECRET_ACCESS_KEY", confidence: "recommended"}},
+	"@aws-sdk/client-s3":       {{name: "AWS_ACCESS_KEY_ID", confidence: "recommended"}, {name: "AWS_SECRET_ACCESS_KEY", confidence: "recommended"}},
+	"@aws-sdk/client-dynamodb": {{name: "AWS_ACCESS_KEY_ID", confidence: "recommended"}, {name: "AWS_SECRET_ACCESS_KEY", confidence: "recommended"}},
+
+	// Third-party services
+	"@sentry/node":   {{name: "SENTRY_DSN", confidence: "recommended"}},
+	"stripe":         {{name: "STRIPE_SECRET_KEY", confidence: "recommended"}},
+	"@sendgrid/mail": {{name: "SENDGRID_API_KEY", confidence: "recommended"}},
+	"newrelic":       {{name: "NEW_RELIC_LICENSE_KEY", confidence: "recommended"}},
+	"jsonwebtoken":   {{name: "JWT_SECRET", confidence: "recommended"}},
+	"twilio":         {{name: "TWILIO_ACCOUNT_SID", confidence: "recommended"}, {name: "TWILIO_AUTH_TOKEN", confidence: "recommended"}},
+	"mailgun-js":     {{name: "MAILGUN_API_KEY", confidence: "recommended"}},
+	"pusher":         {{name: "PUSHER_APP_ID", confidence: "recommended"}, {name: "PUSHER_KEY", confidence: "recommended"}, {name: "PUSHER_SECRET", confidence: "recommended"}},
+	"cloudinary":     {{name: "CLOUDINARY_URL", confidence: "recommended"}},
+}
+
+// nodeEnvPatterns are regex patterns to find env var usage in JavaScript/TypeScript source code
+var nodeEnvPatterns = []*regexp.Regexp{
+	// process.env.VAR
+	regexp.MustCompile(`process\.env\.([A-Z][A-Z0-9_]+)`),
+	// process.env['VAR'] or process.env["VAR"]
+	regexp.MustCompile(`process\.env\[['"]([A-Z][A-Z0-9_]+)['"]\]`),
+}
+
+// nodeOptionalEnvPatterns detect patterns where env var has a default value
+var nodeOptionalEnvPatterns = []*regexp.Regexp{
+	// process.env.VAR || 'default'
+	regexp.MustCompile(`process\.env\.([A-Z][A-Z0-9_]+)\s*\|\|`),
+	// process.env['VAR'] || 'default'
+	regexp.MustCompile(`process\.env\[['"]([A-Z][A-Z0-9_]+)['"]\]\s*\|\|`),
+	// process.env.VAR ?? 'default' (nullish coalescing)
+	regexp.MustCompile(`process\.env\.([A-Z][A-Z0-9_]+)\s*\?\?`),
+}
 
 // nodePackageManager represents the detected package manager
 type nodePackageManager string
@@ -24,6 +73,13 @@ type NodeStack struct {
 	packageManager nodePackageManager
 	scripts        map[string]string
 	entryPoint     string
+
+	// Parsed dependencies from package.json
+	dependencies    map[string]string
+	devDependencies map[string]string
+
+	// Detected environment variable requirements
+	requiredEnvVars []EnvVarRequirement
 }
 
 func (s *NodeStack) Name() string {
@@ -57,8 +113,9 @@ func (s *NodeStack) Detect() bool {
 func (s *NodeStack) Init(opts BuildOptions) {
 	s.SetCwd("/app")
 
-	// Store scripts for later use
-	s.scripts = s.getPackageScripts()
+	// Parse package.json once for scripts and dependencies
+	s.parsePackageJSON()
+
 	if s.scripts != nil {
 		if _, ok := s.scripts["start"]; ok {
 			s.Event("script", "start", "npm start script detected")
@@ -75,6 +132,12 @@ func (s *NodeStack) Init(opts BuildOptions) {
 			s.Event("file", entry, "Entry point file detected")
 			break
 		}
+	}
+
+	// Detect required environment variables
+	s.requiredEnvVars = s.detectEnvVars()
+	for _, ev := range s.requiredEnvVars {
+		s.Event("env_var", ev.Name, ev.Reason)
 	}
 }
 
@@ -136,19 +199,24 @@ func (s *NodeStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 	return &state, nil
 }
 
-func (s *NodeStack) getPackageScripts() map[string]string {
+func (s *NodeStack) parsePackageJSON() {
 	data, err := s.readFile("package.json")
 	if err != nil {
-		return nil
+		return
 	}
 
 	var pkg struct {
-		Scripts map[string]string `json:"scripts"`
+		Scripts         map[string]string `json:"scripts"`
+		Dependencies    map[string]string `json:"dependencies"`
+		DevDependencies map[string]string `json:"devDependencies"`
 	}
 	if err := json.Unmarshal(data, &pkg); err != nil {
-		return nil
+		return
 	}
-	return pkg.Scripts
+
+	s.scripts = pkg.Scripts
+	s.dependencies = pkg.Dependencies
+	s.devDependencies = pkg.DevDependencies
 }
 
 func (s *NodeStack) WebCommand() string {
@@ -178,4 +246,127 @@ func (s *NodeStack) WebCommand() string {
 	}
 
 	return ""
+}
+
+// RequiredEnvVars returns the detected environment variable requirements
+func (s *NodeStack) RequiredEnvVars() []EnvVarRequirement {
+	return s.requiredEnvVars
+}
+
+// detectEnvVars analyzes the app to find required environment variables
+func (s *NodeStack) detectEnvVars() []EnvVarRequirement {
+	var results []EnvVarRequirement
+
+	// 1. Scan source code first to know what env vars are actually used
+	sourceVars := scanSourceFilesForEnvVars(s.dir, []string{".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs"}, nodeEnvPatterns, nodeOptionalEnvPatterns)
+
+	// 2. Framework defaults - NODE_ENV should always be set in production
+	results = append(results, EnvVarRequirement{
+		Name:         "NODE_ENV",
+		Source:       "node_core",
+		Confidence:   "required",
+		Reason:       "Node.js environment mode",
+		DefaultValue: "production",
+	})
+
+	// 3. Package-based inference with elevation logic
+	packageVars := s.detectPackageEnvVars()
+	for _, pv := range packageVars {
+		confidence := pv.Confidence
+		// Elevate to required if source code references this var
+		if confidence == "recommended" && elevateToRequired(pv.Name, sourceVars) {
+			confidence = "required"
+		}
+		if !hasEnvVar(results, pv.Name) {
+			results = append(results, EnvVarRequirement{
+				Name:       pv.Name,
+				Source:     pv.Source,
+				Confidence: confidence,
+				Reason:     pv.Reason,
+			})
+		}
+	}
+
+	// 4. Add remaining source-detected vars not covered by packages
+	for _, v := range sourceVars {
+		if !hasEnvVar(results, v.name) {
+			confidence := "recommended"
+			reason := "Referenced in application code"
+			if v.optional {
+				confidence = "optional"
+				reason = "Referenced in application code (has default)"
+			}
+			results = append(results, EnvVarRequirement{
+				Name:       v.name,
+				Source:     "code",
+				Confidence: confidence,
+				Reason:     reason,
+			})
+		}
+	}
+
+	// 5. Config file parsing (.env.sample, .env.example)
+	for _, filename := range []string{".env.sample", ".env.example"} {
+		sampleVars := parseEnvSampleFile(s.dir, filename)
+		for _, v := range sampleVars {
+			if !hasEnvVar(results, v) {
+				results = append(results, EnvVarRequirement{
+					Name:       v,
+					Source:     "config",
+					Confidence: "required",
+					Reason:     "Declared in " + filename,
+				})
+			}
+		}
+	}
+
+	return results
+}
+
+// detectPackageEnvVars analyzes package.json to infer required env vars from dependencies
+func (s *NodeStack) detectPackageEnvVars() []EnvVarRequirement {
+	var results []EnvVarRequirement
+	seen := make(map[string]bool)
+
+	// Check both dependencies and devDependencies
+	allDeps := make(map[string]bool)
+	for dep := range s.dependencies {
+		allDeps[dep] = true
+	}
+	for dep := range s.devDependencies {
+		allDeps[dep] = true
+	}
+
+	for pkg, vars := range nodePackageEnvVars {
+		// Check for exact match or prefix match (for scoped packages like @aws-sdk/*)
+		matched := false
+		if allDeps[pkg] {
+			matched = true
+		} else if strings.Contains(pkg, "*") {
+			// Handle wildcard patterns like @aws-sdk/*
+			prefix := strings.TrimSuffix(pkg, "*")
+			for dep := range allDeps {
+				if strings.HasPrefix(dep, prefix) {
+					matched = true
+					break
+				}
+			}
+		}
+
+		if matched {
+			for _, v := range vars {
+				if !seen[v.name] {
+					seen[v.name] = true
+					results = append(results, EnvVarRequirement{
+						Name:       v.name,
+						Source:     "package",
+						Confidence: v.confidence,
+						Reason:     pkg + " package detected",
+					})
+				}
+			}
+		}
+	}
+
+	return results
 }

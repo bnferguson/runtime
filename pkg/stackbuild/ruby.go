@@ -79,12 +79,6 @@ type configEnvVar struct {
 	optional bool
 }
 
-// detectedEnvVar holds an env var found in source code with its optionality
-type detectedEnvVar struct {
-	name     string
-	optional bool
-}
-
 // RubyStack implements Stack for Ruby on Rails
 type RubyStack struct {
 	MetaStack
