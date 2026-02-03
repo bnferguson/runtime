@@ -54,7 +54,10 @@ const (
 // In interactive mode, it shows a picker menu. In non-interactive mode, it prints
 // helpful error messages with command suggestions.
 func handlePermissionError(ctx *Context, currentPath string, permErr error) (upgradeInstallOption, error) {
-	userPath, _ := getUserMirenPath()
+	userPath, err := getUserMirenPath()
+	if err != nil {
+		return upgradeOptionCancel, fmt.Errorf("cannot determine user install path: %w", err)
+	}
 
 	if ui.IsInteractive() {
 		return handlePermissionErrorInteractive(ctx, currentPath, userPath)

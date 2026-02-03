@@ -58,6 +58,7 @@ func Upgrade(ctx *Context, opts struct {
 
 	// Determine installation path
 	var installPath string
+	isUserInstall := opts.User
 
 	if opts.User {
 		// User explicitly requested user directory installation
@@ -70,45 +71,59 @@ func Upgrade(ctx *Context, opts struct {
 		installPath = exe
 	}
 
-	// Check permissions before downloading
-	if err := checkInstallPermissions(installPath); err != nil {
-		var permErr *permissionError
-		if errors.As(err, &permErr) {
-			option, handleErr := handlePermissionError(ctx, installPath, permErr)
-			if handleErr != nil {
-				return handleErr
-			}
-
-			switch option {
-			case upgradeOptionSudo:
-				ctx.Info("")
-				ctx.Info("Please re-run with: sudo miren upgrade")
-				return nil
-			case upgradeOptionUser:
-				userPath, err := getUserMirenPath()
-				if err != nil {
-					return fmt.Errorf("failed to determine user install path: %w", err)
+	// Check permissions before downloading (skip if user already requested --user)
+	if !opts.User {
+		if err := checkInstallPermissions(installPath); err != nil {
+			var permErr *permissionError
+			if errors.As(err, &permErr) {
+				option, handleErr := handlePermissionError(ctx, installPath, permErr)
+				if handleErr != nil {
+					return handleErr
 				}
-				installPath = userPath
-			case upgradeOptionCancel:
-				return nil
+
+				switch option {
+				case upgradeOptionSudo:
+					ctx.Info("")
+					ctx.Info("Please re-run with: sudo miren upgrade")
+					return nil
+				case upgradeOptionUser:
+					userPath, err := getUserMirenPath()
+					if err != nil {
+						return fmt.Errorf("failed to determine user install path: %w", err)
+					}
+					installPath = userPath
+					isUserInstall = true
+				case upgradeOptionCancel:
+					return nil
+				}
+			} else {
+				return fmt.Errorf("permission check failed: %w", err)
 			}
-		} else {
-			return fmt.Errorf("permission check failed: %w", err)
 		}
 	}
 
 	// Ensure the install directory exists for user installs
-	needsPathUpdate, err := ensureUserInstallDir(installPath)
-	if err != nil {
-		return err
-	}
+	if isUserInstall {
+		needsPathUpdate, err := ensureUserInstallDir(installPath)
+		if err != nil {
+			return err
+		}
 
-	if needsPathUpdate {
-		ctx.Warn("Note: %s is not in your PATH", filepath.Dir(installPath))
-		ctx.Info("Add it to your shell configuration to use 'miren' directly:")
-		ctx.Info("  export PATH=\"%s:$PATH\"", filepath.Dir(installPath))
-		ctx.Info("")
+		if needsPathUpdate {
+			ctx.Warn("Note: %s is not in your PATH", filepath.Dir(installPath))
+			ctx.Info("Add it to your shell configuration to use 'miren' directly:")
+			ctx.Info("  export PATH=\"%s:$PATH\"", filepath.Dir(installPath))
+			ctx.Info("")
+		}
+
+		// Warn if there's an existing system binary that might take precedence
+		if exe != installPath {
+			if _, err := os.Stat(exe); err == nil {
+				ctx.Warn("Note: %s still exists and may take precedence over the user install", exe)
+				ctx.Info("You may need to remove it or ensure %s comes first in your PATH", filepath.Dir(installPath))
+				ctx.Info("")
+			}
+		}
 	}
 
 	// Update manager with final install path
