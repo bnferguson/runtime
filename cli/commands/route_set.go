@@ -5,13 +5,24 @@ import (
 
 	"miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/ingress"
+	"miren.dev/runtime/appconfig"
 )
 
 func RouteSet(ctx *Context, opts struct {
-	Host string `position:"0" usage:"Hostname for the route (e.g., example.com)" required:"true"`
-	App  string `position:"1" usage:"Application name to route to" required:"true"`
+	Host    string `position:"0" usage:"Hostname for the route (e.g., example.com)" required:"true"`
+	AppName string `position:"1" usage:"Application name to route to"`
 	ConfigCentric
 }) error {
+	appName := opts.AppName
+	if appName == "" {
+		if ac, err := appconfig.LoadAppConfig(); err == nil && ac != nil && ac.Name != "" {
+			appName = ac.Name
+		}
+	}
+	if appName == "" {
+		return fmt.Errorf("app is required")
+	}
+
 	client, err := ctx.RPCClient("entities")
 	if err != nil {
 		return err
@@ -19,9 +30,9 @@ func RouteSet(ctx *Context, opts struct {
 
 	// Look up the app by name
 	appClient := app.NewClient(ctx.Log, client)
-	appEntity, err := appClient.GetByName(ctx, opts.App)
+	appEntity, err := appClient.GetByName(ctx, appName)
 	if err != nil {
-		return fmt.Errorf("failed to find app %q: %w", opts.App, err)
+		return fmt.Errorf("failed to find app %q: %w", appName, err)
 	}
 
 	// Create/update the route
@@ -31,6 +42,6 @@ func RouteSet(ctx *Context, opts struct {
 		return err
 	}
 
-	ctx.Printf("Route set: %s → %s\n", opts.Host, opts.App)
+	ctx.Printf("Route set: %s → %s\n", opts.Host, appName)
 	return nil
 }

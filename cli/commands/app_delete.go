@@ -4,15 +4,24 @@ import (
 	"fmt"
 
 	"miren.dev/runtime/api/app/app_v1alpha"
+	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/pkg/ui"
 )
 
 func AppDelete(ctx *Context, opts struct {
 	Force   bool   `short:"f" long:"force" description:"Force delete without confirmation"`
-	AppName string `position:"0" usage:"Name of the app to delete" required:"true"`
+	AppName string `position:"0" usage:"Name of the app to delete"`
 	ConfigCentric
 }) error {
 	appName := opts.AppName
+	if appName == "" {
+		if ac, err := appconfig.LoadAppConfig(); err == nil && ac != nil && ac.Name != "" {
+			appName = ac.Name
+		}
+	}
+	if appName == "" {
+		return fmt.Errorf("app is required")
+	}
 
 	crudcl, err := ctx.RPCClient("dev.miren.runtime/app")
 	if err != nil {

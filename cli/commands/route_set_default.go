@@ -5,12 +5,23 @@ import (
 
 	apppkg "miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/ingress"
+	"miren.dev/runtime/appconfig"
 )
 
 func RouteSetDefault(ctx *Context, opts struct {
-	App string `position:"0" usage:"Application name to set as default route" required:"true"`
+	AppName string `position:"0" usage:"Application name to set as default route"`
 	ConfigCentric
 }) error {
+	appName := opts.AppName
+	if appName == "" {
+		if ac, err := appconfig.LoadAppConfig(); err == nil && ac != nil && ac.Name != "" {
+			appName = ac.Name
+		}
+	}
+	if appName == "" {
+		return fmt.Errorf("app is required")
+	}
+
 	cl, err := ctx.RPCClient("entities")
 	if err != nil {
 		return err
@@ -19,9 +30,9 @@ func RouteSetDefault(ctx *Context, opts struct {
 	ingressClient := ingress.NewClient(ctx.Log, cl)
 
 	// Get the app to ensure it exists
-	app, err := appClient.GetByName(ctx, opts.App)
+	app, err := appClient.GetByName(ctx, appName)
 	if err != nil {
-		return fmt.Errorf("failed to get app %s: %w", opts.App, err)
+		return fmt.Errorf("failed to get app %s: %w", appName, err)
 	}
 
 	ctx.Log.Info("setting default route", "app", app.ID)
@@ -31,6 +42,6 @@ func RouteSetDefault(ctx *Context, opts struct {
 		return fmt.Errorf("failed to set default route: %w", err)
 	}
 
-	ctx.Printf("Set default route to: %s\n", opts.App)
+	ctx.Printf("Set default route to: %s\n", appName)
 	return nil
 }
