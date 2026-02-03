@@ -59,7 +59,7 @@ func RunnerJoin(ctx *Context, opts struct {
 		return fmt.Errorf("invalid join code format")
 	}
 
-	cs, err := rpc.NewState(ctx, rpc.WithSkipVerify, rpc.WithLogger(ctx.Log))
+	cs, err := rpc.NewState(ctx, rpc.WithSkipVerify, rpc.WithLogger(ctx.Log), rpc.WithBindAddr("[::]:0"))
 	if err != nil {
 		return fmt.Errorf("failed to create RPC state: %w", err)
 	}
