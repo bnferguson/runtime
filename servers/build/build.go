@@ -723,20 +723,9 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		WithBuildArg("MIREN_VERSION", mrv.Version),
 	)
 
-	// Always persist build logs to VictoriaLogs, regardless of status stream
-	tos = append(tos, WithStatusUpdates(func(ss *client.SolveStatus, _ []byte) {
-		for _, log := range ss.Logs {
-			if log.Data != nil {
-				lines := strings.Split(string(log.Data), "\n")
-				for _, line := range lines {
-					line = strings.TrimSpace(line)
-					if line != "" {
-						buildLog.write(line)
-					}
-				}
-			}
-		}
-	}))
+	// Track vertices we've already logged to avoid duplicates
+	vertexStarted := make(map[string]bool)
+	vertexCompleted := make(map[string]bool)
 
 	if status != nil {
 		tos = append(tos, WithPhaseUpdates(func(phase string) {
@@ -755,16 +744,52 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 				_, _ = status.Send(ctx, so)
 			}
 		}))
+	}
 
-		tos = append(tos, WithStatusUpdates(func(_ *client.SolveStatus, sj []byte) {
+	// Single status callback that both persists logs and sends to client
+	tos = append(tos, WithStatusUpdates(func(ss *client.SolveStatus, sj []byte) {
+		// Log vertex status (build steps starting/completing/cached)
+		for _, v := range ss.Vertexes {
+			digestStr := v.Digest.String()
+
+			// Log when a vertex starts
+			if v.Started != nil && !vertexStarted[digestStr] {
+				vertexStarted[digestStr] = true
+				buildLog.write(fmt.Sprintf("[buildkit] %s", v.Name))
+			}
+
+			// Log when a vertex completes with cache status
+			if v.Completed != nil && !vertexCompleted[digestStr] {
+				vertexCompleted[digestStr] = true
+				if v.Cached {
+					buildLog.write(fmt.Sprintf("[buildkit] %s CACHED", v.Name))
+				}
+			}
+		}
+
+		// Log command output from build steps
+		for _, log := range ss.Logs {
+			if log.Data != nil {
+				lines := strings.Split(string(log.Data), "\n")
+				for _, line := range lines {
+					line = strings.TrimRight(line, " \t\r\n")
+					if strings.TrimSpace(line) != "" {
+						buildLog.write(line)
+					}
+				}
+			}
+		}
+
+		// Send raw status to client if connected
+		if status != nil {
 			so := new(build_v1alpha.Status)
 			so.Update().SetBuildkit(sj)
 			_, err := status.Send(ctx, so)
 			if err != nil {
 				b.Log.Warn("error sending status update", "error", err)
 			}
-		}))
-	}
+		}
+	}))
 
 	if status != nil {
 		so.Update().SetMessage("Calculating build")
