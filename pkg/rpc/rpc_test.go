@@ -322,6 +322,39 @@ func TestRPC(t *testing.T) {
 		r.Equal([]float32{42, 100}, vals)
 	})
 
+	t.Run("rejects unauthenticated streaming calls to non-public methods", func(t *testing.T) {
+		r := require.New(t)
+		ctx := t.Context()
+
+		s := example.AdaptEmitTemps(&exampleEmit{})
+
+		// Server with LocalOnlyAuthenticator - requires TLS client certs
+		ss, err := rpc.NewState(ctx, rpc.WithSkipVerify,
+			rpc.WithAuthenticator(&rpc.LocalOnlyAuthenticator{}))
+		r.NoError(err)
+
+		serv := ss.Server()
+		serv.ExposeValue("meter", s)
+
+		// Client without certs - won't be authenticated
+		cs, err := rpc.NewState(ctx, rpc.WithSkipVerify)
+		r.NoError(err)
+
+		c, err := cs.Connect(ss.ListenAddr(), "meter")
+		r.NoError(err)
+
+		mc := &example.EmitTempsClient{Client: c}
+
+		recv := stream.StreamRecv(func(val float32) error {
+			return nil
+		})
+
+		// Should fail with auth error since Emit is not a public method
+		_, err = mc.Emit(ctx, recv)
+		r.Error(err)
+		r.Contains(err.Error(), "401")
+	})
+
 	t.Run("can reresolve a capability", func(t *testing.T) {
 		r := require.New(t)
 		ctx := t.Context()

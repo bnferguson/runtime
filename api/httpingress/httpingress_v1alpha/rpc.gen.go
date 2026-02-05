@@ -392,6 +392,7 @@ func AdaptInternalHttp(t InternalHttp) *rpc.Interface {
 			Name:          "DoRequest",
 			InterfaceName: "InternalHttp",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.DoRequest(ctx, &InternalHttpDoRequest{Call: call})
 			},

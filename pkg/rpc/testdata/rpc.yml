@@ -15,6 +15,7 @@ interfaces:
     methods:
       - name: getHero
         index: 0
+        public: true
         parameters:
           - name: name
             type: string

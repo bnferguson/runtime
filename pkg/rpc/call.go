@@ -15,6 +15,11 @@ type Call interface {
 	Args(v any)
 	Results(v any)
 	NewCapability(i *Interface) *Capability
+	// IsAuthenticated returns true if the caller presented a valid TLS client certificate.
+	// This is used by methods that need to distinguish between authenticated and
+	// unauthenticated callers (e.g., runner registration allows unauthenticated Join
+	// but requires authentication for admin operations like CreateInvite).
+	IsAuthenticated() bool
 }
 
 type NetworkCall struct {
@@ -76,6 +81,12 @@ func (c *NetworkCall) Results(v any) {
 
 func (c *NetworkCall) RemoteAddr() string {
 	return c.r.RemoteAddr
+}
+
+// IsAuthenticated returns true if the caller presented a valid TLS client certificate,
+// or if this is a local call (used in tests).
+func (c *NetworkCall) IsAuthenticated() bool {
+	return c.peer != nil || c.local != nil
 }
 
 func (c *NetworkCall) NewCapability(i *Interface) *Capability {

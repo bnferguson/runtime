@@ -824,6 +824,7 @@ func AdaptNetDB(t NetDB) *rpc.Interface {
 			Name:          "listLeases",
 			InterfaceName: "NetDB",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.ListLeases(ctx, &NetDBListLeases{Call: call})
 			},
@@ -832,6 +833,7 @@ func AdaptNetDB(t NetDB) *rpc.Interface {
 			Name:          "status",
 			InterfaceName: "NetDB",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Status(ctx, &NetDBStatus{Call: call})
 			},
@@ -840,6 +842,7 @@ func AdaptNetDB(t NetDB) *rpc.Interface {
 			Name:          "releaseIP",
 			InterfaceName: "NetDB",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.ReleaseIP(ctx, &NetDBReleaseIP{Call: call})
 			},
@@ -848,6 +851,7 @@ func AdaptNetDB(t NetDB) *rpc.Interface {
 			Name:          "releaseSubnet",
 			InterfaceName: "NetDB",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.ReleaseSubnet(ctx, &NetDBReleaseSubnet{Call: call})
 			},
@@ -856,6 +860,7 @@ func AdaptNetDB(t NetDB) *rpc.Interface {
 			Name:          "releaseAll",
 			InterfaceName: "NetDB",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.ReleaseAll(ctx, &NetDBReleaseAll{Call: call})
 			},
@@ -864,6 +869,7 @@ func AdaptNetDB(t NetDB) *rpc.Interface {
 			Name:          "gc",
 			InterfaceName: "NetDB",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Gc(ctx, &NetDBGc{Call: call})
 			},

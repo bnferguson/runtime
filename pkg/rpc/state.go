@@ -79,6 +79,7 @@ type StateCommon struct {
 	cert         tls.Certificate
 
 	authenticator Authenticator
+	authorizer    Authorizer
 
 	privkey ed25519.PrivateKey
 	pubkey  ed25519.PublicKey
@@ -138,6 +139,7 @@ type stateOptions struct {
 	clientLocalAddr string
 
 	authenticator Authenticator
+	authorizer    Authorizer
 	bearerToken   string // JWT or other bearer token for authentication
 }
 
@@ -213,6 +215,12 @@ func WithEndpoint(endpoint string) StateOption {
 func WithAuthenticator(auth Authenticator) StateOption {
 	return func(o *stateOptions) {
 		o.authenticator = auth
+	}
+}
+
+func WithAuthorizer(authz Authorizer) StateOption {
+	return func(o *stateOptions) {
+		o.authorizer = authz
 	}
 }
 
@@ -311,6 +319,7 @@ func NewState(ctx context.Context, opts ...StateOption) (*State, error) {
 			privkey:       priv,
 			pubkey:        pub,
 			authenticator: authenticator,
+			authorizer:    so.authorizer,
 		},
 
 		defaultEndpoint: so.endpoint,

@@ -661,6 +661,7 @@ func AdaptLsvdDebug(t LsvdDebug) *rpc.Interface {
 			Name:          "listVolumes",
 			InterfaceName: "LsvdDebug",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.ListVolumes(ctx, &LsvdDebugListVolumes{Call: call})
 			},
@@ -669,6 +670,7 @@ func AdaptLsvdDebug(t LsvdDebug) *rpc.Interface {
 			Name:          "listMounts",
 			InterfaceName: "LsvdDebug",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.ListMounts(ctx, &LsvdDebugListMounts{Call: call})
 			},
@@ -677,6 +679,7 @@ func AdaptLsvdDebug(t LsvdDebug) *rpc.Interface {
 			Name:          "getMetrics",
 			InterfaceName: "LsvdDebug",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.GetMetrics(ctx, &LsvdDebugGetMetrics{Call: call})
 			},

@@ -2512,6 +2512,7 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			Name:          "new",
 			InterfaceName: "Crud",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.New(ctx, &CrudNew{Call: call})
 			},
@@ -2520,6 +2521,7 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			Name:          "setConfiguration",
 			InterfaceName: "Crud",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.SetConfiguration(ctx, &CrudSetConfiguration{Call: call})
 			},
@@ -2528,6 +2530,7 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			Name:          "getConfiguration",
 			InterfaceName: "Crud",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.GetConfiguration(ctx, &CrudGetConfiguration{Call: call})
 			},
@@ -2536,6 +2539,7 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			Name:          "setHost",
 			InterfaceName: "Crud",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.SetHost(ctx, &CrudSetHost{Call: call})
 			},
@@ -2544,6 +2548,7 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			Name:          "list",
 			InterfaceName: "Crud",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.List(ctx, &CrudList{Call: call})
 			},
@@ -2552,6 +2557,7 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			Name:          "destroy",
 			InterfaceName: "Crud",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Destroy(ctx, &CrudDestroy{Call: call})
 			},
@@ -2560,6 +2566,7 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			Name:          "setEnvVar",
 			InterfaceName: "Crud",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.SetEnvVar(ctx, &CrudSetEnvVar{Call: call})
 			},
@@ -2568,6 +2575,7 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			Name:          "deleteEnvVar",
 			InterfaceName: "Crud",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.DeleteEnvVar(ctx, &CrudDeleteEnvVar{Call: call})
 			},
@@ -2933,6 +2941,7 @@ func AdaptUserQuery(t UserQuery) *rpc.Interface {
 			Name:          "whoAmI",
 			InterfaceName: "UserQuery",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.WhoAmI(ctx, &UserQueryWhoAmI{Call: call})
 			},
@@ -3093,6 +3102,7 @@ func AdaptAppStatus(t AppStatus) *rpc.Interface {
 			Name:          "appInfo",
 			InterfaceName: "AppStatus",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.AppInfo(ctx, &AppStatusAppInfo{Call: call})
 			},
@@ -3646,6 +3656,7 @@ func AdaptLogs(t Logs) *rpc.Interface {
 			Name:          "appLogs",
 			InterfaceName: "Logs",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.AppLogs(ctx, &LogsAppLogs{Call: call})
 			},
@@ -3654,6 +3665,7 @@ func AdaptLogs(t Logs) *rpc.Interface {
 			Name:          "sandboxLogs",
 			InterfaceName: "Logs",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.SandboxLogs(ctx, &LogsSandboxLogs{Call: call})
 			},
@@ -3662,6 +3674,7 @@ func AdaptLogs(t Logs) *rpc.Interface {
 			Name:          "streamLogs",
 			InterfaceName: "Logs",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.StreamLogs(ctx, &LogsStreamLogs{Call: call})
 			},
@@ -3670,6 +3683,7 @@ func AdaptLogs(t Logs) *rpc.Interface {
 			Name:          "streamLogChunks",
 			InterfaceName: "Logs",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.StreamLogChunks(ctx, &LogsStreamLogChunks{Call: call})
 			},
@@ -4301,6 +4315,7 @@ func AdaptDisks(t Disks) *rpc.Interface {
 			Name:          "new",
 			InterfaceName: "Disks",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.New(ctx, &DisksNew{Call: call})
 			},
@@ -4309,6 +4324,7 @@ func AdaptDisks(t Disks) *rpc.Interface {
 			Name:          "getById",
 			InterfaceName: "Disks",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.GetById(ctx, &DisksGetById{Call: call})
 			},
@@ -4317,6 +4333,7 @@ func AdaptDisks(t Disks) *rpc.Interface {
 			Name:          "getByName",
 			InterfaceName: "Disks",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.GetByName(ctx, &DisksGetByName{Call: call})
 			},
@@ -4325,6 +4342,7 @@ func AdaptDisks(t Disks) *rpc.Interface {
 			Name:          "list",
 			InterfaceName: "Disks",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.List(ctx, &DisksList{Call: call})
 			},
@@ -4333,6 +4351,7 @@ func AdaptDisks(t Disks) *rpc.Interface {
 			Name:          "delete",
 			InterfaceName: "Disks",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Delete(ctx, &DisksDelete{Call: call})
 			},
@@ -4835,6 +4854,7 @@ func AdaptAddons(t Addons) *rpc.Interface {
 			Name:          "createInstance",
 			InterfaceName: "Addons",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.CreateInstance(ctx, &AddonsCreateInstance{Call: call})
 			},
@@ -4843,6 +4863,7 @@ func AdaptAddons(t Addons) *rpc.Interface {
 			Name:          "listInstances",
 			InterfaceName: "Addons",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.ListInstances(ctx, &AddonsListInstances{Call: call})
 			},
@@ -4851,6 +4872,7 @@ func AdaptAddons(t Addons) *rpc.Interface {
 			Name:          "deleteInstance",
 			InterfaceName: "Addons",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.DeleteInstance(ctx, &AddonsDeleteInstance{Call: call})
 			},

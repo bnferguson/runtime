@@ -1619,6 +1619,7 @@ func AdaptDeployment(t Deployment) *rpc.Interface {
 			Name:          "CreateDeployment",
 			InterfaceName: "Deployment",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.CreateDeployment(ctx, &DeploymentCreateDeployment{Call: call})
 			},
@@ -1627,6 +1628,7 @@ func AdaptDeployment(t Deployment) *rpc.Interface {
 			Name:          "UpdateDeploymentStatus",
 			InterfaceName: "Deployment",
 			Index:         1,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.UpdateDeploymentStatus(ctx, &DeploymentUpdateDeploymentStatus{Call: call})
 			},
@@ -1635,6 +1637,7 @@ func AdaptDeployment(t Deployment) *rpc.Interface {
 			Name:          "UpdateDeploymentPhase",
 			InterfaceName: "Deployment",
 			Index:         2,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.UpdateDeploymentPhase(ctx, &DeploymentUpdateDeploymentPhase{Call: call})
 			},
@@ -1643,6 +1646,7 @@ func AdaptDeployment(t Deployment) *rpc.Interface {
 			Name:          "UpdateFailedDeployment",
 			InterfaceName: "Deployment",
 			Index:         3,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.UpdateFailedDeployment(ctx, &DeploymentUpdateFailedDeployment{Call: call})
 			},
@@ -1651,6 +1655,7 @@ func AdaptDeployment(t Deployment) *rpc.Interface {
 			Name:          "UpdateDeploymentAppVersion",
 			InterfaceName: "Deployment",
 			Index:         4,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.UpdateDeploymentAppVersion(ctx, &DeploymentUpdateDeploymentAppVersion{Call: call})
 			},
@@ -1659,6 +1664,7 @@ func AdaptDeployment(t Deployment) *rpc.Interface {
 			Name:          "ListDeployments",
 			InterfaceName: "Deployment",
 			Index:         5,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.ListDeployments(ctx, &DeploymentListDeployments{Call: call})
 			},
@@ -1667,6 +1673,7 @@ func AdaptDeployment(t Deployment) *rpc.Interface {
 			Name:          "GetDeploymentById",
 			InterfaceName: "Deployment",
 			Index:         6,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.GetDeploymentById(ctx, &DeploymentGetDeploymentById{Call: call})
 			},
@@ -1675,6 +1682,7 @@ func AdaptDeployment(t Deployment) *rpc.Interface {
 			Name:          "GetActiveDeployment",
 			InterfaceName: "Deployment",
 			Index:         7,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.GetActiveDeployment(ctx, &DeploymentGetActiveDeployment{Call: call})
 			},
@@ -1683,6 +1691,7 @@ func AdaptDeployment(t Deployment) *rpc.Interface {
 			Name:          "CancelDeployment",
 			InterfaceName: "Deployment",
 			Index:         8,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.CancelDeployment(ctx, &DeploymentCancelDeployment{Call: call})
 			},

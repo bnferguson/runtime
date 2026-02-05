@@ -560,6 +560,7 @@ func AdaptStream(t Stream) *rpc.Interface {
 			Name:          "recv",
 			InterfaceName: "Stream",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Recv(ctx, &StreamRecv{Call: call})
 			},
@@ -2632,6 +2633,7 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Name:          "get",
 			InterfaceName: "EntityAccess",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Get(ctx, &EntityAccessGet{Call: call})
 			},
@@ -2640,6 +2642,7 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Name:          "put",
 			InterfaceName: "EntityAccess",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Put(ctx, &EntityAccessPut{Call: call})
 			},
@@ -2648,6 +2651,7 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Name:          "create",
 			InterfaceName: "EntityAccess",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Create(ctx, &EntityAccessCreate{Call: call})
 			},
@@ -2656,6 +2660,7 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Name:          "replace",
 			InterfaceName: "EntityAccess",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Replace(ctx, &EntityAccessReplace{Call: call})
 			},
@@ -2664,6 +2669,7 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Name:          "patch",
 			InterfaceName: "EntityAccess",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Patch(ctx, &EntityAccessPatch{Call: call})
 			},
@@ -2672,6 +2678,7 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Name:          "ensure",
 			InterfaceName: "EntityAccess",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Ensure(ctx, &EntityAccessEnsure{Call: call})
 			},
@@ -2680,6 +2687,7 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Name:          "put_session",
 			InterfaceName: "EntityAccess",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.PutSession(ctx, &EntityAccessPutSession{Call: call})
 			},
@@ -2688,6 +2696,7 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Name:          "delete",
 			InterfaceName: "EntityAccess",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Delete(ctx, &EntityAccessDelete{Call: call})
 			},
@@ -2696,6 +2705,7 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Name:          "watch_index",
 			InterfaceName: "EntityAccess",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.WatchIndex(ctx, &EntityAccessWatchIndex{Call: call})
 			},
@@ -2704,6 +2714,7 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Name:          "watch_entity",
 			InterfaceName: "EntityAccess",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.WatchEntity(ctx, &EntityAccessWatchEntity{Call: call})
 			},
@@ -2712,6 +2723,7 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Name:          "list",
 			InterfaceName: "EntityAccess",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.List(ctx, &EntityAccessList{Call: call})
 			},
@@ -2720,6 +2732,7 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Name:          "makeAttr",
 			InterfaceName: "EntityAccess",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.MakeAttr(ctx, &EntityAccessMakeAttr{Call: call})
 			},
@@ -2728,6 +2741,7 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Name:          "lookupKind",
 			InterfaceName: "EntityAccess",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.LookupKind(ctx, &EntityAccessLookupKind{Call: call})
 			},
@@ -2736,6 +2750,7 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Name:          "parse",
 			InterfaceName: "EntityAccess",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Parse(ctx, &EntityAccessParse{Call: call})
 			},
@@ -2744,6 +2759,7 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Name:          "format",
 			InterfaceName: "EntityAccess",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Format(ctx, &EntityAccessFormat{Call: call})
 			},
@@ -2752,6 +2768,7 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Name:          "create_session",
 			InterfaceName: "EntityAccess",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.CreateSession(ctx, &EntityAccessCreateSession{Call: call})
 			},
@@ -2760,6 +2777,7 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Name:          "revoke_session",
 			InterfaceName: "EntityAccess",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.RevokeSession(ctx, &EntityAccessRevokeSession{Call: call})
 			},
@@ -2768,6 +2786,7 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Name:          "ping_session",
 			InterfaceName: "EntityAccess",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.PingSession(ctx, &EntityAccessPingSession{Call: call})
 			},
@@ -2776,6 +2795,7 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Name:          "reindex",
 			InterfaceName: "EntityAccess",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Reindex(ctx, &EntityAccessReindex{Call: call})
 			},
@@ -2784,6 +2804,7 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Name:          "get_attributes_by_tag",
 			InterfaceName: "EntityAccess",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.GetAttributesByTag(ctx, &EntityAccessGetAttributesByTag{Call: call})
 			},

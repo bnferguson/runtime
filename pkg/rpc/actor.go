@@ -140,6 +140,11 @@ func (a *ActorCall) NewClient(capa *Capability) Client {
 	return nil
 }
 
+// IsAuthenticated returns true for actor calls since they are local and implicitly trusted.
+func (a *ActorCall) IsAuthenticated() bool {
+	return true
+}
+
 type ActorClient struct {
 	oid OID
 	reg *LocalActorRegistry

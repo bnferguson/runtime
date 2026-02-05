@@ -659,6 +659,7 @@ func AdaptStream(t Stream) *rpc.Interface {
 			Name:          "recv",
 			InterfaceName: "Stream",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Recv(ctx, &StreamRecv{Call: call})
 			},
@@ -960,6 +961,7 @@ func AdaptBuilder(t Builder) *rpc.Interface {
 			Name:          "buildFromTar",
 			InterfaceName: "Builder",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.BuildFromTar(ctx, &BuilderBuildFromTar{Call: call})
 			},
@@ -968,6 +970,7 @@ func AdaptBuilder(t Builder) *rpc.Interface {
 			Name:          "analyzeApp",
 			InterfaceName: "Builder",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.AnalyzeApp(ctx, &BuilderAnalyzeApp{Call: call})
 			},

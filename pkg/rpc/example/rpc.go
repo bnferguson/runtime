@@ -364,6 +364,7 @@ func AdaptMeter(t Meter) *rpc.Interface {
 			Name:          "readTemperature",
 			InterfaceName: "Meter",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.ReadTemperature(ctx, &MeterReadTemperature{Call: call})
 			},
@@ -372,6 +373,7 @@ func AdaptMeter(t Meter) *rpc.Interface {
 			Name:          "getSetter",
 			InterfaceName: "Meter",
 			Index:         1,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.GetSetter(ctx, &MeterGetSetter{Call: call})
 			},
@@ -558,6 +560,7 @@ func AdaptSetTemp(t SetTemp) *rpc.Interface {
 			Name:          "setTemp",
 			InterfaceName: "SetTemp",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.SetTemp(ctx, &SetTempSetTemp{Call: call})
 			},
@@ -713,6 +716,7 @@ func AdaptUpdateReceiver(t UpdateReceiver) *rpc.Interface {
 			Name:          "update",
 			InterfaceName: "UpdateReceiver",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Update(ctx, &UpdateReceiverUpdate{Call: call})
 			},
@@ -860,6 +864,7 @@ func AdaptMeterUpdates(t MeterUpdates) *rpc.Interface {
 			Name:          "registerUpdates",
 			InterfaceName: "MeterUpdates",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.RegisterUpdates(ctx, &MeterUpdatesRegisterUpdates{Call: call})
 			},
@@ -1012,6 +1017,7 @@ func AdaptAdjustTemp(t AdjustTemp) *rpc.Interface {
 			Name:          "adjust",
 			InterfaceName: "AdjustTemp",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Adjust(ctx, &AdjustTempAdjust{Call: call})
 			},
@@ -1164,6 +1170,7 @@ func AdaptSetTempG[T any](t SetTempG[T]) *rpc.Interface {
 			Name:          "setTemp",
 			InterfaceName: "SetTempG",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.SetTemp(ctx, &SetTempGSetTemp[T]{Call: call})
 			},
@@ -1311,6 +1318,7 @@ func AdaptEmitTemps(t EmitTemps) *rpc.Interface {
 			Name:          "emit",
 			InterfaceName: "EmitTemps",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Emit(ctx, &EmitTempsEmit{Call: call})
 			},

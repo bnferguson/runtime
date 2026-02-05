@@ -357,6 +357,7 @@ func AdaptOutboardControl(t OutboardControl) *rpc.Interface {
 			Name:          "health",
 			InterfaceName: "OutboardControl",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Health(ctx, &OutboardControlHealth{Call: call})
 			},
@@ -365,6 +366,7 @@ func AdaptOutboardControl(t OutboardControl) *rpc.Interface {
 			Name:          "checkVersion",
 			InterfaceName: "OutboardControl",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.CheckVersion(ctx, &OutboardControlCheckVersion{Call: call})
 			},

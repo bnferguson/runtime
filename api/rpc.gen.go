@@ -822,6 +822,7 @@ func AdaptUserQuery(t UserQuery) *rpc.Interface {
 			Name:          "whoAmI",
 			InterfaceName: "UserQuery",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.WhoAmI(ctx, &UserQueryWhoAmI{Call: call})
 			},
@@ -982,6 +983,7 @@ func AdaptAppInfo(t AppInfo) *rpc.Interface {
 			Name:          "appInfo",
 			InterfaceName: "AppInfo",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.AppInfo(ctx, &AppInfoAppInfo{Call: call})
 			},
@@ -1165,6 +1167,7 @@ func AdaptLogs(t Logs) *rpc.Interface {
 			Name:          "appLogs",
 			InterfaceName: "Logs",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.AppLogs(ctx, &LogsAppLogs{Call: call})
 			},
@@ -1709,6 +1712,7 @@ func AdaptDisks(t Disks) *rpc.Interface {
 			Name:          "new",
 			InterfaceName: "Disks",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.New(ctx, &DisksNew{Call: call})
 			},
@@ -1717,6 +1721,7 @@ func AdaptDisks(t Disks) *rpc.Interface {
 			Name:          "getById",
 			InterfaceName: "Disks",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.GetById(ctx, &DisksGetById{Call: call})
 			},
@@ -1725,6 +1730,7 @@ func AdaptDisks(t Disks) *rpc.Interface {
 			Name:          "getByName",
 			InterfaceName: "Disks",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.GetByName(ctx, &DisksGetByName{Call: call})
 			},
@@ -1733,6 +1739,7 @@ func AdaptDisks(t Disks) *rpc.Interface {
 			Name:          "list",
 			InterfaceName: "Disks",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.List(ctx, &DisksList{Call: call})
 			},
@@ -1741,6 +1748,7 @@ func AdaptDisks(t Disks) *rpc.Interface {
 			Name:          "delete",
 			InterfaceName: "Disks",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Delete(ctx, &DisksDelete{Call: call})
 			},
@@ -2243,6 +2251,7 @@ func AdaptAddons(t Addons) *rpc.Interface {
 			Name:          "createInstance",
 			InterfaceName: "Addons",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.CreateInstance(ctx, &AddonsCreateInstance{Call: call})
 			},
@@ -2251,6 +2260,7 @@ func AdaptAddons(t Addons) *rpc.Interface {
 			Name:          "listInstances",
 			InterfaceName: "Addons",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.ListInstances(ctx, &AddonsListInstances{Call: call})
 			},
@@ -2259,6 +2269,7 @@ func AdaptAddons(t Addons) *rpc.Interface {
 			Name:          "deleteInstance",
 			InterfaceName: "Addons",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.DeleteInstance(ctx, &AddonsDeleteInstance{Call: call})
 			},
