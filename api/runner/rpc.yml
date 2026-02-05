@@ -32,6 +32,7 @@ interfaces:
 
       - name: Join
         index: 1
+        public: true
         doc: Join a runner to the coordinator using an invite code
         parameters:
           - name: code

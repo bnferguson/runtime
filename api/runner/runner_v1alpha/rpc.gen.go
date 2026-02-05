@@ -857,6 +857,7 @@ func AdaptRunnerRegistration(t RunnerRegistration) *rpc.Interface {
 			Name:          "CreateInvite",
 			InterfaceName: "RunnerRegistration",
 			Index:         0,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.CreateInvite(ctx, &RunnerRegistrationCreateInvite{Call: call})
 			},
@@ -865,6 +866,7 @@ func AdaptRunnerRegistration(t RunnerRegistration) *rpc.Interface {
 			Name:          "Join",
 			InterfaceName: "RunnerRegistration",
 			Index:         1,
+			Public:        true,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Join(ctx, &RunnerRegistrationJoin{Call: call})
 			},
@@ -873,6 +875,7 @@ func AdaptRunnerRegistration(t RunnerRegistration) *rpc.Interface {
 			Name:          "ListInvites",
 			InterfaceName: "RunnerRegistration",
 			Index:         2,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.ListInvites(ctx, &RunnerRegistrationListInvites{Call: call})
 			},
@@ -881,6 +884,7 @@ func AdaptRunnerRegistration(t RunnerRegistration) *rpc.Interface {
 			Name:          "RevokeInvite",
 			InterfaceName: "RunnerRegistration",
 			Index:         3,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.RevokeInvite(ctx, &RunnerRegistrationRevokeInvite{Call: call})
 			},
@@ -889,6 +893,7 @@ func AdaptRunnerRegistration(t RunnerRegistration) *rpc.Interface {
 			Name:          "ListRunners",
 			InterfaceName: "RunnerRegistration",
 			Index:         4,
+			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.ListRunners(ctx, &RunnerRegistrationListRunners{Call: call})
 			},
