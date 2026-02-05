@@ -109,10 +109,11 @@ func NewRPCAuthenticator(ctx context.Context, config Config) (*RPCAuthenticator,
 
 // Authenticate implements rpc.Authenticator.
 // It tries JWT authentication first, then falls back to TLS client certificate.
+// Authorization (RBAC) is handled separately via the Authorize method.
 func (a *RPCAuthenticator) Authenticate(ctx context.Context, r *http.Request) (*rpc.Identity, error) {
 	// Try JWT authentication first if Authorization header is present
 	if authHeader := r.Header.Get("Authorization"); authHeader != "" {
-		identity, err := a.authenticateJWT(ctx, r, authHeader)
+		identity, err := a.authenticateJWT(ctx, authHeader)
 		if err != nil {
 			return nil, err
 		}
@@ -135,8 +136,9 @@ func (a *RPCAuthenticator) Authenticate(ctx context.Context, r *http.Request) (*
 	return nil, nil
 }
 
-// authenticateJWT validates a JWT token and performs RBAC evaluation
-func (a *RPCAuthenticator) authenticateJWT(ctx context.Context, r *http.Request, authHeader string) (*rpc.Identity, error) {
+// authenticateJWT validates a JWT token and returns the caller's identity.
+// Authorization (RBAC) is handled separately in the Authorize method.
+func (a *RPCAuthenticator) authenticateJWT(ctx context.Context, authHeader string) (*rpc.Identity, error) {
 	if !strings.HasPrefix(authHeader, "Bearer ") {
 		return nil, nil // Invalid format, not a JWT
 	}
@@ -159,36 +161,6 @@ func (a *RPCAuthenticator) authenticateJWT(ctx context.Context, r *http.Request,
 		a.tokenCache.Set(token, claims)
 	}
 
-	// Perform RBAC evaluation
-	// TODO: For now we hardcode the resource and action as "cluster access".
-	// In the future, we'll make this per-method for more granular authorization.
-	req := &rbac.Request{
-		Subject:  claims.Subject,
-		Groups:   claims.GroupIDs,
-		Resource: "cluster",
-		Action:   "access",
-		Tags:     a.tags,
-		Context: map[string]any{
-			"organization_id": claims.OrganizationID,
-		},
-	}
-
-	decision := a.rbacEval.Evaluate(req)
-	if decision == rbac.DecisionDeny {
-		a.logger.Warn("authorization denied",
-			"subject", claims.Subject,
-			"groups", claims.GroupIDs,
-			"resource", r.URL.Path,
-			"action", r.Method,
-			"tags", a.tags,
-		)
-
-		// Trigger a refresh of RBAC rules (with 30-second cooldown)
-		a.policyFetcher.RefreshIfNeeded(ctx)
-
-		return nil, fmt.Errorf("access denied by RBAC policy")
-	}
-
 	a.logger.Debug("JWT authentication successful",
 		"subject", claims.Subject,
 		"organization_id", claims.OrganizationID,
@@ -202,6 +174,50 @@ func (a *RPCAuthenticator) authenticateJWT(ctx context.Context, r *http.Request,
 			"organization_id": claims.OrganizationID,
 		},
 	}, nil
+}
+
+// Authorize implements rpc.Authorizer.
+// It performs RBAC evaluation to determine if the identity can perform the action.
+func (a *RPCAuthenticator) Authorize(ctx context.Context, identity *rpc.Identity, resource, action string) error {
+	// Cert-authenticated callers (local/internal) bypass RBAC
+	if identity.Method == rpc.AuthMethodCert {
+		return nil
+	}
+
+	// Build RBAC request using the provided resource and action
+	req := &rbac.Request{
+		Subject:  identity.Subject,
+		Groups:   identity.Groups,
+		Resource: resource,
+		Action:   action,
+		Tags:     a.tags,
+		Context:  map[string]any{},
+	}
+
+	// Add organization_id from metadata if present
+	if identity.Metadata != nil {
+		if orgID, ok := identity.Metadata["organization_id"]; ok {
+			req.Context["organization_id"] = orgID
+		}
+	}
+
+	decision := a.rbacEval.Evaluate(req)
+	if decision == rbac.DecisionDeny {
+		a.logger.Warn("authorization denied",
+			"subject", identity.Subject,
+			"groups", identity.Groups,
+			"resource", resource,
+			"action", action,
+			"tags", a.tags,
+		)
+
+		// Trigger a refresh of RBAC rules (with 30-second cooldown)
+		a.policyFetcher.RefreshIfNeeded(ctx)
+
+		return fmt.Errorf("access denied by RBAC policy")
+	}
+
+	return nil
 }
 
 // Stop stops background tasks

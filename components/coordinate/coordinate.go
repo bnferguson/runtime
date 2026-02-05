@@ -497,7 +497,8 @@ func (c *Coordinator) Start(ctx context.Context) error {
 			return err
 		}
 
-		rpcOpts = append(rpcOpts, rpc.WithAuthenticator(authenticator))
+		// RPCAuthenticator implements both Authenticator and Authorizer
+		rpcOpts = append(rpcOpts, rpc.WithAuthenticator(authenticator), rpc.WithAuthorizer(authenticator))
 		c.Log.Info("cloud authentication enabled",
 			"cloud_url", authCloudURL)
 	} else if c.NoAuth {

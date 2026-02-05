@@ -61,6 +61,15 @@ type Authenticator interface {
 	Authenticate(ctx context.Context, r *http.Request) (*Identity, error)
 }
 
+// Authorizer checks if an identity is allowed to perform an action on a resource
+type Authorizer interface {
+	// Authorize checks if the identity is allowed to perform the action on the resource.
+	// For RPC methods, resource is typically the interface name (lowercase) and
+	// action is the method name (lowercase).
+	// Returns nil if allowed, or an error describing why access was denied.
+	Authorize(ctx context.Context, identity *Identity, resource, action string) error
+}
+
 // NoOpAuthenticator allows all requests without checking credentials.
 // Used for testing only.
 type NoOpAuthenticator struct{}

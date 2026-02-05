@@ -12,6 +12,7 @@ import (
 	"os"
 	"runtime/debug"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1035,6 +1036,20 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 				w.Header().Add("rpc-error", "authentication required")
 				w.WriteHeader(http.StatusUnauthorized)
 				return
+			}
+
+			// Check authorization if an authorizer is configured
+			if s.state.authorizer != nil {
+				resource := strings.ToLower(mm.InterfaceName)
+				action := strings.ToLower(mm.Name)
+				if err := s.state.authorizer.Authorize(ctx, identity, resource, action); err != nil {
+					s.state.log.Warn("authorization denied",
+						"resource", resource, "action", action, "subject", identity.Subject, "error", err)
+					w.Header().Add("rpc-status", "forbidden")
+					w.Header().Add("rpc-error", err.Error())
+					w.WriteHeader(http.StatusForbidden)
+					return
+				}
 			}
 		}
 
