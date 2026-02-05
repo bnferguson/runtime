@@ -107,6 +107,7 @@ require (
 	golang.org/x/sync v0.17.0
 	golang.org/x/sys v0.38.0
 	golang.org/x/term v0.36.0
+	golang.org/x/text v0.30.0
 	golang.org/x/time v0.14.0
 	golang.org/x/tools v0.37.0
 	google.golang.org/genproto/googleapis/api v0.0.0-20250818200422-3122310a409c
@@ -114,7 +115,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 	k8s.io/klog/v2 v2.130.1
 	miren.dev/jsonrpc3/go/jsonrpc3 v0.0.0-20260106052505-c98e2702b093
-	miren.dev/mflags v0.0.0-20260108185351-14a5f63f5679
+	miren.dev/mflags v0.0.0-20260204235050-a70368b57406
 )
 
 require (
@@ -376,7 +377,6 @@ require (
 	go.uber.org/zap v1.27.0 // indirect
 	golang.org/x/mod v0.28.0 // indirect
 	golang.org/x/oauth2 v0.32.0 // indirect
-	golang.org/x/text v0.30.0 // indirect
 	golang.org/x/xerrors v0.0.0-20220907171357-04be3eba64a2 // indirect
 	golang.zx2c4.com/wireguard v0.0.0-20231211153847-12269c276173 // indirect
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20230429144221-925a1e7659e6 // indirect
