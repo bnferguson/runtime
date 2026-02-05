@@ -1886,6 +1886,7 @@ func (g *Generator) generateInterfaces(f *j.File) error {
 						g.Line().Id("Name").Op(":").Lit(m.Name)
 						g.Line().Id("InterfaceName").Op(":").Lit(i.Name)
 						g.Line().Id("Index").Op(":").Lit(m.Index)
+						g.Line().Id("Public").Op(":").Lit(m.Public)
 						g.Line().Id("Handler").Op(":").Func().Params(
 							j.Id("ctx").Qual("context", "Context"),
 							j.Id("call").Qual(rpc, "Call"),
@@ -2181,6 +2182,10 @@ type DescMethods struct {
 	Index      int              `yaml:"index"`
 	Parameters []*DescParamater `yaml:"parameters"`
 	Results    []*DescParamater `yaml:"results"`
+	// Public marks this method as accessible without TLS client certificate authentication.
+	// Public methods still require capability-level auth (Ed25519 signatures) but allow
+	// unauthenticated callers (e.g., for registration flows where the client doesn't have certs yet).
+	Public bool `yaml:"public,omitempty"`
 }
 
 type DescParamater struct {

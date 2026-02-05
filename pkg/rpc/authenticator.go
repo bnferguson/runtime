@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 )
 
 // Authenticator is an interface for authenticating RPC requests
@@ -29,9 +30,15 @@ func (n *NoOpAuthenticator) NoAuthorization(ctx context.Context, r *http.Request
 	return true, "anonymous", nil
 }
 
-// LocalOnlyAuthenticator requires a valid client certificate for all requests.
+// LocalOnlyAuthenticator requires a valid client certificate for most requests.
 // This is used when cloud authentication is not enabled, ensuring that only
 // clients with certificates issued by the local CA can access the server.
+//
+// RPC paths (/_rpc/) are allowed through without TLS certs at this layer because
+// the RPC layer handles authentication:
+// - Capability-based auth (Ed25519 signatures) is always enforced
+// - Per-method auth checks TLS certs for non-public methods
+// - Only methods marked public: true in the schema allow unauthenticated access
 type LocalOnlyAuthenticator struct{}
 
 func (l *LocalOnlyAuthenticator) AuthenticateRequest(ctx context.Context, r *http.Request) (bool, string, error) {
@@ -40,7 +47,14 @@ func (l *LocalOnlyAuthenticator) AuthenticateRequest(ctx context.Context, r *htt
 }
 
 func (l *LocalOnlyAuthenticator) NoAuthorization(ctx context.Context, r *http.Request) (bool, string, error) {
-	// Require a valid client certificate
+	// Allow RPC paths through - the RPC layer handles auth:
+	// - Capability signature auth is always enforced
+	// - Method-level auth rejects unauthenticated calls to non-public methods
+	if strings.HasPrefix(r.URL.Path, "/_rpc/") {
+		return true, "", nil
+	}
+
+	// For non-RPC paths, require a valid client certificate
 	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
 		cert := r.TLS.PeerCertificates[0]
 		return true, cert.Subject.CommonName, nil

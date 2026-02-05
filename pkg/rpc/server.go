@@ -113,6 +113,9 @@ type Method struct {
 	InterfaceName string
 	Index         int
 	Handler       func(ctx context.Context, call Call) error
+	// Public marks this method as accessible without TLS client certificate authentication.
+	// The RPC layer will reject unauthenticated calls to non-public methods automatically.
+	Public bool
 }
 
 type HasRestoreState interface {
@@ -1053,6 +1056,20 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 			w.Header().Add("rpc-status", "unknown")
 			w.Header().Add("rpc-error", "unknown method: "+method)
 			return
+		}
+
+		// Enforce authentication for non-public methods
+		// Public methods can be called without a TLS client certificate
+		if !mm.Public {
+			hasCert := r.TLS != nil && len(r.TLS.PeerCertificates) > 0
+			if !hasCert {
+				s.state.log.Warn("authentication required for non-public method",
+					"method", method, "interface", mm.InterfaceName)
+				w.WriteHeader(http.StatusUnauthorized)
+				w.Header().Add("rpc-status", "unauthorized")
+				w.Header().Add("rpc-error", "authentication required")
+				return
+			}
 		}
 
 		w.WriteHeader(http.StatusOK)
