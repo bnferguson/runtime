@@ -47,17 +47,22 @@ func (l *LocalOnlyAuthenticator) AuthenticateRequest(ctx context.Context, r *htt
 }
 
 func (l *LocalOnlyAuthenticator) NoAuthorization(ctx context.Context, r *http.Request) (bool, string, error) {
+	// Extract identity from cert if present
+	var identity string
+	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+		identity = r.TLS.PeerCertificates[0].Subject.CommonName
+	}
+
 	// Allow RPC paths through - the RPC layer handles auth:
 	// - Capability signature auth is always enforced
 	// - Method-level auth rejects unauthenticated calls to non-public methods
 	if strings.HasPrefix(r.URL.Path, "/_rpc/") {
-		return true, "", nil
+		return true, identity, nil
 	}
 
 	// For non-RPC paths, require a valid client certificate
-	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
-		cert := r.TLS.PeerCertificates[0]
-		return true, cert.Subject.CommonName, nil
+	if identity != "" {
+		return true, identity, nil
 	}
 	return false, "", fmt.Errorf("authentication required")
 }

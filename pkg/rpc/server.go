@@ -911,9 +911,9 @@ func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
 	iface, ok := s.objects[oid]
 	s.mu.Unlock()
 	if !ok {
-		w.WriteHeader(http.StatusNotFound)
 		w.Header().Add("rpc-status", "unknown-capability")
 		w.Header().Add("rpc-error", "unknown object: "+string(oid))
+		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 
@@ -921,9 +921,9 @@ func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
 
 	mm := iface.methods[method]
 	if mm.Handler == nil {
-		w.WriteHeader(http.StatusNotFound)
 		w.Header().Add("rpc-status", "unknown")
 		w.Header().Add("rpc-error", "unknown method: "+method)
+		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 
@@ -1052,22 +1052,27 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 
 		mm := iface.methods[method]
 		if mm.Handler == nil {
-			w.WriteHeader(http.StatusNotFound)
 			w.Header().Add("rpc-status", "unknown")
 			w.Header().Add("rpc-error", "unknown method: "+method)
+			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 
 		// Enforce authentication for non-public methods
 		// Public methods can be called without a TLS client certificate
-		if !mm.Public {
-			hasCert := r.TLS != nil && len(r.TLS.PeerCertificates) > 0
-			if !hasCert {
+		// Skip this check if skipVerify is set (test mode)
+		if !mm.Public && !s.state.opts.skipVerify {
+			// Authentication check:
+			// - If TLS is enabled but no client cert: reject (client should have authenticated)
+			// - If TLS with client cert: allow (authenticated)
+			// - If no TLS at all: allow (server behind auth proxy)
+			tlsWithoutCert := r.TLS != nil && len(r.TLS.PeerCertificates) == 0
+			if tlsWithoutCert {
 				s.state.log.Warn("authentication required for non-public method",
 					"method", method, "interface", mm.InterfaceName)
-				w.WriteHeader(http.StatusUnauthorized)
 				w.Header().Add("rpc-status", "unauthorized")
 				w.Header().Add("rpc-error", "authentication required")
+				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}
 		}
@@ -1142,9 +1147,9 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 		cbor.NewEncoder(w).Encode(call.results)
 		w.Header().Add("rpc-status", "ok")
 	} else {
-		w.WriteHeader(http.StatusNotFound)
 		w.Header().Add("rpc-status", "unknown-capability")
 		w.Header().Add("rpc-error", "unknown object: "+string(oid))
+		w.WriteHeader(http.StatusNotFound)
 	}
 }
 

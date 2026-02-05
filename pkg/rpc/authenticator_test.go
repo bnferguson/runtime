@@ -80,36 +80,59 @@ func TestLocalOnlyAuthenticator(t *testing.T) {
 
 	tests := []struct {
 		name           string
+		path           string
 		authHeader     string
 		hasCert        bool
 		expectAllowed  bool
 		expectIdentity string
 		expectError    bool
 	}{
+		// Non-RPC paths require certificates
 		{
-			name:          "rejects request without certificate",
+			name:          "rejects non-RPC request without certificate",
+			path:          "/api/health",
 			authHeader:    "",
 			hasCert:       false,
 			expectAllowed: false,
 			expectError:   true,
 		},
 		{
-			name:          "rejects request with auth header but no certificate",
+			name:          "rejects non-RPC request with auth header but no certificate",
+			path:          "/api/health",
 			authHeader:    "Bearer token123",
 			hasCert:       false,
 			expectAllowed: false,
 			expectError:   true,
 		},
 		{
-			name:           "allows request with certificate",
+			name:           "allows non-RPC request with certificate",
+			path:           "/api/health",
 			authHeader:     "",
 			hasCert:        true,
 			expectAllowed:  true,
 			expectIdentity: "test-client",
 		},
 		{
-			name:           "allows request with certificate and auth header",
+			name:           "allows non-RPC request with certificate and auth header",
+			path:           "/api/health",
 			authHeader:     "Bearer token123",
+			hasCert:        true,
+			expectAllowed:  true,
+			expectIdentity: "test-client",
+		},
+		// RPC paths are allowed through (RPC layer handles auth)
+		{
+			name:           "allows RPC request without certificate (RPC layer handles auth)",
+			path:           "/_rpc/call/test/method",
+			authHeader:     "",
+			hasCert:        false,
+			expectAllowed:  true,
+			expectIdentity: "",
+		},
+		{
+			name:           "allows RPC request with certificate",
+			path:           "/_rpc/call/test/method",
+			authHeader:     "",
 			hasCert:        true,
 			expectAllowed:  true,
 			expectIdentity: "test-client",
@@ -120,7 +143,7 @@ func TestLocalOnlyAuthenticator(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req, err := http.NewRequest("POST", "/_rpc/call/test/method", nil)
+			req, err := http.NewRequest("POST", tt.path, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
