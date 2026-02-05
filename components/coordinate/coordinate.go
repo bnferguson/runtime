@@ -83,7 +83,7 @@ type CoordinatorConfig struct {
 	Cpu       *metrics.CPUUsage
 	HTTP      *metrics.HTTPMetrics
 	Logs      *observability.LogReader
-	LogWriter *observability.PersistentLogWriter
+	LogWriter observability.LogWriter
 
 	// BuildKit is the persistent BuildKit component for container image builds
 	BuildKit *buildkit.Component

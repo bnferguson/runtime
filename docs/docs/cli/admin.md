@@ -22,6 +22,7 @@ miren admin [flags] <method> [key=value ...]
 
 - `--app, -a` - Application name (or use `$MIREN_APP` environment variable)
 - `--list, -l` - List available admin methods
+- `--func-help` - Show help for a specific admin method
 - `--json, -j` - Output as highlighted JSON (default for non-TTY)
 - `--pretty, -p` - Render output in a human-friendly format (default for TTY)
 - `--params-file, -f` - Read params as JSON from file (use `-` for stdin)
@@ -54,6 +55,12 @@ miren admin update-config -f config.json
 
 # Read params from stdin
 echo '{"user_id": "user-123"}' | miren admin get-user -f -
+
+# Show help for a specific method (parameters, types, description)
+miren admin --func-help get-user
+
+# Pass parameters as flags instead of key=value pairs
+miren admin get-user --user-id user-123
 ```
 
 ## Listing Methods

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"runtime/debug"
 	"net/netip"
 	"net/url"
 	"os"
@@ -290,6 +291,21 @@ func isUpgradeRequest(req *http.Request) bool {
 
 // handleRequest is the inner handler wrapped by TimeoutHandler
 func (h *Server) handleRequest(w http.ResponseWriter, req *http.Request) {
+	// Capture the real stack on panic so it isn't swallowed by TimeoutHandler's
+	// recover/re-panic, which loses the original goroutine stack.
+	defer func() {
+		if r := recover(); r != nil {
+			h.Log.Error("panic in request handler",
+				"error", r,
+				"stack", string(debug.Stack()),
+				"method", req.Method,
+				"path", req.URL.Path,
+				"host", req.Host,
+			)
+			panic(r)
+		}
+	}()
+
 	// Handle Miren server health check endpoint before routing
 	// Using .well-known per RFC 8615 to avoid collision with app routes
 	if req.URL.Path == "/.well-known/miren/health" {

@@ -13,6 +13,7 @@ import (
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/httpingress/httpingress_v1alpha"
 	"miren.dev/runtime/observability"
+	"miren.dev/runtime/pkg/mapx"
 )
 
 const (
@@ -78,10 +79,6 @@ func (s *Server) Invoke(ctx context.Context, state *admin_v1alpha.AdminInvoke) e
 
 	appName := args.App()
 	methodName := args.Method()
-	paramsJSON := "{}"
-	if args.HasParams() && args.Params() != "" {
-		paramsJSON = args.Params()
-	}
 
 	// Look up app and get active version
 	app, appVersion, err := s.getAppAndVersion(ctx, appName)
@@ -108,8 +105,8 @@ func (s *Server) Invoke(ctx context.Context, state *admin_v1alpha.AdminInvoke) e
 
 	// Parse params to ensure valid JSON before sending
 	var params any
-	if paramsJSON != "{}" {
-		if err := json.Unmarshal([]byte(paramsJSON), &params); err != nil {
+	if args.HasParams() && args.Params() != "" {
+		if err := json.Unmarshal([]byte(args.Params()), &params); err != nil {
 			result := &admin_v1alpha.AdminCallResult{}
 			result.SetError(fmt.Sprintf("invalid params JSON: %v", err))
 			results.SetResult(result)
@@ -210,7 +207,11 @@ func (s *Server) Invoke(ctx context.Context, state *admin_v1alpha.AdminInvoke) e
 	results.SetResult(result)
 
 	// Log the admin call
-	s.logAdminCall(app.ID.String(), appName, methodName, len(paramsJSON), startTime, "")
+	paramsLen := 0
+	if args.HasParams() {
+		paramsLen = len(args.Params())
+	}
+	s.logAdminCall(app.ID.String(), appName, methodName, paramsLen, startTime, "")
 
 	return nil
 }
@@ -407,7 +408,7 @@ func (s *Server) fetchMethods(ctx context.Context, appName string) ([]*admin_v1a
 		var params []*admin_v1alpha.AdminMethodParam
 		switch p := m.Params.(type) {
 		case map[string]any:
-			for name, typeVal := range p {
+			for name, typeVal := range mapx.StableOrder(p) {
 				param := &admin_v1alpha.AdminMethodParam{}
 				param.SetName(name)
 				if typeStr, ok := typeVal.(string); ok {

@@ -10,22 +10,23 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"golang.org/x/term"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 	"miren.dev/runtime/api/admin/admin_v1alpha"
 	"miren.dev/runtime/pkg/ui"
 )
 
 func Admin(ctx *Context, opts struct {
 	AppCentric
-	List       bool   `long:"list" short:"l" description:"List available admin methods"`
-	FuncHelp   bool   `long:"func-help" description:"Show help for a specific admin method"`
-	JSON       bool   `long:"json" short:"j" description:"Output as highlighted JSON (default for non-TTY)"`
-	Pretty     bool   `long:"pretty" short:"p" description:"Render output in a human-friendly format (default for TTY)"`
-	NoValidate bool   `long:"no-validate" description:"Skip method/parameter validation"`
-	ParamsFile string `long:"params-file" short:"f" description:"Read params as JSON from file (use - for stdin)"`
-	Args       struct {
-		Method string   `positional-arg-name:"method" description:"Admin method to call"`
-		Params []string `positional-arg-name:"params" description:"Method parameters as key=value pairs"`
-	} `positional-args:"yes"`
+	List       bool     `long:"list" short:"l" description:"List available admin methods"`
+	FuncHelp   bool     `long:"func-help" description:"Show help for a specific admin method"`
+	JSON       bool     `long:"json" short:"j" description:"Output as highlighted JSON (default for non-TTY)"`
+	Pretty     bool     `long:"pretty" short:"p" description:"Render output in a human-friendly format (default for TTY)"`
+	NoValidate bool     `long:"no-validate" description:"Skip method/parameter validation"`
+	ParamsFile string   `long:"params-file" short:"f" description:"Read params as JSON from file (use - for stdin)"`
+	Method     string   `position:"0" description:"Admin method to call"`
+	Params     []string `rest:"true" description:"Method parameters as key=value pairs"`
+	Unknown    []string `unknown:"true"`
 }) error {
 	// Get RPC client
 	cl, err := ctx.RPCClient("dev.miren.runtime/admin")
@@ -41,19 +42,19 @@ func Admin(ctx *Context, opts struct {
 	}
 
 	// Method is required if not listing or getting help
-	if opts.Args.Method == "" {
+	if opts.Method == "" {
 		return fmt.Errorf("method name is required (use --list to see available methods)")
 	}
 
 	// Handle --rpc-help flag
 	if opts.FuncHelp {
-		return adminMethodHelp(ctx, adminClient, opts.App, opts.Args.Method)
+		return adminMethodHelp(ctx, adminClient, opts.App, opts.Method)
 	}
 
 	// Fetch method introspection for type-aware parsing and validation
 	var paramTypes map[string]string
 	if !opts.NoValidate {
-		methodInfo, err := fetchMethodInfo(ctx, adminClient, opts.App, opts.Args.Method)
+		methodInfo, err := fetchMethodInfo(ctx, adminClient, opts.App, opts.Method)
 		if err != nil {
 			return err
 		}
@@ -67,8 +68,10 @@ func Admin(ctx *Context, opts struct {
 		}
 	}
 
-	// Build params object from key=value pairs or file
+	// Build params object from flags, key=value pairs, and/or file.
+	// Track where each param came from to detect duplicates.
 	params := make(map[string]any)
+	paramSources := make(map[string]string) // key -> "file", "flag", or "argument"
 
 	if opts.ParamsFile != "" {
 		// Read params from file (or stdin if "-")
@@ -92,10 +95,19 @@ func Admin(ctx *Context, opts struct {
 		if err := json.Unmarshal(data, &params); err != nil {
 			return fmt.Errorf("failed to parse params JSON: %w", err)
 		}
+
+		for key := range params {
+			paramSources[key] = "file"
+		}
 	}
 
-	// Parse key=value pairs (these override file params)
-	for _, p := range opts.Args.Params {
+	// Parse unknown flags into params (e.g. --name=value, --name value, --flag)
+	if err := parseUnknownFlags(opts.Unknown, params, paramSources, paramTypes); err != nil {
+		return err
+	}
+
+	// Parse key=value pairs
+	for _, p := range opts.Params {
 		parts := strings.SplitN(p, "=", 2)
 		if len(parts) != 2 {
 			return fmt.Errorf("invalid parameter format: %s (expected key=value)", p)
@@ -104,16 +116,21 @@ func Admin(ctx *Context, opts struct {
 		key := parts[0]
 		value := parts[1]
 
+		if source, ok := paramSources[key]; ok {
+			return fmt.Errorf("parameter %q specified multiple times (as %s and as argument)", key, source)
+		}
+
 		parsed, err := parseParamValue(key, value, paramTypes)
 		if err != nil {
 			return err
 		}
+		paramSources[key] = "argument"
 		params[key] = parsed
 	}
 
 	// Validate method and parameters against introspection (unless --no-validate)
 	if !opts.NoValidate {
-		if err := validateAdminCall(ctx, adminClient, opts.App, opts.Args.Method, params); err != nil {
+		if err := validateAdminCall(ctx, adminClient, opts.App, opts.Method, params); err != nil {
 			return err
 		}
 	}
@@ -124,7 +141,7 @@ func Admin(ctx *Context, opts struct {
 	}
 
 	// Make the call
-	result, err := adminClient.Invoke(ctx, opts.App, opts.Args.Method, string(paramsJSON))
+	result, err := adminClient.Invoke(ctx, opts.App, opts.Method, string(paramsJSON))
 	if err != nil {
 		return fmt.Errorf("RPC error: %w", err)
 	}
@@ -243,6 +260,91 @@ func parseParamValue(key, value string, paramTypes map[string]string) (any, erro
 		}
 		return value, nil
 	}
+}
+
+// parseUnknownFlags parses unknown CLI flags into params with duplicate detection.
+// Handles --key=value, --key value, bare key=value, and boolean --flag forms.
+// Kebab-case flag names (e.g. --my-param) are converted to underscores (my_param).
+func parseUnknownFlags(unknown []string, params map[string]any, paramSources map[string]string, paramTypes map[string]string) error {
+	for i := 0; i < len(unknown); i++ {
+		arg := unknown[i]
+
+		var key, value string
+		var isBoolFlag bool
+
+		switch {
+		case strings.HasPrefix(arg, "--"):
+			flagStr := arg[2:]
+			if idx := strings.IndexByte(flagStr, '='); idx >= 0 {
+				key = flagStr[:idx]
+				value = flagStr[idx+1:]
+			} else {
+				key = flagStr
+				// Next arg is the value unless it looks like another flag
+				if i+1 < len(unknown) && !strings.HasPrefix(unknown[i+1], "-") {
+					i++
+					value = unknown[i]
+				} else {
+					isBoolFlag = true
+				}
+			}
+
+		case strings.HasPrefix(arg, "-"):
+			flagStr := arg[1:]
+			if idx := strings.IndexByte(flagStr, '='); idx >= 0 {
+				key = flagStr[:idx]
+				value = flagStr[idx+1:]
+			} else {
+				key = flagStr
+				if i+1 < len(unknown) && !strings.HasPrefix(unknown[i+1], "-") {
+					i++
+					value = unknown[i]
+				} else {
+					isBoolFlag = true
+				}
+			}
+
+		default:
+			// Bare arg — treat as key=value if it contains '='
+			if idx := strings.IndexByte(arg, '='); idx >= 0 {
+				key = arg[:idx]
+				value = arg[idx+1:]
+			} else {
+				return fmt.Errorf("unexpected argument in flags: %s", arg)
+			}
+		}
+
+		// If the key contains hyphens, check whether the underscore form
+		// matches a known param and use that instead. This lets users write
+		// --my-param on the CLI when the actual param is my_param, without
+		// clobbering keys that legitimately contain hyphens.
+		if strings.ContainsRune(key, '-') {
+			alt := strings.ReplaceAll(key, "-", "_")
+			if _, ok := paramTypes[alt]; ok {
+				key = alt
+			}
+		}
+
+		if source, ok := paramSources[key]; ok {
+			return fmt.Errorf("parameter %q specified multiple times (as %s and as --%s flag)", key, source, key)
+		}
+
+		var parsed any
+		if isBoolFlag {
+			parsed = true
+		} else {
+			var err error
+			parsed, err = parseParamValue(key, value, paramTypes)
+			if err != nil {
+				return err
+			}
+		}
+
+		paramSources[key] = "flag"
+		params[key] = parsed
+	}
+
+	return nil
 }
 
 // validateAdminCall fetches method introspection and validates the method and parameters
@@ -718,7 +820,7 @@ func formatKeyAsTitle(key string) string {
 	}
 
 	// Title case
-	return strings.Title(sb.String())
+	return cases.Title(language.Und).String(sb.String())
 }
 
 // formatCellValue formats a value for display in a table cell
@@ -738,44 +840,6 @@ func formatCellValue(v interface{}) string {
 		return fmt.Sprintf("%.2f", val)
 	case string:
 		return val
-	default:
-		b, _ := json.Marshal(val)
-		return string(b)
-	}
-}
-
-// formatPrettyValuePlain formats a value for pretty output without styling
-// (styling is handled by NamedValueList)
-func formatPrettyValuePlain(v interface{}) string {
-	switch val := v.(type) {
-	case nil:
-		return "-"
-	case bool:
-		if val {
-			return "yes"
-		}
-		return "no"
-	case float64:
-		if val == float64(int64(val)) {
-			return fmt.Sprintf("%d", int64(val))
-		}
-		return fmt.Sprintf("%g", val)
-	case string:
-		return val
-	case []interface{}:
-		if len(val) == 0 {
-			return "(empty)"
-		}
-		// For arrays, show count
-		return fmt.Sprintf("(%d items)", len(val))
-	case map[string]interface{}:
-		// For nested objects, show inline
-		parts := make([]string, 0, len(val))
-		for k, v := range val {
-			parts = append(parts, fmt.Sprintf("%s=%s", k, formatCellValue(v)))
-		}
-		sort.Strings(parts)
-		return strings.Join(parts, ", ")
 	default:
 		b, _ := json.Marshal(val)
 		return string(b)

@@ -121,11 +121,11 @@ func (n *NamedValueList) Render() string {
 		return ""
 	}
 
-	// Find the maximum label width
+	// Find the maximum label display width (handles multi-byte runes and ANSI)
 	maxLabelWidth := 0
 	for _, item := range n.items {
-		if len(item.Label) > maxLabelWidth {
-			maxLabelWidth = len(item.Label)
+		if w := lipgloss.Width(item.Label); w > maxLabelWidth {
+			maxLabelWidth = w
 		}
 	}
 
@@ -157,10 +157,11 @@ func (n *NamedValueList) styleValue(item NamedValue) string {
 	}
 }
 
-// padLeft pads a string on the left to the specified width
+// padLeft pads a string on the left to the specified display width
 func padLeft(s string, width int) string {
-	if len(s) >= width {
+	w := lipgloss.Width(s)
+	if w >= width {
 		return s
 	}
-	return strings.Repeat(" ", width-len(s)) + s
+	return strings.Repeat(" ", width-w) + s
 }

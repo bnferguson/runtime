@@ -667,10 +667,6 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		return ipa.Watch(sub, eac)
 	})
 
-	// Create SandboxPoolManager to reconcile pool entities
-	// The SandboxPoolManager runs internally in the coordinator
-	_ = co.SandboxPoolManager()
-
 	// Get httpingress from coordinator (created there for admin server)
 	hs := co.HttpIngress()
 
