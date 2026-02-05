@@ -1059,15 +1059,20 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Enforce authentication for non-public methods
-		// Public methods can be called without a TLS client certificate
+		// Public methods can be called without authentication
 		// Skip this check if skipVerify is set (test mode)
 		if !mm.Public && !s.state.opts.skipVerify {
-			// Authentication check:
-			// - If TLS is enabled but no client cert: reject (client should have authenticated)
-			// - If TLS with client cert: allow (authenticated)
-			// - If no TLS at all: allow (server behind auth proxy)
-			tlsWithoutCert := r.TLS != nil && len(r.TLS.PeerCertificates) == 0
-			if tlsWithoutCert {
+			// Authentication can be via:
+			// - TLS client certificate (r.TLS.PeerCertificates)
+			// - JWT token (Authorization header, already validated by ServeHTTP)
+			// - No TLS at all (server behind auth proxy)
+			//
+			// Only reject if: TLS is enabled, no client cert, AND no Authorization header
+			hasCert := r.TLS != nil && len(r.TLS.PeerCertificates) > 0
+			hasAuthHeader := r.Header.Get("Authorization") != ""
+			noTLS := r.TLS == nil
+
+			if !hasCert && !hasAuthHeader && !noTLS {
 				s.state.log.Warn("authentication required for non-public method",
 					"method", method, "interface", mm.InterfaceName)
 				w.Header().Add("rpc-status", "unauthorized")
