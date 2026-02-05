@@ -18,19 +18,18 @@ const sidebars: SidebarsConfig = {
     'getting-started',
     {
       type: 'category',
-      label: 'Core Concepts',
+      label: 'Features',
       collapsed: false,
       items: [
-        'terminology',
         'languages',
         'services',
         'scaling',
         'disks',
         'firewall',
         'admin-interface',
+        'working-with-miren-cloud',
       ],
     },
-    'working-with-miren-cloud',
     {
       type: 'category',
       label: 'CLI Reference',
@@ -44,8 +43,8 @@ const sidebars: SidebarsConfig = {
         'cli/logs',
         'cli/sandbox',
         'cli/disk',
-        'cli/admin',
         'cli/entity',
+        'cli/admin',
       ],
     },
     {
@@ -53,6 +52,7 @@ const sidebars: SidebarsConfig = {
       label: 'Resources',
       collapsed: false,
       items: [
+        'terminology',
         'labs',
         'changelog',
         'cloud-updates',
