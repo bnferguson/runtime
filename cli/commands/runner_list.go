@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"miren.dev/runtime/api/runner/runner_v1alpha"
+	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/standard"
 	"miren.dev/runtime/pkg/ui"
 )
@@ -14,7 +15,7 @@ func RunnerList(ctx *Context, opts struct {
 	FormatOptions
 	ConfigCentric
 }) error {
-	client, err := ctx.RPCClient("dev.miren.runtime/runner")
+	client, err := ctx.RPCClient(rpc.ServiceRunner)
 	if err != nil {
 		return err
 	}
@@ -126,7 +127,7 @@ func RunnerInviteList(ctx *Context, opts struct {
 	FormatOptions
 	ConfigCentric
 }) error {
-	client, err := ctx.RPCClient("dev.miren.runtime/runner")
+	client, err := ctx.RPCClient(rpc.ServiceRunner)
 	if err != nil {
 		return err
 	}

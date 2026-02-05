@@ -1,16 +1,15 @@
 package commands
 
 import (
-	"bufio"
 	"fmt"
 	"net"
-	"os"
 	"strings"
 
 	"miren.dev/runtime/api/runner/runner_v1alpha"
 	"miren.dev/runtime/pkg/joincode"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/runnerconfig"
+	"miren.dev/runtime/pkg/ui"
 	"miren.dev/runtime/version"
 )
 
@@ -23,6 +22,7 @@ func RunnerJoin(ctx *Context, opts struct {
 
 	Args struct {
 		Coordinator string `positional-arg-name:"coordinator" description:"Coordinator address (host:port)"`
+		JoinCode    string `positional-arg-name:"join-code" description:"Join code from 'miren runner invite'"`
 	} `positional-args:"yes"`
 }) error {
 	coordinator := opts.Coordinator
@@ -44,14 +44,18 @@ func RunnerJoin(ctx *Context, opts struct {
 	}
 
 	ctx.Printf("Joining coordinator at %s\n", coordinator)
-	ctx.Printf("\nEnter join code: ")
 
-	reader := bufio.NewReader(os.Stdin)
-	code, err := reader.ReadString('\n')
-	if err != nil {
-		return fmt.Errorf("failed to read code: %w", err)
+	code := opts.Args.JoinCode
+	if code == "" {
+		var err error
+		code, err = ui.PromptForInput(
+			ui.WithLabel("Enter join code"),
+			ui.WithPlaceholder("word-word-word-abc123"),
+		)
+		if err != nil {
+			return fmt.Errorf("failed to read code: %w", err)
+		}
 	}
-	code = strings.TrimSpace(code)
 
 	if !joincode.Validate(code) {
 		return fmt.Errorf("invalid join code format")
@@ -62,7 +66,7 @@ func RunnerJoin(ctx *Context, opts struct {
 		return fmt.Errorf("failed to create RPC state: %w", err)
 	}
 
-	client, err := cs.Connect(coordinator, "dev.miren.runtime/runner")
+	client, err := cs.Connect(coordinator, rpc.ServiceRunner)
 	if err != nil {
 		return fmt.Errorf("failed to connect to coordinator: %w", err)
 	}

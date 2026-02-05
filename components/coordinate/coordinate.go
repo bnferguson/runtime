@@ -734,7 +734,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	}
 
 	runnerReg := runnerserver.NewRegistrationServer(c.Log, c.authority, eac, c.Address)
-	server.ExposeValue("dev.miren.runtime/runner", runner_v1alpha.AdaptRunnerRegistration(runnerReg))
+	server.ExposeValue(rpc.ServiceRunner, runner_v1alpha.AdaptRunnerRegistration(runnerReg))
 
 	c.Log.Info("started RPC server")
 
