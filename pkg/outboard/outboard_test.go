@@ -64,10 +64,10 @@ func TestTokenAuthenticatorValid(t *testing.T) {
 	req, _ := http.NewRequest("GET", "/", nil)
 	req.Header.Set("Authorization", "Bearer secret-token")
 
-	ok, identity, err := auth.AuthenticateRequest(context.Background(), req)
+	identity, err := auth.Authenticate(context.Background(), req)
 	assert.NoError(t, err)
-	assert.True(t, ok)
-	assert.Equal(t, "outboard", identity)
+	assert.NotNil(t, identity)
+	assert.Equal(t, "outboard", identity.Subject)
 }
 
 func TestTokenAuthenticatorInvalid(t *testing.T) {
@@ -76,9 +76,9 @@ func TestTokenAuthenticatorInvalid(t *testing.T) {
 	req, _ := http.NewRequest("GET", "/", nil)
 	req.Header.Set("Authorization", "Bearer wrong-token")
 
-	ok, _, err := auth.AuthenticateRequest(context.Background(), req)
-	assert.Error(t, err)
-	assert.False(t, ok)
+	identity, err := auth.Authenticate(context.Background(), req)
+	assert.NoError(t, err)
+	assert.Nil(t, identity, "invalid token should return nil identity")
 }
 
 func TestTokenAuthenticatorMissing(t *testing.T) {
@@ -86,19 +86,9 @@ func TestTokenAuthenticatorMissing(t *testing.T) {
 
 	req, _ := http.NewRequest("GET", "/", nil)
 
-	ok, _, err := auth.AuthenticateRequest(context.Background(), req)
-	assert.Error(t, err)
-	assert.False(t, ok)
-}
-
-func TestTokenAuthenticatorNoAuthorization(t *testing.T) {
-	auth := NewTokenAuthenticator("secret-token")
-
-	req, _ := http.NewRequest("GET", "/", nil)
-
-	ok, _, err := auth.NoAuthorization(context.Background(), req)
-	assert.Error(t, err)
-	assert.False(t, ok)
+	identity, err := auth.Authenticate(context.Background(), req)
+	assert.NoError(t, err)
+	assert.Nil(t, identity, "missing auth header should return nil identity")
 }
 
 func TestTokenAuthenticatorBadScheme(t *testing.T) {
@@ -107,9 +97,9 @@ func TestTokenAuthenticatorBadScheme(t *testing.T) {
 	req, _ := http.NewRequest("GET", "/", nil)
 	req.Header.Set("Authorization", "Basic dXNlcjpwYXNz")
 
-	ok, _, err := auth.AuthenticateRequest(context.Background(), req)
-	assert.Error(t, err)
-	assert.False(t, ok)
+	identity, err := auth.Authenticate(context.Background(), req)
+	assert.NoError(t, err)
+	assert.Nil(t, identity, "non-bearer auth should return nil identity")
 }
 
 func TestCreateFIFO(t *testing.T) {

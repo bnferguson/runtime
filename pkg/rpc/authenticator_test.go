@@ -9,25 +9,25 @@ import (
 	"testing"
 )
 
-// TestAuthenticator verifies the authenticator integration
-func TestAuthenticator(t *testing.T) {
+// TestNoOpAuthenticator verifies that NoOpAuthenticator always returns an anonymous identity
+func TestNoOpAuthenticator(t *testing.T) {
+	auth := &NoOpAuthenticator{}
+
 	tests := []struct {
-		name          string
-		authHeader    string
-		expectAllowed bool
-		authenticator Authenticator
+		name       string
+		authHeader string
 	}{
 		{
-			name:          "NoOpAuthenticator allows all requests",
-			authHeader:    "",
-			expectAllowed: true,
-			authenticator: &NoOpAuthenticator{},
+			name:       "no auth header",
+			authHeader: "",
 		},
 		{
-			name:          "NoOpAuthenticator allows with auth header",
-			authHeader:    "Bearer token123",
-			expectAllowed: true,
-			authenticator: &NoOpAuthenticator{},
+			name:       "with bearer token",
+			authHeader: "Bearer token123",
+		},
+		{
+			name:       "with basic auth",
+			authHeader: "Basic dXNlcjpwYXNz",
 		},
 	}
 
@@ -42,28 +42,19 @@ func TestAuthenticator(t *testing.T) {
 				req.Header.Set("Authorization", tt.authHeader)
 			}
 
-			if tt.authHeader != "" {
-				allowed, identity, err := tt.authenticator.AuthenticateRequest(context.Background(), req)
-				if err != nil {
-					t.Errorf("unexpected error: %v", err)
-				}
-				if allowed != tt.expectAllowed {
-					t.Errorf("expected allowed=%v, got %v", tt.expectAllowed, allowed)
-				}
-				if allowed && identity == "" {
-					t.Error("expected non-empty identity for allowed request")
-				}
-			} else {
-				allowed, identity, err := tt.authenticator.NoAuthorization(context.Background(), req)
-				if err != nil {
-					t.Errorf("unexpected error: %v", err)
-				}
-				if allowed != tt.expectAllowed {
-					t.Errorf("expected allowed=%v, got %v", tt.expectAllowed, allowed)
-				}
-				if allowed && identity == "" {
-					t.Error("expected non-empty identity for allowed request")
-				}
+			identity, err := auth.Authenticate(context.Background(), req)
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+			if identity == nil {
+				t.Error("expected non-nil identity")
+				return
+			}
+			if identity.Subject != "anonymous" {
+				t.Errorf("expected subject=anonymous, got %q", identity.Subject)
+			}
+			if identity.Method != AuthMethodAnonymous {
+				t.Errorf("expected method=%v, got %v", AuthMethodAnonymous, identity.Method)
 			}
 		})
 	}
@@ -71,7 +62,6 @@ func TestAuthenticator(t *testing.T) {
 
 // TestLocalOnlyAuthenticator verifies the LocalOnlyAuthenticator behavior
 func TestLocalOnlyAuthenticator(t *testing.T) {
-	// Create a mock certificate for testing
 	mockCert := &x509.Certificate{
 		Subject: pkix.Name{
 			CommonName: "test-client",
@@ -80,158 +70,31 @@ func TestLocalOnlyAuthenticator(t *testing.T) {
 
 	tests := []struct {
 		name           string
-		path           string
-		authHeader     string
 		hasCert        bool
-		expectAllowed  bool
-		expectIdentity string
-		expectError    bool
+		expectIdentity bool
+		expectSubject  string
+		expectMethod   AuthMethod
 	}{
-		// Non-RPC paths require certificates
 		{
-			name:          "rejects non-RPC request without certificate",
-			path:          "/api/health",
-			authHeader:    "",
-			hasCert:       false,
-			expectAllowed: false,
-			expectError:   true,
-		},
-		{
-			name:          "rejects non-RPC request with auth header but no certificate",
-			path:          "/api/health",
-			authHeader:    "Bearer token123",
-			hasCert:       false,
-			expectAllowed: false,
-			expectError:   true,
-		},
-		{
-			name:           "allows non-RPC request with certificate",
-			path:           "/api/health",
-			authHeader:     "",
+			name:           "with certificate returns identity",
 			hasCert:        true,
-			expectAllowed:  true,
-			expectIdentity: "test-client",
+			expectIdentity: true,
+			expectSubject:  "test-client",
+			expectMethod:   AuthMethodCert,
 		},
 		{
-			name:           "allows non-RPC request with certificate and auth header",
-			path:           "/api/health",
-			authHeader:     "Bearer token123",
-			hasCert:        true,
-			expectAllowed:  true,
-			expectIdentity: "test-client",
-		},
-		// RPC paths are allowed through (RPC layer handles auth)
-		{
-			name:           "allows RPC request without certificate (RPC layer handles auth)",
-			path:           "/_rpc/call/test/method",
-			authHeader:     "",
+			name:           "without certificate returns nil",
 			hasCert:        false,
-			expectAllowed:  true,
-			expectIdentity: "",
+			expectIdentity: false,
 		},
 		{
-			name:           "allows RPC request with certificate",
-			path:           "/_rpc/call/test/method",
-			authHeader:     "",
-			hasCert:        true,
-			expectAllowed:  true,
-			expectIdentity: "test-client",
+			name:           "TLS without peer certs returns nil",
+			hasCert:        false,
+			expectIdentity: false,
 		},
 	}
 
 	auth := &LocalOnlyAuthenticator{}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req, err := http.NewRequest("POST", tt.path, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			if tt.authHeader != "" {
-				req.Header.Set("Authorization", tt.authHeader)
-			}
-
-			if tt.hasCert {
-				req.TLS = &tls.ConnectionState{
-					PeerCertificates: []*x509.Certificate{mockCert},
-				}
-			}
-
-			var allowed bool
-			var identity string
-
-			if tt.authHeader != "" {
-				allowed, identity, err = auth.AuthenticateRequest(context.Background(), req)
-			} else {
-				allowed, identity, err = auth.NoAuthorization(context.Background(), req)
-			}
-
-			if err != nil {
-				if !tt.expectError {
-					t.Errorf("unexpected error: %v", err)
-				}
-			}
-			if allowed != tt.expectAllowed {
-				t.Errorf("expected allowed=%v, got %v", tt.expectAllowed, allowed)
-			}
-			if tt.expectAllowed && identity != tt.expectIdentity {
-				t.Errorf("expected identity=%q, got %q", tt.expectIdentity, identity)
-			}
-		})
-	}
-}
-
-// TestIsRequestAuthenticated verifies the isRequestAuthenticated helper function
-// that determines if a request should be allowed to call non-public methods.
-func TestIsRequestAuthenticated(t *testing.T) {
-	mockCert := &x509.Certificate{
-		Subject: pkix.Name{CommonName: "test-client"},
-	}
-
-	tests := []struct {
-		name          string
-		hasTLS        bool
-		hasCert       bool
-		hasAuthHeader bool
-		expectAuth    bool
-	}{
-		{
-			name:          "no TLS at all - authenticated (behind proxy)",
-			hasTLS:        false,
-			hasCert:       false,
-			hasAuthHeader: false,
-			expectAuth:    true,
-		},
-		{
-			name:          "TLS with client cert - authenticated",
-			hasTLS:        true,
-			hasCert:       true,
-			hasAuthHeader: false,
-			expectAuth:    true,
-		},
-		{
-			name:          "TLS with Authorization header (JWT) - authenticated",
-			hasTLS:        true,
-			hasCert:       false,
-			hasAuthHeader: true,
-			expectAuth:    true,
-		},
-		{
-			name:          "TLS with both cert and auth header - authenticated",
-			hasTLS:        true,
-			hasCert:       true,
-			hasAuthHeader: true,
-			expectAuth:    true,
-		},
-		{
-			name:          "TLS without cert or auth header - NOT authenticated",
-			hasTLS:        true,
-			hasCert:       false,
-			hasAuthHeader: false,
-			expectAuth:    false,
-		},
-	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -240,21 +103,78 @@ func TestIsRequestAuthenticated(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			if tt.hasTLS {
-				req.TLS = &tls.ConnectionState{}
-				if tt.hasCert {
-					req.TLS.PeerCertificates = []*x509.Certificate{mockCert}
+			if tt.hasCert {
+				req.TLS = &tls.ConnectionState{
+					PeerCertificates: []*x509.Certificate{mockCert},
 				}
+			} else if tt.name == "TLS without peer certs returns nil" {
+				// TLS connection but no peer certificates
+				req.TLS = &tls.ConnectionState{}
 			}
 
-			if tt.hasAuthHeader {
-				req.Header.Set("Authorization", "Bearer test-token")
+			identity, err := auth.Authenticate(context.Background(), req)
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
 			}
 
-			result := isRequestAuthenticated(req)
-			if result != tt.expectAuth {
-				t.Errorf("expected authenticated=%v, got %v", tt.expectAuth, result)
+			if tt.expectIdentity {
+				if identity == nil {
+					t.Error("expected non-nil identity")
+					return
+				}
+				if identity.Subject != tt.expectSubject {
+					t.Errorf("expected subject=%q, got %q", tt.expectSubject, identity.Subject)
+				}
+				if identity.Method != tt.expectMethod {
+					t.Errorf("expected method=%v, got %v", tt.expectMethod, identity.Method)
+				}
+			} else {
+				if identity != nil {
+					t.Errorf("expected nil identity, got %+v", identity)
+				}
 			}
 		})
 	}
+}
+
+// TestIdentityContext verifies the context helpers for identity propagation
+func TestIdentityContext(t *testing.T) {
+	t.Run("stores and retrieves identity", func(t *testing.T) {
+		identity := &Identity{
+			Subject: "test-user",
+			Groups:  []string{"admin", "users"},
+			Method:  AuthMethodJWT,
+			Metadata: map[string]any{
+				"organization_id": "org-123",
+			},
+		}
+
+		ctx := ContextWithIdentity(context.Background(), identity)
+		retrieved := IdentityFromContext(ctx)
+
+		if retrieved == nil {
+			t.Fatal("expected non-nil identity from context")
+		}
+		if retrieved.Subject != identity.Subject {
+			t.Errorf("expected subject=%q, got %q", identity.Subject, retrieved.Subject)
+		}
+		if len(retrieved.Groups) != len(identity.Groups) {
+			t.Errorf("expected %d groups, got %d", len(identity.Groups), len(retrieved.Groups))
+		}
+		if retrieved.Method != identity.Method {
+			t.Errorf("expected method=%v, got %v", identity.Method, retrieved.Method)
+		}
+		if retrieved.Metadata["organization_id"] != identity.Metadata["organization_id"] {
+			t.Errorf("expected org_id=%v, got %v",
+				identity.Metadata["organization_id"],
+				retrieved.Metadata["organization_id"])
+		}
+	})
+
+	t.Run("returns nil for empty context", func(t *testing.T) {
+		retrieved := IdentityFromContext(context.Background())
+		if retrieved != nil {
+			t.Errorf("expected nil identity, got %+v", retrieved)
+		}
+	})
 }

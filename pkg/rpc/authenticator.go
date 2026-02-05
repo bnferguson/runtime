@@ -2,67 +2,90 @@ package rpc
 
 import (
 	"context"
-	"fmt"
 	"net/http"
-	"strings"
 )
 
-// Authenticator is an interface for authenticating RPC requests
-type Authenticator interface {
-	// AuthenticateRequest authenticates an HTTP request and returns whether it's allowed
-	// It can check JWT tokens, certificates, or other authentication methods
-	AuthenticateRequest(ctx context.Context, r *http.Request) (authenticated bool, identity string, err error)
+// contextKey is a private type for context keys to avoid collisions
+type contextKey string
 
-	// NoAuthorization is called when a request has no Authorization header
-	// This allows the authenticator to decide if such requests should be allowed
-	// (e.g., based on client certificates or to enforce mandatory authentication)
-	NoAuthorization(ctx context.Context, r *http.Request) (allowed bool, identity string, err error)
+const (
+	// identityContextKey is the context key for storing the authenticated Identity
+	identityContextKey contextKey = "rpc-identity"
+)
+
+// IdentityFromContext retrieves the Identity from the context, if present
+func IdentityFromContext(ctx context.Context) *Identity {
+	if id, ok := ctx.Value(identityContextKey).(*Identity); ok {
+		return id
+	}
+	return nil
 }
 
-// NoOpAuthenticator is a no-op authenticator that allows all requests
+// ContextWithIdentity returns a new context with the Identity stored
+func ContextWithIdentity(ctx context.Context, identity *Identity) context.Context {
+	return context.WithValue(ctx, identityContextKey, identity)
+}
+
+// AuthMethod indicates how a caller was authenticated
+type AuthMethod string
+
+const (
+	AuthMethodCert      AuthMethod = "cert"      // TLS client certificate
+	AuthMethodJWT       AuthMethod = "jwt"       // JWT token (e.g., from Miren Cloud)
+	AuthMethodAnonymous AuthMethod = "anonymous" // No authentication (public methods)
+	AuthMethodToken     AuthMethod = "token"     // Bearer token (e.g., outboard)
+)
+
+// Identity represents an authenticated caller
+type Identity struct {
+	// Subject is the primary identifier (cert CN, JWT subject, etc.)
+	Subject string
+
+	// Groups contains group memberships (from JWT claims, etc.)
+	Groups []string
+
+	// Method indicates how the caller was authenticated
+	Method AuthMethod
+
+	// Metadata holds auth-method-specific data (e.g., OrganizationID for cloud auth)
+	Metadata map[string]any
+}
+
+// Authenticator validates credentials and returns caller identity
+type Authenticator interface {
+	// Authenticate validates the request's credentials and returns the caller's identity.
+	// Returns:
+	//   - (*Identity, nil) if credentials are valid
+	//   - (nil, nil) if no credentials present or credentials are invalid
+	//   - (nil, error) if an error occurred during authentication
+	Authenticate(ctx context.Context, r *http.Request) (*Identity, error)
+}
+
+// NoOpAuthenticator allows all requests without checking credentials.
+// Used for testing only.
 type NoOpAuthenticator struct{}
 
-func (n *NoOpAuthenticator) AuthenticateRequest(ctx context.Context, r *http.Request) (bool, string, error) {
-	return true, "anonymous", nil
+func (n *NoOpAuthenticator) Authenticate(ctx context.Context, r *http.Request) (*Identity, error) {
+	return &Identity{
+		Subject: "anonymous",
+		Method:  AuthMethodAnonymous,
+	}, nil
 }
 
-func (n *NoOpAuthenticator) NoAuthorization(ctx context.Context, r *http.Request) (bool, string, error) {
-	return true, "anonymous", nil
-}
-
-// LocalOnlyAuthenticator requires a valid client certificate for most requests.
-// This is used when cloud authentication is not enabled, ensuring that only
-// clients with certificates issued by the local CA can access the server.
-//
-// RPC paths (/_rpc/) are allowed through without TLS certs at this layer because
-// the RPC layer handles authentication:
-// - Capability-based auth (Ed25519 signatures) is always enforced
-// - Per-method auth checks TLS certs for non-public methods
-// - Only methods marked public: true in the schema allow unauthenticated access
+// LocalOnlyAuthenticator requires a valid TLS client certificate.
+// Used when cloud authentication is not enabled.
 type LocalOnlyAuthenticator struct{}
 
-func (l *LocalOnlyAuthenticator) AuthenticateRequest(ctx context.Context, r *http.Request) (bool, string, error) {
-	// Even with an Authorization header, we require a valid client certificate
-	return l.NoAuthorization(ctx, r)
-}
-
-func (l *LocalOnlyAuthenticator) NoAuthorization(ctx context.Context, r *http.Request) (bool, string, error) {
-	// Extract identity from cert if present
-	var identity string
+func (l *LocalOnlyAuthenticator) Authenticate(ctx context.Context, r *http.Request) (*Identity, error) {
+	// Check for TLS client certificate
 	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
-		identity = r.TLS.PeerCertificates[0].Subject.CommonName
+		cert := r.TLS.PeerCertificates[0]
+		return &Identity{
+			Subject: cert.Subject.CommonName,
+			Method:  AuthMethodCert,
+		}, nil
 	}
 
-	// Allow RPC paths through - the RPC layer handles auth:
-	// - Capability signature auth is always enforced
-	// - Method-level auth rejects unauthenticated calls to non-public methods
-	if strings.HasPrefix(r.URL.Path, "/_rpc/") {
-		return true, identity, nil
-	}
-
-	// For non-RPC paths, require a valid client certificate
-	if identity != "" {
-		return true, identity, nil
-	}
-	return false, "", fmt.Errorf("authentication required")
+	// No valid credentials
+	return nil, nil
 }

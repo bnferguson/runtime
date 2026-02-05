@@ -9,6 +9,7 @@ import (
 
 	"miren.dev/runtime/pkg/auth"
 	"miren.dev/runtime/pkg/rbac"
+	"miren.dev/runtime/pkg/rpc"
 )
 
 // DefaultCloudURL is the default URL for miren.cloud
@@ -106,21 +107,38 @@ func NewRPCAuthenticator(ctx context.Context, config Config) (*RPCAuthenticator,
 	return a, nil
 }
 
-// AuthenticateRequest implements rpc.Authenticator
-// This is called before any RPC method is invoked. It's not currently wired
-// into the RPC layer at the method call layer, but it's also ONLY used to
-// authenticate HTTP requests that are routed to RPC methods.
-func (a *RPCAuthenticator) AuthenticateRequest(ctx context.Context, r *http.Request) (bool, string, error) {
-	// Extract token from Authorization header
-	authHeader := r.Header.Get("Authorization")
-	if authHeader == "" {
-		// No auth header - shouldn't happen because rpc server only calls
-		// this method if an auth header is present
-		return false, "", fmt.Errorf("missing authorization header")
+// Authenticate implements rpc.Authenticator.
+// It tries JWT authentication first, then falls back to TLS client certificate.
+func (a *RPCAuthenticator) Authenticate(ctx context.Context, r *http.Request) (*rpc.Identity, error) {
+	// Try JWT authentication first if Authorization header is present
+	if authHeader := r.Header.Get("Authorization"); authHeader != "" {
+		identity, err := a.authenticateJWT(ctx, r, authHeader)
+		if err != nil {
+			return nil, err
+		}
+		if identity != nil {
+			return identity, nil
+		}
+		// Invalid JWT format, fall through to cert check
 	}
 
+	// Fall back to TLS client certificate
+	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+		cert := r.TLS.PeerCertificates[0]
+		return &rpc.Identity{
+			Subject: cert.Subject.CommonName,
+			Method:  rpc.AuthMethodCert,
+		}, nil
+	}
+
+	// No valid credentials
+	return nil, nil
+}
+
+// authenticateJWT validates a JWT token and performs RBAC evaluation
+func (a *RPCAuthenticator) authenticateJWT(ctx context.Context, r *http.Request, authHeader string) (*rpc.Identity, error) {
 	if !strings.HasPrefix(authHeader, "Bearer ") {
-		return false, "", fmt.Errorf("invalid authorization header format")
+		return nil, nil // Invalid format, not a JWT
 	}
 
 	token := strings.TrimPrefix(authHeader, "Bearer ")
@@ -133,7 +151,7 @@ func (a *RPCAuthenticator) AuthenticateRequest(ctx context.Context, r *http.Requ
 	} else {
 		validated, err := a.jwtValidator.ValidateToken(ctx, token)
 		if err != nil {
-			return false, "", fmt.Errorf("token validation failed: %w", err)
+			return nil, fmt.Errorf("token validation failed: %w", err)
 		}
 		claims = validated
 
@@ -141,19 +159,15 @@ func (a *RPCAuthenticator) AuthenticateRequest(ctx context.Context, r *http.Requ
 		a.tokenCache.Set(token, claims)
 	}
 
-	// TODO For now we're going to hardcode the resource and action
-	// as being related to cluster access. In the future, we'll make changes
-	// to this where we request authorization for specific high level actions,
-	// like "deploy", "manage", etc.
-	// At that point, we'll rewire this method to be called post-RPC invoke
-	// inside the handler for the method itself.
-
+	// Perform RBAC evaluation
+	// TODO: For now we hardcode the resource and action as "cluster access".
+	// In the future, we'll make this per-method for more granular authorization.
 	req := &rbac.Request{
 		Subject:  claims.Subject,
 		Groups:   claims.GroupIDs,
 		Resource: "cluster",
 		Action:   "access",
-		Tags:     a.tags, // Use the configured tags
+		Tags:     a.tags,
 		Context: map[string]any{
 			"organization_id": claims.OrganizationID,
 		},
@@ -172,7 +186,7 @@ func (a *RPCAuthenticator) AuthenticateRequest(ctx context.Context, r *http.Requ
 		// Trigger a refresh of RBAC rules (with 30-second cooldown)
 		a.policyFetcher.RefreshIfNeeded(ctx)
 
-		return false, "", fmt.Errorf("access denied by RBAC policy")
+		return nil, fmt.Errorf("access denied by RBAC policy")
 	}
 
 	a.logger.Debug("JWT authentication successful",
@@ -180,20 +194,14 @@ func (a *RPCAuthenticator) AuthenticateRequest(ctx context.Context, r *http.Requ
 		"organization_id", claims.OrganizationID,
 	)
 
-	return true, claims.Subject, nil
-}
-
-// NoAuthorization implements rpc.Authenticator
-func (a *RPCAuthenticator) NoAuthorization(ctx context.Context, r *http.Request) (bool, string, error) {
-	// Check if we have client certificates (already validated by TLS layer)
-	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
-		cert := r.TLS.PeerCertificates[0]
-		return true, cert.Subject.CommonName, nil
-	}
-
-	// No valid auth provided, deny the request
-	a.logger.Debug("request denied - authentication required", "path", r.URL.Path)
-	return false, "", fmt.Errorf("authentication required")
+	return &rpc.Identity{
+		Subject: claims.Subject,
+		Groups:  claims.GroupIDs,
+		Method:  rpc.AuthMethodJWT,
+		Metadata: map[string]any{
+			"organization_id": claims.OrganizationID,
+		},
+	}, nil
 }
 
 // Stop stops background tasks

@@ -303,46 +303,43 @@ func (s *Server) setupMux() {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	// If no authenticator configured, allow all requests
 	if s.state.authenticator == nil {
 		s.mux.ServeHTTP(w, r)
 		return
 	}
 
-	// Check for JWT token in Authorization header
-	authHeader := r.Header.Get("Authorization")
-	if authHeader != "" {
-		// Try JWT authentication
-		authenticated, identity, err := s.state.authenticator.AuthenticateRequest(r.Context(), r)
-		if err != nil {
-			s.state.log.Warn("authentication failed", "error", err, "path", r.URL.Path)
-			http.Error(w, "authentication failed", http.StatusUnauthorized)
-			return
-		}
-		if !authenticated {
-			s.state.log.Warn("request not authenticated", "path", r.URL.Path)
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		s.state.log.Debug("request authenticated", "identity", identity, "path", r.URL.Path)
-	} else {
-		// No Authorization header - let authenticator decide if this is allowed
-		allowed, _, err := s.state.authenticator.NoAuthorization(r.Context(), r)
-		if err != nil {
-			s.state.log.Warn("authentication check failed", "error", err, "path", r.URL.Path)
-			http.Error(w, "authentication failed", http.StatusUnauthorized)
-			return
-		}
-		if !allowed {
-			// NOTE: This is a change from the old behavior. Previously during early development,
-			// the authentication was "best attempt" and we didn't reject requests that didn't
-			// present creds. We've since changed that to require	authentication.
-			s.state.log.Warn("request requires authentication", "path", r.URL.Path)
-			http.Error(w, "authentication required", http.StatusUnauthorized)
-			return
-		}
+	// Try to authenticate the request
+	identity, err := s.state.authenticator.Authenticate(ctx, r)
+	if err != nil {
+		s.state.log.Warn("authentication failed", "error", err, "path", r.URL.Path)
+		http.Error(w, "authentication failed", http.StatusUnauthorized)
+		return
+	}
+
+	// Store identity in context if authenticated
+	if identity != nil {
+		ctx = ContextWithIdentity(ctx, identity)
+		r = r.WithContext(ctx)
+		s.state.log.Debug("request authenticated", "subject", identity.Subject, "method", identity.Method, "path", r.URL.Path)
+	}
+
+	// For RPC paths, let the method-level check in handleCalls decide based on public flag
+	// For non-RPC paths, require authentication
+	if identity == nil && !isRPCPath(r.URL.Path) {
+		s.state.log.Warn("request requires authentication", "path", r.URL.Path)
+		http.Error(w, "authentication required", http.StatusUnauthorized)
+		return
 	}
 
 	s.mux.ServeHTTP(w, r)
+}
+
+// isRPCPath returns true if the path is an RPC endpoint
+func isRPCPath(path string) bool {
+	return len(path) >= 6 && path[:6] == "/_rpc/"
 }
 
 type identifyResponse struct {
@@ -445,60 +442,30 @@ func (s *Server) handleDebugAuth(w http.ResponseWriter, r *http.Request) {
 		UserInfo:      make(map[string]string),
 	}
 
-	// Check authentication
-	authHeader := r.Header.Get("Authorization")
-	if authHeader != "" {
-		// Has authentication header
-		if s.state.authenticator != nil {
-			authenticated, identity, err := s.state.authenticator.AuthenticateRequest(r.Context(), r)
-			if err != nil {
-				resp.Success = false
-				resp.Message = fmt.Sprintf("Authentication failed: %v", err)
-				w.WriteHeader(http.StatusUnauthorized)
-			} else if !authenticated {
-				resp.Success = false
-				resp.Message = "Authentication failed"
-				w.WriteHeader(http.StatusUnauthorized)
-			} else {
-				resp.AuthMethod = "bearer"
-				resp.Identity = identity
-				resp.UserInfo["authenticated"] = "true"
-				resp.UserInfo["identity"] = identity
+	// Check authentication using the new Authenticate interface
+	if s.state.authenticator != nil {
+		identity, err := s.state.authenticator.Authenticate(r.Context(), r)
+		if err != nil {
+			resp.Success = false
+			resp.Message = fmt.Sprintf("Authentication failed: %v", err)
+			w.WriteHeader(http.StatusUnauthorized)
+		} else if identity != nil {
+			resp.AuthMethod = string(identity.Method)
+			resp.Identity = identity.Subject
+			resp.UserInfo["authenticated"] = "true"
+			resp.UserInfo["subject"] = identity.Subject
+			resp.UserInfo["method"] = string(identity.Method)
+			if len(identity.Groups) > 0 {
+				resp.UserInfo["groups"] = fmt.Sprintf("%v", identity.Groups)
 			}
 		} else {
-			resp.AuthMethod = "none"
-			resp.Message = "Server has no authenticator configured"
+			resp.Success = false
+			resp.Message = "Authentication required"
+			w.WriteHeader(http.StatusUnauthorized)
 		}
 	} else {
-		// Check client certificate
-		if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
-			cert := r.TLS.PeerCertificates[0]
-			resp.AuthMethod = "certificate"
-			resp.Identity = cert.Subject.String()
-			resp.UserInfo["cert_subject"] = cert.Subject.String()
-			resp.UserInfo["cert_issuer"] = cert.Issuer.String()
-		} else {
-			// No authentication
-			if s.state.authenticator != nil {
-				allowed, identity, err := s.state.authenticator.NoAuthorization(r.Context(), r)
-				if err != nil {
-					resp.Success = false
-					resp.Message = fmt.Sprintf("Authentication check failed: %v", err)
-					w.WriteHeader(http.StatusUnauthorized)
-				} else if !allowed {
-					resp.Success = false
-					resp.Message = "Authentication required"
-					w.WriteHeader(http.StatusUnauthorized)
-				} else {
-					resp.AuthMethod = "none"
-					resp.Identity = identity
-					resp.Message = "No authentication provided, but allowed by server policy"
-				}
-			} else {
-				resp.AuthMethod = "none"
-				resp.Message = "No authentication configured"
-			}
-		}
+		resp.AuthMethod = "none"
+		resp.Message = "No authentication configured"
 	}
 
 	// Add connection information
@@ -1027,22 +994,6 @@ func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// isRequestAuthenticated checks if an HTTP request has valid authentication.
-// Authentication can be via:
-// - TLS client certificate (r.TLS.PeerCertificates)
-// - JWT token (Authorization header, already validated by ServeHTTP)
-// - No TLS at all (server behind auth proxy that handles auth)
-//
-// Returns false only when: TLS is enabled, no client cert, AND no Authorization header.
-func isRequestAuthenticated(r *http.Request) bool {
-	hasCert := r.TLS != nil && len(r.TLS.PeerCertificates) > 0
-	hasAuthHeader := r.Header.Get("Authorization") != ""
-	noTLS := r.TLS == nil
-
-	// Authenticated if any of these are true
-	return hasCert || hasAuthHeader || noTLS
-}
-
 func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 	oid := OID(r.PathValue("oid"))
 
@@ -1075,9 +1026,9 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Enforce authentication for non-public methods
-		// Skip this check if skipVerify is set (test mode)
-		if !mm.Public && !s.state.opts.skipVerify {
-			if !isRequestAuthenticated(r) {
+		if !mm.Public {
+			identity := IdentityFromContext(ctx)
+			if identity == nil {
 				s.state.log.Warn("authentication required for non-public method",
 					"method", method, "interface", mm.InterfaceName)
 				w.Header().Add("rpc-status", "unauthorized")
