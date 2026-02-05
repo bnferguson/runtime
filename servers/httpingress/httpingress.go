@@ -839,8 +839,16 @@ func (h *Server) DoRequest(ctx context.Context, req *httpingress_v1alpha.Interna
 	// Execute the HTTP request
 	httpResp, err := h.executeInternalRequest(ctx, curLease, req, method, path, appId)
 	if err != nil {
-		// Connection error - invalidate the lease
-		h.invalidateLease(context.Background(), appId, curLease)
+		// Context errors (timeout, cancellation) are not connection failures —
+		// the sandbox is likely still healthy, so just release the lease.
+		// Only invalidate for actual connection errors (refused, no route, etc).
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			h.releaseLease(ctx, curLease)
+		} else if isProxyConnectionError(err) {
+			h.invalidateLease(context.Background(), appId, curLease)
+		} else {
+			h.releaseLease(ctx, curLease)
+		}
 		resp.SetError(fmt.Sprintf("request failed: %v", err))
 		return resp, nil
 	}

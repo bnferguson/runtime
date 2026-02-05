@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -41,9 +42,16 @@ func NewNamedValue(label string, value any) NamedValue {
 		}
 		nv.ValueType = ValueTypeBool
 	case float64:
-		if v == float64(int64(v)) {
-			nv.Value = fmt.Sprintf("%d", int64(v))
-		} else {
+		switch {
+		case math.IsNaN(v):
+			nv.Value = "NaN"
+		case math.IsInf(v, 1):
+			nv.Value = "+Inf"
+		case math.IsInf(v, -1):
+			nv.Value = "-Inf"
+		case v == math.Trunc(v) && v >= math.MinInt64 && v <= math.MaxInt64:
+			nv.Value = fmt.Sprintf("%.0f", v)
+		default:
 			nv.Value = fmt.Sprintf("%g", v)
 		}
 		nv.ValueType = ValueTypeNumber

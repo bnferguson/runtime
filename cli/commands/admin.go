@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -280,10 +281,16 @@ func parseUnknownFlags(unknown []string, params map[string]any, paramSources map
 				value = flagStr[idx+1:]
 			} else {
 				key = flagStr
-				// Next arg is the value unless it looks like another flag
-				if i+1 < len(unknown) && !strings.HasPrefix(unknown[i+1], "-") {
-					i++
-					value = unknown[i]
+				// Next arg is the value unless it looks like another flag.
+				// But allow negative numbers (e.g. -5, -3.14) as values.
+				if i+1 < len(unknown) {
+					next := unknown[i+1]
+					if !strings.HasPrefix(next, "-") || looksLikeNumber(next) {
+						i++
+						value = next
+					} else {
+						isBoolFlag = true
+					}
 				} else {
 					isBoolFlag = true
 				}
@@ -296,9 +303,16 @@ func parseUnknownFlags(unknown []string, params map[string]any, paramSources map
 				value = flagStr[idx+1:]
 			} else {
 				key = flagStr
-				if i+1 < len(unknown) && !strings.HasPrefix(unknown[i+1], "-") {
-					i++
-					value = unknown[i]
+				// Next arg is the value unless it looks like another flag.
+				// But allow negative numbers (e.g. -5, -3.14) as values.
+				if i+1 < len(unknown) {
+					next := unknown[i+1]
+					if !strings.HasPrefix(next, "-") || looksLikeNumber(next) {
+						i++
+						value = next
+					} else {
+						isBoolFlag = true
+					}
 				} else {
 					isBoolFlag = true
 				}
@@ -345,6 +359,23 @@ func parseUnknownFlags(unknown []string, params map[string]any, paramSources map
 	}
 
 	return nil
+}
+
+// looksLikeNumber checks if a string starting with "-" is a negative number
+// rather than a flag. Returns true for values like "-5", "-3.14", "-.5".
+func looksLikeNumber(s string) bool {
+	if !strings.HasPrefix(s, "-") {
+		return false
+	}
+	// Try parsing as integer first
+	if _, err := strconv.ParseInt(s, 10, 64); err == nil {
+		return true
+	}
+	// Try parsing as float
+	if _, err := strconv.ParseFloat(s, 64); err == nil {
+		return true
+	}
+	return false
 }
 
 // validateAdminCall fetches method introspection and validates the method and parameters
