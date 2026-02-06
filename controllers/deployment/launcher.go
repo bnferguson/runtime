@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
@@ -23,6 +24,8 @@ import (
 type Launcher struct {
 	Log *slog.Logger
 	EAC *entityserver_v1alpha.EntityAccessClient
+
+	appMu sync.Map // per-app mutexes: app ID -> *sync.Mutex
 }
 
 // PoolWithEntity wraps a SandboxPool with its entity, allowing updates without re-fetching
@@ -44,6 +47,12 @@ func (l *Launcher) Init(ctx context.Context) error {
 }
 
 func (l *Launcher) Reconcile(ctx context.Context, app *core_v1alpha.App, meta *entity.Meta) error {
+	// Serialize reconciles for the same app to avoid races between rapid deploys.
+	val, _ := l.appMu.LoadOrStore(app.ID, &sync.Mutex{})
+	mu := val.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+
 	// Re-read from store to get latest state, coalescing rapid updates.
 	// The controller framework embeds the entity snapshot at dispatch time,
 	// so the app passed here may have a stale ActiveVersion if multiple
