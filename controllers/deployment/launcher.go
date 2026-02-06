@@ -2,6 +2,7 @@ package deployment
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/containerdx"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
@@ -42,13 +44,29 @@ func (l *Launcher) Init(ctx context.Context) error {
 }
 
 func (l *Launcher) Reconcile(ctx context.Context, app *core_v1alpha.App, meta *entity.Meta) error {
-	if app.ActiveVersion == "" {
-		l.Log.Debug("app has no active version, skipping", "app", app.ID)
+	// Re-read from store to get latest state, coalescing rapid updates.
+	// The controller framework embeds the entity snapshot at dispatch time,
+	// so the app passed here may have a stale ActiveVersion if multiple
+	// versions were created in quick succession.
+	appResp, err := l.EAC.Get(ctx, app.ID.String())
+	if err != nil {
+		if errors.Is(err, cond.ErrNotFound{}) {
+			l.Log.Debug("app not found in store, skipping", "app", app.ID)
+			return nil
+		}
+		return fmt.Errorf("failed to get app from store: %w", err)
+	}
+
+	var current core_v1alpha.App
+	current.Decode(appResp.Entity().Entity())
+
+	if current.ActiveVersion == "" {
+		l.Log.Debug("app has no active version, skipping", "app", current.ID)
 		return nil
 	}
 
-	l.Log.Info("reconciling app", "app", app.ID, "version", app.ActiveVersion)
-	return l.reconcileAppVersion(ctx, app)
+	l.Log.Info("reconciling app", "app", current.ID, "version", current.ActiveVersion)
+	return l.reconcileAppVersion(ctx, &current)
 }
 
 // reconcileAppVersion ensures pools exist for all services in the active version
