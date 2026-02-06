@@ -5,6 +5,11 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *main*
 
+---
+
+## v0.3.1
+*2026-02-06*
+
 **Features**
 
 - **Build-time environment variables** - Environment variables are now available during the build process, so build commands like `npm run build` can access API keys, database URLs, and other configuration. Variables from `app.toml`, existing config, and `--env`/`--secret` CLI flags are all injected at build time. ([#581](https://github.com/mirendev/runtime/pull/581))
