@@ -295,8 +295,8 @@ func TestResolveUnknownIPNoMatchingIP(t *testing.T) {
 		"resolveUnknownIP should return false for non-matching IP")
 }
 
-func TestNonRunningStatusNeverAdded(t *testing.T) {
-	// Sandboxes that are not RUNNING should never be added to DNS,
+func TestStoppedStatusNeverAdded(t *testing.T) {
+	// Sandboxes that are STOPPED or DEAD should never be added to DNS,
 	// even if they have network info.
 
 	s := newTestServer(t)
@@ -304,19 +304,19 @@ func TestNonRunningStatusNeverAdded(t *testing.T) {
 
 	const (
 		ip        = "10.8.24.32"
-		sandboxID = "sandbox/testapp-pending"
+		sandboxID = "sandbox/testapp-stopped"
 	)
 
-	// A PENDING sandbox with network info should not be tracked
-	pendingSandbox := &compute_v1alpha.Sandbox{
+	// A STOPPED sandbox with network info should not be tracked
+	stoppedSandbox := &compute_v1alpha.Sandbox{
 		ID:     entity.Id(sandboxID),
-		Status: compute_v1alpha.PENDING,
+		Status: compute_v1alpha.STOPPED,
 		Network: []compute_v1alpha.Network{
 			{Address: ip + "/24"},
 		},
 	}
-	s.handleSandboxUpdate(ctx, pendingSandbox, nil)
+	s.handleSandboxUpdate(ctx, stoppedSandbox, nil)
 
 	assert.Empty(t, s.lookupAppForIP(ip),
-		"PENDING sandbox should not be added to DNS")
+		"STOPPED sandbox should not be added to DNS")
 }

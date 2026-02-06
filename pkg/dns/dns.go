@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
+	"miren.dev/runtime/api/compute"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/rpc/stream"
 
@@ -490,9 +491,11 @@ func (s *Server) watchSandboxes(ctx context.Context) {
 }
 
 func (s *Server) handleSandboxUpdate(ctx context.Context, sb *compute_v1alpha.Sandbox, en *entity.Entity) {
-	// Only track RUNNING sandboxes - this matches recoverSandboxes() behavior
-	if sb.Status != compute_v1alpha.RUNNING {
-		// Sandbox is not running - remove from DNS if we were tracking it
+	// Track PENDING and RUNNING sandboxes so DNS works during startup.
+	// Containers can make DNS queries while still in PENDING state, before
+	// the sandbox transitions to RUNNING.
+	if !compute.SandboxActive(sb.Status) {
+		// Sandbox is stopped/dead - remove from DNS if we were tracking it
 		s.handleSandboxDeleteByID(sb.ID.String())
 		return
 	}
@@ -502,7 +505,7 @@ func (s *Server) handleSandboxUpdate(ctx context.Context, sb *compute_v1alpha.Sa
 	s.mu.Unlock()
 
 	if tracked {
-		// Already tracked and still RUNNING, skip
+		// Already tracked, skip
 		return
 	}
 
@@ -768,8 +771,8 @@ func (s *Server) recoverSandboxes(ctx context.Context) error {
 		var sb compute_v1alpha.Sandbox
 		sb.Decode(ent.Entity())
 
-		// Only recover RUNNING sandboxes
-		if sb.Status != compute_v1alpha.RUNNING {
+		// Only recover PENDING and RUNNING sandboxes
+		if !compute.SandboxActive(sb.Status) {
 			continue
 		}
 
