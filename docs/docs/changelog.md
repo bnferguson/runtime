@@ -7,12 +7,31 @@ All notable changes to Miren Runtime will be documented in this file.
 
 **Features**
 
-- **Preserve disk mounts during server restart** - The LSVD disk manager now survives server restarts, keeping disk mounts active. Use `systemctl reload miren` for a soft restart that preserves mounts, or `systemctl restart miren` for a full restart. This significantly reduces disruption when updating the miren server.
+- **Build-time environment variables** - Environment variables are now available during the build process, so build commands like `npm run build` can access API keys, database URLs, and other configuration. Variables from `app.toml`, existing config, and `--env`/`--secret` CLI flags are all injected at build time. ([#581](https://github.com/mirendev/runtime/pull/581))
+
+**Improvements**
+
+- **Preserve disk mounts during server restart** - The LSVD disk manager now survives server restarts, keeping disk mounts active. Use `systemctl reload miren` for a soft restart that preserves mounts, or `systemctl restart miren` for a full restart. This significantly reduces disruption when updating the miren server. ([#554](https://github.com/mirendev/runtime/pull/554))
 
   **For existing installations:** To enable this feature, either re-run `sudo miren server install --force` to regenerate the systemd unit file, or manually add the following line to `/etc/systemd/system/miren.service` under the `[Service]` section and run `systemctl daemon-reload`:
   ```
   ExecReload=/bin/kill -USR1 $MAINPID
   ```
+
+- **Batch env var setting** - Setting multiple environment variables now creates a single app version instead of N intermediate versions. ([#578](https://github.com/mirendev/runtime/pull/578))
+- **Smarter deploy coalescing** - Rapid successive deploys are now coalesced so only the latest version is launched, avoiding unnecessary churn from intermediate sandbox pools. ([#579](https://github.com/mirendev/runtime/pull/579))
+- **Default app name from app.toml** - CLI commands like `app delete`, `route set`, and `route set-default` now infer the app name from `.miren/app.toml` when not specified. ([#562](https://github.com/mirendev/runtime/pull/562))
+- **Clearer scaling display** - Instance counts now show `(auto)` or `(fixed)` suffix, and sandbox pool listings include a MODE column. ([#566](https://github.com/mirendev/runtime/pull/566))
+- **Deploy validation for services** - Deploys now fail early with a clear error when no services are defined, instead of silently deploying an unservable app. ([#563](https://github.com/mirendev/runtime/pull/563))
+- **Smarter `miren upgrade`** - Upgrade now checks permissions upfront, offers interactive sudo vs user-directory install picker, and supports a `--user` flag for non-root installation. ([#564](https://github.com/mirendev/runtime/pull/564))
+
+**Bug Fixes**
+
+- **Fixed build log retention** - Build logs are now properly persisted when using the central BuildKit daemon, restoring the ability to retrieve build output after a deploy with `miren logs --build`. ([#561](https://github.com/mirendev/runtime/pull/561), [#570](https://github.com/mirendev/runtime/pull/570))
+- **Fixed orphaned container shims** - Containerd shims are no longer left behind when app containers crash. ([#577](https://github.com/mirendev/runtime/pull/577))
+- **Fixed env vars wiped by app.toml** - Adding the first `[[env]]` entry to `app.toml` no longer silently drops existing environment variables. ([#580](https://github.com/mirendev/runtime/pull/580))
+- **Fixed DNS during sandbox startup** - DNS no longer returns empty responses during sandbox startup; unknown source IPs are now lazily resolved via entity store lookup. ([#576](https://github.com/mirendev/runtime/pull/576))
+- **Fixed nil panic in `miren env list`** - Running `miren env list` when an app isn't deployed to the current cluster no longer crashes. ([#572](https://github.com/mirendev/runtime/pull/572))
 
 ---
 
