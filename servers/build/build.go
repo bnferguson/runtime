@@ -116,7 +116,7 @@ func mergeServiceEnvVars(existingEnvs []core_v1alpha.Env, newEnvs []core_v1alpha
 	for _, e := range existingEnvs {
 		source := e.Source
 		if source == "" {
-			source = "config" // backward compatibility
+			source = "manual" // backward compatibility: preserve unknown-source vars
 		}
 
 		if source == "manual" {
@@ -433,10 +433,10 @@ func mergeVariablesFromAppConfig(existingVars []core_v1alpha.Variable, appConfig
 
 	// First, add all existing manual variables - these always persist
 	for _, v := range existingVars {
-		// Backward compatibility: empty source is treated as "config"
+		// Backward compatibility: preserve unknown-source vars as manual
 		source := v.Source
 		if source == "" {
-			source = "config"
+			source = "manual"
 		}
 
 		// Keep manual vars - they shadow config vars with the same key
