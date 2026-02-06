@@ -2,6 +2,7 @@ package deployment
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -1255,6 +1256,100 @@ func TestPortNameAndType(t *testing.T) {
 	assert.Equal(t, int64(8080), webPort.Port, "web service should use port 8080")
 	assert.Equal(t, "http", webPort.Name, "web service should default to port name http")
 	assert.Equal(t, "http", webPort.Type, "web service should default to port type http")
+}
+
+// TestRapidVersionChangesCreateSinglePool tests that when multiple AppVersions
+// are created in quick succession, the launcher only creates a pool for the
+// latest ActiveVersion. This verifies that Reconcile() re-reads the App from
+// the store (coalescing stale events) rather than using the event-embedded snapshot.
+func TestRapidVersionChangesCreateSinglePool(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create app
+	app := &core_v1alpha.App{
+		Project: entity.Id("project-1"),
+	}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	// Create 3 versions rapidly with the same spec (same image, same config)
+	versions := make([]*core_v1alpha.AppVersion, 3)
+	for i := range versions {
+		ver := &core_v1alpha.AppVersion{
+			App:      app.ID,
+			Version:  fmt.Sprintf("v%d", i+1),
+			ImageUrl: "test:latest",
+			Config: core_v1alpha.Config{
+				Port: 3000,
+				Services: []core_v1alpha.Services{
+					{
+						Name: "web",
+						ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+							Mode:                "auto",
+							RequestsPerInstance: 10,
+						},
+					},
+				},
+			},
+		}
+		verID, err := server.Client.Create(ctx, fmt.Sprintf("test-ver-v%d", i+1), ver)
+		require.NoError(t, err)
+		ver.ID = verID
+		versions[i] = ver
+
+		// Set each version as active (simulating rapid deploys)
+		app.ActiveVersion = ver.ID
+		err = server.Client.Update(ctx, app)
+		require.NoError(t, err)
+	}
+
+	// At this point ActiveVersion points to v3.
+	// Simulate the controller framework dispatching events for v1, v2, v3.
+	// Each event carries a stale App snapshot from when it was dispatched.
+	launcher := NewLauncher(log, server.EAC)
+
+	// Simulate stale v1 event: app snapshot has ActiveVersion=v1
+	staleAppV1 := &core_v1alpha.App{
+		ID:            app.ID,
+		Project:       app.Project,
+		ActiveVersion: versions[0].ID, // stale: points to v1
+	}
+	err = launcher.Reconcile(ctx, staleAppV1, nil)
+	require.NoError(t, err)
+
+	// Simulate stale v2 event
+	staleAppV2 := &core_v1alpha.App{
+		ID:            app.ID,
+		Project:       app.Project,
+		ActiveVersion: versions[1].ID, // stale: points to v2
+	}
+	err = launcher.Reconcile(ctx, staleAppV2, nil)
+	require.NoError(t, err)
+
+	// Simulate v3 event (current)
+	staleAppV3 := &core_v1alpha.App{
+		ID:            app.ID,
+		Project:       app.Project,
+		ActiveVersion: versions[2].ID,
+	}
+	err = launcher.Reconcile(ctx, staleAppV3, nil)
+	require.NoError(t, err)
+
+	// All three reconciles should have seen ActiveVersion=v3 (the latest)
+	// and created/reused a single pool for it.
+	pools := listAllPools(t, ctx, server)
+	require.Len(t, pools, 1, "should create only one pool despite 3 reconcile calls with stale events")
+
+	pool := pools[0]
+	assert.Equal(t, "web", pool.Service)
+	assert.Equal(t, int64(1), pool.DesiredInstances, "auto mode should have desired_instances=1")
+	// The pool should reference v3 (the latest version)
+	assert.Contains(t, pool.ReferencedByVersions, versions[2].ID, "pool should reference the latest version v3")
 }
 
 // TestNoActiveVersionSkipsReconcile tests that the launcher returns early
