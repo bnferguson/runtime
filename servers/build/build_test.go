@@ -632,7 +632,7 @@ func TestMergeVariablesFromAppConfig(t *testing.T) {
 			},
 		},
 		{
-			name: "backward compatibility - empty source treated as config",
+			name: "backward compatibility - empty source preserved as manual",
 			existingVars: []core_v1alpha.Variable{
 				{Key: "OLD_VAR", Value: "old_value", Source: ""},
 			},
@@ -642,6 +642,7 @@ func TestMergeVariablesFromAppConfig(t *testing.T) {
 				},
 			},
 			wantVars: []core_v1alpha.Variable{
+				{Key: "OLD_VAR", Value: "old_value", Source: ""},
 				{Key: "NEW_VAR", Value: "new_value", Source: "config"},
 			},
 		},
@@ -696,6 +697,25 @@ func TestMergeVariablesFromAppConfig(t *testing.T) {
 				{Key: "MANUAL_2", Value: "m2", Source: "manual"},
 				{Key: "CONFIG_1", Value: "c1_updated", Source: "config"},
 				{Key: "CONFIG_3", Value: "c3", Source: "config"},
+			},
+		},
+		{
+			name: "empty source vars preserved when app.toml adds env",
+			existingVars: []core_v1alpha.Variable{
+				{Key: "LEGACY_DB_URL", Value: "postgres://old/db", Source: ""},
+				{Key: "LEGACY_API_KEY", Value: "key123", Source: ""},
+				{Key: "MANUAL_SECRET", Value: "secret", Source: "manual"},
+			},
+			appConfig: &appconfig.AppConfig{
+				EnvVars: []appconfig.AppEnvVar{
+					{Key: "NEW_CONFIG_VAR", Value: "new_value"},
+				},
+			},
+			wantVars: []core_v1alpha.Variable{
+				{Key: "LEGACY_DB_URL", Value: "postgres://old/db", Source: ""},
+				{Key: "LEGACY_API_KEY", Value: "key123", Source: ""},
+				{Key: "MANUAL_SECRET", Value: "secret", Source: "manual"},
+				{Key: "NEW_CONFIG_VAR", Value: "new_value", Source: "config"},
 			},
 		},
 		{
@@ -787,7 +807,7 @@ func TestMergeServiceEnvVars(t *testing.T) {
 			},
 		},
 		{
-			name: "backward compatibility - empty source treated as config",
+			name: "backward compatibility - empty source preserved as manual",
 			existingEnvs: []core_v1alpha.Env{
 				{Key: "OLD_VAR", Value: "old_value", Source: ""},
 			},
@@ -795,6 +815,7 @@ func TestMergeServiceEnvVars(t *testing.T) {
 				{Key: "NEW_VAR", Value: "new_value", Source: "config"},
 			},
 			wantEnvs: []core_v1alpha.Env{
+				{Key: "OLD_VAR", Value: "old_value", Source: ""},
 				{Key: "NEW_VAR", Value: "new_value", Source: "config"},
 			},
 		},
@@ -843,6 +864,23 @@ func TestMergeServiceEnvVars(t *testing.T) {
 				{Key: "MANUAL_2", Value: "m2", Source: "manual"},
 				{Key: "CONFIG_1", Value: "c1_updated", Source: "config"},
 				{Key: "CONFIG_3", Value: "c3", Source: "config"},
+			},
+		},
+		{
+			name: "empty source vars preserved when app.toml adds env",
+			existingEnvs: []core_v1alpha.Env{
+				{Key: "LEGACY_DB_URL", Value: "postgres://old/db", Source: ""},
+				{Key: "LEGACY_API_KEY", Value: "key123", Source: ""},
+				{Key: "MANUAL_SECRET", Value: "secret", Source: "manual"},
+			},
+			newEnvs: []core_v1alpha.Env{
+				{Key: "NEW_CONFIG_VAR", Value: "new_value", Source: "config"},
+			},
+			wantEnvs: []core_v1alpha.Env{
+				{Key: "LEGACY_DB_URL", Value: "postgres://old/db", Source: ""},
+				{Key: "LEGACY_API_KEY", Value: "key123", Source: ""},
+				{Key: "MANUAL_SECRET", Value: "secret", Source: "manual"},
+				{Key: "NEW_CONFIG_VAR", Value: "new_value", Source: "config"},
 			},
 		},
 		{
