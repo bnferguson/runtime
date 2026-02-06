@@ -490,6 +490,111 @@ func (r *AppInfo) SetEnvVar(ctx context.Context, state *app_v1alpha.CrudSetEnvVa
 	return nil
 }
 
+func (r *AppInfo) SetEnvVars(ctx context.Context, state *app_v1alpha.CrudSetEnvVars) error {
+	args := state.Args()
+	name := args.App()
+	vars := args.Vars()
+	service := args.Service()
+
+	if len(vars) == 0 {
+		return fmt.Errorf("no environment variables provided")
+	}
+
+	for _, v := range vars {
+		if strings.HasPrefix(v.Key(), "MIREN_") {
+			return fmt.Errorf("cannot set MIREN_ environment variables")
+		}
+	}
+
+	var appRec core_v1alpha.App
+	err := r.EC.Get(ctx, name, &appRec)
+	if err != nil {
+		return err
+	}
+
+	var appVer core_v1alpha.AppVersion
+	if appRec.ActiveVersion != "" {
+		err = r.EC.GetById(ctx, appRec.ActiveVersion, &appVer)
+		if err != nil {
+			return err
+		}
+	} else {
+		appVer.App = appRec.ID
+	}
+
+	for _, v := range vars {
+		key := v.Key()
+		value := v.Value()
+		sensitive := v.Sensitive()
+
+		if service == "" {
+			found := false
+			for i, ev := range appVer.Config.Variable {
+				if ev.Key == key {
+					appVer.Config.Variable[i].Value = value
+					appVer.Config.Variable[i].Sensitive = sensitive
+					appVer.Config.Variable[i].Source = "manual"
+					found = true
+					break
+				}
+			}
+			if !found {
+				appVer.Config.Variable = append(appVer.Config.Variable, core_v1alpha.Variable{
+					Key:       key,
+					Value:     value,
+					Sensitive: sensitive,
+					Source:    "manual",
+				})
+			}
+		} else {
+			svcFound := false
+			for i := range appVer.Config.Services {
+				if appVer.Config.Services[i].Name == service {
+					svcFound = true
+					envFound := false
+					for j, e := range appVer.Config.Services[i].Env {
+						if e.Key == key {
+							appVer.Config.Services[i].Env[j].Value = value
+							appVer.Config.Services[i].Env[j].Sensitive = sensitive
+							appVer.Config.Services[i].Env[j].Source = "manual"
+							envFound = true
+							break
+						}
+					}
+					if !envFound {
+						appVer.Config.Services[i].Env = append(appVer.Config.Services[i].Env, core_v1alpha.Env{
+							Key:       key,
+							Value:     value,
+							Sensitive: sensitive,
+							Source:    "manual",
+						})
+					}
+					break
+				}
+			}
+			if !svcFound {
+				return fmt.Errorf("service %q not found", service)
+			}
+		}
+	}
+
+	appVer.Version = name + "-" + idgen.Gen("v")
+
+	avid, err := r.EC.Create(ctx, appVer.Version, &appVer)
+	if err != nil {
+		return err
+	}
+
+	appRec.ActiveVersion = avid
+	err = r.EC.Update(ctx, &appRec)
+	if err != nil {
+		return fmt.Errorf("error updating app entity: %w", err)
+	}
+
+	state.Results().SetVersionId(appVer.Version)
+	return nil
+}
+
 func (r *AppInfo) DeleteEnvVar(ctx context.Context, state *app_v1alpha.CrudDeleteEnvVar) error {
 	args := state.Args()
 	name := args.App()

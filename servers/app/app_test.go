@@ -354,3 +354,360 @@ func TestSetConfiguration_EnvVarDeletion(t *testing.T) {
 		}
 	})
 }
+
+func TestSetEnvVars_Batch(t *testing.T) {
+	ctx := context.Background()
+
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	ec := entityserver.NewClient(slog.Default(), inmem.EAC)
+
+	appInfo := &AppInfo{
+		Log:  slog.Default(),
+		EC:   ec,
+		CPU:  &metrics.CPUUsage{},
+		Mem:  &metrics.MemoryUsage{},
+		HTTP: &metrics.HTTPMetrics{},
+	}
+
+	client := &app_v1alpha.CrudClient{
+		Client: rpc.LocalClient(app_v1alpha.AdaptCrud(appInfo)),
+	}
+
+	t.Run("SetMultipleVarsAtOnce", func(t *testing.T) {
+		appName := "test-batch-set"
+		app := &core_v1alpha.App{}
+		appID, err := inmem.Client.Create(ctx, appName, app)
+		if err != nil {
+			t.Fatalf("failed to create app: %v", err)
+		}
+		app.ID = appID
+
+		nv1 := &app_v1alpha.NamedValue{}
+		nv1.SetKey("A")
+		nv1.SetValue("1")
+		nv1.SetSensitive(false)
+
+		nv2 := &app_v1alpha.NamedValue{}
+		nv2.SetKey("B")
+		nv2.SetValue("2")
+		nv2.SetSensitive(false)
+
+		nv3 := &app_v1alpha.NamedValue{}
+		nv3.SetKey("C")
+		nv3.SetValue("3")
+		nv3.SetSensitive(true)
+
+		res, err := client.SetEnvVars(ctx, appName, []*app_v1alpha.NamedValue{nv1, nv2, nv3}, "")
+		if err != nil {
+			t.Fatalf("SetEnvVars failed: %v", err)
+		}
+
+		if res.VersionId() == "" {
+			t.Fatal("expected non-empty version ID")
+		}
+
+		var appCheck core_v1alpha.App
+		err = ec.Get(ctx, appName, &appCheck)
+		if err != nil {
+			t.Fatalf("failed to get app: %v", err)
+		}
+
+		var appVer core_v1alpha.AppVersion
+		err = ec.GetById(ctx, appCheck.ActiveVersion, &appVer)
+		if err != nil {
+			t.Fatalf("failed to get app version: %v", err)
+		}
+
+		if len(appVer.Config.Variable) != 3 {
+			t.Fatalf("expected 3 env vars, got %d", len(appVer.Config.Variable))
+		}
+
+		vars := map[string]core_v1alpha.Variable{}
+		for _, v := range appVer.Config.Variable {
+			vars[v.Key] = v
+		}
+
+		if vars["A"].Value != "1" || vars["A"].Sensitive {
+			t.Errorf("A: got value=%q sensitive=%v, want value=%q sensitive=%v", vars["A"].Value, vars["A"].Sensitive, "1", false)
+		}
+		if vars["B"].Value != "2" || vars["B"].Sensitive {
+			t.Errorf("B: got value=%q sensitive=%v, want value=%q sensitive=%v", vars["B"].Value, vars["B"].Sensitive, "2", false)
+		}
+		if vars["C"].Value != "3" || !vars["C"].Sensitive {
+			t.Errorf("C: got value=%q sensitive=%v, want value=%q sensitive=%v", vars["C"].Value, vars["C"].Sensitive, "3", true)
+		}
+		for _, v := range appVer.Config.Variable {
+			if v.Source != "manual" {
+				t.Errorf("var %s: expected source %q, got %q", v.Key, "manual", v.Source)
+			}
+		}
+	})
+
+	t.Run("CreatesOnlyOneVersion", func(t *testing.T) {
+		appName := "test-batch-single-version"
+		app := &core_v1alpha.App{}
+		appID, err := inmem.Client.Create(ctx, appName, app)
+		if err != nil {
+			t.Fatalf("failed to create app: %v", err)
+		}
+		app.ID = appID
+
+		nv1 := &app_v1alpha.NamedValue{}
+		nv1.SetKey("X")
+		nv1.SetValue("10")
+		nv1.SetSensitive(false)
+
+		nv2 := &app_v1alpha.NamedValue{}
+		nv2.SetKey("Y")
+		nv2.SetValue("20")
+		nv2.SetSensitive(false)
+
+		res, err := client.SetEnvVars(ctx, appName, []*app_v1alpha.NamedValue{nv1, nv2}, "")
+		if err != nil {
+			t.Fatalf("SetEnvVars failed: %v", err)
+		}
+		firstVersionId := res.VersionId()
+
+		var appCheck core_v1alpha.App
+		err = ec.Get(ctx, appName, &appCheck)
+		if err != nil {
+			t.Fatalf("failed to get app: %v", err)
+		}
+
+		var appVer core_v1alpha.AppVersion
+		err = ec.GetById(ctx, appCheck.ActiveVersion, &appVer)
+		if err != nil {
+			t.Fatalf("failed to get app version: %v", err)
+		}
+
+		if appVer.Version != firstVersionId {
+			t.Errorf("active version %q does not match returned version %q", appVer.Version, firstVersionId)
+		}
+	})
+
+	t.Run("UpdatesExistingVars", func(t *testing.T) {
+		appName := "test-batch-update"
+		app := &core_v1alpha.App{}
+		appID, err := inmem.Client.Create(ctx, appName, app)
+		if err != nil {
+			t.Fatalf("failed to create app: %v", err)
+		}
+		app.ID = appID
+
+		// Set initial vars
+		nv1 := &app_v1alpha.NamedValue{}
+		nv1.SetKey("KEY1")
+		nv1.SetValue("old1")
+		nv1.SetSensitive(false)
+
+		nv2 := &app_v1alpha.NamedValue{}
+		nv2.SetKey("KEY2")
+		nv2.SetValue("old2")
+		nv2.SetSensitive(false)
+
+		_, err = client.SetEnvVars(ctx, appName, []*app_v1alpha.NamedValue{nv1, nv2}, "")
+		if err != nil {
+			t.Fatalf("initial SetEnvVars failed: %v", err)
+		}
+
+		// Update KEY1 and add KEY3 in a single batch
+		upd1 := &app_v1alpha.NamedValue{}
+		upd1.SetKey("KEY1")
+		upd1.SetValue("new1")
+		upd1.SetSensitive(true)
+
+		upd3 := &app_v1alpha.NamedValue{}
+		upd3.SetKey("KEY3")
+		upd3.SetValue("val3")
+		upd3.SetSensitive(false)
+
+		_, err = client.SetEnvVars(ctx, appName, []*app_v1alpha.NamedValue{upd1, upd3}, "")
+		if err != nil {
+			t.Fatalf("update SetEnvVars failed: %v", err)
+		}
+
+		var appCheck core_v1alpha.App
+		err = ec.Get(ctx, appName, &appCheck)
+		if err != nil {
+			t.Fatalf("failed to get app: %v", err)
+		}
+
+		var appVer core_v1alpha.AppVersion
+		err = ec.GetById(ctx, appCheck.ActiveVersion, &appVer)
+		if err != nil {
+			t.Fatalf("failed to get app version: %v", err)
+		}
+
+		if len(appVer.Config.Variable) != 3 {
+			t.Fatalf("expected 3 env vars, got %d", len(appVer.Config.Variable))
+		}
+
+		vars := map[string]core_v1alpha.Variable{}
+		for _, v := range appVer.Config.Variable {
+			vars[v.Key] = v
+		}
+
+		if vars["KEY1"].Value != "new1" || !vars["KEY1"].Sensitive {
+			t.Errorf("KEY1: got value=%q sensitive=%v, want value=%q sensitive=%v", vars["KEY1"].Value, vars["KEY1"].Sensitive, "new1", true)
+		}
+		if vars["KEY2"].Value != "old2" {
+			t.Errorf("KEY2: got value=%q, want %q (should be unchanged)", vars["KEY2"].Value, "old2")
+		}
+		if vars["KEY3"].Value != "val3" {
+			t.Errorf("KEY3: got value=%q, want %q", vars["KEY3"].Value, "val3")
+		}
+	})
+
+	t.Run("RejectsMIRENPrefix", func(t *testing.T) {
+		appName := "test-batch-miren-reject"
+		app := &core_v1alpha.App{}
+		appID, err := inmem.Client.Create(ctx, appName, app)
+		if err != nil {
+			t.Fatalf("failed to create app: %v", err)
+		}
+		app.ID = appID
+
+		nv1 := &app_v1alpha.NamedValue{}
+		nv1.SetKey("GOOD_VAR")
+		nv1.SetValue("ok")
+		nv1.SetSensitive(false)
+
+		nv2 := &app_v1alpha.NamedValue{}
+		nv2.SetKey("MIREN_SECRET")
+		nv2.SetValue("bad")
+		nv2.SetSensitive(false)
+
+		_, err = client.SetEnvVars(ctx, appName, []*app_v1alpha.NamedValue{nv1, nv2}, "")
+		if err == nil {
+			t.Fatal("expected error for MIREN_ prefix, got nil")
+		}
+	})
+
+	t.Run("PerServiceEnvVars", func(t *testing.T) {
+		appName := "test-batch-service"
+		app := &core_v1alpha.App{}
+		appID, err := inmem.Client.Create(ctx, appName, app)
+		if err != nil {
+			t.Fatalf("failed to create app: %v", err)
+		}
+		app.ID = appID
+
+		// Create an initial version with a service defined
+		appVer := core_v1alpha.AppVersion{
+			App: appID,
+			Config: core_v1alpha.Config{
+				Services: []core_v1alpha.Services{
+					{Name: "web"},
+				},
+			},
+		}
+		appVer.Version = appName + "-v0"
+		avid, err := inmem.Client.Create(ctx, appVer.Version, &appVer)
+		if err != nil {
+			t.Fatalf("failed to create initial version: %v", err)
+		}
+
+		var appRec core_v1alpha.App
+		err = ec.Get(ctx, appName, &appRec)
+		if err != nil {
+			t.Fatalf("failed to get app: %v", err)
+		}
+		appRec.ActiveVersion = avid
+		err = ec.Update(ctx, &appRec)
+		if err != nil {
+			t.Fatalf("failed to update app: %v", err)
+		}
+
+		nv1 := &app_v1alpha.NamedValue{}
+		nv1.SetKey("DB_HOST")
+		nv1.SetValue("localhost")
+		nv1.SetSensitive(false)
+
+		nv2 := &app_v1alpha.NamedValue{}
+		nv2.SetKey("DB_PASS")
+		nv2.SetValue("secret")
+		nv2.SetSensitive(true)
+
+		_, err = client.SetEnvVars(ctx, appName, []*app_v1alpha.NamedValue{nv1, nv2}, "web")
+		if err != nil {
+			t.Fatalf("SetEnvVars for service failed: %v", err)
+		}
+
+		var appCheck core_v1alpha.App
+		err = ec.Get(ctx, appName, &appCheck)
+		if err != nil {
+			t.Fatalf("failed to get app: %v", err)
+		}
+
+		var ver core_v1alpha.AppVersion
+		err = ec.GetById(ctx, appCheck.ActiveVersion, &ver)
+		if err != nil {
+			t.Fatalf("failed to get app version: %v", err)
+		}
+
+		if len(ver.Config.Services) != 1 {
+			t.Fatalf("expected 1 service, got %d", len(ver.Config.Services))
+		}
+
+		svc := ver.Config.Services[0]
+		if len(svc.Env) != 2 {
+			t.Fatalf("expected 2 service env vars, got %d", len(svc.Env))
+		}
+
+		envMap := map[string]core_v1alpha.Env{}
+		for _, e := range svc.Env {
+			envMap[e.Key] = e
+		}
+
+		if envMap["DB_HOST"].Value != "localhost" || envMap["DB_HOST"].Sensitive {
+			t.Errorf("DB_HOST: got value=%q sensitive=%v, want value=%q sensitive=%v", envMap["DB_HOST"].Value, envMap["DB_HOST"].Sensitive, "localhost", false)
+		}
+		if envMap["DB_PASS"].Value != "secret" || !envMap["DB_PASS"].Sensitive {
+			t.Errorf("DB_PASS: got value=%q sensitive=%v, want value=%q sensitive=%v", envMap["DB_PASS"].Value, envMap["DB_PASS"].Sensitive, "secret", true)
+		}
+
+		if len(ver.Config.Variable) != 0 {
+			t.Errorf("expected 0 global env vars, got %d", len(ver.Config.Variable))
+		}
+	})
+
+	t.Run("ServiceNotFound", func(t *testing.T) {
+		appName := "test-batch-nosvc"
+		app := &core_v1alpha.App{}
+		appID, err := inmem.Client.Create(ctx, appName, app)
+		if err != nil {
+			t.Fatalf("failed to create app: %v", err)
+		}
+		app.ID = appID
+
+		appVer := core_v1alpha.AppVersion{App: appID}
+		appVer.Version = appName + "-v0"
+		avid, err := inmem.Client.Create(ctx, appVer.Version, &appVer)
+		if err != nil {
+			t.Fatalf("failed to create initial version: %v", err)
+		}
+
+		var appRec core_v1alpha.App
+		err = ec.Get(ctx, appName, &appRec)
+		if err != nil {
+			t.Fatalf("failed to get app: %v", err)
+		}
+		appRec.ActiveVersion = avid
+		err = ec.Update(ctx, &appRec)
+		if err != nil {
+			t.Fatalf("failed to update app: %v", err)
+		}
+
+		nv := &app_v1alpha.NamedValue{}
+		nv.SetKey("X")
+		nv.SetValue("1")
+		nv.SetSensitive(false)
+
+		_, err = client.SetEnvVars(ctx, appName, []*app_v1alpha.NamedValue{nv}, "nonexistent")
+		if err == nil {
+			t.Fatal("expected error for nonexistent service, got nil")
+		}
+	})
+}

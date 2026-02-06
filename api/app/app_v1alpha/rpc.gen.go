@@ -2153,6 +2153,95 @@ func (v *CrudSetEnvVarResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type crudSetEnvVarsArgsData struct {
+	App     *string        `cbor:"0,keyasint,omitempty" json:"app,omitempty"`
+	Vars    *[]*NamedValue `cbor:"1,keyasint,omitempty" json:"vars,omitempty"`
+	Service *string        `cbor:"2,keyasint,omitempty" json:"service,omitempty"`
+}
+
+type CrudSetEnvVarsArgs struct {
+	call rpc.Call
+	data crudSetEnvVarsArgsData
+}
+
+func (v *CrudSetEnvVarsArgs) HasApp() bool {
+	return v.data.App != nil
+}
+
+func (v *CrudSetEnvVarsArgs) App() string {
+	if v.data.App == nil {
+		return ""
+	}
+	return *v.data.App
+}
+
+func (v *CrudSetEnvVarsArgs) HasVars() bool {
+	return v.data.Vars != nil
+}
+
+func (v *CrudSetEnvVarsArgs) Vars() []*NamedValue {
+	if v.data.Vars == nil {
+		return nil
+	}
+	return *v.data.Vars
+}
+
+func (v *CrudSetEnvVarsArgs) HasService() bool {
+	return v.data.Service != nil
+}
+
+func (v *CrudSetEnvVarsArgs) Service() string {
+	if v.data.Service == nil {
+		return ""
+	}
+	return *v.data.Service
+}
+
+func (v *CrudSetEnvVarsArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *CrudSetEnvVarsArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *CrudSetEnvVarsArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *CrudSetEnvVarsArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type crudSetEnvVarsResultsData struct {
+	VersionId *string `cbor:"0,keyasint,omitempty" json:"versionId,omitempty"`
+}
+
+type CrudSetEnvVarsResults struct {
+	call rpc.Call
+	data crudSetEnvVarsResultsData
+}
+
+func (v *CrudSetEnvVarsResults) SetVersionId(versionId string) {
+	v.data.VersionId = &versionId
+}
+
+func (v *CrudSetEnvVarsResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *CrudSetEnvVarsResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *CrudSetEnvVarsResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *CrudSetEnvVarsResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type crudDeleteEnvVarArgsData struct {
 	App     *string `cbor:"0,keyasint,omitempty" json:"app,omitempty"`
 	Key     *string `cbor:"1,keyasint,omitempty" json:"key,omitempty"`
@@ -2429,6 +2518,32 @@ func (t *CrudSetEnvVar) Results() *CrudSetEnvVarResults {
 	return results
 }
 
+type CrudSetEnvVars struct {
+	rpc.Call
+	args    CrudSetEnvVarsArgs
+	results CrudSetEnvVarsResults
+}
+
+func (t *CrudSetEnvVars) Args() *CrudSetEnvVarsArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *CrudSetEnvVars) Results() *CrudSetEnvVarsResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type CrudDeleteEnvVar struct {
 	rpc.Call
 	args    CrudDeleteEnvVarArgs
@@ -2463,6 +2578,7 @@ type Crud interface {
 	List(ctx context.Context, state *CrudList) error
 	Destroy(ctx context.Context, state *CrudDestroy) error
 	SetEnvVar(ctx context.Context, state *CrudSetEnvVar) error
+	SetEnvVars(ctx context.Context, state *CrudSetEnvVars) error
 	DeleteEnvVar(ctx context.Context, state *CrudDeleteEnvVar) error
 }
 
@@ -2495,6 +2611,10 @@ func (reexportCrud) Destroy(ctx context.Context, state *CrudDestroy) error {
 }
 
 func (reexportCrud) SetEnvVar(ctx context.Context, state *CrudSetEnvVar) error {
+	panic("not implemented")
+}
+
+func (reexportCrud) SetEnvVars(ctx context.Context, state *CrudSetEnvVars) error {
 	panic("not implemented")
 }
 
@@ -2569,6 +2689,15 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.SetEnvVar(ctx, &CrudSetEnvVar{Call: call})
+			},
+		},
+		{
+			Name:          "setEnvVars",
+			InterfaceName: "Crud",
+			Index:         0,
+			Public:        false,
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.SetEnvVars(ctx, &CrudSetEnvVars{Call: call})
 			},
 		},
 		{
@@ -2796,6 +2925,39 @@ func (v CrudClient) SetEnvVar(ctx context.Context, app string, key string, value
 	}
 
 	return &CrudClientSetEnvVarResults{client: v.Client, data: ret}, nil
+}
+
+type CrudClientSetEnvVarsResults struct {
+	client rpc.Client
+	data   crudSetEnvVarsResultsData
+}
+
+func (v *CrudClientSetEnvVarsResults) HasVersionId() bool {
+	return v.data.VersionId != nil
+}
+
+func (v *CrudClientSetEnvVarsResults) VersionId() string {
+	if v.data.VersionId == nil {
+		return ""
+	}
+	return *v.data.VersionId
+}
+
+func (v CrudClient) SetEnvVars(ctx context.Context, app string, vars []*NamedValue, service string) (*CrudClientSetEnvVarsResults, error) {
+	args := CrudSetEnvVarsArgs{}
+	args.data.App = &app
+	x := slices.Clone(vars)
+	args.data.Vars = &x
+	args.data.Service = &service
+
+	var ret crudSetEnvVarsResultsData
+
+	err := v.Call(ctx, "setEnvVars", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CrudClientSetEnvVarsResults{client: v.Client, data: ret}, nil
 }
 
 type CrudClientDeleteEnvVarResults struct {

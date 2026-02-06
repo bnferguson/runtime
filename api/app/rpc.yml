@@ -381,6 +381,19 @@ interfaces:
         results:
           - name: versionId
             type: string
+      - name: setEnvVars
+        parameters:
+          - name: app
+            type: string
+          - name: vars
+            type: list
+            element: NamedValue
+          - name: service
+            type: string
+            doc: "Optional service name for per-service env vars. Empty means global."
+        results:
+          - name: versionId
+            type: string
       - name: deleteEnvVar
         parameters:
           - name: app

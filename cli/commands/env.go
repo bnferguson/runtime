@@ -123,10 +123,9 @@ func EnvSet(ctx *Context, opts struct {
 
 	ac := app_v1alpha.NewCrudClient(cl)
 
-	var lastVersionId string
+	var vars []*app_v1alpha.NamedValue
 
 	for _, spec := range specs {
-		// Log what we're doing
 		if spec.FromFile {
 			ctx.Printf("setting %s from file %s...\n", spec.Key, spec.FromFile_)
 		} else if spec.Sensitive {
@@ -135,15 +134,19 @@ func EnvSet(ctx *Context, opts struct {
 			ctx.Printf("setting %s...\n", spec.Key)
 		}
 
-		// Use the targeted SetEnvVar RPC - server handles source tracking
-		res, err := ac.SetEnvVar(ctx, opts.App, spec.Key, spec.Value, spec.Sensitive, opts.Service)
-		if err != nil {
-			return err
-		}
-		lastVersionId = res.VersionId()
+		nv := &app_v1alpha.NamedValue{}
+		nv.SetKey(spec.Key)
+		nv.SetValue(spec.Value)
+		nv.SetSensitive(spec.Sensitive)
+		vars = append(vars, nv)
 	}
 
-	ctx.Printf("new version id: %s\n", lastVersionId)
+	res, err := ac.SetEnvVars(ctx, opts.App, vars, opts.Service)
+	if err != nil {
+		return err
+	}
+
+	ctx.Printf("new version id: %s\n", res.VersionId())
 	return nil
 }
 
