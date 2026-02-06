@@ -8,7 +8,11 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	compute_v1alpha "miren.dev/runtime/api/compute/compute_v1alpha"
+	core_v1alpha "miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/entity/testutils"
+	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/slogfmt"
 )
 
@@ -169,8 +173,130 @@ func TestSandboxDeadStatusRemovesFromDNS(t *testing.T) {
 		"sandbox should be removed from DNS when status changes to DEAD")
 }
 
-func TestNonRunningStatusNeverAdded(t *testing.T) {
-	// Sandboxes that are not RUNNING should never be added to DNS,
+func TestResolveUnknownIPWithoutEntityClient(t *testing.T) {
+	// resolveUnknownIP should return false gracefully when entityClient is nil
+	s := newTestServer(t)
+	assert.False(t, s.resolveUnknownIP("10.8.24.50"),
+		"resolveUnknownIP should return false when entityClient is nil")
+}
+
+func TestResolveUnknownIPFindsAndRegistersSandbox(t *testing.T) {
+	// When a sandbox container makes DNS queries before the entity watcher
+	// processes the RUNNING status update, resolveUnknownIP should find
+	// the sandbox in the entity store and register it for DNS.
+
+	ctx := context.Background()
+
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	const (
+		sandboxIP   = "10.8.24.60"
+		appName     = "myapp"
+		serviceName = "web"
+		versionName = "myapp-v1"
+		sandboxName = "myapp-web-1"
+	)
+
+	// Create app entity
+	app := &core_v1alpha.App{}
+	appID, err := inmem.Client.Create(ctx, appName, app)
+	assert.NoError(t, err)
+
+	// Create app version entity referencing the app
+	appVer := &core_v1alpha.AppVersion{App: appID}
+	_, err = inmem.Client.Create(ctx, versionName, appVer)
+	assert.NoError(t, err)
+
+	// Create sandbox entity in PENDING status with network info and service label.
+	// The sandbox is PENDING (not RUNNING) to test that resolveUnknownIP
+	// works regardless of status — the container is clearly running if it's
+	// making DNS queries.
+	sb := &compute_v1alpha.Sandbox{
+		Status: compute_v1alpha.PENDING,
+		Network: []compute_v1alpha.Network{
+			{Address: sandboxIP + "/24"},
+		},
+		Spec: compute_v1alpha.SandboxSpec{
+			Version: entity.Id("app_version/" + versionName),
+		},
+	}
+	_, err = inmem.Client.Create(ctx, sandboxName, sb,
+		entityserver.WithLabels(types.Labels{
+			{Key: "service", Value: serviceName},
+		}),
+	)
+	assert.NoError(t, err)
+
+	// Create DNS server with the entity client
+	log := slog.New(slogfmt.NewTestHandler(t, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	s := &Server{
+		log:             log,
+		entityClient:    inmem.EAC,
+		ipToApp:         make(map[string]string),
+		ipToService:     make(map[string]string),
+		appServiceToIPs: make(map[string]map[string][]string),
+		entityToIP:      make(map[string]string),
+	}
+
+	// IP should not be registered yet
+	assert.Empty(t, s.lookupAppForIP(sandboxIP))
+
+	// resolveUnknownIP should find the sandbox and register it
+	assert.True(t, s.resolveUnknownIP(sandboxIP),
+		"resolveUnknownIP should find and register the sandbox")
+
+	// Verify the sandbox is now registered
+	assert.Equal(t, appName, s.lookupAppForIP(sandboxIP),
+		"sandbox should be registered with correct app name")
+
+	// Verify service mapping
+	s.mu.RLock()
+	assert.Equal(t, serviceName, s.ipToService[sandboxIP],
+		"service mapping should be registered")
+	assert.Contains(t, s.appServiceToIPs[appName][serviceName], sandboxIP,
+		"app+service to IP mapping should be registered")
+	s.mu.RUnlock()
+}
+
+func TestResolveUnknownIPNoMatchingIP(t *testing.T) {
+	// resolveUnknownIP should return false when no sandbox has the queried IP.
+
+	ctx := context.Background()
+
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create a sandbox with a different IP
+	sb := &compute_v1alpha.Sandbox{
+		Status: compute_v1alpha.RUNNING,
+		Network: []compute_v1alpha.Network{
+			{Address: "10.8.24.99/24"},
+		},
+	}
+	_, err := inmem.Client.Create(ctx, "other-sandbox", sb,
+		entityserver.WithLabels(types.Labels{
+			{Key: "service", Value: "web"},
+		}),
+	)
+	assert.NoError(t, err)
+
+	log := slog.New(slogfmt.NewTestHandler(t, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	s := &Server{
+		log:             log,
+		entityClient:    inmem.EAC,
+		ipToApp:         make(map[string]string),
+		ipToService:     make(map[string]string),
+		appServiceToIPs: make(map[string]map[string][]string),
+		entityToIP:      make(map[string]string),
+	}
+
+	assert.False(t, s.resolveUnknownIP("10.8.24.100"),
+		"resolveUnknownIP should return false for non-matching IP")
+}
+
+func TestStoppedStatusNeverAdded(t *testing.T) {
+	// Sandboxes that are STOPPED or DEAD should never be added to DNS,
 	// even if they have network info.
 
 	s := newTestServer(t)
@@ -178,19 +304,19 @@ func TestNonRunningStatusNeverAdded(t *testing.T) {
 
 	const (
 		ip        = "10.8.24.32"
-		sandboxID = "sandbox/testapp-pending"
+		sandboxID = "sandbox/testapp-stopped"
 	)
 
-	// A PENDING sandbox with network info should not be tracked
-	pendingSandbox := &compute_v1alpha.Sandbox{
+	// A STOPPED sandbox with network info should not be tracked
+	stoppedSandbox := &compute_v1alpha.Sandbox{
 		ID:     entity.Id(sandboxID),
-		Status: compute_v1alpha.PENDING,
+		Status: compute_v1alpha.STOPPED,
 		Network: []compute_v1alpha.Network{
 			{Address: ip + "/24"},
 		},
 	}
-	s.handleSandboxUpdate(ctx, pendingSandbox, nil)
+	s.handleSandboxUpdate(ctx, stoppedSandbox, nil)
 
 	assert.Empty(t, s.lookupAppForIP(ip),
-		"PENDING sandbox should not be added to DNS")
+		"STOPPED sandbox should not be added to DNS")
 }
