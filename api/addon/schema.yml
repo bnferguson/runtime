@@ -1,0 +1,84 @@
+domain: dev.miren.addon
+version: v1alpha
+kinds:
+  addon:
+    name:
+      type: string
+      indexed: true
+    display_name:
+      type: string
+    description:
+      type: string
+    default_plan:
+      type: string
+    plans:
+      type: component
+      many: true
+      attrs:
+        name:
+          type: string
+        description:
+          type: string
+        details:
+          type: component
+          many: true
+          attrs:
+            key:
+              type: string
+            value:
+              type: string
+
+  addon_association:
+    app:
+      type: ref
+      indexed: true
+      tags: [dev.miren.app_ref]
+    addon:
+      type: ref
+      indexed: true
+    plan:
+      type: string
+    status:
+      type: string
+      indexed: true
+    error_message:
+      type: string
+    variables:
+      type: component
+      many: true
+      attrs:
+        key:
+          type: string
+        value:
+          type: string
+        sensitive:
+          type: bool
+
+  postgres_server:
+    addon_name:
+      type: string
+      indexed: true
+    plan:
+      type: string
+    sandbox_pool:
+      type: ref
+    service:
+      type: ref
+    status:
+      type: string
+    association_count:
+      type: int
+    superuser_password:
+      type: string
+
+  postgresql_shared_data:
+    postgres_server:
+      type: ref
+    database_name:
+      type: string
+    username:
+      type: string
+
+  postgresql_dedicated_data:
+    postgres_server:
+      type: ref
