@@ -1,0 +1,154 @@
+package addon
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"miren.dev/runtime/api/compute/compute_v1alpha"
+	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/api/entityserver"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/api/network/network_v1alpha"
+	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/entity/types"
+	"miren.dev/runtime/pkg/idgen"
+)
+
+// ProviderFramework provides common operations that addon providers need
+// when creating backing infrastructure (pools, services, etc).
+type ProviderFramework struct {
+	EC  *entityserver.Client
+	EAC *entityserver_v1alpha.EntityAccessClient
+	Log *slog.Logger
+}
+
+// NewProviderFramework creates a new provider framework.
+func NewProviderFramework(log *slog.Logger, ec *entityserver.Client, eac *entityserver_v1alpha.EntityAccessClient) *ProviderFramework {
+	return &ProviderFramework{
+		EC:  ec,
+		EAC: eac,
+		Log: log,
+	}
+}
+
+// CreateSandboxPoolSpec describes the desired sandbox pool configuration.
+type CreateSandboxPoolSpec struct {
+	Name             string
+	Image            string
+	Env              []string
+	DesiredInstances int64
+	Labels           types.Labels
+	SandboxPrefix    string
+	Mounts           []compute_v1alpha.SandboxSpecContainerMount
+}
+
+// CreateSandboxPool creates a fixed-mode SandboxPool entity.
+func (fw *ProviderFramework) CreateSandboxPool(ctx context.Context, spec CreateSandboxPoolSpec) (entity.Id, error) {
+	pool := &compute_v1alpha.SandboxPool{
+		DesiredInstances: spec.DesiredInstances,
+		SandboxLabels:    spec.Labels,
+		SandboxPrefix:    spec.SandboxPrefix,
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			LogAttribute: spec.Labels,
+		},
+	}
+
+	container := compute_v1alpha.SandboxSpecContainer{
+		Name:  "addon",
+		Image: spec.Image,
+		Env:   spec.Env,
+		Mount: spec.Mounts,
+	}
+
+	pool.SandboxSpec.Container = append(pool.SandboxSpec.Container, container)
+
+	name := idgen.GenNS("pool")
+
+	_, err := fw.EAC.Create(ctx, entity.New(
+		(&core_v1alpha.Metadata{
+			Name:   name,
+			Labels: spec.Labels,
+		}).Encode,
+		entity.DBId, entity.Id("pool/"+name),
+		pool.Encode,
+	).Attrs())
+	if err != nil {
+		return "", fmt.Errorf("creating sandbox pool: %w", err)
+	}
+
+	return entity.Id("pool/" + name), nil
+}
+
+// WaitForPool watches a pool entity until it has at least one ready instance
+// or the timeout is reached.
+func (fw *ProviderFramework) WaitForPool(ctx context.Context, poolID entity.Id, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	ch := fw.EC.WatchEntity(ctx, poolID)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timed out waiting for pool %s to be ready", poolID)
+		case e, ok := <-ch:
+			if !ok {
+				return fmt.Errorf("pool %s watch closed unexpectedly", poolID)
+			}
+
+			var pool compute_v1alpha.SandboxPool
+			pool.Decode(e)
+
+			if pool.ReadyInstances > 0 {
+				fw.Log.Info("pool ready", "pool", poolID, "ready", pool.ReadyInstances)
+				return nil
+			}
+		}
+	}
+}
+
+// ScalePool sets the desired instances on a pool.
+func (fw *ProviderFramework) ScalePool(ctx context.Context, poolID entity.Id, desired int64) error {
+	return fw.EC.Patch(ctx, poolID, 0,
+		entity.Int64(compute_v1alpha.SandboxPoolDesiredInstancesId, desired),
+	)
+}
+
+// DeleteSandboxPool scales a pool to zero and then deletes it.
+func (fw *ProviderFramework) DeleteSandboxPool(ctx context.Context, poolID entity.Id) error {
+	// Scale to zero first so sandboxes are cleaned up
+	if err := fw.ScalePool(ctx, poolID, 0); err != nil {
+		fw.Log.Warn("failed to scale pool to zero before delete", "pool", poolID, "error", err)
+	}
+
+	return fw.EC.Delete(ctx, poolID)
+}
+
+// CreateService creates a network Service entity that routes to pods
+// matching the given labels.
+func (fw *ProviderFramework) CreateService(ctx context.Context, name string, matchLabels types.Labels, port int64) (entity.Id, error) {
+	svc := &network_v1alpha.Service{
+		Match: matchLabels,
+		Port: []network_v1alpha.Port{
+			{
+				Port:     port,
+				Name:     "default",
+				Protocol: network_v1alpha.TCP,
+			},
+		},
+	}
+
+	id, err := fw.EC.Create(ctx, name, svc)
+	if err != nil {
+		return "", fmt.Errorf("creating service: %w", err)
+	}
+
+	return id, nil
+}
+
+// DeleteService deletes a network Service entity.
+func (fw *ProviderFramework) DeleteService(ctx context.Context, serviceID entity.Id) error {
+	return fw.EC.Delete(ctx, serviceID)
+}
