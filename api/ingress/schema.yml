@@ -15,30 +15,36 @@ kinds:
       type: bool
       indexed: true
       doc: Whether this is the default route for routing
-    oidc_config:
+    oidc_provider:
+      type: ref
+      doc: Reference to an OIDC provider for authentication
+      indexed: true
+    claim_mappings:
       type: component
-      doc: OIDC authentication configuration for this route
+      doc: Mappings from JWT claims to HTTP headers
+      many: true
       attrs:
-        provider_url:
+        claim:
           type: string
-          doc: The OIDC provider URL (e.g. https://accounts.google.com)
-        client_id:
+          doc: The JWT claim name (e.g. email, sub, name)
+        header:
           type: string
-          doc: The OAuth2 client ID
-        client_secret:
-          type: string
-          doc: The OAuth2 client secret
-        scopes:
-          type: string
-          doc: Space-separated list of OAuth2 scopes (e.g. "openid email profile")
-        claim_mappings:
-          type: component
-          doc: Mappings from JWT claims to HTTP headers
-          many: true
-          attrs:
-            claim:
-              type: string
-              doc: The JWT claim name (e.g. email, sub, name)
-            header:
-              type: string
-              doc: The HTTP header name to inject (e.g. X-User-Email)
+          doc: The HTTP header name to inject (e.g. X-User-Email)
+  oidc_provider:
+    name:
+      type: string
+      doc: A unique name for this OIDC provider
+      indexed: true
+    provider_url:
+      type: string
+      doc: The OIDC provider URL (e.g. https://accounts.google.com)
+      indexed: true
+    client_id:
+      type: string
+      doc: The OAuth2 client ID
+    client_secret:
+      type: string
+      doc: The OAuth2 client secret
+    scopes:
+      type: string
+      doc: Space-separated list of OAuth2 scopes (e.g. "openid email profile")

@@ -1,12 +1,14 @@
 package httpingress
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
 
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
+	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/oidc"
 )
 
@@ -18,22 +20,22 @@ const (
 // oidcHandler manages OIDC authentication for a route
 type oidcHandler struct {
 	route          *ingress_v1alpha.HttpRoute
+	provider       *ingress_v1alpha.OidcProvider
 	client         *oidc.Client
 	sessionManager *oidc.SessionManager
 	logger         *slog.Logger
 }
 
-// newOIDCHandler creates a new OIDC handler for a route
-func newOIDCHandler(route *ingress_v1alpha.HttpRoute, baseURL string, logger *slog.Logger) (*oidcHandler, error) {
-	config := route.OidcConfig
-	if config.ProviderUrl == "" || config.ClientId == "" {
-		return nil, fmt.Errorf("OIDC config missing required fields")
+// newOIDCHandler creates a new OIDC handler for a route with a resolved provider
+func newOIDCHandler(route *ingress_v1alpha.HttpRoute, provider *ingress_v1alpha.OidcProvider, baseURL string, logger *slog.Logger) (*oidcHandler, error) {
+	if provider.ProviderUrl == "" || provider.ClientId == "" {
+		return nil, fmt.Errorf("OIDC provider missing required fields")
 	}
 
 	// Parse scopes
 	scopes := []string{"openid"}
-	if config.Scopes != "" {
-		scopes = strings.Fields(config.Scopes)
+	if provider.Scopes != "" {
+		scopes = strings.Fields(provider.Scopes)
 	}
 
 	// Build redirect URL
@@ -41,9 +43,9 @@ func newOIDCHandler(route *ingress_v1alpha.HttpRoute, baseURL string, logger *sl
 
 	// Create OIDC client
 	client := oidc.NewClient(
-		config.ProviderUrl,
-		config.ClientId,
-		config.ClientSecret,
+		provider.ProviderUrl,
+		provider.ClientId,
+		provider.ClientSecret,
 		redirectURL,
 		scopes,
 		logger,
@@ -56,9 +58,10 @@ func newOIDCHandler(route *ingress_v1alpha.HttpRoute, baseURL string, logger *sl
 
 	return &oidcHandler{
 		route:          route,
+		provider:       provider,
 		client:         client,
 		sessionManager: sessionManager,
-		logger:         logger.With("module", "oidc", "host", route.Host),
+		logger:         logger.With("module", "oidc", "host", route.Host, "provider", provider.Name),
 	}, nil
 }
 
@@ -206,7 +209,7 @@ func (h *oidcHandler) handleCallback(w http.ResponseWriter, r *http.Request) {
 
 // injectClaims adds JWT claims as HTTP headers based on the route configuration
 func (h *oidcHandler) injectClaims(r *http.Request, claims map[string]interface{}) {
-	for _, mapping := range h.route.OidcConfig.ClaimMappings {
+	for _, mapping := range h.route.ClaimMappings {
 		if mapping.Claim == "" || mapping.Header == "" {
 			continue
 		}
@@ -238,17 +241,28 @@ func (h *oidcHandler) injectClaims(r *http.Request, claims map[string]interface{
 
 // oidcMiddleware wraps the request handling with OIDC authentication
 func (s *Server) oidcMiddleware(route *ingress_v1alpha.HttpRoute, next http.HandlerFunc) http.HandlerFunc {
-	// If no OIDC config, just pass through
-	if route.OidcConfig.Empty() {
+	// If no OIDC provider reference, just pass through
+	if entity.Empty(route.OidcProvider) {
 		return next
 	}
+
+	// Resolve the OIDC provider entity
+	ctx := context.Background()
+	resp, err := s.eac.Get(ctx, string(route.OidcProvider))
+	if err != nil {
+		s.Log.Error("failed to get OIDC provider", "error", err, "provider_id", route.OidcProvider)
+		return next
+	}
+
+	var provider ingress_v1alpha.OidcProvider
+	provider.Decode(resp.Entity().Entity())
 
 	// Build base URL from host
 	// In production, this should use the actual scheme (http/https)
 	baseURL := fmt.Sprintf("https://%s", route.Host)
 
 	// Create OIDC handler
-	handler, err := newOIDCHandler(route, baseURL, s.Log)
+	handler, err := newOIDCHandler(route, &provider, baseURL, s.Log)
 	if err != nil {
 		s.Log.Error("failed to create OIDC handler", "error", err, "host", route.Host)
 		return next

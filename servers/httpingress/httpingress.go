@@ -398,7 +398,7 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 		h.Log.Debug("using http route", "host", onlyHost, "app", targetAppId)
 
 		// Check if OIDC authentication is required
-		if !route.OidcConfig.Empty() {
+		if !entity.Empty(route.OidcProvider) {
 			// Wrap the request handler with OIDC middleware
 			oidcWrapped := h.oidcMiddleware(route, func(w http.ResponseWriter, r *http.Request) {
 				// Continue with normal request handling after auth
@@ -430,7 +430,7 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 		h.Log.Debug("using default route", "host", onlyHost, "app", targetAppId)
 
 		// Check if OIDC authentication is required for default route
-		if !defaultRoute.OidcConfig.Empty() {
+		if !entity.Empty(defaultRoute.OidcProvider) {
 			// Update route reference
 			route = defaultRoute
 			// Wrap with OIDC middleware

@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"miren.dev/runtime/api/ingress"
+	"miren.dev/runtime/pkg/entity"
 )
 
 func RouteOidcDisable(ctx *Context, opts struct {
@@ -28,13 +29,13 @@ func RouteOidcDisable(ctx *Context, opts struct {
 	}
 
 	// Check if OIDC is configured
-	if route.OidcConfig.Empty() {
+	if entity.Empty(route.OidcProvider) {
 		ctx.Printf("OIDC is not configured for route: %s\n", opts.Host)
 		return nil
 	}
 
-	// Clear OIDC config
-	_, err = ic.ClearOIDCConfig(ctx, opts.Host)
+	// Detach OIDC provider
+	_, err = ic.DetachOIDCProvider(ctx, opts.Host)
 	if err != nil {
 		return fmt.Errorf("failed to disable OIDC: %w", err)
 	}
