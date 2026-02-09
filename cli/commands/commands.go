@@ -34,7 +34,7 @@ func RegisterAll(d *mflags.Dispatcher) {
 	d.Dispatch("apps", Infer("apps", "List all applications (alias for 'app list')", AppList))
 
 	// Sandbox commands
-	d.Dispatch("sandbox list", Infer("sandbox list", "List all sandboxes", SandboxList))
+	d.Dispatch("sandbox list", Infer("sandbox list", "List sandboxes (excludes dead by default)", SandboxList))
 	d.Dispatch("sandbox stop", Infer("sandbox stop", "Stop a sandbox", SandboxStop))
 	d.Dispatch("sandbox delete", Infer("sandbox delete", "Delete a dead sandbox", SandboxDelete))
 	d.Dispatch("sandbox exec", Infer("sandbox exec", "Open interactive shell in an existing sandbox", SandboxExec))

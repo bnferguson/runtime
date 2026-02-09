@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"miren.dev/runtime/api/compute"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
@@ -11,6 +12,7 @@ import (
 )
 
 func SandboxList(ctx *Context, opts struct {
+	All    bool   `short:"a" long:"all" description:"Include dead sandboxes (excluded by default)"`
 	Status string `short:"s" long:"status" description:"Filter by status (pending, not_ready, running, stopped, dead)"`
 	FormatOptions
 	ConfigCentric
@@ -52,6 +54,11 @@ func SandboxList(ctx *Context, opts struct {
 		poolServiceMap[pool.ID.String()] = pool.Service
 	}
 
+	// Determine whether to exclude dead sandboxes.
+	// Dead sandboxes are excluded by default unless --all is passed
+	// or --status explicitly requests a dead state.
+	excludeDead := !opts.All && opts.Status == ""
+
 	// For JSON output, just filter and return the raw sandbox structs with pool info
 	if opts.IsJSON() {
 		var sandboxes []struct {
@@ -64,6 +71,10 @@ func SandboxList(ctx *Context, opts struct {
 		for _, e := range res.Values() {
 			var sandbox compute_v1alpha.Sandbox
 			sandbox.Decode(e.Entity())
+
+			if excludeDead && compute.SandboxDead(sandbox.Status) {
+				continue
+			}
 
 			// Apply status filter if specified
 			if opts.Status != "" {
@@ -106,12 +117,18 @@ func SandboxList(ctx *Context, opts struct {
 
 	// Table output - all the UI formatting logic
 	var rows []ui.Row
+	var deadCount int
 	headers := []string{"ID", "VERSION", "SERVICE", "POOL", "ADDRESS", "STATUS", "CREATED", "UPDATED"}
 
 	for _, e := range res.Values() {
 		// Decode the sandbox entity
 		var sandbox compute_v1alpha.Sandbox
 		sandbox.Decode(e.Entity())
+
+		if excludeDead && compute.SandboxDead(sandbox.Status) {
+			deadCount++
+			continue
+		}
 
 		// Get status string
 		status := string(sandbox.Status)
@@ -176,6 +193,11 @@ func SandboxList(ctx *Context, opts struct {
 	)
 
 	ctx.Printf("%s\n", table.Render())
+
+	if deadCount > 0 {
+		ctx.Printf("\n%d dead sandbox(es) hidden. Use --all to show.\n", deadCount)
+	}
+
 	return nil
 }
 
