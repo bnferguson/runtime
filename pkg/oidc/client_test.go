@@ -64,7 +64,7 @@ func TestClient_AuthorizationURL(t *testing.T) {
 
 	// Note: This test will fail without a real OIDC provider
 	// In a real test environment, we'd mock the HTTP client
-	_, err := client.AuthorizationURL("test-state", "test-verifier")
+	_, err := client.AuthorizationURL("test-state", "test-verifier", "app.example.com")
 	if err != nil {
 		// Expected to fail without real provider, but we can check error message
 		t.Logf("Expected error without provider: %v", err)

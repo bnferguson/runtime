@@ -52,6 +52,9 @@ Cancel a stuck in-progress deployment. Get the deployment ID from `miren app his
 
 - `miren logs` - Get logs for an application ([details](/cli/logs))
 - `miren route` - List all HTTP routes
+- `miren route oidc enable` - Enable OIDC authentication on a route
+- `miren route oidc disable` - Disable OIDC authentication on a route
+- `miren route oidc show` - Show OIDC configuration for a route
 
 ### Environment & Configuration
 
@@ -102,6 +105,54 @@ Cancel a stuck in-progress deployment. Get the deployment ID from `miren app his
 - `miren version` - Print the version
 - `miren upgrade` - Upgrade miren CLI to latest version
 - `miren server` - Start the miren server
+
+## Route OIDC Authentication
+
+Enable OAuth2/OIDC authentication on HTTP routes to protect your applications with single sign-on.
+
+### Enable OIDC on a Route
+
+```bash
+# Create new OIDC provider inline
+miren route oidc enable myapp.example.com \
+  --provider-url https://accounts.google.com \
+  --client-id YOUR_CLIENT_ID \
+  --client-secret YOUR_CLIENT_SECRET \
+  --scope openid email profile \
+  --claim-header email:X-User-Email \
+  --claim-header sub:X-User-ID
+
+# Use existing OIDC provider
+miren route oidc enable myapp.example.com \
+  --provider google-oauth \
+  --claim-header email:X-User-Email
+```
+
+When OIDC is enabled, unauthenticated requests are redirected to the OIDC provider for login. After successful authentication, JWT claims are extracted and injected as HTTP headers before proxying to your application.
+
+**Options:**
+- `--provider NAME` - Use an existing OIDC provider by name
+- `--provider-url URL` - OIDC provider URL (creates new provider if --provider not specified)
+- `--client-id ID` - OAuth2 client ID (required for new provider)
+- `--client-secret SECRET` - OAuth2 client secret (required for new provider)
+- `--scope SCOPE` - OAuth2 scopes (default: "openid", can be repeated)
+- `--claim-header CLAIM:HEADER` - Map JWT claim to HTTP header (can be repeated)
+
+### Show OIDC Configuration
+
+```bash
+miren route oidc show myapp.example.com
+```
+
+Displays the OIDC provider configuration and claim-to-header mappings for a route.
+
+### Disable OIDC on a Route
+
+```bash
+miren route oidc disable myapp.example.com
+```
+
+Removes OIDC authentication from a route. The OIDC provider entity is not deleted and can be reused.
 
 ## Global Flags
 

@@ -14,6 +14,7 @@ const (
 	FeatureDistributedRunners = "distributedrunners"
 	FeatureUserSubdomains     = "usersubdomains"
 	FeatureAdminAPI           = "adminapi"
+	FeatureRouteOIDC          = "routeoidc"
 )
 
 // AllFeatures returns a list of all known feature names
@@ -23,6 +24,7 @@ func AllFeatures() []string {
 		FeatureDistributedRunners,
 		FeatureUserSubdomains,
 		FeatureAdminAPI,
+		FeatureRouteOIDC,
 	}
 }
 
@@ -33,6 +35,7 @@ func FeatureDescriptions() map[string]string {
 		FeatureDistributedRunners: "Schedule jobs across multiple runner nodes",
 		FeatureUserSubdomains:     "Allow claiming custom subdomains",
 		FeatureAdminAPI:           "Enable the admin API for application management functions",
+		FeatureRouteOIDC:          "Enable OIDC authentication for HTTP routes",
 	}
 }
 
@@ -47,6 +50,7 @@ var featureDefaults = map[string]bool{
 	FeatureDistributedRunners: false,
 	FeatureUserSubdomains:     false,
 	FeatureAdminAPI:           false,
+	FeatureRouteOIDC:          false,
 }
 
 // Init initializes the labs feature flags from the provided flag strings.
@@ -145,4 +149,10 @@ func UserSubdomains() bool {
 // Enable the admin API for application management functions
 func AdminAPI() bool {
 	return IsEnabled(FeatureAdminAPI)
+}
+
+// RouteOIDC returns whether the routeoidc feature is enabled.
+// Enable OIDC authentication for HTTP routes
+func RouteOIDC() bool {
+	return IsEnabled(FeatureRouteOIDC)
 }

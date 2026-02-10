@@ -59,6 +59,14 @@ func RegisterAll(d *mflags.Dispatcher) {
 	d.Dispatch("route set-default", Infer("route set-default", "Set an app as the default route", RouteSetDefault))
 	d.Dispatch("route unset-default", Infer("route unset-default", "Remove the default route", RouteUnsetDefault))
 
+	// Route OIDC commands - behind feature flag
+	if labs.RouteOIDC() {
+		d.Dispatch("route oidc", Section("route oidc", "OIDC authentication management for routes", ""))
+		d.Dispatch("route oidc enable", Infer("route oidc enable", "Enable OIDC authentication for a route", RouteOidcEnable))
+		d.Dispatch("route oidc disable", Infer("route oidc disable", "Disable OIDC authentication for a route", RouteOidcDisable))
+		d.Dispatch("route oidc show", Infer("route oidc show", "Show OIDC configuration for a route", RouteOidcShow))
+	}
+
 	// Config commands
 	d.Dispatch("config", Section("config", "Configuration file management", ""))
 	d.Dispatch("config info", Infer("config info", "Show configuration file locations and format", ConfigInfo))

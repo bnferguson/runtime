@@ -18,3 +18,8 @@ features:
     predicate: AdminAPI
     description: Enable the admin API for application management functions
     default: false
+
+  - name: routeoidc
+    predicate: RouteOIDC
+    description: Enable OIDC authentication for HTTP routes
+    default: false

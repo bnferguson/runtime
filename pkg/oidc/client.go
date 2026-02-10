@@ -60,8 +60,8 @@ func NewClient(providerURL, clientID, clientSecret, redirectURL string, scopes [
 }
 
 // AuthorizationURL generates the URL to redirect users to for authentication.
-// It includes PKCE challenge for added security.
-func (c *Client) AuthorizationURL(state, pkceVerifier string) (string, error) {
+// It includes PKCE challenge for added security and a resource indicator (RFC 8707).
+func (c *Client) AuthorizationURL(state, pkceVerifier, resource string) (string, error) {
 	config, err := c.getOAuth2Config(context.Background())
 	if err != nil {
 		return "", fmt.Errorf("failed to get OAuth2 config: %w", err)
@@ -70,11 +70,16 @@ func (c *Client) AuthorizationURL(state, pkceVerifier string) (string, error) {
 	// Generate PKCE challenge from verifier
 	pkceChallenge := generatePKCEChallenge(pkceVerifier)
 
-	// Build authorization URL with PKCE
-	url := config.AuthCodeURL(state,
+	// Build authorization URL with PKCE and resource indicator
+	opts := []oauth2.AuthCodeOption{
 		oauth2.SetAuthURLParam("code_challenge", pkceChallenge),
 		oauth2.SetAuthURLParam("code_challenge_method", "S256"),
-	)
+	}
+	if resource != "" {
+		opts = append(opts, oauth2.SetAuthURLParam("resource", resource))
+	}
+
+	url := config.AuthCodeURL(state, opts...)
 
 	return url, nil
 }

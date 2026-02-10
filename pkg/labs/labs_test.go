@@ -23,6 +23,9 @@ func TestDefaultFeatureValues(t *testing.T) {
 	if AdminAPI() {
 		t.Error("AdminAPI should be false by default")
 	}
+	if RouteOIDC() {
+		t.Error("RouteOIDC should be false by default")
+	}
 }
 
 func TestEnableFeatureViaInit(t *testing.T) {
@@ -120,11 +123,11 @@ func TestIsEnabledFunction(t *testing.T) {
 func TestAllFeatures(t *testing.T) {
 	features := AllFeatures()
 
-	if len(features) != 4 {
-		t.Errorf("Expected 4 features, got %d", len(features))
+	if len(features) != 5 {
+		t.Errorf("Expected 5 features, got %d", len(features))
 	}
 
-	expected := []string{"globalrouter", "distributedrunners", "usersubdomains", "adminapi"}
+	expected := []string{"globalrouter", "distributedrunners", "usersubdomains", "adminapi", "routeoidc"}
 	for _, name := range expected {
 		found := false
 		for _, f := range features {
@@ -142,8 +145,8 @@ func TestAllFeatures(t *testing.T) {
 func TestFeatureDescriptions(t *testing.T) {
 	descriptions := FeatureDescriptions()
 
-	if len(descriptions) != 4 {
-		t.Errorf("Expected 4 descriptions, got %d", len(descriptions))
+	if len(descriptions) != 5 {
+		t.Errorf("Expected 5 descriptions, got %d", len(descriptions))
 	}
 
 	if descriptions[FeatureGlobalRouter] == "" {
@@ -158,18 +161,21 @@ func TestFeatureDescriptions(t *testing.T) {
 	if descriptions[FeatureAdminAPI] == "" {
 		t.Error("AdminAPI description should not be empty")
 	}
+	if descriptions[FeatureRouteOIDC] == "" {
+		t.Error("RouteOIDC description should not be empty")
+	}
 }
 
 func TestResetFunction(t *testing.T) {
-	Init(nil, []string{"globalrouter", "distributedrunners", "usersubdomains", "adminapi"})
+	Init(nil, []string{"globalrouter", "distributedrunners", "usersubdomains", "adminapi", "routeoidc"})
 
-	if !GlobalRouter() || !DistributedRunners() || !UserSubdomains() || !AdminAPI() {
+	if !GlobalRouter() || !DistributedRunners() || !UserSubdomains() || !AdminAPI() || !RouteOIDC() {
 		t.Error("All features should be enabled before reset")
 	}
 
 	Reset()
 
-	if GlobalRouter() || DistributedRunners() || UserSubdomains() || AdminAPI() {
+	if GlobalRouter() || DistributedRunners() || UserSubdomains() || AdminAPI() || RouteOIDC() {
 		t.Error("All features should be back to defaults (false) after reset")
 	}
 }

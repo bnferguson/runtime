@@ -9,6 +9,7 @@ import (
 
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/labs"
 	"miren.dev/runtime/pkg/oidc"
 )
 
@@ -23,11 +24,13 @@ type oidcHandler struct {
 	provider       *ingress_v1alpha.OidcProvider
 	client         *oidc.Client
 	sessionManager *oidc.SessionManager
+	resource       string
 	logger         *slog.Logger
 }
 
-// newOIDCHandler creates a new OIDC handler for a route with a resolved provider
-func newOIDCHandler(route *ingress_v1alpha.HttpRoute, provider *ingress_v1alpha.OidcProvider, baseURL string, logger *slog.Logger) (*oidcHandler, error) {
+// newOIDCHandler creates a new OIDC handler for a route with a resolved provider.
+// The resource parameter is the RFC 8707 resource indicator for the authorization request.
+func newOIDCHandler(route *ingress_v1alpha.HttpRoute, provider *ingress_v1alpha.OidcProvider, baseURL, resource string, logger *slog.Logger) (*oidcHandler, error) {
 	if provider.ProviderUrl == "" || provider.ClientId == "" {
 		return nil, fmt.Errorf("OIDC provider missing required fields")
 	}
@@ -61,6 +64,7 @@ func newOIDCHandler(route *ingress_v1alpha.HttpRoute, provider *ingress_v1alpha.
 		provider:       provider,
 		client:         client,
 		sessionManager: sessionManager,
+		resource:       resource,
 		logger:         logger.With("module", "oidc", "host", route.Host, "provider", provider.Name),
 	}, nil
 }
@@ -107,8 +111,8 @@ func (h *oidcHandler) redirectToProvider(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Generate authorization URL
-	authURL, err := h.client.AuthorizationURL(state.State, state.PKCEVerifier)
+	// Generate authorization URL with resource indicator (RFC 8707)
+	authURL, err := h.client.AuthorizationURL(state.State, state.PKCEVerifier, h.resource)
 	if err != nil {
 		h.logger.Error("failed to generate auth URL", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -241,6 +245,11 @@ func (h *oidcHandler) injectClaims(r *http.Request, claims map[string]interface{
 
 // oidcMiddleware wraps the request handling with OIDC authentication
 func (s *Server) oidcMiddleware(route *ingress_v1alpha.HttpRoute, next http.HandlerFunc) http.HandlerFunc {
+	// Check if OIDC feature is enabled
+	if !labs.RouteOIDC() {
+		return next
+	}
+
 	// If no OIDC provider reference, just pass through
 	if entity.Empty(route.OidcProvider) {
 		return next
@@ -257,18 +266,27 @@ func (s *Server) oidcMiddleware(route *ingress_v1alpha.HttpRoute, next http.Hand
 	var provider ingress_v1alpha.OidcProvider
 	provider.Decode(resp.Entity().Entity())
 
-	// Build base URL from host
-	// In production, this should use the actual scheme (http/https)
-	baseURL := fmt.Sprintf("https://%s", route.Host)
-
-	// Create OIDC handler
-	handler, err := newOIDCHandler(route, &provider, baseURL, s.Log)
-	if err != nil {
-		s.Log.Error("failed to create OIDC handler", "error", err, "host", route.Host)
-		return next
+	// Determine the resource indicator (RFC 8707) based on route type
+	var resource string
+	if route.Default {
+		resource = "cluster:default"
+	} else {
+		resource = route.Host
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Build base URL from the request host, which works for both
+		// named routes and the default route (which has no static host)
+		baseURL := fmt.Sprintf("https://%s", r.Host)
+
+		// Create OIDC handler per-request so the base URL matches the actual host
+		handler, err := newOIDCHandler(route, &provider, baseURL, resource, s.Log)
+		if err != nil {
+			s.Log.Error("failed to create OIDC handler", "error", err, "host", r.Host)
+			next(w, r)
+			return
+		}
+
 		// Handle callback path specially
 		if r.URL.Path == oidcCallbackPath {
 			handler.handleCallback(w, r)

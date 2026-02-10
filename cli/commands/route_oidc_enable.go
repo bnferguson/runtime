@@ -6,18 +6,33 @@ import (
 
 	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
+	"miren.dev/runtime/pkg/labs"
+	"miren.dev/runtime/pkg/ui"
 )
 
 func RouteOidcEnable(ctx *Context, opts struct {
-	Host         string   `position:"0" usage:"Hostname for the route (e.g., example.com)" required:"true"`
-	Provider     string   `flag:"provider" usage:"Name of existing OIDC provider (use --provider-url for inline creation)"`
-	ProviderURL  string   `flag:"provider-url" usage:"OIDC provider URL (e.g., https://accounts.google.com) - creates provider if not exists"`
-	ClientID     string   `flag:"client-id" usage:"OAuth2 client ID (required with --provider-url)"`
-	ClientSecret string   `flag:"client-secret" usage:"OAuth2 client secret (required with --provider-url)"`
-	Scopes       []string `flag:"scope" usage:"OAuth2 scopes (can be specified multiple times)"`
-	ClaimHeader  []string `flag:"claim-header" usage:"Claim to header mapping in format 'claim:header' (e.g., 'email:X-User-Email')"`
+	Host         string   `position:"0" usage:"Hostname for the route (e.g., example.com)"`
+	Default      bool     `long:"default" description:"Apply to the default route"`
+	Provider     string   `long:"provider" description:"Name of existing OIDC provider (use --provider-url for inline creation)"`
+	ProviderURL  string   `long:"provider-url" description:"OIDC provider URL (e.g., https://accounts.google.com) - creates provider if not exists"`
+	ClientID     string   `long:"client-id" description:"OAuth2 client ID (required with --provider-url)"`
+	ClientSecret string   `long:"client-secret" description:"OAuth2 client secret (required with --provider-url)"`
+	Scopes       []string `long:"scope" description:"OAuth2 scopes (can be specified multiple times)"`
+	ClaimHeader  []string `long:"claim-header" description:"Claim to header mapping in format 'claim:header' (e.g., 'email:X-User-Email')"`
 	ConfigCentric
 }) error {
+	if !labs.RouteOIDC() {
+		return fmt.Errorf("OIDC authentication for routes is disabled. Enable with MIREN_LABS=routeoidc")
+	}
+
+	if opts.Host == "" && !opts.Default {
+		return fmt.Errorf("either a hostname or --default must be specified")
+	}
+
+	if opts.Host != "" && opts.Default {
+		return fmt.Errorf("--default cannot be used with a hostname")
+	}
+
 	client, err := ctx.RPCClient("entities")
 	if err != nil {
 		return err
@@ -25,14 +40,27 @@ func RouteOidcEnable(ctx *Context, opts struct {
 
 	ic := ingress.NewClient(ctx.Log, client)
 
-	// Look up existing route
-	route, err := ic.Lookup(ctx, opts.Host)
-	if err != nil {
-		return fmt.Errorf("failed to lookup route: %w", err)
-	}
+	var route *ingress_v1alpha.HttpRoute
+	var routeLabel string
 
-	if route == nil {
-		return fmt.Errorf("route not found for host: %s", opts.Host)
+	if opts.Default {
+		route, err = ic.LookupDefault(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to lookup default route: %w", err)
+		}
+		if route == nil {
+			return fmt.Errorf("no default route configured")
+		}
+		routeLabel = "default"
+	} else {
+		route, err = ic.Lookup(ctx, opts.Host)
+		if err != nil {
+			return fmt.Errorf("failed to lookup route: %w", err)
+		}
+		if route == nil {
+			return fmt.Errorf("route not found for host: %s", opts.Host)
+		}
+		routeLabel = opts.Host
 	}
 
 	// Determine provider name
@@ -96,18 +124,35 @@ func RouteOidcEnable(ctx *Context, opts struct {
 	}
 
 	// Attach provider to route
-	_, err = ic.AttachOIDCProvider(ctx, opts.Host, providerName, claimMappings)
+	_, err = ic.AttachOIDCProviderToRoute(ctx, route, providerName, claimMappings)
 	if err != nil {
 		return fmt.Errorf("failed to attach OIDC provider to route: %w", err)
 	}
 
-	ctx.Printf("OIDC enabled for route: %s\n", opts.Host)
-	ctx.Printf("Provider: %s\n", providerName)
-	if len(claimMappings) > 0 {
-		ctx.Printf("Claim mappings:\n")
-		for _, mapping := range claimMappings {
-			ctx.Printf("  %s → %s\n", mapping.Claim, mapping.Header)
-		}
+	items := []ui.NamedValue{
+		ui.NewNamedValue("Route", routeLabel),
+		ui.NewNamedValue("OIDC", true),
+		ui.NewNamedValue("Provider", providerName),
 	}
+
+	ctx.Printf("%s\n", ui.NewNamedValueList(items).Render())
+
+	if len(claimMappings) > 0 {
+		var rows []ui.Row
+		for _, m := range claimMappings {
+			rows = append(rows, ui.Row{m.Claim, m.Header})
+		}
+
+		headers := []string{"CLAIM", "HEADER"}
+		columns := ui.AutoSizeColumns(headers, rows, ui.Columns().NoTruncate(0).NoTruncate(1))
+		table := ui.NewTable(
+			ui.WithTableTitle("Claim Mappings"),
+			ui.WithColumns(columns),
+			ui.WithRows(rows),
+		)
+
+		ctx.Printf("\n%s\n", table.Render())
+	}
+
 	return nil
 }

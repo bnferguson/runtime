@@ -29,6 +29,7 @@ func ServerInstallDocker(ctx *Context, opts struct {
 	ClusterName  string            `long:"cluster-name" description:"Cluster name for cloud registration"`
 	CloudURL     string            `short:"u" long:"url" description:"Cloud URL for registration" default:"https://miren.cloud"`
 	Tags         map[string]string `short:"t" long:"tag" description:"Tags for the cluster (key:value)"`
+	Labs         []string          `short:"l" long:"labs" description:"Miren Labs features to enable (e.g. routeoidc,adminapi). Prefix with - to disable."`
 }) error {
 	if opts.ClusterName == "" {
 		opts.ClusterName = opts.Name
@@ -95,6 +96,7 @@ func ServerInstallDocker(ctx *Context, opts struct {
 		HTTPPort:    opts.HTTPPort,
 		VolumeName:  volumeName,
 		HostNetwork: opts.HostNetwork,
+		Labs:        opts.Labs,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create container: %w", err)
@@ -290,6 +292,7 @@ type dockerContainerConfig struct {
 	HTTPPort    int
 	VolumeName  string
 	HostNetwork bool
+	Labs        []string
 }
 
 func checkDockerAvailable() error {
@@ -343,6 +346,10 @@ func dockerCreateContainer(name, image string, config dockerContainerConfig) (st
 			"-p", "8443:8443/udp",
 			"-p", "443:443/tcp",
 		)
+	}
+
+	if len(config.Labs) > 0 {
+		args = append(args, "-e", fmt.Sprintf("MIREN_LABS=%s", strings.Join(config.Labs, ",")))
 	}
 
 	// Add volume and image

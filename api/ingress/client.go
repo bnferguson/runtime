@@ -281,6 +281,11 @@ func (c *Client) AttachOIDCProvider(ctx context.Context, host string, providerNa
 		return nil, fmt.Errorf("route not found: %s", host)
 	}
 
+	return c.AttachOIDCProviderToRoute(ctx, route, providerName, claimMappings)
+}
+
+// AttachOIDCProviderToRoute associates an OIDC provider with an already-resolved route
+func (c *Client) AttachOIDCProviderToRoute(ctx context.Context, route *ingress_v1alpha.HttpRoute, providerName string, claimMappings []ingress_v1alpha.ClaimMappings) (*ingress_v1alpha.HttpRoute, error) {
 	// Look up provider
 	provider, err := c.GetOIDCProvider(ctx, providerName)
 	if err != nil {
@@ -315,12 +320,17 @@ func (c *Client) DetachOIDCProvider(ctx context.Context, host string) (*ingress_
 		return nil, fmt.Errorf("route not found: %s", host)
 	}
 
+	return c.DetachOIDCProviderFromRoute(ctx, route)
+}
+
+// DetachOIDCProviderFromRoute removes OIDC provider association from an already-resolved route
+func (c *Client) DetachOIDCProviderFromRoute(ctx context.Context, route *ingress_v1alpha.HttpRoute) (*ingress_v1alpha.HttpRoute, error) {
 	// Clear provider reference and claim mappings
 	route.OidcProvider = ""
 	route.ClaimMappings = nil
 
 	// Update the route
-	_, err = c.ec.CreateOrUpdate(ctx, string(route.ID), route)
+	_, err := c.ec.CreateOrUpdate(ctx, string(route.ID), route)
 	if err != nil {
 		return nil, fmt.Errorf("failed to detach OIDC provider from route: %w", err)
 	}

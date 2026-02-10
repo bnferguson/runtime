@@ -63,6 +63,12 @@ func (rw *RouteWatcher) Watch(ctx context.Context) error {
 
 		routeID := op.EntityId()
 
+		// Delete events don't carry an entity payload
+		if op.OperationType() == entityserver_v1alpha.EntityOperationDelete {
+			rw.removeRouteHost(routeID)
+			return nil
+		}
+
 		var route ingress_v1alpha.HttpRoute
 		route.Decode(op.Entity().Entity())
 
@@ -78,9 +84,6 @@ func (rw *RouteWatcher) Watch(ctx context.Context) error {
 
 		case entityserver_v1alpha.EntityOperationUpdate:
 			rw.updateRouteHost(routeID, host)
-
-		case entityserver_v1alpha.EntityOperationDelete:
-			rw.removeRouteHost(routeID)
 		}
 
 		return nil
