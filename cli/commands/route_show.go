@@ -12,6 +12,10 @@ func RouteShow(ctx *Context, opts struct {
 	FormatOptions
 	ConfigCentric
 }) error {
+	if opts.Host == "" {
+		return fmt.Errorf("host is required")
+	}
+
 	client, err := ctx.RPCClient("entities")
 	if err != nil {
 		return err

@@ -13,6 +13,10 @@ func RouteSet(ctx *Context, opts struct {
 	AppName string `position:"1" usage:"Application name to route to"`
 	ConfigCentric
 }) error {
+	if opts.Host == "" {
+		return fmt.Errorf("host is required")
+	}
+
 	appName := opts.AppName
 	if appName == "" {
 		if ac, err := appconfig.LoadAppConfig(); err == nil && ac != nil && ac.Name != "" {
