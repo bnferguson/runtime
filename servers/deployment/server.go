@@ -13,28 +13,34 @@ import (
 	deployment_v1alpha "miren.dev/runtime/api/deployment/deployment_v1alpha"
 	aes "miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/rpc/standard"
 )
 
 type DeploymentServer struct {
-	Log       *slog.Logger
-	EAC       *entityserver_v1alpha.EntityAccessClient
-	EC        *aes.Client
-	AppClient *appclient.Client
+	Log           *slog.Logger
+	EAC           *entityserver_v1alpha.EntityAccessClient
+	EC            *aes.Client
+	AppClient     *appclient.Client
+	IngressClient *ingress.Client
+	DNSHostname   string
 }
 
 var _ deployment_v1alpha.Deployment = (*DeploymentServer)(nil)
 
 const deploymentLockTimeout = 30 * time.Minute
 
-func NewDeploymentServer(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, ec *aes.Client, appClient *appclient.Client) (*DeploymentServer, error) {
+func NewDeploymentServer(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, ec *aes.Client, appClient *appclient.Client, dnsHostname string) (*DeploymentServer, error) {
 	return &DeploymentServer{
-		Log:       log.With("module", "deployment"),
-		EAC:       eac,
-		EC:        ec,
-		AppClient: appClient,
+		Log:           log.With("module", "deployment"),
+		EAC:           eac,
+		EC:            ec,
+		AppClient:     appClient,
+		IngressClient: ingress.NewClient(log, eac),
+		DNSHostname:   dnsHostname,
 	}, nil
 }
 
@@ -690,6 +696,21 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 		return nil
 	}
 
+	// If env vars are provided, create a derived version with merged variables
+	if args.HasEnvVars() && len(args.EnvVars()) > 0 {
+		derivedVersion, err := d.createDerivedVersion(ctx, &appVersion, args.EnvVars())
+		if err != nil {
+			d.Log.Error("Failed to create derived version with env vars", "error", err)
+			results.SetError(fmt.Sprintf("failed to apply env vars: %v", err))
+			return nil
+		}
+		appVersion = *derivedVersion
+		appVersionId = derivedVersion.Version
+		d.Log.Info("Created derived version with env vars",
+			"original", args.AppVersionId(), "derived", appVersionId,
+			"env_var_count", len(args.EnvVars()))
+	}
+
 	// Check for existing in_progress deployments (deployment lock)
 	existingDeployments, err := d.listDeploymentsInternal(ctx, appName, clusterId, "in_progress", 1)
 	if err != nil {
@@ -822,6 +843,9 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 	deploymentInfo := d.toDeploymentInfo(deployment)
 	results.SetDeployment(deploymentInfo)
 
+	accessInfo := d.getAccessInfo(ctx, appName)
+	results.SetAccessInfo(&accessInfo)
+
 	d.Log.Info("Deployed version",
 		"deployment_id", newDeploymentId,
 		"app", appName,
@@ -830,6 +854,47 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 		"is_rollback", isRollback)
 
 	return nil
+}
+
+// getAccessInfo queries routes to determine how the app can be accessed
+func (d *DeploymentServer) getAccessInfo(ctx context.Context, appName string) *deployment_v1alpha.AccessInfo {
+	info := &deployment_v1alpha.AccessInfo{}
+
+	appEntity, err := d.AppClient.GetByName(ctx, appName)
+	if err != nil {
+		d.Log.Debug("could not get app for access info", "app", appName, "error", err)
+		return info
+	}
+
+	routes, err := d.IngressClient.List(ctx)
+	if err != nil {
+		d.Log.Debug("could not list routes for access info", "error", err)
+		return info
+	}
+
+	var hostnames []string
+	var hasDefaultRoute bool
+
+	for _, r := range routes {
+		if r.Route.App != appEntity.ID {
+			continue
+		}
+		if r.Route.Default {
+			hasDefaultRoute = true
+		}
+		if r.Route.Host != "" {
+			hostnames = append(hostnames, r.Route.Host)
+		}
+	}
+
+	info.SetHostnames(&hostnames)
+	info.SetDefaultRoute(hasDefaultRoute)
+
+	if d.DNSHostname != "" {
+		info.SetClusterHostname(d.DNSHostname)
+	}
+
+	return info
 }
 
 // Internal helper methods
@@ -1034,4 +1099,53 @@ func (w *rpcEntityWrapper) GetAll(name entity.Id) []entity.Attr {
 
 func (w *rpcEntityWrapper) Attrs() []entity.Attr {
 	return w.entity.Attrs()
+}
+
+// createDerivedVersion clones an existing AppVersion with CLI env vars merged
+// into its config, creates the new entity, and returns it.
+func (d *DeploymentServer) createDerivedVersion(ctx context.Context, base *core_v1alpha.AppVersion, envVars []*deployment_v1alpha.EnvironmentVariable) (*core_v1alpha.AppVersion, error) {
+	// Extract app name from the base version's App field (e.g. "app/go-server" -> "go-server")
+	appName := string(base.App)
+	if idx := len("app/"); len(appName) > idx && appName[:idx] == "app/" {
+		appName = appName[idx:]
+	}
+
+	newVersionName := appName + "-" + idgen.Gen("v")
+
+	derived := &core_v1alpha.AppVersion{
+		App:            base.App,
+		Version:        newVersionName,
+		Artifact:       base.Artifact,
+		ImageUrl:       base.ImageUrl,
+		Config:         base.Config,
+		AdminToken:     base.AdminToken,
+		Manifest:       base.Manifest,
+		ManifestDigest: base.ManifestDigest,
+	}
+
+	// Merge env vars into config
+	varMap := make(map[string]core_v1alpha.Variable)
+	for _, v := range derived.Config.Variable {
+		varMap[v.Key] = v
+	}
+	for _, ev := range envVars {
+		varMap[ev.Key()] = core_v1alpha.Variable{
+			Key:       ev.Key(),
+			Value:     ev.Value(),
+			Sensitive: ev.Sensitive(),
+			Source:    "manual",
+		}
+	}
+	derived.Config.Variable = make([]core_v1alpha.Variable, 0, len(varMap))
+	for _, v := range varMap {
+		derived.Config.Variable = append(derived.Config.Variable, v)
+	}
+
+	id, err := d.EC.Create(ctx, newVersionName, derived)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create derived version entity: %w", err)
+	}
+	derived.ID = id
+
+	return derived, nil
 }

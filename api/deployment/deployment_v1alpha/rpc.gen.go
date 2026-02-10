@@ -573,6 +573,145 @@ func (v *DeploymentLockInfo) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type environmentVariableData struct {
+	Key       *string `cbor:"0,keyasint,omitempty" json:"key,omitempty"`
+	Value     *string `cbor:"1,keyasint,omitempty" json:"value,omitempty"`
+	Sensitive *bool   `cbor:"2,keyasint,omitempty" json:"sensitive,omitempty"`
+}
+
+type EnvironmentVariable struct {
+	data environmentVariableData
+}
+
+func (v *EnvironmentVariable) HasKey() bool {
+	return v.data.Key != nil
+}
+
+func (v *EnvironmentVariable) Key() string {
+	if v.data.Key == nil {
+		return ""
+	}
+	return *v.data.Key
+}
+
+func (v *EnvironmentVariable) SetKey(key string) {
+	v.data.Key = &key
+}
+
+func (v *EnvironmentVariable) HasValue() bool {
+	return v.data.Value != nil
+}
+
+func (v *EnvironmentVariable) Value() string {
+	if v.data.Value == nil {
+		return ""
+	}
+	return *v.data.Value
+}
+
+func (v *EnvironmentVariable) SetValue(value string) {
+	v.data.Value = &value
+}
+
+func (v *EnvironmentVariable) HasSensitive() bool {
+	return v.data.Sensitive != nil
+}
+
+func (v *EnvironmentVariable) Sensitive() bool {
+	if v.data.Sensitive == nil {
+		return false
+	}
+	return *v.data.Sensitive
+}
+
+func (v *EnvironmentVariable) SetSensitive(sensitive bool) {
+	v.data.Sensitive = &sensitive
+}
+
+func (v *EnvironmentVariable) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EnvironmentVariable) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EnvironmentVariable) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EnvironmentVariable) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type accessInfoData struct {
+	Hostnames       *[]string `cbor:"0,keyasint,omitempty" json:"hostnames,omitempty"`
+	DefaultRoute    *bool     `cbor:"1,keyasint,omitempty" json:"default_route,omitempty"`
+	ClusterHostname *string   `cbor:"2,keyasint,omitempty" json:"cluster_hostname,omitempty"`
+}
+
+type AccessInfo struct {
+	data accessInfoData
+}
+
+func (v *AccessInfo) HasHostnames() bool {
+	return v.data.Hostnames != nil
+}
+
+func (v *AccessInfo) Hostnames() *[]string {
+	return v.data.Hostnames
+}
+
+func (v *AccessInfo) SetHostnames(hostnames *[]string) {
+	v.data.Hostnames = hostnames
+}
+
+func (v *AccessInfo) HasDefaultRoute() bool {
+	return v.data.DefaultRoute != nil
+}
+
+func (v *AccessInfo) DefaultRoute() bool {
+	if v.data.DefaultRoute == nil {
+		return false
+	}
+	return *v.data.DefaultRoute
+}
+
+func (v *AccessInfo) SetDefaultRoute(default_route bool) {
+	v.data.DefaultRoute = &default_route
+}
+
+func (v *AccessInfo) HasClusterHostname() bool {
+	return v.data.ClusterHostname != nil
+}
+
+func (v *AccessInfo) ClusterHostname() string {
+	if v.data.ClusterHostname == nil {
+		return ""
+	}
+	return *v.data.ClusterHostname
+}
+
+func (v *AccessInfo) SetClusterHostname(cluster_hostname string) {
+	v.data.ClusterHostname = &cluster_hostname
+}
+
+func (v *AccessInfo) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AccessInfo) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AccessInfo) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AccessInfo) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type deploymentCreateDeploymentArgsData struct {
 	AppName      *string  `cbor:"0,keyasint,omitempty" json:"app_name,omitempty"`
 	ClusterId    *string  `cbor:"1,keyasint,omitempty" json:"cluster_id,omitempty"`
@@ -1340,10 +1479,11 @@ func (v *DeploymentCancelDeploymentResults) UnmarshalJSON(data []byte) error {
 }
 
 type deploymentDeployVersionArgsData struct {
-	AppName      *string `cbor:"0,keyasint,omitempty" json:"app_name,omitempty"`
-	ClusterId    *string `cbor:"1,keyasint,omitempty" json:"cluster_id,omitempty"`
-	AppVersionId *string `cbor:"2,keyasint,omitempty" json:"app_version_id,omitempty"`
-	IsRollback   *bool   `cbor:"3,keyasint,omitempty" json:"is_rollback,omitempty"`
+	AppName      *string                 `cbor:"0,keyasint,omitempty" json:"app_name,omitempty"`
+	ClusterId    *string                 `cbor:"1,keyasint,omitempty" json:"cluster_id,omitempty"`
+	AppVersionId *string                 `cbor:"2,keyasint,omitempty" json:"app_version_id,omitempty"`
+	IsRollback   *bool                   `cbor:"3,keyasint,omitempty" json:"is_rollback,omitempty"`
+	EnvVars      *[]*EnvironmentVariable `cbor:"4,keyasint,omitempty" json:"env_vars,omitempty"`
 }
 
 type DeploymentDeployVersionArgs struct {
@@ -1395,6 +1535,17 @@ func (v *DeploymentDeployVersionArgs) IsRollback() bool {
 	return *v.data.IsRollback
 }
 
+func (v *DeploymentDeployVersionArgs) HasEnvVars() bool {
+	return v.data.EnvVars != nil
+}
+
+func (v *DeploymentDeployVersionArgs) EnvVars() []*EnvironmentVariable {
+	if v.data.EnvVars == nil {
+		return nil
+	}
+	return *v.data.EnvVars
+}
+
 func (v *DeploymentDeployVersionArgs) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(v.data)
 }
@@ -1415,6 +1566,7 @@ type deploymentDeployVersionResultsData struct {
 	Deployment *DeploymentInfo     `cbor:"0,keyasint,omitempty" json:"deployment,omitempty"`
 	Error      *string             `cbor:"1,keyasint,omitempty" json:"error,omitempty"`
 	LockInfo   *DeploymentLockInfo `cbor:"2,keyasint,omitempty" json:"lock_info,omitempty"`
+	AccessInfo **AccessInfo        `cbor:"3,keyasint,omitempty" json:"access_info,omitempty"`
 }
 
 type DeploymentDeployVersionResults struct {
@@ -1432,6 +1584,10 @@ func (v *DeploymentDeployVersionResults) SetError(error string) {
 
 func (v *DeploymentDeployVersionResults) SetLockInfo(lock_info *DeploymentLockInfo) {
 	v.data.LockInfo = lock_info
+}
+
+func (v *DeploymentDeployVersionResults) SetAccessInfo(access_info **AccessInfo) {
+	v.data.AccessInfo = access_info
 }
 
 func (v *DeploymentDeployVersionResults) MarshalCBOR() ([]byte, error) {
@@ -2205,12 +2361,24 @@ func (v *DeploymentClientDeployVersionResults) LockInfo() *DeploymentLockInfo {
 	return v.data.LockInfo
 }
 
-func (v DeploymentClient) DeployVersion(ctx context.Context, app_name string, cluster_id string, app_version_id string, is_rollback bool) (*DeploymentClientDeployVersionResults, error) {
+func (v *DeploymentClientDeployVersionResults) HasAccessInfo() bool {
+	return v.data.AccessInfo != nil
+}
+
+func (v *DeploymentClientDeployVersionResults) AccessInfo() *AccessInfo {
+	if v.data.AccessInfo == nil {
+		return nil
+	}
+	return *v.data.AccessInfo
+}
+
+func (v DeploymentClient) DeployVersion(ctx context.Context, app_name string, cluster_id string, app_version_id string, is_rollback bool, env_vars []*EnvironmentVariable) (*DeploymentClientDeployVersionResults, error) {
 	args := DeploymentDeployVersionArgs{}
 	args.data.AppName = &app_name
 	args.data.ClusterId = &cluster_id
 	args.data.AppVersionId = &app_version_id
 	args.data.IsRollback = &is_rollback
+	args.data.EnvVars = &env_vars
 
 	var ret deploymentDeployVersionResultsData
 

@@ -87,7 +87,7 @@ func App(ctx *Context, opts struct {
 		return nil
 	}
 
-	cl, err := ctx.RPCClient("dev.miren.runtime/app-status")
+	cl, err := ctx.RPCClient(rpcAppStatus)
 	if err != nil {
 		return err
 	}

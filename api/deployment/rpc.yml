@@ -187,6 +187,9 @@ interfaces:
           - name: is_rollback
             type: bool
             doc: If true, previous active deployment marked as rolled_back instead of succeeded
+          - name: env_vars
+            type: '[]*EnvironmentVariable'
+            doc: Environment variables to set (creates a derived version with these vars merged in)
         results:
           - name: deployment
             type: DeploymentInfo
@@ -197,6 +200,9 @@ interfaces:
           - name: lock_info
             type: DeploymentLockInfo
             doc: Structured information about the deployment lock (if blocked)
+          - name: access_info
+            type: '*AccessInfo'
+            doc: Information about how to access the deployed app
 
 types:
   - type: DeploymentInfo
@@ -338,3 +344,35 @@ types:
         type: standard.Timestamp
         index: 6
         doc: When the lock will expire
+
+  - type: EnvironmentVariable
+    doc: An environment variable to set on the app during deploy
+    fields:
+      - name: key
+        type: string
+        index: 0
+        doc: Environment variable name
+      - name: value
+        type: string
+        index: 1
+        doc: Environment variable value
+      - name: sensitive
+        type: bool
+        index: 2
+        doc: Whether this is a sensitive value that should be masked
+
+  - type: AccessInfo
+    doc: Information about how to access the deployed application
+    fields:
+      - name: hostnames
+        type: '[]string'
+        index: 0
+        doc: Hostnames where the app is accessible (from configured routes)
+      - name: default_route
+        type: bool
+        index: 1
+        doc: Whether this app is the default route
+      - name: cluster_hostname
+        type: string
+        index: 2
+        doc: Cloud-provisioned DNS hostname for the cluster (if registered with Miren Cloud)

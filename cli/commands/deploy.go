@@ -16,6 +16,7 @@ import (
 	"github.com/moby/buildkit/util/progress/progresswriter"
 	"golang.org/x/term"
 
+	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/deployment/deployment_v1alpha"
 	"miren.dev/runtime/appconfig"
@@ -114,7 +115,22 @@ func Deploy(ctx *Context, opts struct {
 		}
 		depClient := deployment_v1alpha.NewDeploymentClient(depCl)
 
-		result, err := depClient.DeployVersion(ctx, name, ctx.ClusterName, opts.Version, false)
+		var envVars []*deployment_v1alpha.EnvironmentVariable
+		if len(opts.Env) > 0 || len(opts.Sensitive) > 0 {
+			specs, err := ParseEnvVarSpecs(opts.Env, opts.Sensitive)
+			if err != nil {
+				return err
+			}
+			for _, spec := range specs {
+				ev := &deployment_v1alpha.EnvironmentVariable{}
+				ev.SetKey(spec.Key)
+				ev.SetValue(spec.Value)
+				ev.SetSensitive(spec.Sensitive)
+				envVars = append(envVars, ev)
+			}
+		}
+
+		result, err := depClient.DeployVersion(ctx, name, ctx.ClusterName, opts.Version, false, envVars)
 		if err != nil {
 			return fmt.Errorf("failed to deploy version: %w", err)
 		}
@@ -146,7 +162,21 @@ func Deploy(ctx *Context, opts struct {
 		}
 
 		if result.HasDeployment() && result.Deployment() != nil {
-			ctx.Printf("✓ Deployed version %s to %s\n", opts.Version, ctx.ClusterName)
+			deployedVersion := result.Deployment().AppVersionId()
+			if deployedVersion == "" {
+				deployedVersion = opts.Version
+			}
+			ctx.Printf("✓ Deployed version %s to %s\n", deployedVersion, ctx.ClusterName)
+
+			appCl, appErr := ctx.RPCClient(rpcAppStatus)
+			if appErr == nil {
+				appStatusClient := app_v1alpha.NewAppStatusClient(appCl)
+				waitForActivation(ctx, appStatusClient, name, deployedVersion)
+			}
+
+			if result.HasAccessInfo() && result.AccessInfo() != nil {
+				displayDeployVersionAccessInfo(ctx, name, result.AccessInfo())
+			}
 		}
 		return nil
 	}

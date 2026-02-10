@@ -853,7 +853,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	ls := logs.NewServer(c.Log, ec, c.Logs)
 	server.ExposeValue("dev.miren.runtime/logs", app_v1alpha.AdaptLogs(ls))
 
-	ds, err := deployment.NewDeploymentServer(c.Log, eac, ec, appClient)
+	ds, err := deployment.NewDeploymentServer(c.Log, eac, ec, appClient, c.CloudAuth.DNSHostname)
 	if err != nil {
 		c.Log.Error("failed to create deployment server", "error", err)
 		return err

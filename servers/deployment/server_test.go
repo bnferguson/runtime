@@ -24,7 +24,7 @@ func newTestDeploymentServer(t *testing.T, logger *slog.Logger, inmem *testutils
 	localClient := rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(inmem.Server))
 	ec := aes.NewClient(logger, inmem.EAC)
 	ac := appclient.NewClient(logger, localClient)
-	return NewDeploymentServer(logger, inmem.EAC, ec, ac)
+	return NewDeploymentServer(logger, inmem.EAC, ec, ac, "")
 }
 
 func TestCreateDeploymentWithGitInfo(t *testing.T) {
@@ -924,28 +924,28 @@ func TestDeployVersion(t *testing.T) {
 	}
 
 	t.Run("missing app_name returns error", func(t *testing.T) {
-		_, err := client.DeployVersion(ctx, "", "cluster1", "myapp-v1", false)
+		_, err := client.DeployVersion(ctx, "", "cluster1", "myapp-v1", false, nil)
 		if err == nil {
 			t.Fatal("Expected error for empty app_name")
 		}
 	})
 
 	t.Run("missing cluster_id returns error", func(t *testing.T) {
-		_, err := client.DeployVersion(ctx, "myapp", "", "myapp-v1", false)
+		_, err := client.DeployVersion(ctx, "myapp", "", "myapp-v1", false, nil)
 		if err == nil {
 			t.Fatal("Expected error for empty cluster_id")
 		}
 	})
 
 	t.Run("missing app_version_id returns error", func(t *testing.T) {
-		_, err := client.DeployVersion(ctx, "myapp", "cluster1", "", false)
+		_, err := client.DeployVersion(ctx, "myapp", "cluster1", "", false, nil)
 		if err == nil {
 			t.Fatal("Expected error for empty app_version_id")
 		}
 	})
 
 	t.Run("non-existent version returns error in results", func(t *testing.T) {
-		result, err := client.DeployVersion(ctx, "myapp", "cluster1", "nonexistent-version", false)
+		result, err := client.DeployVersion(ctx, "myapp", "cluster1", "nonexistent-version", false, nil)
 		if err != nil {
 			t.Fatalf("Unexpected RPC error: %v", err)
 		}
@@ -994,7 +994,7 @@ func TestDeployVersion(t *testing.T) {
 		}
 
 		// Deploy the version
-		result, err := client.DeployVersion(ctx, "testapp", "cluster1", "testapp-v1abc", false)
+		result, err := client.DeployVersion(ctx, "testapp", "cluster1", "testapp-v1abc", false, nil)
 		if err != nil {
 			t.Fatalf("DeployVersion failed: %v", err)
 		}
@@ -1078,7 +1078,7 @@ func TestDeployVersion(t *testing.T) {
 		}
 
 		// Roll back to v1
-		result, err := client.DeployVersion(ctx, "rollback-app", "cluster1", "rollback-app-v1", true)
+		result, err := client.DeployVersion(ctx, "rollback-app", "cluster1", "rollback-app-v1", true, nil)
 		if err != nil {
 			t.Fatalf("DeployVersion (rollback) failed: %v", err)
 		}
@@ -1131,7 +1131,7 @@ func TestDeployVersion(t *testing.T) {
 		}
 
 		// Try to deploy — should be blocked
-		result, err := client.DeployVersion(ctx, "locked-app", "cluster1", "locked-app-v1", false)
+		result, err := client.DeployVersion(ctx, "locked-app", "cluster1", "locked-app-v1", false, nil)
 		if err != nil {
 			t.Fatalf("Unexpected RPC error: %v", err)
 		}

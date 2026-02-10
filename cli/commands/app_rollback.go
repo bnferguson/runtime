@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/deployment/deployment_v1alpha"
 	"miren.dev/runtime/pkg/ui"
 )
@@ -91,7 +92,7 @@ func Rollback(ctx *Context, opts struct {
 	selectedVersion := selected.ID()
 
 	// Call DeployVersion with is_rollback=true
-	deployResult, err := depClient.DeployVersion(ctx, opts.App, ctx.ClusterName, selectedVersion, true)
+	deployResult, err := depClient.DeployVersion(ctx, opts.App, ctx.ClusterName, selectedVersion, true, nil)
 	if err != nil {
 		return fmt.Errorf("failed to roll back: %w", err)
 	}
@@ -117,5 +118,16 @@ func Rollback(ctx *Context, opts struct {
 	}
 
 	ctx.Printf("✓ Rolled back %s to version %s\n", opts.App, selectedVersion)
+
+	appCl, appErr := ctx.RPCClient(rpcAppStatus)
+	if appErr == nil {
+		appStatusClient := app_v1alpha.NewAppStatusClient(appCl)
+		waitForActivation(ctx, appStatusClient, opts.App, selectedVersion)
+	}
+
+	if deployResult.HasAccessInfo() && deployResult.AccessInfo() != nil {
+		displayDeployVersionAccessInfo(ctx, opts.App, deployResult.AccessInfo())
+	}
+
 	return nil
 }
