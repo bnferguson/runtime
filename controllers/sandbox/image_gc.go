@@ -133,10 +133,7 @@ func (w *ImageWatchdog) runGCWithLogging(ctx context.Context, trigger string) {
 	result, err := w.RunGC(ctx)
 	if err != nil {
 		w.Log.Error("image GC failed", "trigger", trigger, "error", err)
-		return
-	}
-
-	if len(result.DeletedImages) > 0 || len(result.FailedImages) > 0 {
+	} else if len(result.DeletedImages) > 0 || len(result.FailedImages) > 0 {
 		w.Log.Info("image GC complete",
 			"trigger", trigger,
 			"deleted", len(result.DeletedImages),
@@ -155,6 +152,31 @@ func (w *ImageWatchdog) runGCWithLogging(ctx context.Context, trigger string) {
 			"trigger", trigger,
 			"retained", result.RetainedImages,
 			"total", result.TotalImages)
+	}
+
+	// Run blob GC independently of image GC
+	blobResult, blobErr := w.RunBlobGC(ctx)
+	if blobErr != nil {
+		w.Log.Error("blob GC failed", "trigger", trigger, "error", blobErr)
+	} else if len(blobResult.DeletedBlobs) > 0 || len(blobResult.FailedBlobs) > 0 {
+		w.Log.Info("blob GC complete",
+			"trigger", trigger,
+			"deleted", len(blobResult.DeletedBlobs),
+			"failed", len(blobResult.FailedBlobs),
+			"retained", blobResult.RetainedBlobs,
+			"total", blobResult.TotalBlobs)
+
+		for _, blob := range blobResult.DeletedBlobs {
+			w.Log.Debug("deleted blob", "blob", blob)
+		}
+		for blob, err := range blobResult.FailedBlobs {
+			w.Log.Warn("failed to delete blob", "blob", blob, "error", err)
+		}
+	} else {
+		w.Log.Debug("blob GC complete, no blobs deleted",
+			"trigger", trigger,
+			"retained", blobResult.RetainedBlobs,
+			"total", blobResult.TotalBlobs)
 	}
 }
 

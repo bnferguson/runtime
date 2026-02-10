@@ -299,7 +299,6 @@ insecure-entitlements = [ "network.host", "security.insecure" ]
   [[worker.oci.gcpolicy]]
     keepBytes = %d
     keepDuration = %d
-    filters = ["type==source.local", "type==exec.cachemount"]
 
 [registry."docker.io"]
   http = true
