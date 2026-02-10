@@ -138,16 +138,7 @@ func buildDeploymentTable(deployments []*deployment_v1alpha.DeploymentInfo, opts
 		if opts.hasIdentity {
 			headers = append(headers, "DEPLOYED BY")
 		}
-		headers = append(headers, "WHEN", "GIT SHA", "BRANCH", "COMMIT MESSAGE")
-		builder = ui.Columns().
-			NoTruncate(0).               // STATUS
-			MaxWidth(len(headers)-1, 40) // COMMIT MESSAGE
-	} else {
-		headers = []string{"STATUS", "VERSION"}
-		if opts.hasIdentity {
-			headers = append(headers, "DEPLOYED BY")
-		}
-		headers = append(headers, "WHEN", "ID", "ERROR")
+		headers = append(headers, "WHEN", "ID", "ERROR", "GIT SHA", "BRANCH", "COMMIT MESSAGE")
 		// Find ID column index dynamically
 		idColIndex := -1
 		for i, h := range headers {
@@ -157,7 +148,16 @@ func buildDeploymentTable(deployments []*deployment_v1alpha.DeploymentInfo, opts
 			}
 		}
 		builder = ui.Columns().
-			NoTruncate(0, idColIndex) // STATUS and ID
+			NoTruncate(0, idColIndex).   // STATUS and ID
+			MaxWidth(len(headers)-1, 40) // COMMIT MESSAGE
+	} else {
+		headers = []string{"STATUS", "VERSION"}
+		if opts.hasIdentity {
+			headers = append(headers, "DEPLOYED BY")
+		}
+		headers = append(headers, "WHEN", "GIT SHA", "BRANCH")
+		builder = ui.Columns().
+			NoTruncate(0) // STATUS
 	}
 
 	for _, dep := range deployments {
@@ -184,9 +184,10 @@ func buildDeploymentRow(dep *deployment_v1alpha.DeploymentInfo, opts historyDisp
 
 	if opts.detailed {
 		gitSha, gitBranch, gitMessage := formatGitInfo(dep)
-		row = append(row, gitSha, gitBranch, gitMessage)
+		row = append(row, ui.CleanEntityID(dep.Id()), formatErrorInfo(dep, status), gitSha, gitBranch, gitMessage)
 	} else {
-		row = append(row, ui.CleanEntityID(dep.Id()), formatErrorInfo(dep, status))
+		gitSha, gitBranch, _ := formatGitInfo(dep)
+		row = append(row, gitSha, gitBranch)
 	}
 
 	return row

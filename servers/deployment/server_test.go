@@ -832,3 +832,64 @@ func TestUpdateDeploymentStatusToInProgress(t *testing.T) {
 		t.Error("CompletedAt should not be set for in_progress deployment")
 	}
 }
+
+func TestListDeploymentsClusterFilter(t *testing.T) {
+	ctx := context.Background()
+
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	logger := slog.Default()
+	server, err := NewDeploymentServer(logger, inmem.EAC)
+	if err != nil {
+		t.Fatalf("Failed to create deployment server: %v", err)
+	}
+
+	client := &deployment_v1alpha.DeploymentClient{
+		Client: rpc.LocalClient(deployment_v1alpha.AdaptDeployment(server)),
+	}
+
+	// Create deployments across different clusters
+	for _, d := range []*core_v1alpha.Deployment{
+		{AppName: "myapp", ClusterId: "cluster-a", AppVersion: "v1", Status: "active"},
+		{AppName: "myapp", ClusterId: "cluster-b", AppVersion: "v2", Status: "active"},
+		{AppName: "myapp", ClusterId: "cluster-a", AppVersion: "v3", Status: "succeeded"},
+	} {
+		name := d.AppName + "-" + d.ClusterId + "-" + d.AppVersion
+		if _, err := inmem.Client.Create(ctx, name, d); err != nil {
+			t.Fatalf("Failed to create deployment: %v", err)
+		}
+	}
+
+	// Without cluster filter: should return all 3
+	result, err := client.ListDeployments(ctx, "myapp", "", "", 0)
+	if err != nil {
+		t.Fatalf("ListDeployments failed: %v", err)
+	}
+	if len(result.Deployments()) != 3 {
+		t.Errorf("Expected 3 deployments without cluster filter, got %d", len(result.Deployments()))
+	}
+
+	// With cluster-a filter: should return 2
+	result, err = client.ListDeployments(ctx, "myapp", "cluster-a", "", 0)
+	if err != nil {
+		t.Fatalf("ListDeployments failed: %v", err)
+	}
+	if len(result.Deployments()) != 2 {
+		t.Errorf("Expected 2 deployments for cluster-a, got %d", len(result.Deployments()))
+	}
+	for _, dep := range result.Deployments() {
+		if dep.ClusterId() != "cluster-a" {
+			t.Errorf("Expected cluster-a, got %s", dep.ClusterId())
+		}
+	}
+
+	// With cluster-b filter: should return 1
+	result, err = client.ListDeployments(ctx, "myapp", "cluster-b", "", 0)
+	if err != nil {
+		t.Fatalf("ListDeployments failed: %v", err)
+	}
+	if len(result.Deployments()) != 1 {
+		t.Errorf("Expected 1 deployment for cluster-b, got %d", len(result.Deployments()))
+	}
+}

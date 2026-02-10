@@ -676,6 +676,9 @@ func (d *DeploymentServer) listDeploymentsInternal(ctx context.Context, appName,
 		if appName != "" && dep.AppName != appName {
 			continue
 		}
+		if clusterId != "" && dep.ClusterId != clusterId {
+			continue
+		}
 		if status != "" && dep.Status != status {
 			continue
 		}
