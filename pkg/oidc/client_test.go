@@ -1,7 +1,18 @@
 package oidc
 
 import (
+	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
+
+	"github.com/go-jose/go-jose/v4"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 func TestGeneratePKCEChallenge(t *testing.T) {
@@ -30,26 +41,147 @@ func TestGeneratePKCEChallenge(t *testing.T) {
 	}
 }
 
-func TestParseIDToken_BasicParsing(t *testing.T) {
-	// This is a mock JWT token (header.payload.signature)
-	// Header: {"alg":"none","typ":"JWT"}
-	// Payload: {"sub":"1234567890","name":"Test User","iat":1516239022}
-	mockToken := "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IlRlc3QgVXNlciIsImlhdCI6MTUxNjIzOTAyMn0."
+// newTestProvider starts an httptest server that serves OIDC discovery and JWKS
+// endpoints backed by the given RSA key. It returns the server and the key ID
+// used in the JWKS.
+func newTestProvider(t *testing.T, key *rsa.PrivateKey) (*httptest.Server, string) {
+	t.Helper()
 
-	client := NewClient("https://provider.example.com", "client-id", "secret", "https://redirect.example.com", []string{"openid"}, nil)
+	kid := "test-key-1"
 
-	claims, err := client.ParseIDToken(mockToken)
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+		// We need the server URL but don't have it yet during setup,
+		// so we read it from the request host.
+		baseURL := fmt.Sprintf("http://%s", r.Host)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"issuer":                 baseURL,
+			"authorization_endpoint": baseURL + "/authorize",
+			"token_endpoint":         baseURL + "/token",
+			"jwks_uri":               baseURL + "/jwks",
+		})
+	})
+
+	mux.HandleFunc("/jwks", func(w http.ResponseWriter, r *http.Request) {
+		jwk := jose.JSONWebKey{
+			Key:       &key.PublicKey,
+			KeyID:     kid,
+			Algorithm: string(jose.RS256),
+			Use:       "sig",
+		}
+		json.NewEncoder(w).Encode(jose.JSONWebKeySet{Keys: []jose.JSONWebKey{jwk}})
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv, kid
+}
+
+// signToken creates a signed JWT with the given claims using RS256.
+func signToken(t *testing.T, key *rsa.PrivateKey, kid string, claims jwt.MapClaims) string {
+	t.Helper()
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	token.Header["kid"] = kid
+	signed, err := token.SignedString(key)
 	if err != nil {
-		t.Fatalf("failed to parse ID token: %v", err)
+		t.Fatalf("failed to sign token: %v", err)
+	}
+	return signed
+}
+
+func TestParseIDToken(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("failed to generate RSA key: %v", err)
 	}
 
-	if claims["sub"] != "1234567890" {
-		t.Errorf("sub claim mismatch: got %v", claims["sub"])
-	}
+	srv, kid := newTestProvider(t, key)
 
-	if claims["name"] != "Test User" {
-		t.Errorf("name claim mismatch: got %v", claims["name"])
-	}
+	client := NewClient(srv.URL, "client-id", "secret", "https://redirect.example.com", []string{"openid"}, nil)
+
+	t.Run("valid token", func(t *testing.T) {
+		token := signToken(t, key, kid, jwt.MapClaims{
+			"iss":  srv.URL,
+			"aud":  "client-id",
+			"sub":  "user-123",
+			"name": "Test User",
+			"exp":  time.Now().Add(time.Hour).Unix(),
+			"iat":  time.Now().Unix(),
+		})
+
+		claims, err := client.ParseIDToken(context.Background(), token)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if claims["sub"] != "user-123" {
+			t.Errorf("sub claim mismatch: got %v", claims["sub"])
+		}
+		if claims["name"] != "Test User" {
+			t.Errorf("name claim mismatch: got %v", claims["name"])
+		}
+	})
+
+	t.Run("wrong issuer", func(t *testing.T) {
+		token := signToken(t, key, kid, jwt.MapClaims{
+			"iss": "https://evil.example.com",
+			"aud": "client-id",
+			"sub": "user-123",
+			"exp": time.Now().Add(time.Hour).Unix(),
+			"iat": time.Now().Unix(),
+		})
+
+		_, err := client.ParseIDToken(context.Background(), token)
+		if err == nil {
+			t.Fatal("expected error for wrong issuer")
+		}
+	})
+
+	t.Run("wrong audience", func(t *testing.T) {
+		token := signToken(t, key, kid, jwt.MapClaims{
+			"iss": srv.URL,
+			"aud": "wrong-client",
+			"sub": "user-123",
+			"exp": time.Now().Add(time.Hour).Unix(),
+			"iat": time.Now().Unix(),
+		})
+
+		_, err := client.ParseIDToken(context.Background(), token)
+		if err == nil {
+			t.Fatal("expected error for wrong audience")
+		}
+	})
+
+	t.Run("expired token", func(t *testing.T) {
+		token := signToken(t, key, kid, jwt.MapClaims{
+			"iss": srv.URL,
+			"aud": "client-id",
+			"sub": "user-123",
+			"exp": time.Now().Add(-time.Hour).Unix(),
+			"iat": time.Now().Add(-2 * time.Hour).Unix(),
+		})
+
+		_, err := client.ParseIDToken(context.Background(), token)
+		if err == nil {
+			t.Fatal("expected error for expired token")
+		}
+	})
+
+	t.Run("tampered signature", func(t *testing.T) {
+		otherKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		token := signToken(t, otherKey, kid, jwt.MapClaims{
+			"iss": srv.URL,
+			"aud": "client-id",
+			"sub": "user-123",
+			"exp": time.Now().Add(time.Hour).Unix(),
+			"iat": time.Now().Unix(),
+		})
+
+		_, err := client.ParseIDToken(context.Background(), token)
+		if err == nil {
+			t.Fatal("expected error for tampered signature")
+		}
+	})
 }
 
 func TestClient_AuthorizationURL(t *testing.T) {

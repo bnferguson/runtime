@@ -1,14 +1,14 @@
 package oidc
 
 import (
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
+
+	"golang.org/x/crypto/chacha20poly1305"
 )
 
 const (
@@ -22,12 +22,13 @@ const (
 	pkceVerifierLength = 64
 )
 
-// SessionManager handles OIDC session lifecycle using HMAC-signed cookies.
+// SessionManager handles OIDC session lifecycle using encrypted cookies.
+// Cookie values are encrypted and authenticated with XChaCha20-Poly1305.
 type SessionManager struct {
 	cookieSecure    bool
 	cookieDomain    string
 	sessionDuration time.Duration
-	signingKey      []byte
+	key             []byte
 }
 
 // SessionData contains the authenticated session information
@@ -69,68 +70,63 @@ func (sm *SessionManager) SetSecure(secure bool) {
 }
 
 // NewSessionManager creates a new session manager.
-// If signingKey is nil, a random 32-byte key is generated. This means sessions
+// If key is nil, a random 32-byte key is generated. This means sessions
 // won't survive server restarts; pass a persistent key for durable sessions.
-func NewSessionManager(cookieSecure bool, cookieDomain string, signingKey []byte) *SessionManager {
-	if signingKey == nil {
-		signingKey = make([]byte, 32)
-		rand.Read(signingKey)
+func NewSessionManager(cookieSecure bool, cookieDomain string, key []byte) *SessionManager {
+	if key == nil {
+		key = make([]byte, chacha20poly1305.KeySize)
+		rand.Read(key)
 	}
 	return &SessionManager{
 		cookieSecure:    cookieSecure,
 		cookieDomain:    cookieDomain,
 		sessionDuration: defaultSessionDuration,
-		signingKey:      signingKey,
+		key:             key,
 	}
 }
 
-// signCookie produces "base64(json).base64(hmac-sha256)" from data.
-func (sm *SessionManager) signCookie(data []byte) string {
-	encoded := base64.RawURLEncoding.EncodeToString(data)
-	mac := hmac.New(sha256.New, sm.signingKey)
-	mac.Write([]byte(encoded))
-	sig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
-	return encoded + "." + sig
-}
-
-// verifyCookie splits "payload.sig", verifies the HMAC, and returns the decoded payload.
-func (sm *SessionManager) verifyCookie(value string) ([]byte, error) {
-	parts := splitCookieValue(value)
-	if len(parts) != 2 {
-		return nil, fmt.Errorf("malformed signed cookie")
-	}
-
-	mac := hmac.New(sha256.New, sm.signingKey)
-	mac.Write([]byte(parts[0]))
-	expectedSig := mac.Sum(nil)
-
-	sig, err := base64.RawURLEncoding.DecodeString(parts[1])
+// sealCookie encrypts and authenticates data with XChaCha20-Poly1305,
+// returning base64(nonce || ciphertext).
+func (sm *SessionManager) sealCookie(plaintext []byte) (string, error) {
+	aead, err := chacha20poly1305.NewX(sm.key)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode signature: %w", err)
+		return "", fmt.Errorf("creating AEAD: %w", err)
 	}
 
-	if !hmac.Equal(sig, expectedSig) {
-		return nil, fmt.Errorf("cookie signature verification failed")
+	nonce := make([]byte, aead.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return "", fmt.Errorf("generating nonce: %w", err)
 	}
 
-	data, err := base64.RawURLEncoding.DecodeString(parts[0])
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode cookie payload: %w", err)
-	}
-
-	return data, nil
+	// nonce is prepended to ciphertext
+	sealed := aead.Seal(nonce, nonce, plaintext, nil)
+	return base64.RawURLEncoding.EncodeToString(sealed), nil
 }
 
-// splitCookieValue splits on the last '.' to separate payload from signature.
-func splitCookieValue(s string) []string {
-	idx := len(s) - 1
-	for idx >= 0 && s[idx] != '.' {
-		idx--
+// openCookie decodes, decrypts, and verifies a cookie produced by sealCookie.
+func (sm *SessionManager) openCookie(value string) ([]byte, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode cookie: %w", err)
 	}
-	if idx <= 0 {
-		return nil
+
+	aead, err := chacha20poly1305.NewX(sm.key)
+	if err != nil {
+		return nil, fmt.Errorf("creating AEAD: %w", err)
 	}
-	return []string{s[:idx], s[idx+1:]}
+
+	nonceSize := aead.NonceSize()
+	if len(raw) < nonceSize {
+		return nil, fmt.Errorf("cookie value too short")
+	}
+
+	nonce, ciphertext := raw[:nonceSize], raw[nonceSize:]
+	plaintext, err := aead.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return nil, fmt.Errorf("cookie decryption failed: %w", err)
+	}
+
+	return plaintext, nil
 }
 
 // GetSession retrieves the current session from cookies
@@ -143,7 +139,7 @@ func (sm *SessionManager) GetSession(r *http.Request) (*SessionData, error) {
 		return nil, fmt.Errorf("failed to read session cookie: %w", err)
 	}
 
-	data, err := sm.verifyCookie(cookie.Value)
+	data, err := sm.openCookie(cookie.Value)
 	if err != nil {
 		return nil, fmt.Errorf("invalid session cookie: %w", err)
 	}
@@ -160,7 +156,7 @@ func (sm *SessionManager) GetSession(r *http.Request) (*SessionData, error) {
 	return &session, nil
 }
 
-// SetSession stores a new session in an HMAC-signed cookie
+// SetSession stores a new session in an encrypted cookie
 func (sm *SessionManager) SetSession(w http.ResponseWriter, session *SessionData) error {
 	if session.ExpiresAt.IsZero() {
 		session.ExpiresAt = time.Now().Add(sm.sessionDuration)
@@ -171,9 +167,14 @@ func (sm *SessionManager) SetSession(w http.ResponseWriter, session *SessionData
 		return fmt.Errorf("failed to marshal session: %w", err)
 	}
 
+	sealed, err := sm.sealCookie(data)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt session: %w", err)
+	}
+
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
-		Value:    sm.signCookie(data),
+		Value:    sealed,
 		Path:     "/",
 		Domain:   sm.cookieDomain,
 		Expires:  session.ExpiresAt,
@@ -223,16 +224,21 @@ func (sm *SessionManager) GenerateState(returnPath string) (*StateData, error) {
 	}, nil
 }
 
-// SetState stores OIDC flow state in an HMAC-signed cookie
+// SetState stores OIDC flow state in an encrypted cookie
 func (sm *SessionManager) SetState(w http.ResponseWriter, state *StateData) error {
 	data, err := json.Marshal(state)
 	if err != nil {
 		return fmt.Errorf("failed to marshal state: %w", err)
 	}
 
+	sealed, err := sm.sealCookie(data)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt state: %w", err)
+	}
+
 	http.SetCookie(w, &http.Cookie{
 		Name:     stateCookieName,
-		Value:    sm.signCookie(data),
+		Value:    sealed,
 		Path:     "/",
 		Domain:   sm.cookieDomain,
 		Expires:  state.ExpiresAt,
@@ -254,7 +260,7 @@ func (sm *SessionManager) GetState(r *http.Request) (*StateData, error) {
 		return nil, fmt.Errorf("failed to read state cookie: %w", err)
 	}
 
-	data, err := sm.verifyCookie(cookie.Value)
+	data, err := sm.openCookie(cookie.Value)
 	if err != nil {
 		return nil, fmt.Errorf("invalid state cookie: %w", err)
 	}

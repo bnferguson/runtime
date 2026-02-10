@@ -115,8 +115,8 @@ func (h *oidcHandler) checkAuth(w http.ResponseWriter, r *http.Request) (authent
 			return true, session.Claims
 		}
 
-		// Fallback: parse claims from ID token
-		claims, err := h.client.ParseIDToken(session.IDToken)
+		// Fallback: validate and parse claims from ID token
+		claims, err := h.client.ParseIDToken(r.Context(), session.IDToken)
 		if err != nil {
 			h.logger.Error("failed to parse ID token", "error", err)
 			h.sessionManager.ClearSession(w)
@@ -131,7 +131,7 @@ func (h *oidcHandler) checkAuth(w http.ResponseWriter, r *http.Request) (authent
 // redirectToProvider redirects the user to the OIDC provider for authentication
 func (h *oidcHandler) redirectToProvider(w http.ResponseWriter, r *http.Request) {
 	// Generate state and PKCE verifier
-	state, err := h.sessionManager.GenerateState(r.URL.Path)
+	state, err := h.sessionManager.GenerateState(r.URL.RequestURI())
 	if err != nil {
 		h.logger.Error("failed to generate state", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -210,15 +210,11 @@ func (h *oidcHandler) handleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Verify and parse claims from ID token
-	claims, err := h.client.VerifyIDToken(ctx, idToken)
+	claims, err := h.client.ParseIDToken(ctx, idToken)
 	if err != nil {
-		h.logger.Warn("ID token verification failed, falling back to unverified parse", "error", err)
-		claims, err = h.client.ParseIDToken(idToken)
-		if err != nil {
-			h.logger.Error("failed to parse ID token", "error", err)
-			http.Error(w, "Failed to parse ID token", http.StatusInternalServerError)
-			return
-		}
+		h.logger.Error("failed to parse ID token", "error", err)
+		http.Error(w, "Failed to verify ID token", http.StatusInternalServerError)
+		return
 	}
 
 	// Create session
@@ -317,30 +313,40 @@ func requestScheme(r *http.Request) string {
 	return "http"
 }
 
-// oidcMiddleware wraps the request handling with OIDC authentication
-func (s *Server) oidcMiddleware(route *ingress_v1alpha.HttpRoute, next http.HandlerFunc) http.HandlerFunc {
-	// Check if OIDC feature is enabled
-	if !labs.RouteOIDC() {
-		return next
+// getOrCreateOIDCHandler returns a cached oidcHandler for the given route,
+// creating one on first access. The handler (and its oidc.Client) is reused
+// across requests so that discovery and JWKS caches are effective.
+func (s *Server) getOrCreateOIDCHandler(route *ingress_v1alpha.HttpRoute, baseURL string) (*oidcHandler, error) {
+	// Key by route host; default routes use a sentinel.
+	key := route.Host
+	if route.Default {
+		key = "__default__"
 	}
 
-	// If no OIDC provider reference, just pass through
-	if entity.Empty(route.OidcProvider) {
-		return next
+	s.oidcMu.RLock()
+	if h, ok := s.oidcHandlers[key]; ok {
+		s.oidcMu.RUnlock()
+		return h, nil
+	}
+	s.oidcMu.RUnlock()
+
+	s.oidcMu.Lock()
+	defer s.oidcMu.Unlock()
+
+	// Double-check after acquiring write lock
+	if h, ok := s.oidcHandlers[key]; ok {
+		return h, nil
 	}
 
 	// Resolve the OIDC provider entity
-	ctx := context.Background()
-	resp, err := s.eac.Get(ctx, string(route.OidcProvider))
+	resp, err := s.eac.Get(context.Background(), string(route.OidcProvider))
 	if err != nil {
-		s.Log.Error("failed to get OIDC provider", "error", err, "provider_id", route.OidcProvider)
-		return next
+		return nil, fmt.Errorf("failed to get OIDC provider: %w", err)
 	}
 
 	var provider ingress_v1alpha.OidcProvider
 	provider.Decode(resp.Entity().Entity())
 
-	// Determine the resource indicator (RFC 8707) based on route type
 	var resource string
 	if route.Default {
 		resource = "cluster:default"
@@ -348,16 +354,34 @@ func (s *Server) oidcMiddleware(route *ingress_v1alpha.HttpRoute, next http.Hand
 		resource = route.Host
 	}
 
+	handler, err := newOIDCHandler(route, &provider, s.oidcSessionManager, baseURL, resource, s.Log)
+	if err != nil {
+		return nil, err
+	}
+
+	s.oidcHandlers[key] = handler
+	return handler, nil
+}
+
+// oidcMiddleware wraps the request handling with OIDC authentication
+func (s *Server) oidcMiddleware(route *ingress_v1alpha.HttpRoute, next http.HandlerFunc) http.HandlerFunc {
+	if !labs.RouteOIDC() {
+		return next
+	}
+
+	if entity.Empty(route.OidcProvider) {
+		return next
+	}
+
 	return func(w http.ResponseWriter, r *http.Request) {
 		scheme := requestScheme(r)
 		baseURL := fmt.Sprintf("%s://%s", scheme, r.Host)
 
-		// Update cookie secure flag based on actual request scheme
 		s.oidcSessionManager.SetSecure(scheme == "https")
 
-		handler, err := newOIDCHandler(route, &provider, s.oidcSessionManager, baseURL, resource, s.Log)
+		handler, err := s.getOrCreateOIDCHandler(route, baseURL)
 		if err != nil {
-			s.Log.Error("failed to create OIDC handler", "error", err, "host", r.Host)
+			s.Log.Error("failed to get OIDC handler", "error", err, "host", r.Host)
 			next(w, r)
 			return
 		}

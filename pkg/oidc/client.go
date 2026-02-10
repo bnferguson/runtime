@@ -103,39 +103,19 @@ func (c *Client) ExchangeCode(ctx context.Context, code, pkceVerifier string) (*
 	return token, nil
 }
 
-// ParseIDToken parses and validates an ID token JWT without signature verification.
-// Signature verification should be done separately if needed using a JWT validator.
-func (c *Client) ParseIDToken(idToken string) (map[string]interface{}, error) {
-	// Parse without verification - just extract claims
-	parser := jwt.NewParser(jwt.WithoutClaimsValidation())
-	token, _, err := parser.ParseUnverified(idToken, jwt.MapClaims{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse ID token: %w", err)
-	}
-
-	claims, ok := token.Claims.(jwt.MapClaims)
-	if !ok {
-		return nil, fmt.Errorf("failed to extract claims")
-	}
-
-	return claims, nil
-}
-
-// VerifyIDToken validates an ID token's signature and claims.
-// This performs full JWT validation including signature verification.
-func (c *Client) VerifyIDToken(ctx context.Context, idToken string) (map[string]interface{}, error) {
+// ParseIDToken validates an ID token's signature via the provider's JWKS
+// and checks standard claims (issuer, audience).
+func (c *Client) ParseIDToken(ctx context.Context, idToken string) (map[string]interface{}, error) {
 	discovery, err := c.getDiscovery(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get discovery data: %w", err)
 	}
 
-	// Get JWKS for signature verification
 	keyFunc, err := c.getJWKSKeyFunc(ctx, discovery.JwksURI)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get JWKS key function: %w", err)
 	}
 
-	// Parse and verify token
 	token, err := jwt.Parse(idToken, keyFunc)
 	if err != nil {
 		return nil, fmt.Errorf("failed to verify ID token: %w", err)
@@ -150,12 +130,10 @@ func (c *Client) VerifyIDToken(ctx context.Context, idToken string) (map[string]
 		return nil, fmt.Errorf("failed to extract claims")
 	}
 
-	// Validate issuer matches provider
 	if iss, ok := claims["iss"].(string); !ok || iss != discovery.Issuer {
 		return nil, fmt.Errorf("issuer mismatch: got %v, want %s", claims["iss"], discovery.Issuer)
 	}
 
-	// Validate audience contains our client ID
 	if err := c.validateAudience(claims); err != nil {
 		return nil, err
 	}

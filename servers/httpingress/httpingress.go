@@ -64,6 +64,8 @@ type Server struct {
 	apps map[string]*appUsage
 
 	oidcSessionManager *oidc.SessionManager
+	oidcMu             sync.RWMutex
+	oidcHandlers       map[string]*oidcHandler
 }
 
 type appUsage struct {
@@ -109,6 +111,7 @@ func NewServer(
 		logWriter:          logWriter,
 		apps:               make(map[string]*appUsage),
 		oidcSessionManager: oidc.NewSessionManager(false, "", signingKey),
+		oidcHandlers:       make(map[string]*oidcHandler),
 	}
 
 	// Build the timeout handler once at initialization
