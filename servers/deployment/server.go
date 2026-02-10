@@ -682,6 +682,7 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 	appName := args.AppName()
 	clusterId := args.ClusterId()
 	appVersionId := args.AppVersionId()
+	sourceVersionId := appVersionId
 	isRollback := args.HasIsRollback() && args.IsRollback()
 
 	// Verify the AppVersion entity exists
@@ -781,7 +782,7 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 
 	var sourceDeployment *core_v1alpha.Deployment
 	for _, dep := range allDeployments {
-		if dep.AppVersion == appVersionId {
+		if dep.AppVersion == sourceVersionId {
 			sourceDeployment = dep
 			break // listDeploymentsInternal returns newest first
 		}
@@ -794,12 +795,11 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 		AppName:    appName,
 		AppVersion: appVersionId,
 		ClusterId:  clusterId,
-		Status:     "active",
+		Status:     "in_progress",
 		Phase:      "activating",
 		DeployedBy: core_v1alpha.DeployedBy{
 			Timestamp: now.Format(time.RFC3339),
 		},
-		CompletedAt: now.Format(time.RFC3339),
 	}
 
 	// Copy git info and source ID from the source deployment
@@ -826,8 +826,35 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 	// Activate the version via AppClient
 	if err := d.AppClient.SetActiveVersion(ctx, appName, string(appVersion.ID)); err != nil {
 		d.Log.Error("Failed to set active version", "error", err, "app", appName, "version_id", string(appVersion.ID))
+
+		deployment.Status = "failed"
+		deployment.ErrorMessage = fmt.Sprintf("failed to activate version: %v", err)
+		deployment.CompletedAt = time.Now().Format(time.RFC3339)
+		if current, getErr := d.EAC.Get(ctx, newDeploymentId); getErr == nil {
+			failEntity := &entityserver_v1alpha.Entity{}
+			failEntity.SetId(newDeploymentId)
+			failEntity.SetAttrs(deployment.Encode())
+			failEntity.SetRevision(current.Entity().Revision())
+			if _, putErr := d.EAC.Put(ctx, failEntity); putErr != nil {
+				d.Log.Error("Failed to mark deployment as failed", "error", putErr)
+			}
+		}
+
 		results.SetError(fmt.Sprintf("failed to activate version: %v", err))
 		return nil
+	}
+
+	// Activation succeeded — mark deployment active
+	deployment.Status = "active"
+	deployment.CompletedAt = time.Now().Format(time.RFC3339)
+	if current, getErr := d.EAC.Get(ctx, newDeploymentId); getErr == nil {
+		activeEntity := &entityserver_v1alpha.Entity{}
+		activeEntity.SetId(newDeploymentId)
+		activeEntity.SetAttrs(deployment.Encode())
+		activeEntity.SetRevision(current.Entity().Revision())
+		if _, putErr := d.EAC.Put(ctx, activeEntity); putErr != nil {
+			d.Log.Error("Failed to update deployment status to active", "error", putErr)
+		}
 	}
 
 	// Mark previous active deployments

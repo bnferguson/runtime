@@ -129,7 +129,7 @@ func displayDeployVersionAccessInfo(ctx *Context, appName string, accessInfo *de
 		} else {
 			ctx.Printf("\nYour app is the default route and will receive all unmatched traffic.\n")
 		}
-		suggestRoute(ctx, appName, accessInfo.ClusterHostname())
+		suggestRoute(ctx, appName, clusterAddr)
 	} else {
 		ctx.Printf("\nNo routes configured for this app.\n")
 		suggestRoute(ctx, appName, clusterAddr)
