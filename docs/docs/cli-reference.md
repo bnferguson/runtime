@@ -108,7 +108,11 @@ Cancel a stuck in-progress deployment. Get the deployment ID from `miren app his
 
 ## Route OIDC Authentication
 
-Enable OAuth2/OIDC authentication on HTTP routes to protect your applications with single sign-on.
+:::info Labs Feature
+Route OIDC authentication is a [labs feature](/labs) and is disabled by default. Enable it with `--labs routeoidc` or `MIREN_LABS=routeoidc` when starting the server.
+:::
+
+Enable OAuth2/OIDC authentication on HTTP routes to protect your applications with single sign-on. See the [Route OIDC Authentication guide](/route-oidc) for a conceptual overview and example provider setups.
 
 ### Enable OIDC on a Route
 

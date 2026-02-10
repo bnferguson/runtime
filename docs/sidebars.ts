@@ -26,6 +26,7 @@ const sidebars: SidebarsConfig = {
         'scaling',
         'disks',
         'firewall',
+        'route-oidc',
         'admin-interface',
         'working-with-miren-cloud',
       ],
