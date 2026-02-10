@@ -14,6 +14,9 @@ import (
 // It watches sandbox entities and adds a ScheduleKey attribute to assign
 // each sandbox to an available node.
 //
+// Stateful sandboxes (those with miren disk volumes) are scheduled to the
+// coordinator node, while stateless sandboxes prefer runner nodes when available.
+//
 // Implements controller.ReconcileControllerI[*compute_v1alpha.Sandbox]
 type Controller struct {
 	log *slog.Logger
@@ -68,13 +71,39 @@ func (c *Controller) Reconcile(ctx context.Context, sandbox *compute_v1alpha.San
 		return nil
 	}
 
-	// Pick a random ready node
-	// TODO: implement smarter scheduling (load balancing, affinity, etc.)
-	assignedNode := nodes[rand.Intn(len(nodes))]
+	var assignedNode *compute_v1alpha.Node
+
+	if c.isStateful(sandbox) {
+		// Stateful sandboxes must run on the coordinator (for disk access)
+		assignedNode = c.findCoordinatorNode(nodes)
+		if assignedNode == nil {
+			c.log.Error("no coordinator node available for stateful sandbox", "sandbox", sandbox.ID)
+			return nil
+		}
+		c.log.Debug("scheduling stateful sandbox to coordinator",
+			"sandbox", sandbox.ID,
+			"node", assignedNode.ID)
+	} else {
+		// Stateless sandboxes prefer runner nodes when available
+		runnerNodes := c.filterRunnerNodes(nodes)
+		if len(runnerNodes) > 0 {
+			assignedNode = runnerNodes[rand.Intn(len(runnerNodes))]
+			c.log.Debug("scheduling stateless sandbox to runner",
+				"sandbox", sandbox.ID,
+				"node", assignedNode.ID)
+		} else {
+			// Fall back to any available node (including coordinator)
+			assignedNode = nodes[rand.Intn(len(nodes))]
+			c.log.Debug("scheduling stateless sandbox to available node (no runners)",
+				"sandbox", sandbox.ID,
+				"node", assignedNode.ID)
+		}
+	}
 
 	c.log.Info("assigning sandbox to node",
 		"sandbox", sandbox.ID,
-		"node", assignedNode.ID)
+		"node", assignedNode.ID,
+		"stateful", c.isStateful(sandbox))
 
 	// Add schedule key to the entity
 	schedule := compute_v1alpha.Schedule{
@@ -90,6 +119,48 @@ func (c *Controller) Reconcile(ctx context.Context, sandbox *compute_v1alpha.San
 	}
 
 	return nil
+}
+
+// isStateful determines if a sandbox is stateful based on its volume configuration.
+// A sandbox is considered stateful if it has volumes with provider="miren" (disk volumes).
+func (c *Controller) isStateful(sandbox *compute_v1alpha.Sandbox) bool {
+	// Check volumes in spec (new-style sandboxes)
+	for _, vol := range sandbox.Spec.Volume {
+		if vol.Provider == "miren" {
+			return true
+		}
+	}
+
+	// Check legacy volume field (old-style sandboxes)
+	for _, vol := range sandbox.Volume {
+		if vol.Provider == "miren" {
+			return true
+		}
+	}
+
+	return false
+}
+
+// findCoordinatorNode finds the coordinator node among the available nodes.
+// The coordinator is identified by having a "role=coordinator" constraint label.
+func (c *Controller) findCoordinatorNode(nodes []*compute_v1alpha.Node) *compute_v1alpha.Node {
+	for _, node := range nodes {
+		if role, ok := node.Constraints.Get("role"); ok && role == "coordinator" {
+			return node
+		}
+	}
+	return nil
+}
+
+// filterRunnerNodes returns only nodes that are distributed runners (not the coordinator).
+func (c *Controller) filterRunnerNodes(nodes []*compute_v1alpha.Node) []*compute_v1alpha.Node {
+	var runners []*compute_v1alpha.Node
+	for _, node := range nodes {
+		if role, ok := node.Constraints.Get("role"); !ok || role != "coordinator" {
+			runners = append(runners, node)
+		}
+	}
+	return runners
 }
 
 // gatherNodes fetches all node entities from the entity store

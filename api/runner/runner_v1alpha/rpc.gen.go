@@ -453,12 +453,15 @@ func (v *RunnerRegistrationJoinArgs) UnmarshalJSON(data []byte) error {
 }
 
 type runnerRegistrationJoinResultsData struct {
-	CertPem         *[]byte `cbor:"0,keyasint,omitempty" json:"cert_pem,omitempty"`
-	KeyPem          *[]byte `cbor:"1,keyasint,omitempty" json:"key_pem,omitempty"`
-	CaPem           *[]byte `cbor:"2,keyasint,omitempty" json:"ca_pem,omitempty"`
-	CoordinatorAddr *string `cbor:"3,keyasint,omitempty" json:"coordinator_addr,omitempty"`
-	RunnerId        *string `cbor:"4,keyasint,omitempty" json:"runner_id,omitempty"`
-	Error           *string `cbor:"5,keyasint,omitempty" json:"error,omitempty"`
+	CertPem         *[]byte   `cbor:"0,keyasint,omitempty" json:"cert_pem,omitempty"`
+	KeyPem          *[]byte   `cbor:"1,keyasint,omitempty" json:"key_pem,omitempty"`
+	CaPem           *[]byte   `cbor:"2,keyasint,omitempty" json:"ca_pem,omitempty"`
+	CoordinatorAddr *string   `cbor:"3,keyasint,omitempty" json:"coordinator_addr,omitempty"`
+	RunnerId        *string   `cbor:"4,keyasint,omitempty" json:"runner_id,omitempty"`
+	EtcdEndpoints   *[]string `cbor:"5,keyasint,omitempty" json:"etcd_endpoints,omitempty"`
+	EtcdPrefix      *string   `cbor:"6,keyasint,omitempty" json:"etcd_prefix,omitempty"`
+	NetworkBackend  *string   `cbor:"7,keyasint,omitempty" json:"network_backend,omitempty"`
+	Error           *string   `cbor:"8,keyasint,omitempty" json:"error,omitempty"`
 }
 
 type RunnerRegistrationJoinResults struct {
@@ -487,6 +490,19 @@ func (v *RunnerRegistrationJoinResults) SetCoordinatorAddr(coordinator_addr stri
 
 func (v *RunnerRegistrationJoinResults) SetRunnerId(runner_id string) {
 	v.data.RunnerId = &runner_id
+}
+
+func (v *RunnerRegistrationJoinResults) SetEtcdEndpoints(etcd_endpoints []string) {
+	x := slices.Clone(etcd_endpoints)
+	v.data.EtcdEndpoints = &x
+}
+
+func (v *RunnerRegistrationJoinResults) SetEtcdPrefix(etcd_prefix string) {
+	v.data.EtcdPrefix = &etcd_prefix
+}
+
+func (v *RunnerRegistrationJoinResults) SetNetworkBackend(network_backend string) {
+	v.data.NetworkBackend = &network_backend
 }
 
 func (v *RunnerRegistrationJoinResults) SetError(error string) {
@@ -1013,6 +1029,39 @@ func (v *RunnerRegistrationClientJoinResults) RunnerId() string {
 		return ""
 	}
 	return *v.data.RunnerId
+}
+
+func (v *RunnerRegistrationClientJoinResults) HasEtcdEndpoints() bool {
+	return v.data.EtcdEndpoints != nil
+}
+
+func (v *RunnerRegistrationClientJoinResults) EtcdEndpoints() []string {
+	if v.data.EtcdEndpoints == nil {
+		return nil
+	}
+	return *v.data.EtcdEndpoints
+}
+
+func (v *RunnerRegistrationClientJoinResults) HasEtcdPrefix() bool {
+	return v.data.EtcdPrefix != nil
+}
+
+func (v *RunnerRegistrationClientJoinResults) EtcdPrefix() string {
+	if v.data.EtcdPrefix == nil {
+		return ""
+	}
+	return *v.data.EtcdPrefix
+}
+
+func (v *RunnerRegistrationClientJoinResults) HasNetworkBackend() bool {
+	return v.data.NetworkBackend != nil
+}
+
+func (v *RunnerRegistrationClientJoinResults) NetworkBackend() string {
+	if v.data.NetworkBackend == nil {
+		return ""
+	}
+	return *v.data.NetworkBackend
 }
 
 func (v *RunnerRegistrationClientJoinResults) HasError() bool {

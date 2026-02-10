@@ -230,6 +230,14 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 
 	}
 
+	// Apply MIREN_SERVER_NETWORK_BACKEND
+	if val := os.Getenv("MIREN_SERVER_NETWORK_BACKEND"); val != "" {
+
+		cfg.Server.NetworkBackend = &val
+		log.Debug("applied env var", "key", "MIREN_SERVER_NETWORK_BACKEND")
+
+	}
+
 	// Apply MIREN_SERVER_RELEASE_PATH
 	if val := os.Getenv("MIREN_SERVER_RELEASE_PATH"); val != "" {
 

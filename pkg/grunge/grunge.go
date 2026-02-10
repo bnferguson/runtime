@@ -2,6 +2,8 @@ package grunge
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -51,12 +53,29 @@ type NetworkOptions struct {
 
 	PrevIPv4 netip.Prefix
 	PrevIPv6 netip.Prefix
+
+	// TLS configuration for etcd mTLS (optional)
+	TLSCert   []byte // Client certificate PEM
+	TLSKey    []byte // Client private key PEM
+	TLSCACert []byte // CA certificate PEM
 }
 
 func NewNetwork(log *slog.Logger, opts NetworkOptions) (*Network, error) {
-	ec, err := clientv3.New(clientv3.Config{
+	etcdConfig := clientv3.Config{
 		Endpoints: opts.EtcdEndpoints,
-	})
+	}
+
+	// Configure TLS if certificates are provided
+	if opts.TLSCert != nil && opts.TLSKey != nil && opts.TLSCACert != nil {
+		tlsConfig, err := buildTLSConfig(opts.TLSCert, opts.TLSKey, opts.TLSCACert)
+		if err != nil {
+			return nil, fmt.Errorf("failed to build etcd TLS config: %w", err)
+		}
+		etcdConfig.TLS = tlsConfig
+		log.Info("grunge using mTLS for etcd connection")
+	}
+
+	ec, err := clientv3.New(etcdConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -68,12 +87,35 @@ func NewNetwork(log *slog.Logger, opts NetworkOptions) (*Network, error) {
 	}, nil
 }
 
+// buildTLSConfig creates a tls.Config from PEM-encoded certificates.
+func buildTLSConfig(certPEM, keyPEM, caCertPEM []byte) (*tls.Config, error) {
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load client certificate: %w", err)
+	}
+
+	caCertPool := x509.NewCertPool()
+	if !caCertPool.AppendCertsFromPEM(caCertPEM) {
+		return nil, fmt.Errorf("failed to parse CA certificate")
+	}
+
+	return &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		RootCAs:      caCertPool,
+	}, nil
+}
+
 func (n *Network) SetupConfig(ctx context.Context, v4, v6 netip.Prefix) error {
-	var vxlanBackend struct {
+	var backend struct {
 		Type string
 	}
 
-	vxlanBackend.Type = "vxlan"
+	// Use configured backend type, defaulting to vxlan for backward compatibility
+	backendType := n.BackendType
+	if backendType == "" {
+		backendType = "vxlan"
+	}
+	backend.Type = backendType
 
 	var config subnet.Config
 	config.EnableIPv4 = true
@@ -82,7 +124,7 @@ func (n *Network) SetupConfig(ctx context.Context, v4, v6 netip.Prefix) error {
 	config.Network = ip.FromIPNet(netipx.PrefixIPNet(v4))
 	//config.IPv6Network = ip.FromIP6Net(netipx.PrefixIPNet(v6))
 
-	data, err := json.Marshal(vxlanBackend)
+	data, err := json.Marshal(backend)
 	if err != nil {
 		n.log.Error("Failed to marshal config", "error", err)
 		return err
@@ -237,9 +279,16 @@ func (n *Network) Start(ctx context.Context, eg *errgroup.Group) error {
 	}
 
 	bm := backend.NewManager(ctx, sm, extIface)
-	be, err := bm.GetBackend("vxlan")
+
+	// Use configured backend type, defaulting to vxlan for backward compatibility
+	backendType := n.BackendType
+	if backendType == "" {
+		backendType = "vxlan"
+	}
+
+	be, err := bm.GetBackend(backendType)
 	if err != nil {
-		n.log.Error("Failed to get backend", "error", err)
+		n.log.Error("Failed to get backend", "backend", backendType, "error", err)
 		return err
 	}
 

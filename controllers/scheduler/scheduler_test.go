@@ -10,6 +10,7 @@ import (
 	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
+	"miren.dev/runtime/pkg/entity/types"
 )
 
 // reconcileSandbox is a test helper that processes a sandbox through the real controller framework.
@@ -235,5 +236,246 @@ func TestSchedulerMultipleNodes(t *testing.T) {
 		var schedule compute_v1alpha.Schedule
 		schedule.Decode(resp.Entity().Entity())
 		assert.True(t, nodeIDs[schedule.Key.Node], "sandbox should be assigned to one of our nodes")
+	}
+}
+
+// TestSchedulerStatefulSandboxGoesToCoordinator tests that stateful sandboxes
+// (those with miren disk volumes) are scheduled to the coordinator node
+func TestSchedulerStatefulSandboxGoesToCoordinator(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create a coordinator node (role=coordinator constraint)
+	coordNode := &compute_v1alpha.Node{
+		Status:      compute_v1alpha.READY,
+		Constraints: types.LabelSet("role", "coordinator"),
+	}
+	coordNodeID, err := server.Client.Create(ctx, "coordinator", coordNode)
+	require.NoError(t, err)
+
+	// Create a runner node
+	runnerNode := &compute_v1alpha.Node{
+		Status:   compute_v1alpha.READY,
+		RunnerId: "550e8400-e29b-41d4-a716-446655440000",
+	}
+	_, err = server.Client.Create(ctx, "runner", runnerNode)
+	require.NoError(t, err)
+
+	// Create scheduler and initialize
+	scheduler := NewController(log, server.EAC)
+	err = scheduler.Init(ctx)
+	require.NoError(t, err)
+
+	// Create a stateful sandbox (has miren disk volume)
+	sandbox := &compute_v1alpha.Sandbox{
+		Status: compute_v1alpha.PENDING,
+		Spec: compute_v1alpha.SandboxSpec{
+			Volume: []compute_v1alpha.SandboxSpecVolume{
+				{
+					Name:     "data",
+					Provider: "miren",
+					DiskName: "my-disk",
+				},
+			},
+			Container: []compute_v1alpha.SandboxSpecContainer{
+				{Image: "test:latest"},
+			},
+		},
+	}
+	sandboxID, err := server.Client.Create(ctx, "stateful-sandbox", sandbox)
+	require.NoError(t, err)
+
+	// Run reconciliation
+	reconcileSandbox(t, ctx, server, scheduler, sandboxID)
+
+	// Verify the stateful sandbox was assigned to the coordinator
+	resp, err := server.EAC.Get(ctx, sandboxID.String())
+	require.NoError(t, err)
+
+	var schedule compute_v1alpha.Schedule
+	schedule.Decode(resp.Entity().Entity())
+	assert.Equal(t, coordNodeID, schedule.Key.Node, "stateful sandbox should be assigned to coordinator")
+}
+
+// TestSchedulerStatelessSandboxPrefersRunners tests that stateless sandboxes
+// prefer runner nodes over the coordinator when runners are available
+func TestSchedulerStatelessSandboxPrefersRunners(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create a coordinator node (role=coordinator constraint)
+	coordNode := &compute_v1alpha.Node{
+		Status:      compute_v1alpha.READY,
+		Constraints: types.LabelSet("role", "coordinator"),
+	}
+	coordNodeID, err := server.Client.Create(ctx, "coordinator", coordNode)
+	require.NoError(t, err)
+
+	// Create multiple runner nodes
+	runnerIDs := make(map[entity.Id]bool)
+	for i := 0; i < 3; i++ {
+		runnerNode := &compute_v1alpha.Node{
+			Status:   compute_v1alpha.READY,
+			RunnerId: "550e8400-e29b-41d4-a716-44665544000" + string(rune('0'+i)),
+		}
+		runnerID, err := server.Client.Create(ctx, "", runnerNode)
+		require.NoError(t, err)
+		runnerIDs[runnerID] = true
+	}
+
+	// Create scheduler and initialize
+	scheduler := NewController(log, server.EAC)
+	err = scheduler.Init(ctx)
+	require.NoError(t, err)
+
+	// Create and schedule multiple stateless sandboxes
+	for i := 0; i < 10; i++ {
+		sandbox := &compute_v1alpha.Sandbox{
+			Status: compute_v1alpha.PENDING,
+			Spec: compute_v1alpha.SandboxSpec{
+				Container: []compute_v1alpha.SandboxSpecContainer{
+					{Image: "test:latest"},
+				},
+			},
+		}
+		sandboxID, err := server.Client.Create(ctx, "", sandbox)
+		require.NoError(t, err)
+
+		reconcileSandbox(t, ctx, server, scheduler, sandboxID)
+
+		// Verify the stateless sandbox was assigned to a runner, not the coordinator
+		resp, err := server.EAC.Get(ctx, sandboxID.String())
+		require.NoError(t, err)
+
+		var schedule compute_v1alpha.Schedule
+		schedule.Decode(resp.Entity().Entity())
+		assert.True(t, runnerIDs[schedule.Key.Node], "stateless sandbox should be assigned to a runner")
+		assert.NotEqual(t, coordNodeID, schedule.Key.Node, "stateless sandbox should NOT be assigned to coordinator")
+	}
+}
+
+// TestSchedulerStatelessFallsBackToCoordinator tests that stateless sandboxes
+// fall back to the coordinator when no runners are available
+func TestSchedulerStatelessFallsBackToCoordinator(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create only a coordinator node (no runners)
+	coordNode := &compute_v1alpha.Node{
+		Status:      compute_v1alpha.READY,
+		Constraints: types.LabelSet("role", "coordinator"),
+	}
+	coordNodeID, err := server.Client.Create(ctx, "coordinator", coordNode)
+	require.NoError(t, err)
+
+	// Create scheduler and initialize
+	scheduler := NewController(log, server.EAC)
+	err = scheduler.Init(ctx)
+	require.NoError(t, err)
+
+	// Create a stateless sandbox
+	sandbox := &compute_v1alpha.Sandbox{
+		Status: compute_v1alpha.PENDING,
+		Spec: compute_v1alpha.SandboxSpec{
+			Container: []compute_v1alpha.SandboxSpecContainer{
+				{Image: "test:latest"},
+			},
+		},
+	}
+	sandboxID, err := server.Client.Create(ctx, "stateless-sandbox", sandbox)
+	require.NoError(t, err)
+
+	// Run reconciliation
+	reconcileSandbox(t, ctx, server, scheduler, sandboxID)
+
+	// Verify the stateless sandbox falls back to coordinator when no runners available
+	resp, err := server.EAC.Get(ctx, sandboxID.String())
+	require.NoError(t, err)
+
+	var schedule compute_v1alpha.Schedule
+	schedule.Decode(resp.Entity().Entity())
+	assert.Equal(t, coordNodeID, schedule.Key.Node, "stateless sandbox should fall back to coordinator when no runners")
+}
+
+// TestIsStatefulDetection tests the isStateful helper function
+func TestIsStatefulDetection(t *testing.T) {
+	log := testutils.TestLogger(t)
+	scheduler := NewController(log, nil)
+
+	tests := []struct {
+		name     string
+		sandbox  *compute_v1alpha.Sandbox
+		expected bool
+	}{
+		{
+			name: "stateful - spec volume with miren provider",
+			sandbox: &compute_v1alpha.Sandbox{
+				Spec: compute_v1alpha.SandboxSpec{
+					Volume: []compute_v1alpha.SandboxSpecVolume{
+						{Name: "data", Provider: "miren"},
+					},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "stateful - legacy volume with miren provider",
+			sandbox: &compute_v1alpha.Sandbox{
+				Volume: []compute_v1alpha.Volume{
+					{Name: "data", Provider: "miren"},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "stateless - no volumes",
+			sandbox: &compute_v1alpha.Sandbox{
+				Spec: compute_v1alpha.SandboxSpec{
+					Container: []compute_v1alpha.SandboxSpecContainer{
+						{Image: "test:latest"},
+					},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "stateless - volume with different provider",
+			sandbox: &compute_v1alpha.Sandbox{
+				Spec: compute_v1alpha.SandboxSpec{
+					Volume: []compute_v1alpha.SandboxSpecVolume{
+						{Name: "data", Provider: "local"},
+					},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "stateful - mixed volumes with one miren",
+			sandbox: &compute_v1alpha.Sandbox{
+				Spec: compute_v1alpha.SandboxSpec{
+					Volume: []compute_v1alpha.SandboxSpecVolume{
+						{Name: "cache", Provider: "local"},
+						{Name: "data", Provider: "miren"},
+					},
+				},
+			},
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := scheduler.isStateful(tt.sandbox)
+			assert.Equal(t, tt.expected, result)
+		})
 	}
 }

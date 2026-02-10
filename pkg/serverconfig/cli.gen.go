@@ -26,6 +26,7 @@ type CLIFlags struct {
 	ServerConfigConfigClusterName        *string  `long:"config-cluster-name" short:"C" description:"Name of the cluster in client config"`
 	ServerConfigDataPath                 *string  `long:"data-path" short:"d" description:"Data path"`
 	ServerConfigHTTPRequestTimeout       *int     `long:"http-request-timeout" description:"HTTP request timeout in seconds"`
+	ServerConfigNetworkBackend           *string  `long:"network-backend" description:"Network backend for sandbox connectivity: vxlan (default) or wireguard"`
 	ServerConfigReleasePath              *string  `long:"release-path" description:"Path to release directory containing binaries"`
 	ServerConfigRunnerAddress            *string  `long:"runner-address" description:"Runner address (host:port). For IPv6 use brackets, e.g. \"[::1]:8444\"."`
 	ServerConfigRunnerID                 *string  `long:"runner-id" short:"r" description:"Runner ID"`

@@ -59,7 +59,7 @@ func RunnerJoin(ctx *Context, opts struct {
 		return fmt.Errorf("invalid join code format")
 	}
 
-	cs, err := rpc.NewState(ctx, rpc.WithSkipVerify, rpc.WithLogger(ctx.Log))
+	cs, err := rpc.NewState(ctx, rpc.WithSkipVerify, rpc.WithLogger(ctx.Log), rpc.WithBindAddr("[::]:0"))
 	if err != nil {
 		return fmt.Errorf("failed to create RPC state: %w", err)
 	}
@@ -100,6 +100,9 @@ func RunnerJoin(ctx *Context, opts struct {
 		ClientCert:         string(res.CertPem()),
 		ClientKey:          string(res.KeyPem()),
 		Labels:             labels,
+		EtcdEndpoints:      res.EtcdEndpoints(),
+		EtcdPrefix:         res.EtcdPrefix(),
+		NetworkBackend:     res.NetworkBackend(),
 	}
 
 	if err := cfg.Save(opts.ConfigPath); err != nil {
@@ -108,7 +111,7 @@ func RunnerJoin(ctx *Context, opts struct {
 
 	ctx.Printf("Config saved to %s\n", opts.ConfigPath)
 	ctx.Printf("\nTo start this runner, run:\n")
-	ctx.Printf("  miren server --runner\n")
+	ctx.Printf("  miren runner start\n")
 
 	return nil
 }

@@ -17,6 +17,10 @@ type Config struct {
 	ClientCert         string            `yaml:"client_cert" json:"client_cert"`
 	ClientKey          string            `yaml:"client_key" json:"client_key"`
 	Labels             map[string]string `yaml:"labels,omitempty" json:"labels,omitempty"`
+	// Network configuration for distributed runners
+	EtcdEndpoints  []string `yaml:"etcd_endpoints,omitempty" json:"etcd_endpoints,omitempty"`
+	EtcdPrefix     string   `yaml:"etcd_prefix,omitempty" json:"etcd_prefix,omitempty"`
+	NetworkBackend string   `yaml:"network_backend,omitempty" json:"network_backend,omitempty"`
 }
 
 func Load(path string) (*Config, error) {

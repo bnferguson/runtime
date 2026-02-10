@@ -113,3 +113,28 @@ func TestWordlistsLowercase(t *testing.T) {
 		}
 	}
 }
+
+func TestIsUUID(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected bool
+	}{
+		{"550e8400-e29b-41d4-a716-446655440000", true},
+		{"550E8400-E29B-41D4-A716-446655440000", true},
+		{"6ba7b810-9dad-11d1-80b4-00c04fd430c8", true},
+		{"550e8400e29b41d4a716446655440000", true}, // UUID without hyphens is valid
+		{"miren", false},
+		{"", false},
+		{"not-a-uuid", false},
+		{"calm-river-x7k2", false},
+		{"550e8400-e29b-41d4-a716", false}, // truncated UUID
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			if got := IsUUID(tt.input); got != tt.expected {
+				t.Errorf("IsUUID(%q) = %v, want %v", tt.input, got, tt.expected)
+			}
+		})
+	}
+}

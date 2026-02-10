@@ -61,6 +61,7 @@ func DefaultServerConfig() ServerConfig {
 		ConfigClusterName:       strPtr("local"),
 		DataPath:                strPtr("/var/lib/miren"),
 		HTTPRequestTimeout:      intPtr(60),
+		NetworkBackend:          strPtr("vxlan"),
 		ReleasePath:             strPtr(""),
 		RunnerAddress:           strPtr("localhost:8444"),
 		RunnerID:                strPtr("miren"),

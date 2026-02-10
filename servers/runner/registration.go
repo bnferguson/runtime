@@ -29,16 +29,22 @@ type RegistrationServer struct {
 	Authority       *caauth.Authority
 	EAC             *entityserver_v1alpha.EntityAccessClient
 	CoordinatorAddr string
+	EtcdEndpoints   []string
+	EtcdPrefix      string
+	NetworkBackend  string
 }
 
 var _ runner_v1alpha.RunnerRegistration = (*RegistrationServer)(nil)
 
-func NewRegistrationServer(log *slog.Logger, authority *caauth.Authority, eac *entityserver_v1alpha.EntityAccessClient, coordinatorAddr string) *RegistrationServer {
+func NewRegistrationServer(log *slog.Logger, authority *caauth.Authority, eac *entityserver_v1alpha.EntityAccessClient, coordinatorAddr string, etcdEndpoints []string, etcdPrefix string, networkBackend string) *RegistrationServer {
 	return &RegistrationServer{
 		Log:             log.With("module", "runner-registration"),
 		Authority:       authority,
 		EAC:             eac,
 		CoordinatorAddr: coordinatorAddr,
+		EtcdEndpoints:   etcdEndpoints,
+		EtcdPrefix:      etcdPrefix,
+		NetworkBackend:  networkBackend,
 	}
 }
 
@@ -236,6 +242,17 @@ func (s *RegistrationServer) Join(ctx context.Context, req *runner_v1alpha.Runne
 	results.SetCaPem(cc.CACert)
 	results.SetCoordinatorAddr(s.CoordinatorAddr)
 	results.SetRunnerId(runnerID)
+
+	// Provide network configuration for distributed runners
+	if len(s.EtcdEndpoints) > 0 {
+		results.SetEtcdEndpoints(s.EtcdEndpoints)
+	}
+	if s.EtcdPrefix != "" {
+		results.SetEtcdPrefix(s.EtcdPrefix + "/sub/flannel")
+	}
+	if s.NetworkBackend != "" {
+		results.SetNetworkBackend(s.NetworkBackend)
+	}
 
 	return nil
 }
