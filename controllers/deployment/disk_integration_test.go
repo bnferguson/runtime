@@ -26,23 +26,23 @@ func TestBuildSandboxSpecWithDisks(t *testing.T) {
 			App:      app.ID,
 			Version:  "v1",
 			ImageUrl: "test:latest",
-			Config: core_v1alpha.Config{
-				Port: 3000,
-				Services: []core_v1alpha.Services{
-					{
-						Name: "web",
-						ServiceConcurrency: core_v1alpha.ServiceConcurrency{
-							Mode:         "fixed",
-							NumInstances: 1,
-						},
-						Disks: []core_v1alpha.Disks{
-							{
-								Name:         "postgres-data",
-								MountPath:    "/var/lib/postgresql/data",
-								SizeGb:       100,
-								Filesystem:   "ext4",
-								LeaseTimeout: "5m",
-							},
+		}
+
+		cfgSpec := &core_v1alpha.ConfigSpec{
+			Services: []core_v1alpha.ConfigSpecServices{
+				{
+					Name: "web",
+					Concurrency: core_v1alpha.ConfigSpecServicesConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+					Disks: []core_v1alpha.ConfigSpecServicesDisks{
+						{
+							Name:         "postgres-data",
+							MountPath:    "/var/lib/postgresql/data",
+							SizeGb:       100,
+							Filesystem:   "ext4",
+							LeaseTimeout: "5m",
 						},
 					},
 				},
@@ -52,7 +52,7 @@ func TestBuildSandboxSpecWithDisks(t *testing.T) {
 		// Create a mock launcher with minimal setup
 		// Note: In a real test, we'd need to set up EAC properly
 		// For now, we test the spec building logic directly
-		spec, err := buildSandboxSpecForTest(ctx, app, ver, "web", "test:latest")
+		spec, err := buildSandboxSpecForTest(ctx, app, cfgSpec, ver, "web", "test:latest")
 		require.NoError(t, err)
 
 		// Verify volume was added
@@ -91,36 +91,36 @@ func TestBuildSandboxSpecWithDisks(t *testing.T) {
 			App:      app.ID,
 			Version:  "v1",
 			ImageUrl: "test:latest",
-			Config: core_v1alpha.Config{
-				Port: 3000,
-				Services: []core_v1alpha.Services{
-					{
-						Name: "database",
-						ServiceConcurrency: core_v1alpha.ServiceConcurrency{
-							Mode:         "fixed",
-							NumInstances: 1,
+		}
+
+		cfgSpec := &core_v1alpha.ConfigSpec{
+			Services: []core_v1alpha.ConfigSpecServices{
+				{
+					Name: "database",
+					Concurrency: core_v1alpha.ConfigSpecServicesConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+					Disks: []core_v1alpha.ConfigSpecServicesDisks{
+						{
+							Name:       "db-data",
+							MountPath:  "/data",
+							SizeGb:     200,
+							Filesystem: "ext4",
 						},
-						Disks: []core_v1alpha.Disks{
-							{
-								Name:       "db-data",
-								MountPath:  "/data",
-								SizeGb:     200,
-								Filesystem: "ext4",
-							},
-							{
-								Name:       "db-wal",
-								MountPath:  "/wal",
-								SizeGb:     50,
-								Filesystem: "xfs",
-								ReadOnly:   false,
-							},
+						{
+							Name:       "db-wal",
+							MountPath:  "/wal",
+							SizeGb:     50,
+							Filesystem: "xfs",
+							ReadOnly:   false,
 						},
 					},
 				},
 			},
 		}
 
-		spec, err := buildSandboxSpecForTest(ctx, app, ver, "database", "test:latest")
+		spec, err := buildSandboxSpecForTest(ctx, app, cfgSpec, ver, "database", "test:latest")
 		require.NoError(t, err)
 
 		// Verify both volumes were added
@@ -161,28 +161,29 @@ func TestBuildSandboxSpecWithDisks(t *testing.T) {
 			App:      app.ID,
 			Version:  "v1",
 			ImageUrl: "test:latest",
-			Config: core_v1alpha.Config{
-				Services: []core_v1alpha.Services{
-					{
-						Name: "reader",
-						ServiceConcurrency: core_v1alpha.ServiceConcurrency{
-							Mode:         "fixed",
-							NumInstances: 1,
-						},
-						Disks: []core_v1alpha.Disks{
-							{
-								Name:      "shared-data",
-								MountPath: "/data",
-								ReadOnly:  true,
-								SizeGb:    50,
-							},
+		}
+
+		cfgSpec := &core_v1alpha.ConfigSpec{
+			Services: []core_v1alpha.ConfigSpecServices{
+				{
+					Name: "reader",
+					Concurrency: core_v1alpha.ConfigSpecServicesConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+					Disks: []core_v1alpha.ConfigSpecServicesDisks{
+						{
+							Name:      "shared-data",
+							MountPath: "/data",
+							ReadOnly:  true,
+							SizeGb:    50,
 						},
 					},
 				},
 			},
 		}
 
-		spec, err := buildSandboxSpecForTest(ctx, app, ver, "reader", "test:latest")
+		spec, err := buildSandboxSpecForTest(ctx, app, cfgSpec, ver, "reader", "test:latest")
 		require.NoError(t, err)
 
 		// Verify read-only flag in volume field
@@ -203,16 +204,17 @@ func TestBuildSandboxSpecWithDisks(t *testing.T) {
 			App:      app.ID,
 			Version:  "v1",
 			ImageUrl: "test:latest",
-			Config: core_v1alpha.Config{
-				Services: []core_v1alpha.Services{
-					{
-						Name: "stateless",
-					},
+		}
+
+		cfgSpec := &core_v1alpha.ConfigSpec{
+			Services: []core_v1alpha.ConfigSpecServices{
+				{
+					Name: "stateless",
 				},
 			},
 		}
 
-		spec, err := buildSandboxSpecForTest(ctx, app, ver, "stateless", "test:latest")
+		spec, err := buildSandboxSpecForTest(ctx, app, cfgSpec, ver, "stateless", "test:latest")
 		require.NoError(t, err)
 
 		// Verify no volumes
@@ -236,20 +238,21 @@ func TestBuildSandboxSpecWithDisks(t *testing.T) {
 			App:      app.ID,
 			Version:  "v1",
 			ImageUrl: "test:latest",
-			Config: core_v1alpha.Config{
-				Services: []core_v1alpha.Services{
-					{
-						Name: "auto-service",
-						ServiceConcurrency: core_v1alpha.ServiceConcurrency{
-							Mode:                "auto",
-							RequestsPerInstance: 10,
-						},
-						Disks: []core_v1alpha.Disks{
-							{
-								Name:      "data",
-								MountPath: "/data",
-								SizeGb:    50,
-							},
+		}
+
+		cfgSpec := &core_v1alpha.ConfigSpec{
+			Services: []core_v1alpha.ConfigSpecServices{
+				{
+					Name: "auto-service",
+					Concurrency: core_v1alpha.ConfigSpecServicesConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+					},
+					Disks: []core_v1alpha.ConfigSpecServicesDisks{
+						{
+							Name:      "data",
+							MountPath: "/data",
+							SizeGb:    50,
 						},
 					},
 				},
@@ -257,7 +260,7 @@ func TestBuildSandboxSpecWithDisks(t *testing.T) {
 		}
 
 		// This should not add any volumes because the service is auto mode
-		spec, err := buildSandboxSpecForTest(ctx, app, ver, "auto-service", "test:latest")
+		spec, err := buildSandboxSpecForTest(ctx, app, cfgSpec, ver, "auto-service", "test:latest")
 		require.NoError(t, err)
 
 		// Verify no volumes were added (they were skipped due to auto mode)
@@ -278,21 +281,22 @@ func TestBuildSandboxSpecWithDisks(t *testing.T) {
 			App:      app.ID,
 			Version:  "v1",
 			ImageUrl: "test:latest",
-			Config: core_v1alpha.Config{
-				Services: []core_v1alpha.Services{
-					{
-						Name: "database",
-						ServiceConcurrency: core_v1alpha.ServiceConcurrency{
-							Mode:         "fixed",
-							NumInstances: 3,
-						},
-						Disks: []core_v1alpha.Disks{
-							{
-								Name:       "production",
-								MountPath:  "/data",
-								SizeGb:     100,
-								Filesystem: "ext4",
-							},
+		}
+
+		cfgSpec := &core_v1alpha.ConfigSpec{
+			Services: []core_v1alpha.ConfigSpecServices{
+				{
+					Name: "database",
+					Concurrency: core_v1alpha.ConfigSpecServicesConcurrency{
+						Mode:         "fixed",
+						NumInstances: 3,
+					},
+					Disks: []core_v1alpha.ConfigSpecServicesDisks{
+						{
+							Name:       "production",
+							MountPath:  "/data",
+							SizeGb:     100,
+							Filesystem: "ext4",
 						},
 					},
 				},
@@ -300,7 +304,7 @@ func TestBuildSandboxSpecWithDisks(t *testing.T) {
 		}
 
 		// Build spec for the service
-		spec, err := buildSandboxSpecForTest(ctx, app, ver, "database", "test:latest")
+		spec, err := buildSandboxSpecForTest(ctx, app, cfgSpec, ver, "database", "test:latest")
 		require.NoError(t, err)
 
 		// Verify the disk volume was added
@@ -317,7 +321,7 @@ func TestBuildSandboxSpecWithDisks(t *testing.T) {
 
 // buildSandboxSpecForTest is a test helper that calls the private buildSandboxSpec logic
 // without requiring a full EAC setup
-func buildSandboxSpecForTest(ctx context.Context, app *core_v1alpha.App, ver *core_v1alpha.AppVersion, serviceName string, image string) (*compute_v1alpha.SandboxSpec, error) {
+func buildSandboxSpecForTest(ctx context.Context, app *core_v1alpha.App, cfgSpec *core_v1alpha.ConfigSpec, ver *core_v1alpha.AppVersion, serviceName string, image string) (*compute_v1alpha.SandboxSpec, error) {
 	// This would need to be refactored to make buildSandboxSpec testable
 	// For now, we'll inline the disk-related logic
 	spec := &compute_v1alpha.SandboxSpec{
@@ -327,9 +331,6 @@ func buildSandboxSpecForTest(ctx context.Context, app *core_v1alpha.App, ver *co
 	}
 
 	port := int64(3000)
-	if ver.Config.Port > 0 {
-		port = ver.Config.Port
-	}
 
 	appCont := compute_v1alpha.SandboxSpecContainer{
 		Name:      "app",
@@ -345,12 +346,12 @@ func buildSandboxSpecForTest(ctx context.Context, app *core_v1alpha.App, ver *co
 	}
 
 	// Add disk volumes and mounts for this service (copied from buildSandboxSpec)
-	for _, svc := range ver.Config.Services {
+	for _, svc := range cfgSpec.Services {
 		if svc.Name == serviceName {
 			// Only add disks for fixed concurrency services
 			if len(svc.Disks) > 0 {
 				// Skip if not fixed mode
-				if svc.ServiceConcurrency.Mode != "fixed" {
+				if svc.Concurrency.Mode != "fixed" {
 					break
 				}
 			}

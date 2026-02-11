@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"miren.dev/runtime/api/app/app_v1alpha"
+	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/metrics"
@@ -80,8 +81,13 @@ func TestSetConfiguration_DuplicateEnvVars(t *testing.T) {
 			t.Fatalf("failed to get app version: %v", err)
 		}
 
-		if len(appVerCheck.Config.Variable) != 2 {
-			t.Errorf("expected 2 env vars, got %d", len(appVerCheck.Config.Variable))
+		resolvedCfg, err := coreutil.ResolveConfig(ctx, ec.EAC(), &appVerCheck)
+		if err != nil {
+			t.Fatalf("failed to resolve config: %v", err)
+		}
+
+		if len(resolvedCfg.Variables) != 2 {
+			t.Errorf("expected 2 env vars, got %d", len(resolvedCfg.Variables))
 		}
 	})
 
@@ -115,7 +121,12 @@ func TestSetConfiguration_DuplicateEnvVars(t *testing.T) {
 			t.Fatalf("failed to get app version: %v", err)
 		}
 
-		envVars := appVerCheck.Config.Variable
+		resolvedCfg, err := coreutil.ResolveConfig(ctx, ec.EAC(), &appVerCheck)
+		if err != nil {
+			t.Fatalf("failed to resolve config: %v", err)
+		}
+
+		envVars := resolvedCfg.Variables
 
 		// Count FOO occurrences
 		fooCount := 0
@@ -166,7 +177,12 @@ func TestSetConfiguration_DuplicateEnvVars(t *testing.T) {
 			t.Fatalf("failed to get app version: %v", err)
 		}
 
-		envVars := appVerCheck.Config.Variable
+		resolvedCfg, err := coreutil.ResolveConfig(ctx, ec.EAC(), &appVerCheck)
+		if err != nil {
+			t.Fatalf("failed to resolve config: %v", err)
+		}
+
+		envVars := resolvedCfg.Variables
 
 		// Count SECRET occurrences
 		secretCount := 0
@@ -254,8 +270,13 @@ func TestSetConfiguration_EnvVarDeletion(t *testing.T) {
 			t.Fatalf("failed to get app version: %v", err)
 		}
 
-		if len(appVerCheck.Config.Variable) != 3 {
-			t.Errorf("expected 3 env vars, got %d", len(appVerCheck.Config.Variable))
+		resolvedCfg, err := coreutil.ResolveConfig(ctx, ec.EAC(), &appVerCheck)
+		if err != nil {
+			t.Fatalf("failed to resolve config: %v", err)
+		}
+
+		if len(resolvedCfg.Variables) != 3 {
+			t.Errorf("expected 3 env vars, got %d", len(resolvedCfg.Variables))
 		}
 	})
 
@@ -293,12 +314,17 @@ func TestSetConfiguration_EnvVarDeletion(t *testing.T) {
 			t.Fatalf("failed to get app version: %v", err)
 		}
 
-		if len(appVerCheck.Config.Variable) != 2 {
-			t.Errorf("expected 2 env vars after deletion, got %d", len(appVerCheck.Config.Variable))
+		resolvedCfg, err := coreutil.ResolveConfig(ctx, ec.EAC(), &appVerCheck)
+		if err != nil {
+			t.Fatalf("failed to resolve config: %v", err)
+		}
+
+		if len(resolvedCfg.Variables) != 2 {
+			t.Errorf("expected 2 env vars after deletion, got %d", len(resolvedCfg.Variables))
 		}
 
 		// Check that VAR2 is specifically gone
-		for _, ev := range appVerCheck.Config.Variable {
+		for _, ev := range resolvedCfg.Variables {
 			if ev.Key == "VAR2" {
 				t.Errorf("VAR2 should have been deleted but still exists")
 			}
@@ -306,7 +332,7 @@ func TestSetConfiguration_EnvVarDeletion(t *testing.T) {
 
 		// Check that VAR1 and VAR3 still exist
 		hasVar1, hasVar3 := false, false
-		for _, ev := range appVerCheck.Config.Variable {
+		for _, ev := range resolvedCfg.Variables {
 			if ev.Key == "VAR1" && ev.Value == "value1" {
 				hasVar1 = true
 			}
@@ -346,9 +372,14 @@ func TestSetConfiguration_EnvVarDeletion(t *testing.T) {
 			t.Fatalf("failed to get app version: %v", err)
 		}
 
-		if len(appVerCheck.Config.Variable) != 0 {
-			t.Errorf("expected 0 env vars after deleting all, got %d", len(appVerCheck.Config.Variable))
-			for _, ev := range appVerCheck.Config.Variable {
+		resolvedCfg, err := coreutil.ResolveConfig(ctx, ec.EAC(), &appVerCheck)
+		if err != nil {
+			t.Fatalf("failed to resolve config: %v", err)
+		}
+
+		if len(resolvedCfg.Variables) != 0 {
+			t.Errorf("expected 0 env vars after deleting all, got %d", len(resolvedCfg.Variables))
+			for _, ev := range resolvedCfg.Variables {
 				t.Errorf("  unexpected var: %s = %s", ev.Key, ev.Value)
 			}
 		}
@@ -420,12 +451,17 @@ func TestSetEnvVars_Batch(t *testing.T) {
 			t.Fatalf("failed to get app version: %v", err)
 		}
 
-		if len(appVer.Config.Variable) != 3 {
-			t.Fatalf("expected 3 env vars, got %d", len(appVer.Config.Variable))
+		resolvedCfg, err := coreutil.ResolveConfig(ctx, ec.EAC(), &appVer)
+		if err != nil {
+			t.Fatalf("failed to resolve config: %v", err)
 		}
 
-		vars := map[string]core_v1alpha.Variable{}
-		for _, v := range appVer.Config.Variable {
+		if len(resolvedCfg.Variables) != 3 {
+			t.Fatalf("expected 3 env vars, got %d", len(resolvedCfg.Variables))
+		}
+
+		vars := map[string]core_v1alpha.ConfigSpecVariables{}
+		for _, v := range resolvedCfg.Variables {
 			vars[v.Key] = v
 		}
 
@@ -438,7 +474,7 @@ func TestSetEnvVars_Batch(t *testing.T) {
 		if vars["C"].Value != "3" || !vars["C"].Sensitive {
 			t.Errorf("C: got value=%q sensitive=%v, want value=%q sensitive=%v", vars["C"].Value, vars["C"].Sensitive, "3", true)
 		}
-		for _, v := range appVer.Config.Variable {
+		for _, v := range resolvedCfg.Variables {
 			if v.Source != "manual" {
 				t.Errorf("var %s: expected source %q, got %q", v.Key, "manual", v.Source)
 			}
@@ -540,12 +576,17 @@ func TestSetEnvVars_Batch(t *testing.T) {
 			t.Fatalf("failed to get app version: %v", err)
 		}
 
-		if len(appVer.Config.Variable) != 3 {
-			t.Fatalf("expected 3 env vars, got %d", len(appVer.Config.Variable))
+		resolvedCfg, err := coreutil.ResolveConfig(ctx, ec.EAC(), &appVer)
+		if err != nil {
+			t.Fatalf("failed to resolve config: %v", err)
 		}
 
-		vars := map[string]core_v1alpha.Variable{}
-		for _, v := range appVer.Config.Variable {
+		if len(resolvedCfg.Variables) != 3 {
+			t.Fatalf("expected 3 env vars, got %d", len(resolvedCfg.Variables))
+		}
+
+		vars := map[string]core_v1alpha.ConfigSpecVariables{}
+		for _, v := range resolvedCfg.Variables {
 			vars[v.Key] = v
 		}
 
@@ -647,16 +688,21 @@ func TestSetEnvVars_Batch(t *testing.T) {
 			t.Fatalf("failed to get app version: %v", err)
 		}
 
-		if len(ver.Config.Services) != 1 {
-			t.Fatalf("expected 1 service, got %d", len(ver.Config.Services))
+		resolvedCfg, err := coreutil.ResolveConfig(ctx, ec.EAC(), &ver)
+		if err != nil {
+			t.Fatalf("failed to resolve config: %v", err)
 		}
 
-		svc := ver.Config.Services[0]
+		if len(resolvedCfg.Services) != 1 {
+			t.Fatalf("expected 1 service, got %d", len(resolvedCfg.Services))
+		}
+
+		svc := resolvedCfg.Services[0]
 		if len(svc.Env) != 2 {
 			t.Fatalf("expected 2 service env vars, got %d", len(svc.Env))
 		}
 
-		envMap := map[string]core_v1alpha.Env{}
+		envMap := map[string]core_v1alpha.ConfigSpecServicesEnv{}
 		for _, e := range svc.Env {
 			envMap[e.Key] = e
 		}
@@ -668,8 +714,8 @@ func TestSetEnvVars_Batch(t *testing.T) {
 			t.Errorf("DB_PASS: got value=%q sensitive=%v, want value=%q sensitive=%v", envMap["DB_PASS"].Value, envMap["DB_PASS"].Sensitive, "secret", true)
 		}
 
-		if len(ver.Config.Variable) != 0 {
-			t.Errorf("expected 0 global env vars, got %d", len(ver.Config.Variable))
+		if len(resolvedCfg.Variables) != 0 {
+			t.Errorf("expected 0 global env vars, got %d", len(resolvedCfg.Variables))
 		}
 	})
 
@@ -708,6 +754,376 @@ func TestSetEnvVars_Batch(t *testing.T) {
 		_, err = client.SetEnvVars(ctx, appName, []*app_v1alpha.NamedValue{nv}, "nonexistent")
 		if err == nil {
 			t.Fatal("expected error for nonexistent service, got nil")
+		}
+	})
+}
+
+// setupAppWithConfig creates a test app with the given global vars and services via SetConfiguration.
+// Returns the app name and the CrudClient.
+func setupAppWithConfig(
+	t *testing.T,
+	ctx context.Context,
+	ec *entityserver.Client,
+	appInfo *AppInfo,
+	appName string,
+	globalVars []*app_v1alpha.NamedValue,
+	commands []*app_v1alpha.ServiceCommand,
+	services []*app_v1alpha.ServiceConfig,
+) *app_v1alpha.CrudClient {
+	t.Helper()
+
+	client := &app_v1alpha.CrudClient{
+		Client: rpc.LocalClient(app_v1alpha.AdaptCrud(appInfo)),
+	}
+
+	app := &core_v1alpha.App{}
+	appID, err := ec.Create(ctx, appName, app)
+	if err != nil {
+		t.Fatalf("failed to create app: %v", err)
+	}
+	_ = appID
+
+	cfg := &app_v1alpha.Configuration{}
+	if globalVars != nil {
+		cfg.SetEnvVars(globalVars)
+	}
+	if commands != nil {
+		cfg.SetCommands(commands)
+	}
+	if services != nil {
+		cfg.SetServices(services)
+	}
+
+	_, err = client.SetConfiguration(ctx, appName, cfg)
+	if err != nil {
+		t.Fatalf("failed to set initial configuration: %v", err)
+	}
+
+	return client
+}
+
+func resolveAppConfig(t *testing.T, ctx context.Context, ec *entityserver.Client, appName string) *core_v1alpha.ConfigSpec {
+	t.Helper()
+
+	var appCheck core_v1alpha.App
+	err := ec.Get(ctx, appName, &appCheck)
+	if err != nil {
+		t.Fatalf("failed to get app: %v", err)
+	}
+
+	var appVerCheck core_v1alpha.AppVersion
+	err = ec.GetById(ctx, appCheck.ActiveVersion, &appVerCheck)
+	if err != nil {
+		t.Fatalf("failed to get app version: %v", err)
+	}
+
+	resolvedCfg, err := coreutil.ResolveConfig(ctx, ec.EAC(), &appVerCheck)
+	if err != nil {
+		t.Fatalf("failed to resolve config: %v", err)
+	}
+
+	return resolvedCfg
+}
+
+func makeNamedValue(key, value string, sensitive bool) *app_v1alpha.NamedValue {
+	nv := &app_v1alpha.NamedValue{}
+	nv.SetKey(key)
+	nv.SetValue(value)
+	nv.SetSensitive(sensitive)
+	return nv
+}
+
+func TestSetEnvVar(t *testing.T) {
+	ctx := context.Background()
+
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	ec := entityserver.NewClient(slog.Default(), inmem.EAC)
+
+	appInfo := &AppInfo{
+		Log:  slog.Default(),
+		EC:   ec,
+		CPU:  &metrics.CPUUsage{},
+		Mem:  &metrics.MemoryUsage{},
+		HTTP: &metrics.HTTPMetrics{},
+	}
+
+	t.Run("adds global var preserving existing vars", func(t *testing.T) {
+		appName := "test-setenv-add"
+		client := setupAppWithConfig(t, ctx, ec, appInfo, appName,
+			[]*app_v1alpha.NamedValue{
+				makeNamedValue("FOO", "foo_val", false),
+				makeNamedValue("BAR", "bar_val", false),
+			},
+			nil, nil,
+		)
+
+		_, err := client.SetEnvVar(ctx, appName, "BAZ", "baz_val", false, "")
+		if err != nil {
+			t.Fatalf("SetEnvVar failed: %v", err)
+		}
+
+		cfg := resolveAppConfig(t, ctx, ec, appName)
+		if len(cfg.Variables) != 3 {
+			t.Fatalf("expected 3 vars, got %d", len(cfg.Variables))
+		}
+
+		varMap := make(map[string]core_v1alpha.ConfigSpecVariables)
+		for _, v := range cfg.Variables {
+			varMap[v.Key] = v
+		}
+
+		for _, key := range []string{"FOO", "BAR", "BAZ"} {
+			if _, ok := varMap[key]; !ok {
+				t.Errorf("expected var %s to be present", key)
+			}
+		}
+		if varMap["BAZ"].Source != "manual" {
+			t.Errorf("expected BAZ source=manual, got %q", varMap["BAZ"].Source)
+		}
+	})
+
+	t.Run("updates existing global var", func(t *testing.T) {
+		appName := "test-setenv-update"
+		client := setupAppWithConfig(t, ctx, ec, appInfo, appName,
+			[]*app_v1alpha.NamedValue{
+				makeNamedValue("FOO", "old_val", false),
+				makeNamedValue("BAR", "bar_val", false),
+			},
+			nil, nil,
+		)
+
+		_, err := client.SetEnvVar(ctx, appName, "FOO", "new_val", true, "")
+		if err != nil {
+			t.Fatalf("SetEnvVar failed: %v", err)
+		}
+
+		cfg := resolveAppConfig(t, ctx, ec, appName)
+		if len(cfg.Variables) != 2 {
+			t.Fatalf("expected 2 vars, got %d", len(cfg.Variables))
+		}
+
+		varMap := make(map[string]core_v1alpha.ConfigSpecVariables)
+		for _, v := range cfg.Variables {
+			varMap[v.Key] = v
+		}
+
+		if varMap["FOO"].Value != "new_val" {
+			t.Errorf("expected FOO value=new_val, got %q", varMap["FOO"].Value)
+		}
+		if varMap["FOO"].Sensitive != true {
+			t.Errorf("expected FOO sensitive=true")
+		}
+		if varMap["FOO"].Source != "manual" {
+			t.Errorf("expected FOO source=manual, got %q", varMap["FOO"].Source)
+		}
+		if varMap["BAR"].Value != "bar_val" {
+			t.Errorf("expected BAR to be unchanged, got %q", varMap["BAR"].Value)
+		}
+	})
+
+	t.Run("adds per-service var preserving global vars", func(t *testing.T) {
+		appName := "test-setenv-svc"
+
+		// Create a service via Commands so it exists in spec.Services
+		cmd := &app_v1alpha.ServiceCommand{}
+		cmd.SetService("web")
+		cmd.SetCommand("./start-web")
+
+		client := setupAppWithConfig(t, ctx, ec, appInfo, appName,
+			[]*app_v1alpha.NamedValue{
+				makeNamedValue("GLOBAL1", "g1", false),
+			},
+			[]*app_v1alpha.ServiceCommand{cmd},
+			nil,
+		)
+
+		_, err := client.SetEnvVar(ctx, appName, "SVC_KEY", "svc_val", false, "web")
+		if err != nil {
+			t.Fatalf("SetEnvVar failed: %v", err)
+		}
+
+		cfg := resolveAppConfig(t, ctx, ec, appName)
+
+		// Global var preserved
+		if len(cfg.Variables) != 1 {
+			t.Fatalf("expected 1 global var, got %d", len(cfg.Variables))
+		}
+		if cfg.Variables[0].Key != "GLOBAL1" || cfg.Variables[0].Value != "g1" {
+			t.Errorf("global var changed: %+v", cfg.Variables[0])
+		}
+
+		// Service var added
+		var webSvc *core_v1alpha.ConfigSpecServices
+		for i := range cfg.Services {
+			if cfg.Services[i].Name == "web" {
+				webSvc = &cfg.Services[i]
+				break
+			}
+		}
+		if webSvc == nil {
+			t.Fatal("web service not found")
+		}
+		if len(webSvc.Env) != 1 {
+			t.Fatalf("expected 1 service env var, got %d", len(webSvc.Env))
+		}
+		if webSvc.Env[0].Key != "SVC_KEY" || webSvc.Env[0].Value != "svc_val" {
+			t.Errorf("unexpected service env var: %+v", webSvc.Env[0])
+		}
+		if webSvc.Env[0].Source != "manual" {
+			t.Errorf("expected service env source=manual, got %q", webSvc.Env[0].Source)
+		}
+	})
+
+	t.Run("error on non-existent service", func(t *testing.T) {
+		appName := "test-setenv-nosvc"
+		client := setupAppWithConfig(t, ctx, ec, appInfo, appName,
+			[]*app_v1alpha.NamedValue{
+				makeNamedValue("FOO", "bar", false),
+			},
+			nil, nil,
+		)
+
+		_, err := client.SetEnvVar(ctx, appName, "KEY", "val", false, "nonexistent")
+		if err == nil {
+			t.Fatal("expected error for non-existent service")
+		}
+	})
+}
+
+func TestDeleteEnvVar(t *testing.T) {
+	ctx := context.Background()
+
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	ec := entityserver.NewClient(slog.Default(), inmem.EAC)
+
+	appInfo := &AppInfo{
+		Log:  slog.Default(),
+		EC:   ec,
+		CPU:  &metrics.CPUUsage{},
+		Mem:  &metrics.MemoryUsage{},
+		HTTP: &metrics.HTTPMetrics{},
+	}
+
+	t.Run("deletes global var preserving others", func(t *testing.T) {
+		appName := "test-delenv-global"
+		client := setupAppWithConfig(t, ctx, ec, appInfo, appName,
+			[]*app_v1alpha.NamedValue{
+				makeNamedValue("FOO", "foo_val", false),
+				makeNamedValue("BAR", "bar_val", false),
+				makeNamedValue("BAZ", "baz_val", true),
+			},
+			nil, nil,
+		)
+
+		_, err := client.DeleteEnvVar(ctx, appName, "BAR", "")
+		if err != nil {
+			t.Fatalf("DeleteEnvVar failed: %v", err)
+		}
+
+		cfg := resolveAppConfig(t, ctx, ec, appName)
+		if len(cfg.Variables) != 2 {
+			t.Fatalf("expected 2 vars, got %d", len(cfg.Variables))
+		}
+
+		varMap := make(map[string]core_v1alpha.ConfigSpecVariables)
+		for _, v := range cfg.Variables {
+			varMap[v.Key] = v
+		}
+
+		if _, ok := varMap["BAR"]; ok {
+			t.Error("BAR should have been deleted")
+		}
+		if varMap["FOO"].Value != "foo_val" {
+			t.Errorf("FOO should be preserved, got %q", varMap["FOO"].Value)
+		}
+		if varMap["BAZ"].Value != "baz_val" {
+			t.Errorf("BAZ should be preserved, got %q", varMap["BAZ"].Value)
+		}
+	})
+
+	t.Run("deletes per-service var preserving others", func(t *testing.T) {
+		appName := "test-delenv-svc"
+
+		cmd := &app_v1alpha.ServiceCommand{}
+		cmd.SetService("web")
+		cmd.SetCommand("./start")
+
+		svcEnv1 := makeNamedValue("SVC_A", "a", false)
+		svcEnv2 := makeNamedValue("SVC_B", "b", false)
+		svcCfg := &app_v1alpha.ServiceConfig{}
+		svcCfg.SetService("web")
+		svcCfg.SetServiceEnv([]*app_v1alpha.NamedValue{svcEnv1, svcEnv2})
+
+		client := setupAppWithConfig(t, ctx, ec, appInfo, appName,
+			[]*app_v1alpha.NamedValue{
+				makeNamedValue("GLOBAL", "gval", false),
+			},
+			[]*app_v1alpha.ServiceCommand{cmd},
+			[]*app_v1alpha.ServiceConfig{svcCfg},
+		)
+
+		_, err := client.DeleteEnvVar(ctx, appName, "SVC_A", "web")
+		if err != nil {
+			t.Fatalf("DeleteEnvVar failed: %v", err)
+		}
+
+		cfg := resolveAppConfig(t, ctx, ec, appName)
+
+		// Global var preserved
+		if len(cfg.Variables) != 1 || cfg.Variables[0].Key != "GLOBAL" {
+			t.Errorf("global var should be preserved: %+v", cfg.Variables)
+		}
+
+		// Service var SVC_B preserved, SVC_A removed
+		var webSvc *core_v1alpha.ConfigSpecServices
+		for i := range cfg.Services {
+			if cfg.Services[i].Name == "web" {
+				webSvc = &cfg.Services[i]
+				break
+			}
+		}
+		if webSvc == nil {
+			t.Fatal("web service not found")
+		}
+		if len(webSvc.Env) != 1 {
+			t.Fatalf("expected 1 service env var, got %d", len(webSvc.Env))
+		}
+		if webSvc.Env[0].Key != "SVC_B" {
+			t.Errorf("expected SVC_B to remain, got %s", webSvc.Env[0].Key)
+		}
+	})
+
+	t.Run("error on non-existent var", func(t *testing.T) {
+		appName := "test-delenv-novar"
+		client := setupAppWithConfig(t, ctx, ec, appInfo, appName,
+			[]*app_v1alpha.NamedValue{
+				makeNamedValue("FOO", "bar", false),
+			},
+			nil, nil,
+		)
+
+		_, err := client.DeleteEnvVar(ctx, appName, "NONEXISTENT", "")
+		if err == nil {
+			t.Fatal("expected error for non-existent var")
+		}
+	})
+
+	t.Run("error on non-existent service", func(t *testing.T) {
+		appName := "test-delenv-nosvc"
+		client := setupAppWithConfig(t, ctx, ec, appInfo, appName,
+			[]*app_v1alpha.NamedValue{
+				makeNamedValue("FOO", "bar", false),
+			},
+			nil, nil,
+		)
+
+		_, err := client.DeleteEnvVar(ctx, appName, "KEY", "nonexistent")
+		if err == nil {
+			t.Fatal("expected error for non-existent service")
 		}
 	})
 }

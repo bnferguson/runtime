@@ -16,7 +16,7 @@ func TestBuildVariablesFromAppConfig(t *testing.T) {
 	tests := []struct {
 		name          string
 		appConfig     *appconfig.AppConfig
-		wantVariables []core_v1alpha.Variable
+		wantVariables []core_v1alpha.ConfigSpecVariables
 	}{
 		{
 			name:          "nil app config",
@@ -37,8 +37,8 @@ func TestBuildVariablesFromAppConfig(t *testing.T) {
 					{Key: "DATABASE_URL", Value: "postgres://localhost/db"},
 				},
 			},
-			wantVariables: []core_v1alpha.Variable{
-				{Key: "DATABASE_URL", Value: "postgres://localhost/db"},
+			wantVariables: []core_v1alpha.ConfigSpecVariables{
+				{Key: "DATABASE_URL", Value: "postgres://localhost/db", Source: "config"},
 			},
 		},
 		{
@@ -50,10 +50,10 @@ func TestBuildVariablesFromAppConfig(t *testing.T) {
 					{Key: "PORT", Value: "8080"},
 				},
 			},
-			wantVariables: []core_v1alpha.Variable{
-				{Key: "DATABASE_URL", Value: "postgres://localhost/db"},
-				{Key: "API_KEY", Value: "secret123"},
-				{Key: "PORT", Value: "8080"},
+			wantVariables: []core_v1alpha.ConfigSpecVariables{
+				{Key: "DATABASE_URL", Value: "postgres://localhost/db", Source: "config"},
+				{Key: "API_KEY", Value: "secret123", Source: "config"},
+				{Key: "PORT", Value: "8080", Source: "config"},
 			},
 		},
 	}
@@ -80,7 +80,7 @@ func TestBuildServicesConfig(t *testing.T) {
 		name             string
 		appConfig        *appconfig.AppConfig
 		procfileServices map[string]string
-		validateServices func(t *testing.T, services []core_v1alpha.Services)
+		validateServices func(t *testing.T, services []core_v1alpha.ConfigSpecServices)
 	}{
 		{
 			name: "service with only concurrency config (no command) - uptime-kuma case",
@@ -96,11 +96,11 @@ func TestBuildServicesConfig(t *testing.T) {
 				},
 			},
 			procfileServices: nil,
-			validateServices: func(t *testing.T, services []core_v1alpha.Services) {
+			validateServices: func(t *testing.T, services []core_v1alpha.ConfigSpecServices) {
 				require.Len(t, services, 1, "should have one service")
 				assert.Equal(t, "web", services[0].Name)
-				assert.Equal(t, "fixed", services[0].ServiceConcurrency.Mode)
-				assert.Equal(t, int64(1), services[0].ServiceConcurrency.NumInstances)
+				assert.Equal(t, "fixed", services[0].Concurrency.Mode)
+				assert.Equal(t, int64(1), services[0].Concurrency.NumInstances)
 			},
 		},
 		{
@@ -118,12 +118,12 @@ func TestBuildServicesConfig(t *testing.T) {
 				},
 			},
 			procfileServices: nil,
-			validateServices: func(t *testing.T, services []core_v1alpha.Services) {
+			validateServices: func(t *testing.T, services []core_v1alpha.ConfigSpecServices) {
 				require.Len(t, services, 1)
 				assert.Equal(t, "web", services[0].Name)
-				assert.Equal(t, "auto", services[0].ServiceConcurrency.Mode)
-				assert.Equal(t, int64(10), services[0].ServiceConcurrency.RequestsPerInstance)
-				assert.Equal(t, "15m", services[0].ServiceConcurrency.ScaleDownDelay)
+				assert.Equal(t, "auto", services[0].Concurrency.Mode)
+				assert.Equal(t, int64(10), services[0].Concurrency.RequestsPerInstance)
+				assert.Equal(t, "15m", services[0].Concurrency.ScaleDownDelay)
 			},
 		},
 		{
@@ -132,13 +132,13 @@ func TestBuildServicesConfig(t *testing.T) {
 			procfileServices: map[string]string{
 				"web": "npm start",
 			},
-			validateServices: func(t *testing.T, services []core_v1alpha.Services) {
+			validateServices: func(t *testing.T, services []core_v1alpha.ConfigSpecServices) {
 				require.Len(t, services, 1)
 				assert.Equal(t, "web", services[0].Name)
 				// Web service should get auto mode defaults
-				assert.Equal(t, "auto", services[0].ServiceConcurrency.Mode)
-				assert.Equal(t, int64(10), services[0].ServiceConcurrency.RequestsPerInstance)
-				assert.Equal(t, "15m", services[0].ServiceConcurrency.ScaleDownDelay)
+				assert.Equal(t, "auto", services[0].Concurrency.Mode)
+				assert.Equal(t, int64(10), services[0].Concurrency.RequestsPerInstance)
+				assert.Equal(t, "15m", services[0].Concurrency.ScaleDownDelay)
 			},
 		},
 		{
@@ -164,29 +164,29 @@ func TestBuildServicesConfig(t *testing.T) {
 			procfileServices: map[string]string{
 				"cron": "node cron.js",
 			},
-			validateServices: func(t *testing.T, services []core_v1alpha.Services) {
+			validateServices: func(t *testing.T, services []core_v1alpha.ConfigSpecServices) {
 				require.Len(t, services, 3, "should have three services")
 
 				// Find each service and validate
-				serviceMap := make(map[string]core_v1alpha.Services)
+				serviceMap := make(map[string]core_v1alpha.ConfigSpecServices)
 				for _, svc := range services {
 					serviceMap[svc.Name] = svc
 				}
 
 				// Web service
 				require.Contains(t, serviceMap, "web")
-				assert.Equal(t, "fixed", serviceMap["web"].ServiceConcurrency.Mode)
-				assert.Equal(t, int64(1), serviceMap["web"].ServiceConcurrency.NumInstances)
+				assert.Equal(t, "fixed", serviceMap["web"].Concurrency.Mode)
+				assert.Equal(t, int64(1), serviceMap["web"].Concurrency.NumInstances)
 
 				// Worker service
 				require.Contains(t, serviceMap, "worker")
-				assert.Equal(t, "fixed", serviceMap["worker"].ServiceConcurrency.Mode)
-				assert.Equal(t, int64(2), serviceMap["worker"].ServiceConcurrency.NumInstances)
+				assert.Equal(t, "fixed", serviceMap["worker"].Concurrency.Mode)
+				assert.Equal(t, int64(2), serviceMap["worker"].Concurrency.NumInstances)
 
 				// Cron service (from procfile, gets default fixed mode)
 				require.Contains(t, serviceMap, "cron")
-				assert.Equal(t, "fixed", serviceMap["cron"].ServiceConcurrency.Mode)
-				assert.Equal(t, int64(1), serviceMap["cron"].ServiceConcurrency.NumInstances)
+				assert.Equal(t, "fixed", serviceMap["cron"].Concurrency.Mode)
+				assert.Equal(t, int64(1), serviceMap["cron"].Concurrency.NumInstances)
 			},
 		},
 		{
@@ -206,13 +206,13 @@ func TestBuildServicesConfig(t *testing.T) {
 			procfileServices: map[string]string{
 				"web": "npm start",
 			},
-			validateServices: func(t *testing.T, services []core_v1alpha.Services) {
+			validateServices: func(t *testing.T, services []core_v1alpha.ConfigSpecServices) {
 				require.Len(t, services, 1)
 				assert.Equal(t, "web", services[0].Name)
 				// Should get app config concurrency, not defaults
-				assert.Equal(t, "auto", services[0].ServiceConcurrency.Mode)
-				assert.Equal(t, int64(20), services[0].ServiceConcurrency.RequestsPerInstance)
-				assert.Equal(t, "5m", services[0].ServiceConcurrency.ScaleDownDelay)
+				assert.Equal(t, "auto", services[0].Concurrency.Mode)
+				assert.Equal(t, int64(20), services[0].Concurrency.RequestsPerInstance)
+				assert.Equal(t, "5m", services[0].Concurrency.ScaleDownDelay)
 			},
 		},
 		{
@@ -226,12 +226,12 @@ func TestBuildServicesConfig(t *testing.T) {
 				},
 			},
 			procfileServices: nil,
-			validateServices: func(t *testing.T, services []core_v1alpha.Services) {
+			validateServices: func(t *testing.T, services []core_v1alpha.ConfigSpecServices) {
 				require.Len(t, services, 1)
 				assert.Equal(t, "worker", services[0].Name)
 				// No concurrency will be empty since ResolveDefaults skips existing services
-				assert.Equal(t, "", services[0].ServiceConcurrency.Mode)
-				assert.Equal(t, int64(0), services[0].ServiceConcurrency.NumInstances)
+				assert.Equal(t, "", services[0].Concurrency.Mode)
+				assert.Equal(t, int64(0), services[0].Concurrency.NumInstances)
 			},
 		},
 		{
@@ -248,7 +248,7 @@ func TestBuildServicesConfig(t *testing.T) {
 				},
 			},
 			procfileServices: nil,
-			validateServices: func(t *testing.T, services []core_v1alpha.Services) {
+			validateServices: func(t *testing.T, services []core_v1alpha.ConfigSpecServices) {
 				require.Len(t, services, 1)
 				assert.Equal(t, "postgres", services[0].Name)
 				assert.Equal(t, "oci.miren.cloud/postgres:15", services[0].Image)
@@ -267,7 +267,7 @@ func TestBuildServicesConfig(t *testing.T) {
 				},
 			},
 			procfileServices: nil,
-			validateServices: func(t *testing.T, services []core_v1alpha.Services) {
+			validateServices: func(t *testing.T, services []core_v1alpha.ConfigSpecServices) {
 				require.Len(t, services, 1)
 				assert.Equal(t, "web", services[0].Name)
 				assert.Equal(t, "", services[0].Image, "image should be empty when not specified")
@@ -300,10 +300,10 @@ func TestBuildServicesConfig(t *testing.T) {
 				},
 			},
 			procfileServices: nil,
-			validateServices: func(t *testing.T, services []core_v1alpha.Services) {
+			validateServices: func(t *testing.T, services []core_v1alpha.ConfigSpecServices) {
 				require.Len(t, services, 3)
 
-				serviceMap := make(map[string]core_v1alpha.Services)
+				serviceMap := make(map[string]core_v1alpha.ConfigSpecServices)
 				for _, svc := range services {
 					serviceMap[svc.Name] = svc
 				}
@@ -341,7 +341,7 @@ func TestBuildServicesConfig(t *testing.T) {
 				},
 			},
 			procfileServices: nil,
-			validateServices: func(t *testing.T, services []core_v1alpha.Services) {
+			validateServices: func(t *testing.T, services []core_v1alpha.ConfigSpecServices) {
 				require.Len(t, services, 1)
 				svc := services[0]
 				assert.Equal(t, "postgres", svc.Name)
@@ -385,7 +385,7 @@ func TestBuildServicesConfig(t *testing.T) {
 				},
 			},
 			procfileServices: nil,
-			validateServices: func(t *testing.T, services []core_v1alpha.Services) {
+			validateServices: func(t *testing.T, services []core_v1alpha.ConfigSpecServices) {
 				require.Len(t, services, 1)
 				svc := services[0]
 				assert.Equal(t, "database", svc.Name)
@@ -426,7 +426,7 @@ func TestBuildServicesConfig(t *testing.T) {
 				},
 			},
 			procfileServices: nil,
-			validateServices: func(t *testing.T, services []core_v1alpha.Services) {
+			validateServices: func(t *testing.T, services []core_v1alpha.ConfigSpecServices) {
 				require.Len(t, services, 1)
 				svc := services[0]
 
@@ -454,7 +454,7 @@ func TestBuildServicesConfig(t *testing.T) {
 				},
 			},
 			procfileServices: nil,
-			validateServices: func(t *testing.T, services []core_v1alpha.Services) {
+			validateServices: func(t *testing.T, services []core_v1alpha.ConfigSpecServices) {
 				require.Len(t, services, 1)
 				svc := services[0]
 				assert.Equal(t, "web", svc.Name)
@@ -498,10 +498,10 @@ func TestBuildServicesConfig(t *testing.T) {
 				},
 			},
 			procfileServices: nil,
-			validateServices: func(t *testing.T, services []core_v1alpha.Services) {
+			validateServices: func(t *testing.T, services []core_v1alpha.ConfigSpecServices) {
 				require.Len(t, services, 3)
 
-				serviceMap := make(map[string]core_v1alpha.Services)
+				serviceMap := make(map[string]core_v1alpha.ConfigSpecServices)
 				for _, svc := range services {
 					serviceMap[svc.Name] = svc
 				}
@@ -529,7 +529,7 @@ func TestBuildServicesConfig(t *testing.T) {
 			name:             "no config no procfile",
 			appConfig:        nil,
 			procfileServices: nil,
-			validateServices: func(t *testing.T, services []core_v1alpha.Services) {
+			validateServices: func(t *testing.T, services []core_v1alpha.ConfigSpecServices) {
 				assert.Len(t, services, 0, "should have no services")
 			},
 		},
@@ -539,7 +539,7 @@ func TestBuildServicesConfig(t *testing.T) {
 				Services: map[string]*appconfig.ServiceConfig{},
 			},
 			procfileServices: nil,
-			validateServices: func(t *testing.T, services []core_v1alpha.Services) {
+			validateServices: func(t *testing.T, services []core_v1alpha.ConfigSpecServices) {
 				assert.Len(t, services, 0, "should have no services")
 			},
 		},
@@ -556,37 +556,37 @@ func TestBuildServicesConfig(t *testing.T) {
 func TestMergeVariablesFromAppConfig(t *testing.T) {
 	tests := []struct {
 		name         string
-		existingVars []core_v1alpha.Variable
+		existingVars []core_v1alpha.ConfigSpecVariables
 		appConfig    *appconfig.AppConfig
-		wantVars     []core_v1alpha.Variable
+		wantVars     []core_v1alpha.ConfigSpecVariables
 	}{
 		{
 			name: "preserve existing vars when app.toml has no env section",
-			existingVars: []core_v1alpha.Variable{
+			existingVars: []core_v1alpha.ConfigSpecVariables{
 				{Key: "API_KEY", Value: "secret123", Source: "manual"},
 				{Key: "DATABASE_URL", Value: "postgres://localhost/db", Source: "config"},
 			},
 			appConfig: nil,
-			wantVars: []core_v1alpha.Variable{
+			wantVars: []core_v1alpha.ConfigSpecVariables{
 				{Key: "API_KEY", Value: "secret123", Source: "manual"},
 				{Key: "DATABASE_URL", Value: "postgres://localhost/db", Source: "config"},
 			},
 		},
 		{
 			name: "preserve existing vars when app.toml has empty env section",
-			existingVars: []core_v1alpha.Variable{
+			existingVars: []core_v1alpha.ConfigSpecVariables{
 				{Key: "API_KEY", Value: "secret123", Source: "manual"},
 			},
 			appConfig: &appconfig.AppConfig{
 				EnvVars: []appconfig.AppEnvVar{},
 			},
-			wantVars: []core_v1alpha.Variable{
+			wantVars: []core_v1alpha.ConfigSpecVariables{
 				{Key: "API_KEY", Value: "secret123", Source: "manual"},
 			},
 		},
 		{
 			name: "manual vars persist when removed from app.toml",
-			existingVars: []core_v1alpha.Variable{
+			existingVars: []core_v1alpha.ConfigSpecVariables{
 				{Key: "MANUAL_VAR", Value: "manual_value", Source: "manual"},
 				{Key: "CONFIG_VAR", Value: "config_value", Source: "config"},
 			},
@@ -595,14 +595,14 @@ func TestMergeVariablesFromAppConfig(t *testing.T) {
 					{Key: "NEW_VAR", Value: "new_value"},
 				},
 			},
-			wantVars: []core_v1alpha.Variable{
+			wantVars: []core_v1alpha.ConfigSpecVariables{
 				{Key: "MANUAL_VAR", Value: "manual_value", Source: "manual"},
 				{Key: "NEW_VAR", Value: "new_value", Source: "config"},
 			},
 		},
 		{
 			name: "config vars removed when removed from app.toml",
-			existingVars: []core_v1alpha.Variable{
+			existingVars: []core_v1alpha.ConfigSpecVariables{
 				{Key: "CONFIG_VAR_1", Value: "value1", Source: "config"},
 				{Key: "CONFIG_VAR_2", Value: "value2", Source: "config"},
 			},
@@ -611,13 +611,13 @@ func TestMergeVariablesFromAppConfig(t *testing.T) {
 					{Key: "CONFIG_VAR_1", Value: "value1"},
 				},
 			},
-			wantVars: []core_v1alpha.Variable{
+			wantVars: []core_v1alpha.ConfigSpecVariables{
 				{Key: "CONFIG_VAR_1", Value: "value1", Source: "config"},
 			},
 		},
 		{
 			name: "app.toml vars override config vars per-key",
-			existingVars: []core_v1alpha.Variable{
+			existingVars: []core_v1alpha.ConfigSpecVariables{
 				{Key: "VAR1", Value: "old_value", Source: "config"},
 				{Key: "VAR2", Value: "keep_value", Source: "manual"},
 			},
@@ -626,14 +626,14 @@ func TestMergeVariablesFromAppConfig(t *testing.T) {
 					{Key: "VAR1", Value: "new_value"},
 				},
 			},
-			wantVars: []core_v1alpha.Variable{
+			wantVars: []core_v1alpha.ConfigSpecVariables{
 				{Key: "VAR1", Value: "new_value", Source: "config"},
 				{Key: "VAR2", Value: "keep_value", Source: "manual"},
 			},
 		},
 		{
 			name: "backward compatibility - empty source preserved as manual",
-			existingVars: []core_v1alpha.Variable{
+			existingVars: []core_v1alpha.ConfigSpecVariables{
 				{Key: "OLD_VAR", Value: "old_value", Source: ""},
 			},
 			appConfig: &appconfig.AppConfig{
@@ -641,14 +641,14 @@ func TestMergeVariablesFromAppConfig(t *testing.T) {
 					{Key: "NEW_VAR", Value: "new_value"},
 				},
 			},
-			wantVars: []core_v1alpha.Variable{
+			wantVars: []core_v1alpha.ConfigSpecVariables{
 				{Key: "OLD_VAR", Value: "old_value", Source: ""},
 				{Key: "NEW_VAR", Value: "new_value", Source: "config"},
 			},
 		},
 		{
 			name: "manual var shadows config var with same key",
-			existingVars: []core_v1alpha.Variable{
+			existingVars: []core_v1alpha.ConfigSpecVariables{
 				{Key: "DATABASE_URL", Value: "manually_set", Source: "manual"},
 			},
 			appConfig: &appconfig.AppConfig{
@@ -656,31 +656,30 @@ func TestMergeVariablesFromAppConfig(t *testing.T) {
 					{Key: "DATABASE_URL", Value: "from_config"},
 				},
 			},
-			wantVars: []core_v1alpha.Variable{
-				// Manual wins - user intent takes precedence over config
+			wantVars: []core_v1alpha.ConfigSpecVariables{
 				{Key: "DATABASE_URL", Value: "manually_set", Source: "manual"},
 			},
 		},
 		{
 			name: "config cannot override existing manual var",
-			existingVars: []core_v1alpha.Variable{
+			existingVars: []core_v1alpha.ConfigSpecVariables{
 				{Key: "SECRET", Value: "user_secret", Source: "manual"},
 				{Key: "LOG_LEVEL", Value: "debug", Source: "config"},
 			},
 			appConfig: &appconfig.AppConfig{
 				EnvVars: []appconfig.AppEnvVar{
-					{Key: "SECRET", Value: "default_secret"}, // Should NOT override manual
-					{Key: "LOG_LEVEL", Value: "info"},        // Should override config
+					{Key: "SECRET", Value: "default_secret"},
+					{Key: "LOG_LEVEL", Value: "info"},
 				},
 			},
-			wantVars: []core_v1alpha.Variable{
-				{Key: "SECRET", Value: "user_secret", Source: "manual"}, // Manual preserved
-				{Key: "LOG_LEVEL", Value: "info", Source: "config"},     // Config updated
+			wantVars: []core_v1alpha.ConfigSpecVariables{
+				{Key: "SECRET", Value: "user_secret", Source: "manual"},
+				{Key: "LOG_LEVEL", Value: "info", Source: "config"},
 			},
 		},
 		{
 			name: "complex mix of manual and config vars",
-			existingVars: []core_v1alpha.Variable{
+			existingVars: []core_v1alpha.ConfigSpecVariables{
 				{Key: "MANUAL_1", Value: "m1", Source: "manual"},
 				{Key: "CONFIG_1", Value: "c1", Source: "config"},
 				{Key: "MANUAL_2", Value: "m2", Source: "manual"},
@@ -692,7 +691,7 @@ func TestMergeVariablesFromAppConfig(t *testing.T) {
 					{Key: "CONFIG_3", Value: "c3"},
 				},
 			},
-			wantVars: []core_v1alpha.Variable{
+			wantVars: []core_v1alpha.ConfigSpecVariables{
 				{Key: "MANUAL_1", Value: "m1", Source: "manual"},
 				{Key: "MANUAL_2", Value: "m2", Source: "manual"},
 				{Key: "CONFIG_1", Value: "c1_updated", Source: "config"},
@@ -701,7 +700,7 @@ func TestMergeVariablesFromAppConfig(t *testing.T) {
 		},
 		{
 			name: "empty source vars preserved when app.toml adds env",
-			existingVars: []core_v1alpha.Variable{
+			existingVars: []core_v1alpha.ConfigSpecVariables{
 				{Key: "LEGACY_DB_URL", Value: "postgres://old/db", Source: ""},
 				{Key: "LEGACY_API_KEY", Value: "key123", Source: ""},
 				{Key: "MANUAL_SECRET", Value: "secret", Source: "manual"},
@@ -711,7 +710,7 @@ func TestMergeVariablesFromAppConfig(t *testing.T) {
 					{Key: "NEW_CONFIG_VAR", Value: "new_value"},
 				},
 			},
-			wantVars: []core_v1alpha.Variable{
+			wantVars: []core_v1alpha.ConfigSpecVariables{
 				{Key: "LEGACY_DB_URL", Value: "postgres://old/db", Source: ""},
 				{Key: "LEGACY_API_KEY", Value: "key123", Source: ""},
 				{Key: "MANUAL_SECRET", Value: "secret", Source: "manual"},
@@ -726,9 +725,9 @@ func TestMergeVariablesFromAppConfig(t *testing.T) {
 		},
 		{
 			name:         "handle empty existing vars with no app config",
-			existingVars: []core_v1alpha.Variable{},
+			existingVars: []core_v1alpha.ConfigSpecVariables{},
 			appConfig:    nil,
-			wantVars:     []core_v1alpha.Variable{},
+			wantVars:     []core_v1alpha.ConfigSpecVariables{},
 		},
 		{
 			name:         "set new vars when there are no existing vars",
@@ -738,7 +737,7 @@ func TestMergeVariablesFromAppConfig(t *testing.T) {
 					{Key: "NEW_VAR", Value: "new_value"},
 				},
 			},
-			wantVars: []core_v1alpha.Variable{
+			wantVars: []core_v1alpha.ConfigSpecVariables{
 				{Key: "NEW_VAR", Value: "new_value", Source: "config"},
 			},
 		},
@@ -751,13 +750,13 @@ func TestMergeVariablesFromAppConfig(t *testing.T) {
 				assert.Nil(t, result)
 			} else {
 				// Sort both slices by key for consistent comparison
-				sortVarsByKey := func(vars []core_v1alpha.Variable) {
+				sortVarsByKey := func(vars []core_v1alpha.ConfigSpecVariables) {
 					sort.Slice(vars, func(i, j int) bool {
 						return vars[i].Key < vars[j].Key
 					})
 				}
 				sortVarsByKey(result)
-				wantSorted := make([]core_v1alpha.Variable, len(tt.wantVars))
+				wantSorted := make([]core_v1alpha.ConfigSpecVariables, len(tt.wantVars))
 				copy(wantSorted, tt.wantVars)
 				sortVarsByKey(wantSorted)
 
@@ -775,91 +774,90 @@ func TestMergeVariablesFromAppConfig(t *testing.T) {
 func TestMergeServiceEnvVars(t *testing.T) {
 	tests := []struct {
 		name         string
-		existingEnvs []core_v1alpha.Env
-		newEnvs      []core_v1alpha.Env
-		wantEnvs     []core_v1alpha.Env
+		existingEnvs []core_v1alpha.ConfigSpecServicesEnv
+		newEnvs      []core_v1alpha.ConfigSpecServicesEnv
+		wantEnvs     []core_v1alpha.ConfigSpecServicesEnv
 	}{
 		{
 			name: "manual vars persist when removed from app.toml",
-			existingEnvs: []core_v1alpha.Env{
+			existingEnvs: []core_v1alpha.ConfigSpecServicesEnv{
 				{Key: "MANUAL_VAR", Value: "manual_value", Source: "manual"},
 				{Key: "CONFIG_VAR", Value: "config_value", Source: "config"},
 			},
-			newEnvs: []core_v1alpha.Env{
+			newEnvs: []core_v1alpha.ConfigSpecServicesEnv{
 				{Key: "NEW_VAR", Value: "new_value", Source: "config"},
 			},
-			wantEnvs: []core_v1alpha.Env{
+			wantEnvs: []core_v1alpha.ConfigSpecServicesEnv{
 				{Key: "MANUAL_VAR", Value: "manual_value", Source: "manual"},
 				{Key: "NEW_VAR", Value: "new_value", Source: "config"},
 			},
 		},
 		{
 			name: "config vars removed when removed from app.toml",
-			existingEnvs: []core_v1alpha.Env{
+			existingEnvs: []core_v1alpha.ConfigSpecServicesEnv{
 				{Key: "CONFIG_VAR_1", Value: "value1", Source: "config"},
 				{Key: "CONFIG_VAR_2", Value: "value2", Source: "config"},
 			},
-			newEnvs: []core_v1alpha.Env{
+			newEnvs: []core_v1alpha.ConfigSpecServicesEnv{
 				{Key: "CONFIG_VAR_1", Value: "value1", Source: "config"},
 			},
-			wantEnvs: []core_v1alpha.Env{
+			wantEnvs: []core_v1alpha.ConfigSpecServicesEnv{
 				{Key: "CONFIG_VAR_1", Value: "value1", Source: "config"},
 			},
 		},
 		{
 			name: "backward compatibility - empty source preserved as manual",
-			existingEnvs: []core_v1alpha.Env{
+			existingEnvs: []core_v1alpha.ConfigSpecServicesEnv{
 				{Key: "OLD_VAR", Value: "old_value", Source: ""},
 			},
-			newEnvs: []core_v1alpha.Env{
+			newEnvs: []core_v1alpha.ConfigSpecServicesEnv{
 				{Key: "NEW_VAR", Value: "new_value", Source: "config"},
 			},
-			wantEnvs: []core_v1alpha.Env{
+			wantEnvs: []core_v1alpha.ConfigSpecServicesEnv{
 				{Key: "OLD_VAR", Value: "old_value", Source: ""},
 				{Key: "NEW_VAR", Value: "new_value", Source: "config"},
 			},
 		},
 		{
 			name: "manual var shadows config var with same key",
-			existingEnvs: []core_v1alpha.Env{
+			existingEnvs: []core_v1alpha.ConfigSpecServicesEnv{
 				{Key: "DATABASE_URL", Value: "manually_set", Source: "manual"},
 			},
-			newEnvs: []core_v1alpha.Env{
+			newEnvs: []core_v1alpha.ConfigSpecServicesEnv{
 				{Key: "DATABASE_URL", Value: "from_config", Source: "config"},
 			},
-			wantEnvs: []core_v1alpha.Env{
-				// Manual wins - user intent takes precedence over config
+			wantEnvs: []core_v1alpha.ConfigSpecServicesEnv{
 				{Key: "DATABASE_URL", Value: "manually_set", Source: "manual"},
 			},
 		},
 		{
 			name: "config cannot override existing manual var",
-			existingEnvs: []core_v1alpha.Env{
+			existingEnvs: []core_v1alpha.ConfigSpecServicesEnv{
 				{Key: "SECRET", Value: "user_secret", Source: "manual"},
 				{Key: "LOG_LEVEL", Value: "debug", Source: "config"},
 			},
-			newEnvs: []core_v1alpha.Env{
-				{Key: "SECRET", Value: "default_secret", Source: "config"}, // Should NOT override manual
-				{Key: "LOG_LEVEL", Value: "info", Source: "config"},        // Should override config
+			newEnvs: []core_v1alpha.ConfigSpecServicesEnv{
+				{Key: "SECRET", Value: "default_secret", Source: "config"},
+				{Key: "LOG_LEVEL", Value: "info", Source: "config"},
 			},
-			wantEnvs: []core_v1alpha.Env{
-				{Key: "SECRET", Value: "user_secret", Source: "manual"}, // Manual preserved
-				{Key: "LOG_LEVEL", Value: "info", Source: "config"},     // Config updated
+			wantEnvs: []core_v1alpha.ConfigSpecServicesEnv{
+				{Key: "SECRET", Value: "user_secret", Source: "manual"},
+				{Key: "LOG_LEVEL", Value: "info", Source: "config"},
 			},
 		},
 		{
 			name: "complex mix of manual and config vars",
-			existingEnvs: []core_v1alpha.Env{
+			existingEnvs: []core_v1alpha.ConfigSpecServicesEnv{
 				{Key: "MANUAL_1", Value: "m1", Source: "manual"},
 				{Key: "CONFIG_1", Value: "c1", Source: "config"},
 				{Key: "MANUAL_2", Value: "m2", Source: "manual"},
 				{Key: "CONFIG_2", Value: "c2", Source: "config"},
 			},
-			newEnvs: []core_v1alpha.Env{
+			newEnvs: []core_v1alpha.ConfigSpecServicesEnv{
 				{Key: "CONFIG_1", Value: "c1_updated", Source: "config"},
 				{Key: "CONFIG_3", Value: "c3", Source: "config"},
 			},
-			wantEnvs: []core_v1alpha.Env{
+			wantEnvs: []core_v1alpha.ConfigSpecServicesEnv{
 				{Key: "MANUAL_1", Value: "m1", Source: "manual"},
 				{Key: "MANUAL_2", Value: "m2", Source: "manual"},
 				{Key: "CONFIG_1", Value: "c1_updated", Source: "config"},
@@ -868,15 +866,15 @@ func TestMergeServiceEnvVars(t *testing.T) {
 		},
 		{
 			name: "empty source vars preserved when app.toml adds env",
-			existingEnvs: []core_v1alpha.Env{
+			existingEnvs: []core_v1alpha.ConfigSpecServicesEnv{
 				{Key: "LEGACY_DB_URL", Value: "postgres://old/db", Source: ""},
 				{Key: "LEGACY_API_KEY", Value: "key123", Source: ""},
 				{Key: "MANUAL_SECRET", Value: "secret", Source: "manual"},
 			},
-			newEnvs: []core_v1alpha.Env{
+			newEnvs: []core_v1alpha.ConfigSpecServicesEnv{
 				{Key: "NEW_CONFIG_VAR", Value: "new_value", Source: "config"},
 			},
-			wantEnvs: []core_v1alpha.Env{
+			wantEnvs: []core_v1alpha.ConfigSpecServicesEnv{
 				{Key: "LEGACY_DB_URL", Value: "postgres://old/db", Source: ""},
 				{Key: "LEGACY_API_KEY", Value: "key123", Source: ""},
 				{Key: "MANUAL_SECRET", Value: "secret", Source: "manual"},
@@ -886,20 +884,20 @@ func TestMergeServiceEnvVars(t *testing.T) {
 		{
 			name:         "nil existing envs",
 			existingEnvs: nil,
-			newEnvs: []core_v1alpha.Env{
+			newEnvs: []core_v1alpha.ConfigSpecServicesEnv{
 				{Key: "NEW_VAR", Value: "new_value", Source: "config"},
 			},
-			wantEnvs: []core_v1alpha.Env{
+			wantEnvs: []core_v1alpha.ConfigSpecServicesEnv{
 				{Key: "NEW_VAR", Value: "new_value", Source: "config"},
 			},
 		},
 		{
 			name: "nil new envs preserves manual vars",
-			existingEnvs: []core_v1alpha.Env{
+			existingEnvs: []core_v1alpha.ConfigSpecServicesEnv{
 				{Key: "MANUAL_VAR", Value: "manual_value", Source: "manual"},
 			},
 			newEnvs: nil,
-			wantEnvs: []core_v1alpha.Env{
+			wantEnvs: []core_v1alpha.ConfigSpecServicesEnv{
 				{Key: "MANUAL_VAR", Value: "manual_value", Source: "manual"},
 			},
 		},
@@ -910,13 +908,13 @@ func TestMergeServiceEnvVars(t *testing.T) {
 			result := mergeServiceEnvVars(tt.existingEnvs, tt.newEnvs)
 
 			// Sort both slices by key for consistent comparison
-			sortEnvsByKey := func(envs []core_v1alpha.Env) {
+			sortEnvsByKey := func(envs []core_v1alpha.ConfigSpecServicesEnv) {
 				sort.Slice(envs, func(i, j int) bool {
 					return envs[i].Key < envs[j].Key
 				})
 			}
 			sortEnvsByKey(result)
-			wantSorted := make([]core_v1alpha.Env, len(tt.wantEnvs))
+			wantSorted := make([]core_v1alpha.ConfigSpecServicesEnv, len(tt.wantEnvs))
 			copy(wantSorted, tt.wantEnvs)
 			sortEnvsByKey(wantSorted)
 
@@ -1005,7 +1003,7 @@ func TestBuildVersionConfig(t *testing.T) {
 	tests := []struct {
 		name     string
 		inputs   ConfigInputs
-		validate func(t *testing.T, cfg core_v1alpha.Config)
+		validate func(t *testing.T, spec core_v1alpha.ConfigSpec)
 	}{
 		{
 			name: "image entrypoint creates web service when no services configured",
@@ -1016,15 +1014,13 @@ func TestBuildVersionConfig(t *testing.T) {
 				},
 				AppConfig:        nil,
 				ProcfileServices: nil,
-				ExistingConfig:   core_v1alpha.Config{},
+				ExistingConfig:   core_v1alpha.ConfigSpec{},
 			},
-			validate: func(t *testing.T, cfg core_v1alpha.Config) {
-				require.Len(t, cfg.Services, 1, "should have one service")
-				assert.Equal(t, "web", cfg.Services[0].Name)
-				require.Len(t, cfg.Commands, 1, "should have one command")
-				assert.Equal(t, "web", cfg.Commands[0].Service)
-				assert.Equal(t, "node server.js", cfg.Commands[0].Command)
-				assert.Equal(t, "/app", cfg.StartDirectory)
+			validate: func(t *testing.T, spec core_v1alpha.ConfigSpec) {
+				require.Len(t, spec.Services, 1, "should have one service")
+				assert.Equal(t, "web", spec.Services[0].Name)
+				assert.Equal(t, "node server.js", spec.Services[0].Command)
+				assert.Equal(t, "/app", spec.StartDirectory)
 			},
 		},
 		{
@@ -1038,29 +1034,23 @@ func TestBuildVersionConfig(t *testing.T) {
 				ProcfileServices: map[string]string{
 					"worker": "node worker.js",
 				},
-				ExistingConfig: core_v1alpha.Config{},
+				ExistingConfig: core_v1alpha.ConfigSpec{},
 			},
-			validate: func(t *testing.T, cfg core_v1alpha.Config) {
-				require.Len(t, cfg.Services, 2, "should have two services")
+			validate: func(t *testing.T, spec core_v1alpha.ConfigSpec) {
+				require.Len(t, spec.Services, 2, "should have two services")
 
 				// Find services by name
-				serviceMap := make(map[string]core_v1alpha.Services)
-				for _, svc := range cfg.Services {
+				serviceMap := make(map[string]core_v1alpha.ConfigSpecServices)
+				for _, svc := range spec.Services {
 					serviceMap[svc.Name] = svc
 				}
 
 				require.Contains(t, serviceMap, "web")
 				require.Contains(t, serviceMap, "worker")
 
-				// Find commands by service
-				cmdMap := make(map[string]string)
-				for _, cmd := range cfg.Commands {
-					cmdMap[cmd.Service] = cmd.Command
-				}
-
-				assert.Equal(t, "npm start", cmdMap["web"])
-				assert.Equal(t, "node worker.js", cmdMap["worker"])
-				assert.Equal(t, "/myapp", cfg.StartDirectory)
+				assert.Equal(t, "npm start", serviceMap["web"].Command)
+				assert.Equal(t, "node worker.js", serviceMap["worker"].Command)
+				assert.Equal(t, "/myapp", spec.StartDirectory)
 			},
 		},
 		{
@@ -1074,13 +1064,12 @@ func TestBuildVersionConfig(t *testing.T) {
 				ProcfileServices: map[string]string{
 					"web": "npm run production",
 				},
-				ExistingConfig: core_v1alpha.Config{},
+				ExistingConfig: core_v1alpha.ConfigSpec{},
 			},
-			validate: func(t *testing.T, cfg core_v1alpha.Config) {
-				require.Len(t, cfg.Services, 1)
-				assert.Equal(t, "web", cfg.Services[0].Name)
-				require.Len(t, cfg.Commands, 1)
-				assert.Equal(t, "npm run production", cfg.Commands[0].Command)
+			validate: func(t *testing.T, spec core_v1alpha.ConfigSpec) {
+				require.Len(t, spec.Services, 1)
+				assert.Equal(t, "web", spec.Services[0].Name)
+				assert.Equal(t, "npm run production", spec.Services[0].Command)
 			},
 		},
 		{
@@ -1097,13 +1086,12 @@ func TestBuildVersionConfig(t *testing.T) {
 					},
 				},
 				ProcfileServices: nil,
-				ExistingConfig:   core_v1alpha.Config{},
+				ExistingConfig:   core_v1alpha.ConfigSpec{},
 			},
-			validate: func(t *testing.T, cfg core_v1alpha.Config) {
-				require.Len(t, cfg.Services, 1)
-				assert.Equal(t, "web", cfg.Services[0].Name)
-				require.Len(t, cfg.Commands, 1)
-				assert.Equal(t, "npm run app-config", cfg.Commands[0].Command)
+			validate: func(t *testing.T, spec core_v1alpha.ConfigSpec) {
+				require.Len(t, spec.Services, 1)
+				assert.Equal(t, "web", spec.Services[0].Name)
+				assert.Equal(t, "npm run app-config", spec.Services[0].Command)
 			},
 		},
 		{
@@ -1114,12 +1102,11 @@ func TestBuildVersionConfig(t *testing.T) {
 				},
 				AppConfig:        nil,
 				ProcfileServices: nil,
-				ExistingConfig:   core_v1alpha.Config{},
+				ExistingConfig:   core_v1alpha.ConfigSpec{},
 			},
-			validate: func(t *testing.T, cfg core_v1alpha.Config) {
-				assert.Len(t, cfg.Services, 0, "should have no services")
-				assert.Len(t, cfg.Commands, 0, "should have no commands")
-				assert.Equal(t, "/app", cfg.StartDirectory)
+			validate: func(t *testing.T, spec core_v1alpha.ConfigSpec) {
+				assert.Len(t, spec.Services, 0, "should have no services")
+				assert.Equal(t, "/app", spec.StartDirectory)
 			},
 		},
 		{
@@ -1131,10 +1118,10 @@ func TestBuildVersionConfig(t *testing.T) {
 				},
 				AppConfig:        nil,
 				ProcfileServices: nil,
-				ExistingConfig:   core_v1alpha.Config{},
+				ExistingConfig:   core_v1alpha.ConfigSpec{},
 			},
-			validate: func(t *testing.T, cfg core_v1alpha.Config) {
-				assert.Equal(t, "/app/bin/start", cfg.Entrypoint)
+			validate: func(t *testing.T, spec core_v1alpha.ConfigSpec) {
+				assert.Equal(t, "/app/bin/start", spec.Entrypoint)
 			},
 		},
 		{
@@ -1143,10 +1130,10 @@ func TestBuildVersionConfig(t *testing.T) {
 				BuildResult:      &BuildResult{},
 				AppConfig:        nil,
 				ProcfileServices: nil,
-				ExistingConfig:   core_v1alpha.Config{},
+				ExistingConfig:   core_v1alpha.ConfigSpec{},
 			},
-			validate: func(t *testing.T, cfg core_v1alpha.Config) {
-				assert.Equal(t, "/app", cfg.StartDirectory)
+			validate: func(t *testing.T, spec core_v1alpha.ConfigSpec) {
+				assert.Equal(t, "/app", spec.StartDirectory)
 			},
 		},
 		{
@@ -1157,11 +1144,11 @@ func TestBuildVersionConfig(t *testing.T) {
 				ProcfileServices: map[string]string{
 					"web": "npm start",
 				},
-				ExistingConfig: core_v1alpha.Config{
-					Services: []core_v1alpha.Services{
+				ExistingConfig: core_v1alpha.ConfigSpec{
+					Services: []core_v1alpha.ConfigSpecServices{
 						{
 							Name: "web",
-							Env: []core_v1alpha.Env{
+							Env: []core_v1alpha.ConfigSpecServicesEnv{
 								{Key: "MANUAL_VAR", Value: "manual_value", Source: "manual"},
 								{Key: "CONFIG_VAR", Value: "old_config", Source: "config"},
 							},
@@ -1169,13 +1156,13 @@ func TestBuildVersionConfig(t *testing.T) {
 					},
 				},
 			},
-			validate: func(t *testing.T, cfg core_v1alpha.Config) {
-				require.Len(t, cfg.Services, 1)
-				assert.Equal(t, "web", cfg.Services[0].Name)
+			validate: func(t *testing.T, spec core_v1alpha.ConfigSpec) {
+				require.Len(t, spec.Services, 1)
+				assert.Equal(t, "web", spec.Services[0].Name)
 
 				// Should preserve manual var
-				envMap := make(map[string]core_v1alpha.Env)
-				for _, env := range cfg.Services[0].Env {
+				envMap := make(map[string]core_v1alpha.ConfigSpecServicesEnv)
+				for _, env := range spec.Services[0].Env {
 					envMap[env.Key] = env
 				}
 
@@ -1202,26 +1189,21 @@ func TestBuildVersionConfig(t *testing.T) {
 					},
 				},
 				ProcfileServices: nil,
-				ExistingConfig:   core_v1alpha.Config{},
+				ExistingConfig:   core_v1alpha.ConfigSpec{},
 			},
-			validate: func(t *testing.T, cfg core_v1alpha.Config) {
-				require.Len(t, cfg.Services, 2, "should have two services")
+			validate: func(t *testing.T, spec core_v1alpha.ConfigSpec) {
+				require.Len(t, spec.Services, 2, "should have two services")
 
-				serviceMap := make(map[string]core_v1alpha.Services)
-				for _, svc := range cfg.Services {
+				serviceMap := make(map[string]core_v1alpha.ConfigSpecServices)
+				for _, svc := range spec.Services {
 					serviceMap[svc.Name] = svc
 				}
 
 				require.Contains(t, serviceMap, "web")
 				require.Contains(t, serviceMap, "worker")
 
-				cmdMap := make(map[string]string)
-				for _, cmd := range cfg.Commands {
-					cmdMap[cmd.Service] = cmd.Command
-				}
-
-				assert.Equal(t, "python app.py", cmdMap["web"])
-				assert.Equal(t, "celery worker", cmdMap["worker"])
+				assert.Equal(t, "python app.py", serviceMap["web"].Command)
+				assert.Equal(t, "celery worker", serviceMap["worker"].Command)
 			},
 		},
 		{
@@ -1234,21 +1216,20 @@ func TestBuildVersionConfig(t *testing.T) {
 				},
 				AppConfig:        nil,
 				ProcfileServices: nil,
-				ExistingConfig:   core_v1alpha.Config{},
+				ExistingConfig:   core_v1alpha.ConfigSpec{},
 			},
-			validate: func(t *testing.T, cfg core_v1alpha.Config) {
-				require.Len(t, cfg.Services, 1, "should have one service")
-				assert.Equal(t, "web", cfg.Services[0].Name)
-				require.Len(t, cfg.Commands, 1, "should have one command")
-				assert.Equal(t, "server.js", cfg.Commands[0].Command)
+			validate: func(t *testing.T, spec core_v1alpha.ConfigSpec) {
+				require.Len(t, spec.Services, 1, "should have one service")
+				assert.Equal(t, "web", spec.Services[0].Name)
+				assert.Equal(t, "server.js", spec.Services[0].Command)
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := buildVersionConfig(tt.inputs)
-			tt.validate(t, cfg)
+			spec := buildVersionConfig(tt.inputs)
+			tt.validate(t, spec)
 		})
 	}
 }
@@ -1348,15 +1329,15 @@ func makeEnvVar(key, value string, sensitive bool) *build_v1alpha.EnvironmentVar
 func TestMergeCliEnvVars(t *testing.T) {
 	tests := []struct {
 		name          string
-		existingVars  []core_v1alpha.Variable
+		existingVars  []core_v1alpha.ConfigSpecVariables
 		cliVars       []*build_v1alpha.EnvironmentVariable
-		wantVariables []core_v1alpha.Variable
+		wantVariables []core_v1alpha.ConfigSpecVariables
 	}{
 		{
 			name:          "empty CLI vars returns existing unchanged",
-			existingVars:  []core_v1alpha.Variable{{Key: "FOO", Value: "bar", Source: "config"}},
+			existingVars:  []core_v1alpha.ConfigSpecVariables{{Key: "FOO", Value: "bar", Source: "config"}},
 			cliVars:       nil,
-			wantVariables: []core_v1alpha.Variable{{Key: "FOO", Value: "bar", Source: "config"}},
+			wantVariables: []core_v1alpha.ConfigSpecVariables{{Key: "FOO", Value: "bar", Source: "config"}},
 		},
 		{
 			name:         "CLI vars added to empty existing",
@@ -1364,56 +1345,56 @@ func TestMergeCliEnvVars(t *testing.T) {
 			cliVars: []*build_v1alpha.EnvironmentVariable{
 				makeEnvVar("FOO", "bar", false),
 			},
-			wantVariables: []core_v1alpha.Variable{
+			wantVariables: []core_v1alpha.ConfigSpecVariables{
 				{Key: "FOO", Value: "bar", Sensitive: false, Source: "manual"},
 			},
 		},
 		{
 			name: "CLI vars override existing config vars",
-			existingVars: []core_v1alpha.Variable{
+			existingVars: []core_v1alpha.ConfigSpecVariables{
 				{Key: "FOO", Value: "old", Source: "config"},
 			},
 			cliVars: []*build_v1alpha.EnvironmentVariable{
 				makeEnvVar("FOO", "new", false),
 			},
-			wantVariables: []core_v1alpha.Variable{
+			wantVariables: []core_v1alpha.ConfigSpecVariables{
 				{Key: "FOO", Value: "new", Sensitive: false, Source: "manual"},
 			},
 		},
 		{
 			name: "CLI vars override existing manual vars",
-			existingVars: []core_v1alpha.Variable{
+			existingVars: []core_v1alpha.ConfigSpecVariables{
 				{Key: "FOO", Value: "old-manual", Source: "manual"},
 			},
 			cliVars: []*build_v1alpha.EnvironmentVariable{
 				makeEnvVar("FOO", "new-manual", false),
 			},
-			wantVariables: []core_v1alpha.Variable{
+			wantVariables: []core_v1alpha.ConfigSpecVariables{
 				{Key: "FOO", Value: "new-manual", Sensitive: false, Source: "manual"},
 			},
 		},
 		{
 			name: "CLI vars merge with existing - different keys",
-			existingVars: []core_v1alpha.Variable{
+			existingVars: []core_v1alpha.ConfigSpecVariables{
 				{Key: "EXISTING", Value: "value", Source: "config"},
 			},
 			cliVars: []*build_v1alpha.EnvironmentVariable{
 				makeEnvVar("NEW", "cli-value", false),
 			},
-			wantVariables: []core_v1alpha.Variable{
+			wantVariables: []core_v1alpha.ConfigSpecVariables{
 				{Key: "EXISTING", Value: "value", Source: "config"},
 				{Key: "NEW", Value: "cli-value", Sensitive: false, Source: "manual"},
 			},
 		},
 		{
 			name: "sensitive flag preserved from CLI",
-			existingVars: []core_v1alpha.Variable{
+			existingVars: []core_v1alpha.ConfigSpecVariables{
 				{Key: "SECRET", Value: "old", Sensitive: false, Source: "config"},
 			},
 			cliVars: []*build_v1alpha.EnvironmentVariable{
 				makeEnvVar("SECRET", "new-secret", true),
 			},
-			wantVariables: []core_v1alpha.Variable{
+			wantVariables: []core_v1alpha.ConfigSpecVariables{
 				{Key: "SECRET", Value: "new-secret", Sensitive: true, Source: "manual"},
 			},
 		},
@@ -1425,7 +1406,7 @@ func TestMergeCliEnvVars(t *testing.T) {
 				makeEnvVar("BAR", "bar-val", false),
 				makeEnvVar("SECRET", "secret-val", true),
 			},
-			wantVariables: []core_v1alpha.Variable{
+			wantVariables: []core_v1alpha.ConfigSpecVariables{
 				{Key: "FOO", Value: "foo-val", Sensitive: false, Source: "manual"},
 				{Key: "BAR", Value: "bar-val", Sensitive: false, Source: "manual"},
 				{Key: "SECRET", Value: "secret-val", Sensitive: true, Source: "manual"},
@@ -1485,7 +1466,7 @@ func TestIsSystemEnvVar(t *testing.T) {
 func TestComputeBuildEnvVars(t *testing.T) {
 	tests := []struct {
 		name         string
-		existingVars []core_v1alpha.Variable
+		existingVars []core_v1alpha.ConfigSpecVariables
 		appConfig    *appconfig.AppConfig
 		cliVars      []*build_v1alpha.EnvironmentVariable
 		wantVars     map[string]string
@@ -1499,7 +1480,7 @@ func TestComputeBuildEnvVars(t *testing.T) {
 		},
 		{
 			name: "existing config vars are included",
-			existingVars: []core_v1alpha.Variable{
+			existingVars: []core_v1alpha.ConfigSpecVariables{
 				{Key: "DATABASE_URL", Value: "postgres://localhost/db", Source: "manual"},
 				{Key: "API_KEY", Value: "secret123", Source: "config"},
 			},
@@ -1512,7 +1493,7 @@ func TestComputeBuildEnvVars(t *testing.T) {
 		},
 		{
 			name: "app config vars merged in",
-			existingVars: []core_v1alpha.Variable{
+			existingVars: []core_v1alpha.ConfigSpecVariables{
 				{Key: "EXISTING", Value: "value", Source: "manual"},
 			},
 			appConfig: &appconfig.AppConfig{
@@ -1543,7 +1524,7 @@ func TestComputeBuildEnvVars(t *testing.T) {
 		},
 		{
 			name: "system vars are filtered out",
-			existingVars: []core_v1alpha.Variable{
+			existingVars: []core_v1alpha.ConfigSpecVariables{
 				{Key: "DATABASE_URL", Value: "postgres://localhost/db", Source: "manual"},
 				{Key: "MIREN_VERSION", Value: "v1", Source: "config"},
 				{Key: "MIREN_APP", Value: "myapp", Source: "config"},
@@ -1559,7 +1540,7 @@ func TestComputeBuildEnvVars(t *testing.T) {
 		},
 		{
 			name: "sensitive vars are included",
-			existingVars: []core_v1alpha.Variable{
+			existingVars: []core_v1alpha.ConfigSpecVariables{
 				{Key: "SECRET_KEY", Value: "super-secret", Sensitive: true, Source: "manual"},
 			},
 			appConfig: nil,
@@ -1570,7 +1551,7 @@ func TestComputeBuildEnvVars(t *testing.T) {
 		},
 		{
 			name: "full merge: existing + app config + CLI with system filtering",
-			existingVars: []core_v1alpha.Variable{
+			existingVars: []core_v1alpha.ConfigSpecVariables{
 				{Key: "EXISTING_MANUAL", Value: "m1", Source: "manual"},
 				{Key: "EXISTING_CONFIG", Value: "c1", Source: "config"},
 				{Key: "PORT", Value: "3000", Source: "manual"},
@@ -1604,30 +1585,30 @@ func TestComputeBuildEnvVars(t *testing.T) {
 func TestValidateServicesExist(t *testing.T) {
 	tests := []struct {
 		name    string
-		config  core_v1alpha.Config
+		config  core_v1alpha.ConfigSpec
 		wantErr bool
 	}{
 		{
 			name:    "no services returns error",
-			config:  core_v1alpha.Config{Services: nil},
+			config:  core_v1alpha.ConfigSpec{Services: nil},
 			wantErr: true,
 		},
 		{
 			name:    "empty services returns error",
-			config:  core_v1alpha.Config{Services: []core_v1alpha.Services{}},
+			config:  core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{}},
 			wantErr: true,
 		},
 		{
 			name: "one service passes",
-			config: core_v1alpha.Config{
-				Services: []core_v1alpha.Services{{Name: "web"}},
+			config: core_v1alpha.ConfigSpec{
+				Services: []core_v1alpha.ConfigSpecServices{{Name: "web"}},
 			},
 			wantErr: false,
 		},
 		{
 			name: "multiple services passes",
-			config: core_v1alpha.Config{
-				Services: []core_v1alpha.Services{{Name: "web"}, {Name: "worker"}},
+			config: core_v1alpha.ConfigSpec{
+				Services: []core_v1alpha.ConfigSpecServices{{Name: "web"}, {Name: "worker"}},
 			},
 			wantErr: false,
 		},

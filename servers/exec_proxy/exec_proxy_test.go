@@ -32,6 +32,7 @@ func TestBuildSandboxSpec(t *testing.T) {
 		name          string
 		app           *core_v1alpha.App
 		ver           *core_v1alpha.AppVersion
+		cfgSpec       *core_v1alpha.ConfigSpec
 		expectedImage string
 		expectedEnvs  []string
 	}{
@@ -45,11 +46,11 @@ func TestBuildSandboxSpec(t *testing.T) {
 				App:      "app/basic-app",
 				Version:  "v1",
 				ImageUrl: "basic-image:latest",
-				Config: core_v1alpha.Config{
-					StartDirectory: "/workspace",
-					Variable: []core_v1alpha.Variable{
-						{Key: "GLOBAL_VAR", Value: "global_value"},
-					},
+			},
+			cfgSpec: &core_v1alpha.ConfigSpec{
+				StartDirectory: "/workspace",
+				Variables: []core_v1alpha.ConfigSpecVariables{
+					{Key: "GLOBAL_VAR", Value: "global_value"},
 				},
 			},
 			expectedImage: "basic-image:latest",
@@ -69,7 +70,7 @@ func TestBuildSandboxSpec(t *testing.T) {
 			).Attrs())
 			require.NoError(t, err, "Failed to create app entity")
 
-			spec, err := server.buildSandboxSpec(ctx, tt.app, tt.ver)
+			spec, err := server.buildSandboxSpec(ctx, tt.app, tt.ver, tt.cfgSpec)
 			require.NoError(t, err, "buildSandboxSpec failed")
 			require.NotNil(t, spec, "Expected spec to be returned")
 
@@ -123,11 +124,12 @@ func TestCreateEphemeralSandbox(t *testing.T) {
 		App:      "app/test-app",
 		Version:  "v1",
 		ImageUrl: "test-image:latest",
-		Config: core_v1alpha.Config{
-			StartDirectory: "/app",
-			Variable: []core_v1alpha.Variable{
-				{Key: "ENV", Value: "test"},
-			},
+	}
+
+	cfgSpec := &core_v1alpha.ConfigSpec{
+		StartDirectory: "/app",
+		Variables: []core_v1alpha.ConfigSpecVariables{
+			{Key: "ENV", Value: "test"},
 		},
 	}
 
@@ -142,7 +144,7 @@ func TestCreateEphemeralSandbox(t *testing.T) {
 	require.NoError(t, err, "Failed to create app entity")
 
 	// Create ephemeral sandbox - should succeed with mock controller
-	sbEnt, cleanupFn, createErr := server.createEphemeralSandbox(ctx, app, ver)
+	sbEnt, cleanupFn, createErr := server.createEphemeralSandbox(ctx, app, ver, cfgSpec)
 	require.NoError(t, createErr, "createEphemeralSandbox failed")
 	defer cleanupFn()
 
@@ -200,8 +202,10 @@ func TestCreateEphemeralSandbox_Timeout(t *testing.T) {
 	shortCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
 	defer cancel()
 
+	cfgSpec := &core_v1alpha.ConfigSpec{}
+
 	// This will timeout because there's no sandbox controller
-	_, _, createErr := server.createEphemeralSandbox(shortCtx, app, ver)
+	_, _, createErr := server.createEphemeralSandbox(shortCtx, app, ver, cfgSpec)
 	require.Error(t, createErr, "Expected error due to timeout")
 
 	// Verify the error is a timeout error
@@ -252,8 +256,10 @@ func TestCreateEphemeralSandbox_Failure(t *testing.T) {
 	).Attrs())
 	require.NoError(t, err, "Failed to create app entity")
 
+	cfgSpec := &core_v1alpha.ConfigSpec{}
+
 	// This should fail because sandbox transitions to DEAD
-	_, _, createErr := server.createEphemeralSandbox(ctx, app, ver)
+	_, _, createErr := server.createEphemeralSandbox(ctx, app, ver, cfgSpec)
 	require.Error(t, createErr, "Expected error for failed sandbox")
 
 	// Verify the error mentions the dead status

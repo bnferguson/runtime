@@ -16,18 +16,16 @@ func TestCommand(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		ver      *core_v1alpha.AppVersion
+		cfgSpec  *core_v1alpha.ConfigSpec
 		service  string
 		expected string
 	}{
 		{
 			name: "console command with entrypoint",
-			ver: &core_v1alpha.AppVersion{
-				Config: core_v1alpha.Config{
-					Entrypoint: "mise exec --",
-					Commands: []core_v1alpha.Commands{
-						{Service: "console", Command: "bin/rails console"},
-					},
+			cfgSpec: &core_v1alpha.ConfigSpec{
+				Entrypoint: "mise exec --",
+				Services: []core_v1alpha.ConfigSpecServices{
+					{Name: "console", Command: "bin/rails console"},
 				},
 			},
 			service:  "console",
@@ -35,11 +33,9 @@ func TestCommand(t *testing.T) {
 		},
 		{
 			name: "console command without entrypoint",
-			ver: &core_v1alpha.AppVersion{
-				Config: core_v1alpha.Config{
-					Commands: []core_v1alpha.Commands{
-						{Service: "console", Command: "bin/rails console"},
-					},
+			cfgSpec: &core_v1alpha.ConfigSpec{
+				Services: []core_v1alpha.ConfigSpecServices{
+					{Name: "console", Command: "bin/rails console"},
 				},
 			},
 			service:  "console",
@@ -47,12 +43,10 @@ func TestCommand(t *testing.T) {
 		},
 		{
 			name: "no matching service",
-			ver: &core_v1alpha.AppVersion{
-				Config: core_v1alpha.Config{
-					Entrypoint: "mise exec --",
-					Commands: []core_v1alpha.Commands{
-						{Service: "web", Command: "bin/rails server"},
-					},
+			cfgSpec: &core_v1alpha.ConfigSpec{
+				Entrypoint: "mise exec --",
+				Services: []core_v1alpha.ConfigSpecServices{
+					{Name: "web", Command: "bin/rails server"},
 				},
 			},
 			service:  "console",
@@ -60,11 +54,9 @@ func TestCommand(t *testing.T) {
 		},
 		{
 			name: "empty command for service",
-			ver: &core_v1alpha.AppVersion{
-				Config: core_v1alpha.Config{
-					Commands: []core_v1alpha.Commands{
-						{Service: "console", Command: ""},
-					},
+			cfgSpec: &core_v1alpha.ConfigSpec{
+				Services: []core_v1alpha.ConfigSpecServices{
+					{Name: "console", Command: ""},
 				},
 			},
 			service:  "console",
@@ -74,7 +66,7 @@ func TestCommand(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := server.command(tt.ver, tt.service)
+			result := server.command(tt.cfgSpec, tt.service)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -97,98 +89,86 @@ func TestSpec(t *testing.T) {
 	tests := []struct {
 		name         string
 		opts         *exec_v1alpha.ShellOptions
-		ver          *core_v1alpha.AppVersion
+		cfgSpec      *core_v1alpha.ConfigSpec
 		expectedArgs []string
 		description  string
 	}{
 		{
-			name:         "nil version, no command - defaults to /bin/sh",
+			name:         "nil config, no command - defaults to /bin/sh",
 			opts:         &exec_v1alpha.ShellOptions{},
-			ver:          nil,
+			cfgSpec:      nil,
 			expectedArgs: []string{"/bin/sh"},
 			description:  "Non-app containers (like postgres) should get plain shell",
 		},
 		{
-			name: "nil version, with command - runs command directly",
+			name: "nil config, with command - runs command directly",
 			opts: func() *exec_v1alpha.ShellOptions {
 				o := &exec_v1alpha.ShellOptions{}
 				o.SetCommand([]string{"psql", "-U", "postgres"})
 				return o
 			}(),
-			ver:          nil,
+			cfgSpec:      nil,
 			expectedArgs: []string{"psql", "-U", "postgres"},
 			description:  "Non-app containers should run commands without entrypoint",
 		},
 		{
-			name: "version with entrypoint, no command - wraps shell with entrypoint",
+			name: "config with entrypoint, no command - wraps shell with entrypoint",
 			opts: &exec_v1alpha.ShellOptions{},
-			ver: &core_v1alpha.AppVersion{
-				Config: core_v1alpha.Config{
-					Entrypoint: "mise exec --",
-				},
+			cfgSpec: &core_v1alpha.ConfigSpec{
+				Entrypoint: "mise exec --",
 			},
 			expectedArgs: []string{"/bin/sh", "-c", "exec mise exec -- /bin/sh"},
 			description:  "App containers should have entrypoint applied to shell",
 		},
 		{
-			name: "version with entrypoint, with command - wraps command with entrypoint",
+			name: "config with entrypoint, with command - wraps command with entrypoint",
 			opts: func() *exec_v1alpha.ShellOptions {
 				o := &exec_v1alpha.ShellOptions{}
 				o.SetCommand([]string{"bin/rails", "runner", "puts 'hello'"})
 				return o
 			}(),
-			ver: &core_v1alpha.AppVersion{
-				Config: core_v1alpha.Config{
-					Entrypoint: "mise exec --",
-				},
+			cfgSpec: &core_v1alpha.ConfigSpec{
+				Entrypoint: "mise exec --",
 			},
 			expectedArgs: []string{"/bin/sh", "-c", "exec mise exec -- bin/rails runner puts 'hello'"},
 			description:  "App containers should have entrypoint applied to commands",
 		},
 		{
-			name: "version without entrypoint, no command - plain shell",
-			opts: &exec_v1alpha.ShellOptions{},
-			ver: &core_v1alpha.AppVersion{
-				Config: core_v1alpha.Config{},
-			},
+			name:         "config without entrypoint, no command - plain shell",
+			opts:         &exec_v1alpha.ShellOptions{},
+			cfgSpec:      &core_v1alpha.ConfigSpec{},
 			expectedArgs: []string{"/bin/sh"},
 			description:  "App containers without entrypoint get plain shell",
 		},
 		{
-			name: "version without entrypoint, with command - runs command directly",
+			name: "config without entrypoint, with command - runs command directly",
 			opts: func() *exec_v1alpha.ShellOptions {
 				o := &exec_v1alpha.ShellOptions{}
 				o.SetCommand([]string{"ls", "-la"})
 				return o
 			}(),
-			ver: &core_v1alpha.AppVersion{
-				Config: core_v1alpha.Config{},
-			},
+			cfgSpec:      &core_v1alpha.ConfigSpec{},
 			expectedArgs: []string{"ls", "-la"},
 			description:  "App containers without entrypoint run commands directly",
 		},
 		{
-			name: "version with console command, no user command - uses console command",
+			name: "config with console command, no user command - uses console command",
 			opts: &exec_v1alpha.ShellOptions{},
-			ver: &core_v1alpha.AppVersion{
-				Config: core_v1alpha.Config{
-					Entrypoint: "mise exec --",
-					Commands: []core_v1alpha.Commands{
-						{Service: "console", Command: "bin/rails console"},
-					},
+			cfgSpec: &core_v1alpha.ConfigSpec{
+				Entrypoint: "mise exec --",
+				Services: []core_v1alpha.ConfigSpecServices{
+					{Name: "console", Command: "bin/rails console"},
 				},
 			},
 			expectedArgs: []string{"/bin/sh", "-c", "exec mise exec -- bin/rails console"},
 			description:  "Interactive exec should use configured console command",
 		},
 		{
-			name: "version with console command but no entrypoint",
+			name: "config with console command but no entrypoint",
 			opts: &exec_v1alpha.ShellOptions{},
-			ver: &core_v1alpha.AppVersion{
-				Config: core_v1alpha.Config{
-					Commands: []core_v1alpha.Commands{
-						{Service: "console", Command: "bin/rails console"},
-					},
+			cfgSpec: &core_v1alpha.ConfigSpec{
+				Services: []core_v1alpha.ConfigSpecServices{
+					{Name: "console", Command: "bin/rails console"},
 				},
 			},
 			expectedArgs: []string{"/bin/sh", "-c", "exec bin/rails console"},
@@ -198,7 +178,7 @@ func TestSpec(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			proc, err := server.spec(tt.opts, baseOCISpec, tt.ver)
+			proc, err := server.spec(tt.opts, baseOCISpec, tt.cfgSpec)
 			require.NoError(t, err)
 			assert.Equal(t, tt.expectedArgs, proc.Args, tt.description)
 
@@ -279,17 +259,14 @@ func TestEntrypointNotAppliedToCustomImageContainers(t *testing.T) {
 	})
 
 	t.Run("app container with same image gets entrypoint", func(t *testing.T) {
-		// When exec'ing into an app container, ver is populated
+		// When exec'ing into an app container, cfgSpec is populated
 		// because the container's image matches the app's image
 		opts := &exec_v1alpha.ShellOptions{}
-		ver := &core_v1alpha.AppVersion{
-			ImageUrl: "myapp:latest",
-			Config: core_v1alpha.Config{
-				Entrypoint: "mise exec --",
-			},
+		cfgSpec := &core_v1alpha.ConfigSpec{
+			Entrypoint: "mise exec --",
 		}
 
-		proc, err := server.spec(opts, baseOCISpec, ver)
+		proc, err := server.spec(opts, baseOCISpec, cfgSpec)
 		require.NoError(t, err)
 		assert.Equal(t, []string{"/bin/sh", "-c", "exec mise exec -- /bin/sh"}, proc.Args,
 			"App container should have entrypoint applied")

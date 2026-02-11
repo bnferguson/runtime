@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"miren.dev/runtime/api/compute/compute_v1alpha"
+	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/ui"
@@ -42,12 +43,14 @@ func SandboxPoolList(ctx *Context, opts struct {
 		return err
 	}
 
-	// Build version map for lookup
-	versionMap := make(map[string]*core_v1alpha.AppVersion)
+	// Build resolved config spec map for lookup
+	specMap := make(map[string]*core_v1alpha.ConfigSpec)
 	for _, e := range versionsRes.Values() {
 		v := new(core_v1alpha.AppVersion)
 		v.Decode(e.Entity())
-		versionMap[v.ID.String()] = v
+		if resolvedCfg, err := coreutil.ResolveConfig(ctx, eac, v); err == nil {
+			specMap[v.ID.String()] = resolvedCfg
+		}
 	}
 
 	if opts.IsJSON() {
@@ -71,9 +74,9 @@ func SandboxPoolList(ctx *Context, opts struct {
 
 		// Determine scaling mode from version config
 		mode := "auto"
-		if version, ok := versionMap[pool.SandboxSpec.Version.String()]; ok {
-			for _, svc := range version.Config.Services {
-				if svc.Name == pool.Service && svc.ServiceConcurrency.Mode == "fixed" {
+		if spec, ok := specMap[pool.SandboxSpec.Version.String()]; ok {
+			for _, svc := range spec.Services {
+				if svc.Name == pool.Service && svc.Concurrency.Mode == "fixed" {
 					mode = "fixed"
 					break
 				}

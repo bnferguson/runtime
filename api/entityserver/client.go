@@ -29,6 +29,11 @@ func NewClient(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient) *
 	}
 }
 
+// EAC returns the underlying EntityAccessClient.
+func (c *Client) EAC() *entityserver_v1alpha.EntityAccessClient {
+	return c.eac
+}
+
 type SchemaEncoder interface {
 	ShortKind() string
 	Kind() entity.Id

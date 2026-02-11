@@ -7,13 +7,558 @@ import (
 )
 
 const (
+	ConfigSpecEntrypointId     = entity.Id("dev.miren.core/component.config_spec.entrypoint")
+	ConfigSpecServicesId       = entity.Id("dev.miren.core/component.config_spec.services")
+	ConfigSpecStartDirectoryId = entity.Id("dev.miren.core/component.config_spec.start_directory")
+	ConfigSpecVariablesId      = entity.Id("dev.miren.core/component.config_spec.variables")
+)
+
+type ConfigSpec struct {
+	Entrypoint     string                `cbor:"entrypoint,omitempty" json:"entrypoint,omitempty"`
+	Services       []ConfigSpecServices  `cbor:"services,omitempty" json:"services,omitempty"`
+	StartDirectory string                `cbor:"start_directory,omitempty" json:"start_directory,omitempty"`
+	Variables      []ConfigSpecVariables `cbor:"variables,omitempty" json:"variables,omitempty"`
+}
+
+func (o *ConfigSpec) Decode(e entity.AttrGetter) {
+	if a, ok := e.Get(ConfigSpecEntrypointId); ok && a.Value.Kind() == entity.KindString {
+		o.Entrypoint = a.Value.String()
+	}
+	for _, a := range e.GetAll(ConfigSpecServicesId) {
+		if a.Value.Kind() == entity.KindComponent {
+			var v ConfigSpecServices
+			v.Decode(a.Value.Component())
+			o.Services = append(o.Services, v)
+		}
+	}
+	if a, ok := e.Get(ConfigSpecStartDirectoryId); ok && a.Value.Kind() == entity.KindString {
+		o.StartDirectory = a.Value.String()
+	}
+	for _, a := range e.GetAll(ConfigSpecVariablesId) {
+		if a.Value.Kind() == entity.KindComponent {
+			var v ConfigSpecVariables
+			v.Decode(a.Value.Component())
+			o.Variables = append(o.Variables, v)
+		}
+	}
+}
+
+func (o *ConfigSpec) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.Entrypoint) {
+		attrs = append(attrs, entity.String(ConfigSpecEntrypointId, o.Entrypoint))
+	}
+	for _, v := range o.Services {
+		attrs = append(attrs, entity.Component(ConfigSpecServicesId, v.Encode()))
+	}
+	if !entity.Empty(o.StartDirectory) {
+		attrs = append(attrs, entity.String(ConfigSpecStartDirectoryId, o.StartDirectory))
+	}
+	for _, v := range o.Variables {
+		attrs = append(attrs, entity.Component(ConfigSpecVariablesId, v.Encode()))
+	}
+	return
+}
+
+func (o *ConfigSpec) Empty() bool {
+	if !entity.Empty(o.Entrypoint) {
+		return false
+	}
+	if len(o.Services) != 0 {
+		return false
+	}
+	if !entity.Empty(o.StartDirectory) {
+		return false
+	}
+	if len(o.Variables) != 0 {
+		return false
+	}
+	return true
+}
+
+func (o *ConfigSpec) InitSchema(sb *schema.SchemaBuilder) {
+	sb.String("entrypoint", "dev.miren.core/component.config_spec.entrypoint", schema.Doc("The container entrypoint command"))
+	sb.Component("services", "dev.miren.core/component.config_spec.services", schema.Doc("Per-service configuration"), schema.Many)
+	(&ConfigSpecServices{}).InitSchema(sb.Builder("component.config_spec.services"))
+	sb.String("start_directory", "dev.miren.core/component.config_spec.start_directory", schema.Doc("Directory to start the process in (defaults to /app)"))
+	sb.Component("variables", "dev.miren.core/component.config_spec.variables", schema.Doc("Environment variables and configuration values"), schema.Many)
+	(&ConfigSpecVariables{}).InitSchema(sb.Builder("component.config_spec.variables"))
+}
+
+const (
+	ConfigSpecServicesCommandId     = entity.Id("dev.miren.core/component.config_spec.services.command")
+	ConfigSpecServicesConcurrencyId = entity.Id("dev.miren.core/component.config_spec.services.concurrency")
+	ConfigSpecServicesDisksId       = entity.Id("dev.miren.core/component.config_spec.services.disks")
+	ConfigSpecServicesEnvId         = entity.Id("dev.miren.core/component.config_spec.services.env")
+	ConfigSpecServicesImageId       = entity.Id("dev.miren.core/component.config_spec.services.image")
+	ConfigSpecServicesNameId        = entity.Id("dev.miren.core/component.config_spec.services.name")
+	ConfigSpecServicesPortId        = entity.Id("dev.miren.core/component.config_spec.services.port")
+	ConfigSpecServicesPortNameId    = entity.Id("dev.miren.core/component.config_spec.services.port_name")
+	ConfigSpecServicesPortTypeId    = entity.Id("dev.miren.core/component.config_spec.services.port_type")
+)
+
+type ConfigSpecServices struct {
+	Command     string                        `cbor:"command,omitempty" json:"command,omitempty"`
+	Concurrency ConfigSpecServicesConcurrency `cbor:"concurrency,omitempty" json:"concurrency,omitempty"`
+	Disks       []ConfigSpecServicesDisks     `cbor:"disks,omitempty" json:"disks,omitempty"`
+	Env         []ConfigSpecServicesEnv       `cbor:"env,omitempty" json:"env,omitempty"`
+	Image       string                        `cbor:"image,omitempty" json:"image,omitempty"`
+	Name        string                        `cbor:"name,omitempty" json:"name,omitempty"`
+	Port        int64                         `cbor:"port,omitempty" json:"port,omitempty"`
+	PortName    string                        `cbor:"port_name,omitempty" json:"port_name,omitempty"`
+	PortType    string                        `cbor:"port_type,omitempty" json:"port_type,omitempty"`
+}
+
+func (o *ConfigSpecServices) Decode(e entity.AttrGetter) {
+	if a, ok := e.Get(ConfigSpecServicesCommandId); ok && a.Value.Kind() == entity.KindString {
+		o.Command = a.Value.String()
+	}
+	if a, ok := e.Get(ConfigSpecServicesConcurrencyId); ok && a.Value.Kind() == entity.KindComponent {
+		o.Concurrency.Decode(a.Value.Component())
+	}
+	for _, a := range e.GetAll(ConfigSpecServicesDisksId) {
+		if a.Value.Kind() == entity.KindComponent {
+			var v ConfigSpecServicesDisks
+			v.Decode(a.Value.Component())
+			o.Disks = append(o.Disks, v)
+		}
+	}
+	for _, a := range e.GetAll(ConfigSpecServicesEnvId) {
+		if a.Value.Kind() == entity.KindComponent {
+			var v ConfigSpecServicesEnv
+			v.Decode(a.Value.Component())
+			o.Env = append(o.Env, v)
+		}
+	}
+	if a, ok := e.Get(ConfigSpecServicesImageId); ok && a.Value.Kind() == entity.KindString {
+		o.Image = a.Value.String()
+	}
+	if a, ok := e.Get(ConfigSpecServicesNameId); ok && a.Value.Kind() == entity.KindString {
+		o.Name = a.Value.String()
+	}
+	if a, ok := e.Get(ConfigSpecServicesPortId); ok && a.Value.Kind() == entity.KindInt64 {
+		o.Port = a.Value.Int64()
+	}
+	if a, ok := e.Get(ConfigSpecServicesPortNameId); ok && a.Value.Kind() == entity.KindString {
+		o.PortName = a.Value.String()
+	}
+	if a, ok := e.Get(ConfigSpecServicesPortTypeId); ok && a.Value.Kind() == entity.KindString {
+		o.PortType = a.Value.String()
+	}
+}
+
+func (o *ConfigSpecServices) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.Command) {
+		attrs = append(attrs, entity.String(ConfigSpecServicesCommandId, o.Command))
+	}
+	if !o.Concurrency.Empty() {
+		attrs = append(attrs, entity.Component(ConfigSpecServicesConcurrencyId, o.Concurrency.Encode()))
+	}
+	for _, v := range o.Disks {
+		attrs = append(attrs, entity.Component(ConfigSpecServicesDisksId, v.Encode()))
+	}
+	for _, v := range o.Env {
+		attrs = append(attrs, entity.Component(ConfigSpecServicesEnvId, v.Encode()))
+	}
+	if !entity.Empty(o.Image) {
+		attrs = append(attrs, entity.String(ConfigSpecServicesImageId, o.Image))
+	}
+	if !entity.Empty(o.Name) {
+		attrs = append(attrs, entity.String(ConfigSpecServicesNameId, o.Name))
+	}
+	if !entity.Empty(o.Port) {
+		attrs = append(attrs, entity.Int64(ConfigSpecServicesPortId, o.Port))
+	}
+	if !entity.Empty(o.PortName) {
+		attrs = append(attrs, entity.String(ConfigSpecServicesPortNameId, o.PortName))
+	}
+	if !entity.Empty(o.PortType) {
+		attrs = append(attrs, entity.String(ConfigSpecServicesPortTypeId, o.PortType))
+	}
+	return
+}
+
+func (o *ConfigSpecServices) Empty() bool {
+	if !entity.Empty(o.Command) {
+		return false
+	}
+	if !o.Concurrency.Empty() {
+		return false
+	}
+	if len(o.Disks) != 0 {
+		return false
+	}
+	if len(o.Env) != 0 {
+		return false
+	}
+	if !entity.Empty(o.Image) {
+		return false
+	}
+	if !entity.Empty(o.Name) {
+		return false
+	}
+	if !entity.Empty(o.Port) {
+		return false
+	}
+	if !entity.Empty(o.PortName) {
+		return false
+	}
+	if !entity.Empty(o.PortType) {
+		return false
+	}
+	return true
+}
+
+func (o *ConfigSpecServices) InitSchema(sb *schema.SchemaBuilder) {
+	sb.String("command", "dev.miren.core/component.config_spec.services.command", schema.Doc("The command to run for the service"))
+	sb.Component("concurrency", "dev.miren.core/component.config_spec.services.concurrency", schema.Doc("Concurrency configuration for this service"))
+	(&ConfigSpecServicesConcurrency{}).InitSchema(sb.Builder("component.config_spec.services.concurrency"))
+	sb.Component("disks", "dev.miren.core/component.config_spec.services.disks", schema.Doc("Disk attachments for this service"), schema.Many)
+	(&ConfigSpecServicesDisks{}).InitSchema(sb.Builder("component.config_spec.services.disks"))
+	sb.Component("env", "dev.miren.core/component.config_spec.services.env", schema.Doc("Environment variables for this service only"), schema.Many)
+	(&ConfigSpecServicesEnv{}).InitSchema(sb.Builder("component.config_spec.services.env"))
+	sb.String("image", "dev.miren.core/component.config_spec.services.image", schema.Doc("Optional container image for this service"))
+	sb.String("name", "dev.miren.core/component.config_spec.services.name", schema.Doc("The service name (e.g. web, worker)"))
+	sb.Int64("port", "dev.miren.core/component.config_spec.services.port", schema.Doc("The TCP port the service listens on"))
+	sb.String("port_name", "dev.miren.core/component.config_spec.services.port_name", schema.Doc("The name of the port (e.g. http, grpc)"))
+	sb.String("port_type", "dev.miren.core/component.config_spec.services.port_type", schema.Doc("The type of the port (e.g. http, tcp)"))
+}
+
+const (
+	ConfigSpecServicesConcurrencyModeId                = entity.Id("dev.miren.core/component.config_spec.services.concurrency.mode")
+	ConfigSpecServicesConcurrencyNumInstancesId        = entity.Id("dev.miren.core/component.config_spec.services.concurrency.num_instances")
+	ConfigSpecServicesConcurrencyRequestsPerInstanceId = entity.Id("dev.miren.core/component.config_spec.services.concurrency.requests_per_instance")
+	ConfigSpecServicesConcurrencyScaleDownDelayId      = entity.Id("dev.miren.core/component.config_spec.services.concurrency.scale_down_delay")
+	ConfigSpecServicesConcurrencyShutdownTimeoutId     = entity.Id("dev.miren.core/component.config_spec.services.concurrency.shutdown_timeout")
+)
+
+type ConfigSpecServicesConcurrency struct {
+	Mode                string `cbor:"mode,omitempty" json:"mode,omitempty"`
+	NumInstances        int64  `cbor:"num_instances,omitempty" json:"num_instances,omitempty"`
+	RequestsPerInstance int64  `cbor:"requests_per_instance,omitempty" json:"requests_per_instance,omitempty"`
+	ScaleDownDelay      string `cbor:"scale_down_delay,omitempty" json:"scale_down_delay,omitempty"`
+	ShutdownTimeout     string `cbor:"shutdown_timeout,omitempty" json:"shutdown_timeout,omitempty"`
+}
+
+func (o *ConfigSpecServicesConcurrency) Decode(e entity.AttrGetter) {
+	if a, ok := e.Get(ConfigSpecServicesConcurrencyModeId); ok && a.Value.Kind() == entity.KindString {
+		o.Mode = a.Value.String()
+	}
+	if a, ok := e.Get(ConfigSpecServicesConcurrencyNumInstancesId); ok && a.Value.Kind() == entity.KindInt64 {
+		o.NumInstances = a.Value.Int64()
+	}
+	if a, ok := e.Get(ConfigSpecServicesConcurrencyRequestsPerInstanceId); ok && a.Value.Kind() == entity.KindInt64 {
+		o.RequestsPerInstance = a.Value.Int64()
+	}
+	if a, ok := e.Get(ConfigSpecServicesConcurrencyScaleDownDelayId); ok && a.Value.Kind() == entity.KindString {
+		o.ScaleDownDelay = a.Value.String()
+	}
+	if a, ok := e.Get(ConfigSpecServicesConcurrencyShutdownTimeoutId); ok && a.Value.Kind() == entity.KindString {
+		o.ShutdownTimeout = a.Value.String()
+	}
+}
+
+func (o *ConfigSpecServicesConcurrency) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.Mode) {
+		attrs = append(attrs, entity.String(ConfigSpecServicesConcurrencyModeId, o.Mode))
+	}
+	if !entity.Empty(o.NumInstances) {
+		attrs = append(attrs, entity.Int64(ConfigSpecServicesConcurrencyNumInstancesId, o.NumInstances))
+	}
+	if !entity.Empty(o.RequestsPerInstance) {
+		attrs = append(attrs, entity.Int64(ConfigSpecServicesConcurrencyRequestsPerInstanceId, o.RequestsPerInstance))
+	}
+	if !entity.Empty(o.ScaleDownDelay) {
+		attrs = append(attrs, entity.String(ConfigSpecServicesConcurrencyScaleDownDelayId, o.ScaleDownDelay))
+	}
+	if !entity.Empty(o.ShutdownTimeout) {
+		attrs = append(attrs, entity.String(ConfigSpecServicesConcurrencyShutdownTimeoutId, o.ShutdownTimeout))
+	}
+	return
+}
+
+func (o *ConfigSpecServicesConcurrency) Empty() bool {
+	if !entity.Empty(o.Mode) {
+		return false
+	}
+	if !entity.Empty(o.NumInstances) {
+		return false
+	}
+	if !entity.Empty(o.RequestsPerInstance) {
+		return false
+	}
+	if !entity.Empty(o.ScaleDownDelay) {
+		return false
+	}
+	if !entity.Empty(o.ShutdownTimeout) {
+		return false
+	}
+	return true
+}
+
+func (o *ConfigSpecServicesConcurrency) InitSchema(sb *schema.SchemaBuilder) {
+	sb.String("mode", "dev.miren.core/component.config_spec.services.concurrency.mode", schema.Doc("The concurrency mode (auto or fixed)"))
+	sb.Int64("num_instances", "dev.miren.core/component.config_spec.services.concurrency.num_instances", schema.Doc("For fixed mode, number of instances to maintain"))
+	sb.Int64("requests_per_instance", "dev.miren.core/component.config_spec.services.concurrency.requests_per_instance", schema.Doc("For auto mode, number of concurrent requests per instance"))
+	sb.String("scale_down_delay", "dev.miren.core/component.config_spec.services.concurrency.scale_down_delay", schema.Doc("For auto mode, delay before scaling down idle instances"))
+	sb.String("shutdown_timeout", "dev.miren.core/component.config_spec.services.concurrency.shutdown_timeout", schema.Doc("Time to wait for graceful shutdown before force-killing"))
+}
+
+const (
+	ConfigSpecServicesDisksFilesystemId   = entity.Id("dev.miren.core/component.config_spec.services.disks.filesystem")
+	ConfigSpecServicesDisksLeaseTimeoutId = entity.Id("dev.miren.core/component.config_spec.services.disks.lease_timeout")
+	ConfigSpecServicesDisksMountPathId    = entity.Id("dev.miren.core/component.config_spec.services.disks.mount_path")
+	ConfigSpecServicesDisksNameId         = entity.Id("dev.miren.core/component.config_spec.services.disks.name")
+	ConfigSpecServicesDisksReadOnlyId     = entity.Id("dev.miren.core/component.config_spec.services.disks.read_only")
+	ConfigSpecServicesDisksSizeGbId       = entity.Id("dev.miren.core/component.config_spec.services.disks.size_gb")
+)
+
+type ConfigSpecServicesDisks struct {
+	Filesystem   string `cbor:"filesystem,omitempty" json:"filesystem,omitempty"`
+	LeaseTimeout string `cbor:"lease_timeout,omitempty" json:"lease_timeout,omitempty"`
+	MountPath    string `cbor:"mount_path,omitempty" json:"mount_path,omitempty"`
+	Name         string `cbor:"name,omitempty" json:"name,omitempty"`
+	ReadOnly     bool   `cbor:"read_only,omitempty" json:"read_only,omitempty"`
+	SizeGb       int64  `cbor:"size_gb,omitempty" json:"size_gb,omitempty"`
+}
+
+func (o *ConfigSpecServicesDisks) Decode(e entity.AttrGetter) {
+	if a, ok := e.Get(ConfigSpecServicesDisksFilesystemId); ok && a.Value.Kind() == entity.KindString {
+		o.Filesystem = a.Value.String()
+	}
+	if a, ok := e.Get(ConfigSpecServicesDisksLeaseTimeoutId); ok && a.Value.Kind() == entity.KindString {
+		o.LeaseTimeout = a.Value.String()
+	}
+	if a, ok := e.Get(ConfigSpecServicesDisksMountPathId); ok && a.Value.Kind() == entity.KindString {
+		o.MountPath = a.Value.String()
+	}
+	if a, ok := e.Get(ConfigSpecServicesDisksNameId); ok && a.Value.Kind() == entity.KindString {
+		o.Name = a.Value.String()
+	}
+	if a, ok := e.Get(ConfigSpecServicesDisksReadOnlyId); ok && a.Value.Kind() == entity.KindBool {
+		o.ReadOnly = a.Value.Bool()
+	}
+	if a, ok := e.Get(ConfigSpecServicesDisksSizeGbId); ok && a.Value.Kind() == entity.KindInt64 {
+		o.SizeGb = a.Value.Int64()
+	}
+}
+
+func (o *ConfigSpecServicesDisks) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.Filesystem) {
+		attrs = append(attrs, entity.String(ConfigSpecServicesDisksFilesystemId, o.Filesystem))
+	}
+	if !entity.Empty(o.LeaseTimeout) {
+		attrs = append(attrs, entity.String(ConfigSpecServicesDisksLeaseTimeoutId, o.LeaseTimeout))
+	}
+	if !entity.Empty(o.MountPath) {
+		attrs = append(attrs, entity.String(ConfigSpecServicesDisksMountPathId, o.MountPath))
+	}
+	if !entity.Empty(o.Name) {
+		attrs = append(attrs, entity.String(ConfigSpecServicesDisksNameId, o.Name))
+	}
+	attrs = append(attrs, entity.Bool(ConfigSpecServicesDisksReadOnlyId, o.ReadOnly))
+	if !entity.Empty(o.SizeGb) {
+		attrs = append(attrs, entity.Int64(ConfigSpecServicesDisksSizeGbId, o.SizeGb))
+	}
+	return
+}
+
+func (o *ConfigSpecServicesDisks) Empty() bool {
+	if !entity.Empty(o.Filesystem) {
+		return false
+	}
+	if !entity.Empty(o.LeaseTimeout) {
+		return false
+	}
+	if !entity.Empty(o.MountPath) {
+		return false
+	}
+	if !entity.Empty(o.Name) {
+		return false
+	}
+	if !entity.Empty(o.ReadOnly) {
+		return false
+	}
+	if !entity.Empty(o.SizeGb) {
+		return false
+	}
+	return true
+}
+
+func (o *ConfigSpecServicesDisks) InitSchema(sb *schema.SchemaBuilder) {
+	sb.String("filesystem", "dev.miren.core/component.config_spec.services.disks.filesystem", schema.Doc("Filesystem type (ext4, xfs, btrfs) for auto-creating the disk"))
+	sb.String("lease_timeout", "dev.miren.core/component.config_spec.services.disks.lease_timeout", schema.Doc("Timeout for acquiring the disk lease"))
+	sb.String("mount_path", "dev.miren.core/component.config_spec.services.disks.mount_path", schema.Doc("The path inside the container where the disk will be mounted"))
+	sb.String("name", "dev.miren.core/component.config_spec.services.disks.name", schema.Doc("The name of the disk entity to attach"))
+	sb.Bool("read_only", "dev.miren.core/component.config_spec.services.disks.read_only", schema.Doc("Whether to mount the disk as read-only"))
+	sb.Int64("size_gb", "dev.miren.core/component.config_spec.services.disks.size_gb", schema.Doc("Size in GB for auto-creating the disk if it doesn't exist"))
+}
+
+const (
+	ConfigSpecServicesEnvKeyId       = entity.Id("dev.miren.core/component.config_spec.services.env.key")
+	ConfigSpecServicesEnvOriginId    = entity.Id("dev.miren.core/component.config_spec.services.env.origin")
+	ConfigSpecServicesEnvSensitiveId = entity.Id("dev.miren.core/component.config_spec.services.env.sensitive")
+	ConfigSpecServicesEnvSourceId    = entity.Id("dev.miren.core/component.config_spec.services.env.source")
+	ConfigSpecServicesEnvValueId     = entity.Id("dev.miren.core/component.config_spec.services.env.value")
+)
+
+type ConfigSpecServicesEnv struct {
+	Key       string `cbor:"key,omitempty" json:"key,omitempty"`
+	Origin    string `cbor:"origin,omitempty" json:"origin,omitempty"`
+	Sensitive bool   `cbor:"sensitive,omitempty" json:"sensitive,omitempty"`
+	Source    string `cbor:"source,omitempty" json:"source,omitempty"`
+	Value     string `cbor:"value,omitempty" json:"value,omitempty"`
+}
+
+func (o *ConfigSpecServicesEnv) Decode(e entity.AttrGetter) {
+	if a, ok := e.Get(ConfigSpecServicesEnvKeyId); ok && a.Value.Kind() == entity.KindString {
+		o.Key = a.Value.String()
+	}
+	if a, ok := e.Get(ConfigSpecServicesEnvOriginId); ok && a.Value.Kind() == entity.KindString {
+		o.Origin = a.Value.String()
+	}
+	if a, ok := e.Get(ConfigSpecServicesEnvSensitiveId); ok && a.Value.Kind() == entity.KindBool {
+		o.Sensitive = a.Value.Bool()
+	}
+	if a, ok := e.Get(ConfigSpecServicesEnvSourceId); ok && a.Value.Kind() == entity.KindString {
+		o.Source = a.Value.String()
+	}
+	if a, ok := e.Get(ConfigSpecServicesEnvValueId); ok && a.Value.Kind() == entity.KindString {
+		o.Value = a.Value.String()
+	}
+}
+
+func (o *ConfigSpecServicesEnv) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.Key) {
+		attrs = append(attrs, entity.String(ConfigSpecServicesEnvKeyId, o.Key))
+	}
+	if !entity.Empty(o.Origin) {
+		attrs = append(attrs, entity.String(ConfigSpecServicesEnvOriginId, o.Origin))
+	}
+	attrs = append(attrs, entity.Bool(ConfigSpecServicesEnvSensitiveId, o.Sensitive))
+	if !entity.Empty(o.Source) {
+		attrs = append(attrs, entity.String(ConfigSpecServicesEnvSourceId, o.Source))
+	}
+	if !entity.Empty(o.Value) {
+		attrs = append(attrs, entity.String(ConfigSpecServicesEnvValueId, o.Value))
+	}
+	return
+}
+
+func (o *ConfigSpecServicesEnv) Empty() bool {
+	if !entity.Empty(o.Key) {
+		return false
+	}
+	if !entity.Empty(o.Origin) {
+		return false
+	}
+	if !entity.Empty(o.Sensitive) {
+		return false
+	}
+	if !entity.Empty(o.Source) {
+		return false
+	}
+	if !entity.Empty(o.Value) {
+		return false
+	}
+	return true
+}
+
+func (o *ConfigSpecServicesEnv) InitSchema(sb *schema.SchemaBuilder) {
+	sb.String("key", "dev.miren.core/component.config_spec.services.env.key", schema.Doc("The name of the variable"))
+	sb.String("origin", "dev.miren.core/component.config_spec.services.env.origin", schema.Doc("The provenance of the variable (user, file, generated, detected)"))
+	sb.Bool("sensitive", "dev.miren.core/component.config_spec.services.env.sensitive", schema.Doc("Whether or not the value is sensitive"))
+	sb.String("source", "dev.miren.core/component.config_spec.services.env.source", schema.Doc("The source of the variable (config or manual). Defaults to config for backward compatibility."))
+	sb.String("value", "dev.miren.core/component.config_spec.services.env.value", schema.Doc("The value of the variable"))
+}
+
+const (
+	ConfigSpecVariablesKeyId       = entity.Id("dev.miren.core/component.config_spec.variables.key")
+	ConfigSpecVariablesOriginId    = entity.Id("dev.miren.core/component.config_spec.variables.origin")
+	ConfigSpecVariablesSensitiveId = entity.Id("dev.miren.core/component.config_spec.variables.sensitive")
+	ConfigSpecVariablesSourceId    = entity.Id("dev.miren.core/component.config_spec.variables.source")
+	ConfigSpecVariablesValueId     = entity.Id("dev.miren.core/component.config_spec.variables.value")
+)
+
+type ConfigSpecVariables struct {
+	Key       string `cbor:"key,omitempty" json:"key,omitempty"`
+	Origin    string `cbor:"origin,omitempty" json:"origin,omitempty"`
+	Sensitive bool   `cbor:"sensitive,omitempty" json:"sensitive,omitempty"`
+	Source    string `cbor:"source,omitempty" json:"source,omitempty"`
+	Value     string `cbor:"value,omitempty" json:"value,omitempty"`
+}
+
+func (o *ConfigSpecVariables) Decode(e entity.AttrGetter) {
+	if a, ok := e.Get(ConfigSpecVariablesKeyId); ok && a.Value.Kind() == entity.KindString {
+		o.Key = a.Value.String()
+	}
+	if a, ok := e.Get(ConfigSpecVariablesOriginId); ok && a.Value.Kind() == entity.KindString {
+		o.Origin = a.Value.String()
+	}
+	if a, ok := e.Get(ConfigSpecVariablesSensitiveId); ok && a.Value.Kind() == entity.KindBool {
+		o.Sensitive = a.Value.Bool()
+	}
+	if a, ok := e.Get(ConfigSpecVariablesSourceId); ok && a.Value.Kind() == entity.KindString {
+		o.Source = a.Value.String()
+	}
+	if a, ok := e.Get(ConfigSpecVariablesValueId); ok && a.Value.Kind() == entity.KindString {
+		o.Value = a.Value.String()
+	}
+}
+
+func (o *ConfigSpecVariables) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.Key) {
+		attrs = append(attrs, entity.String(ConfigSpecVariablesKeyId, o.Key))
+	}
+	if !entity.Empty(o.Origin) {
+		attrs = append(attrs, entity.String(ConfigSpecVariablesOriginId, o.Origin))
+	}
+	attrs = append(attrs, entity.Bool(ConfigSpecVariablesSensitiveId, o.Sensitive))
+	if !entity.Empty(o.Source) {
+		attrs = append(attrs, entity.String(ConfigSpecVariablesSourceId, o.Source))
+	}
+	if !entity.Empty(o.Value) {
+		attrs = append(attrs, entity.String(ConfigSpecVariablesValueId, o.Value))
+	}
+	return
+}
+
+func (o *ConfigSpecVariables) Empty() bool {
+	if !entity.Empty(o.Key) {
+		return false
+	}
+	if !entity.Empty(o.Origin) {
+		return false
+	}
+	if !entity.Empty(o.Sensitive) {
+		return false
+	}
+	if !entity.Empty(o.Source) {
+		return false
+	}
+	if !entity.Empty(o.Value) {
+		return false
+	}
+	return true
+}
+
+func (o *ConfigSpecVariables) InitSchema(sb *schema.SchemaBuilder) {
+	sb.String("key", "dev.miren.core/component.config_spec.variables.key", schema.Doc("The name of the variable"))
+	sb.String("origin", "dev.miren.core/component.config_spec.variables.origin", schema.Doc("The provenance of the variable (user, file, generated, detected)."))
+	sb.Bool("sensitive", "dev.miren.core/component.config_spec.variables.sensitive", schema.Doc("Whether or not the value is sensitive"))
+	sb.String("source", "dev.miren.core/component.config_spec.variables.source", schema.Doc("The source of the variable (config or manual). Defaults to config for backward compatibility."))
+	sb.String("value", "dev.miren.core/component.config_spec.variables.value", schema.Doc("The value of the variable"))
+}
+
+const (
 	AppActiveVersionId = entity.Id("dev.miren.core/app.active_version")
+	AppInitialConfigId = entity.Id("dev.miren.core/app.initial_config")
 	AppProjectId       = entity.Id("dev.miren.core/app.project")
 )
 
 type App struct {
 	ID            entity.Id `json:"id"`
 	ActiveVersion entity.Id `cbor:"active_version,omitempty" json:"active_version,omitempty"`
+	InitialConfig entity.Id `cbor:"initial_config,omitempty" json:"initial_config,omitempty"`
 	Project       entity.Id `cbor:"project,omitempty" json:"project,omitempty"`
 }
 
@@ -21,6 +566,9 @@ func (o *App) Decode(e entity.AttrGetter) {
 	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
 	if a, ok := e.Get(AppActiveVersionId); ok && a.Value.Kind() == entity.KindId {
 		o.ActiveVersion = a.Value.Id()
+	}
+	if a, ok := e.Get(AppInitialConfigId); ok && a.Value.Kind() == entity.KindId {
+		o.InitialConfig = a.Value.Id()
 	}
 	if a, ok := e.Get(AppProjectId); ok && a.Value.Kind() == entity.KindId {
 		o.Project = a.Value.Id()
@@ -47,6 +595,9 @@ func (o *App) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.ActiveVersion) {
 		attrs = append(attrs, entity.Ref(AppActiveVersionId, o.ActiveVersion))
 	}
+	if !entity.Empty(o.InitialConfig) {
+		attrs = append(attrs, entity.Ref(AppInitialConfigId, o.InitialConfig))
+	}
 	if !entity.Empty(o.Project) {
 		attrs = append(attrs, entity.Ref(AppProjectId, o.Project))
 	}
@@ -58,6 +609,9 @@ func (o *App) Empty() bool {
 	if !entity.Empty(o.ActiveVersion) {
 		return false
 	}
+	if !entity.Empty(o.InitialConfig) {
+		return false
+	}
 	if !entity.Empty(o.Project) {
 		return false
 	}
@@ -66,6 +620,7 @@ func (o *App) Empty() bool {
 
 func (o *App) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Ref("active_version", "dev.miren.core/app.active_version", schema.Doc("The version of the project that should be used"))
+	sb.Ref("initial_config", "dev.miren.core/app.initial_config", schema.Doc("Reference to the initial ConfigVersion entity created before the first deploy"))
 	sb.Ref("project", "dev.miren.core/app.project", schema.Doc("The project that the app belongs to"))
 }
 
@@ -74,6 +629,7 @@ const (
 	AppVersionAppId            = entity.Id("dev.miren.core/app_version.app")
 	AppVersionArtifactId       = entity.Id("dev.miren.core/app_version.artifact")
 	AppVersionConfigId         = entity.Id("dev.miren.core/app_version.config")
+	AppVersionConfigVersionId  = entity.Id("dev.miren.core/app_version.config_version")
 	AppVersionImageUrlId       = entity.Id("dev.miren.core/app_version.image_url")
 	AppVersionManifestId       = entity.Id("dev.miren.core/app_version.manifest")
 	AppVersionManifestDigestId = entity.Id("dev.miren.core/app_version.manifest_digest")
@@ -86,6 +642,7 @@ type AppVersion struct {
 	App            entity.Id `cbor:"app,omitempty" json:"app,omitempty"`
 	Artifact       entity.Id `cbor:"artifact,omitempty" json:"artifact,omitempty"`
 	Config         Config    `cbor:"config,omitempty" json:"config,omitempty"`
+	ConfigVersion  entity.Id `cbor:"config_version,omitempty" json:"config_version,omitempty"`
 	ImageUrl       string    `cbor:"image_url,omitempty" json:"image_url,omitempty"`
 	Manifest       string    `cbor:"manifest,omitempty" json:"manifest,omitempty"`
 	ManifestDigest string    `cbor:"manifest_digest,omitempty" json:"manifest_digest,omitempty"`
@@ -105,6 +662,9 @@ func (o *AppVersion) Decode(e entity.AttrGetter) {
 	}
 	if a, ok := e.Get(AppVersionConfigId); ok && a.Value.Kind() == entity.KindComponent {
 		o.Config.Decode(a.Value.Component())
+	}
+	if a, ok := e.Get(AppVersionConfigVersionId); ok && a.Value.Kind() == entity.KindId {
+		o.ConfigVersion = a.Value.Id()
 	}
 	if a, ok := e.Get(AppVersionImageUrlId); ok && a.Value.Kind() == entity.KindString {
 		o.ImageUrl = a.Value.String()
@@ -149,6 +709,9 @@ func (o *AppVersion) Encode() (attrs []entity.Attr) {
 	if !o.Config.Empty() {
 		attrs = append(attrs, entity.Component(AppVersionConfigId, o.Config.Encode()))
 	}
+	if !entity.Empty(o.ConfigVersion) {
+		attrs = append(attrs, entity.Ref(AppVersionConfigVersionId, o.ConfigVersion))
+	}
 	if !entity.Empty(o.ImageUrl) {
 		attrs = append(attrs, entity.String(AppVersionImageUrlId, o.ImageUrl))
 	}
@@ -178,6 +741,9 @@ func (o *AppVersion) Empty() bool {
 	if !o.Config.Empty() {
 		return false
 	}
+	if !entity.Empty(o.ConfigVersion) {
+		return false
+	}
 	if !entity.Empty(o.ImageUrl) {
 		return false
 	}
@@ -199,6 +765,7 @@ func (o *AppVersion) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Ref("artifact", "dev.miren.core/app_version.artifact", schema.Doc("The artifact to deploy for the version"))
 	sb.Component("config", "dev.miren.core/app_version.config", schema.Doc("The configuration of the version"))
 	(&Config{}).InitSchema(sb.Builder("app_version.config"))
+	sb.Ref("config_version", "dev.miren.core/app_version.config_version", schema.Doc("Reference to the ConfigVersion entity containing the resolved configuration for this version"))
 	sb.String("image_url", "dev.miren.core/app_version.image_url", schema.Doc("The OCI url for the versions code"))
 	sb.String("manifest", "dev.miren.core/app_version.manifest", schema.Doc("The OCI image manifest for the version"))
 	sb.String("manifest_digest", "dev.miren.core/app_version.manifest_digest", schema.Doc("The digest of the manifest"), schema.Indexed)
@@ -575,6 +1142,7 @@ func (o *Disks) InitSchema(sb *schema.SchemaBuilder) {
 
 const (
 	EnvKeyId       = entity.Id("dev.miren.core/env.key")
+	EnvOriginId    = entity.Id("dev.miren.core/env.origin")
 	EnvSensitiveId = entity.Id("dev.miren.core/env.sensitive")
 	EnvSourceId    = entity.Id("dev.miren.core/env.source")
 	EnvValueId     = entity.Id("dev.miren.core/env.value")
@@ -582,6 +1150,7 @@ const (
 
 type Env struct {
 	Key       string `cbor:"key,omitempty" json:"key,omitempty"`
+	Origin    string `cbor:"origin,omitempty" json:"origin,omitempty"`
 	Sensitive bool   `cbor:"sensitive,omitempty" json:"sensitive,omitempty"`
 	Source    string `cbor:"source,omitempty" json:"source,omitempty"`
 	Value     string `cbor:"value,omitempty" json:"value,omitempty"`
@@ -590,6 +1159,9 @@ type Env struct {
 func (o *Env) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(EnvKeyId); ok && a.Value.Kind() == entity.KindString {
 		o.Key = a.Value.String()
+	}
+	if a, ok := e.Get(EnvOriginId); ok && a.Value.Kind() == entity.KindString {
+		o.Origin = a.Value.String()
 	}
 	if a, ok := e.Get(EnvSensitiveId); ok && a.Value.Kind() == entity.KindBool {
 		o.Sensitive = a.Value.Bool()
@@ -606,6 +1178,9 @@ func (o *Env) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.Key) {
 		attrs = append(attrs, entity.String(EnvKeyId, o.Key))
 	}
+	if !entity.Empty(o.Origin) {
+		attrs = append(attrs, entity.String(EnvOriginId, o.Origin))
+	}
 	attrs = append(attrs, entity.Bool(EnvSensitiveId, o.Sensitive))
 	if !entity.Empty(o.Source) {
 		attrs = append(attrs, entity.String(EnvSourceId, o.Source))
@@ -618,6 +1193,9 @@ func (o *Env) Encode() (attrs []entity.Attr) {
 
 func (o *Env) Empty() bool {
 	if !entity.Empty(o.Key) {
+		return false
+	}
+	if !entity.Empty(o.Origin) {
 		return false
 	}
 	if !entity.Empty(o.Sensitive) {
@@ -634,6 +1212,7 @@ func (o *Env) Empty() bool {
 
 func (o *Env) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("key", "dev.miren.core/env.key", schema.Doc("The name of the variable"))
+	sb.String("origin", "dev.miren.core/env.origin", schema.Doc("The provenance of the variable (user, file, generated, detected)."))
 	sb.Bool("sensitive", "dev.miren.core/env.sensitive", schema.Doc("Whether or not the value is sensitive"))
 	sb.String("source", "dev.miren.core/env.source", schema.Doc("The source of the variable (config or manual). Defaults to config for backward compatibility."))
 	sb.String("value", "dev.miren.core/env.value", schema.Doc("The value of the variable"))
@@ -721,6 +1300,7 @@ func (o *ServiceConcurrency) InitSchema(sb *schema.SchemaBuilder) {
 
 const (
 	VariableKeyId       = entity.Id("dev.miren.core/variable.key")
+	VariableOriginId    = entity.Id("dev.miren.core/variable.origin")
 	VariableSensitiveId = entity.Id("dev.miren.core/variable.sensitive")
 	VariableSourceId    = entity.Id("dev.miren.core/variable.source")
 	VariableValueId     = entity.Id("dev.miren.core/variable.value")
@@ -728,6 +1308,7 @@ const (
 
 type Variable struct {
 	Key       string `cbor:"key,omitempty" json:"key,omitempty"`
+	Origin    string `cbor:"origin,omitempty" json:"origin,omitempty"`
 	Sensitive bool   `cbor:"sensitive,omitempty" json:"sensitive,omitempty"`
 	Source    string `cbor:"source,omitempty" json:"source,omitempty"`
 	Value     string `cbor:"value,omitempty" json:"value,omitempty"`
@@ -736,6 +1317,9 @@ type Variable struct {
 func (o *Variable) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(VariableKeyId); ok && a.Value.Kind() == entity.KindString {
 		o.Key = a.Value.String()
+	}
+	if a, ok := e.Get(VariableOriginId); ok && a.Value.Kind() == entity.KindString {
+		o.Origin = a.Value.String()
 	}
 	if a, ok := e.Get(VariableSensitiveId); ok && a.Value.Kind() == entity.KindBool {
 		o.Sensitive = a.Value.Bool()
@@ -752,6 +1336,9 @@ func (o *Variable) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.Key) {
 		attrs = append(attrs, entity.String(VariableKeyId, o.Key))
 	}
+	if !entity.Empty(o.Origin) {
+		attrs = append(attrs, entity.String(VariableOriginId, o.Origin))
+	}
 	attrs = append(attrs, entity.Bool(VariableSensitiveId, o.Sensitive))
 	if !entity.Empty(o.Source) {
 		attrs = append(attrs, entity.String(VariableSourceId, o.Source))
@@ -764,6 +1351,9 @@ func (o *Variable) Encode() (attrs []entity.Attr) {
 
 func (o *Variable) Empty() bool {
 	if !entity.Empty(o.Key) {
+		return false
+	}
+	if !entity.Empty(o.Origin) {
 		return false
 	}
 	if !entity.Empty(o.Sensitive) {
@@ -780,6 +1370,7 @@ func (o *Variable) Empty() bool {
 
 func (o *Variable) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("key", "dev.miren.core/variable.key", schema.Doc("The name of the variable"))
+	sb.String("origin", "dev.miren.core/variable.origin", schema.Doc("The provenance of the variable (user, file, generated, detected)."))
 	sb.Bool("sensitive", "dev.miren.core/variable.sensitive", schema.Doc("Whether or not the value is sensitive"))
 	sb.String("source", "dev.miren.core/variable.source", schema.Doc("The source of the variable (config or manual). Defaults to config for backward compatibility."))
 	sb.String("value", "dev.miren.core/variable.value", schema.Doc("The value of the value"))
@@ -884,6 +1475,69 @@ func (o *Artifact) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Singleton("dev.miren.core/status.active")
 	sb.Singleton("dev.miren.core/status.archived")
 	sb.Ref("status", "dev.miren.core/artifact.status", schema.Doc("Artifact lifecycle status"), schema.Indexed, schema.Choices(ArtifactStatusActiveId, ArtifactStatusArchivedId))
+}
+
+const (
+	ConfigVersionAppId  = entity.Id("dev.miren.core/config_version.app")
+	ConfigVersionSpecId = entity.Id("dev.miren.core/config_version.spec")
+)
+
+type ConfigVersion struct {
+	ID   entity.Id  `json:"id"`
+	App  entity.Id  `cbor:"app,omitempty" json:"app,omitempty"`
+	Spec ConfigSpec `cbor:"spec,omitempty" json:"spec,omitempty"`
+}
+
+func (o *ConfigVersion) Decode(e entity.AttrGetter) {
+	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
+	if a, ok := e.Get(ConfigVersionAppId); ok && a.Value.Kind() == entity.KindId {
+		o.App = a.Value.Id()
+	}
+	if a, ok := e.Get(ConfigVersionSpecId); ok && a.Value.Kind() == entity.KindComponent {
+		o.Spec.Decode(a.Value.Component())
+	}
+}
+
+func (o *ConfigVersion) Is(e entity.AttrGetter) bool {
+	return entity.Is(e, KindConfigVersion)
+}
+
+func (o *ConfigVersion) ShortKind() string {
+	return "config_version"
+}
+
+func (o *ConfigVersion) Kind() entity.Id {
+	return KindConfigVersion
+}
+
+func (o *ConfigVersion) EntityId() entity.Id {
+	return o.ID
+}
+
+func (o *ConfigVersion) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.App) {
+		attrs = append(attrs, entity.Ref(ConfigVersionAppId, o.App))
+	}
+	if !o.Spec.Empty() {
+		attrs = append(attrs, entity.Component(ConfigVersionSpecId, o.Spec.Encode()))
+	}
+	attrs = append(attrs, entity.Ref(entity.EntityKind, KindConfigVersion))
+	return
+}
+
+func (o *ConfigVersion) Empty() bool {
+	if !entity.Empty(o.App) {
+		return false
+	}
+	if !o.Spec.Empty() {
+		return false
+	}
+	return true
+}
+
+func (o *ConfigVersion) InitSchema(sb *schema.SchemaBuilder) {
+	sb.Ref("app", "dev.miren.core/config_version.app", schema.Doc("The application this config version belongs to"), schema.Indexed, schema.Tags("dev.miren.app_ref"))
+	sb.Component("spec", "dev.miren.core/config_version.spec", schema.Doc("The configuration specification"))
 }
 
 const (
@@ -1382,23 +2036,26 @@ func (o *Project) InitSchema(sb *schema.SchemaBuilder) {
 }
 
 var (
-	KindApp        = entity.Id("dev.miren.core/kind.app")
-	KindAppVersion = entity.Id("dev.miren.core/kind.app_version")
-	KindArtifact   = entity.Id("dev.miren.core/kind.artifact")
-	KindDeployment = entity.Id("dev.miren.core/kind.deployment")
-	KindMetadata   = entity.Id("dev.miren.core/kind.metadata")
-	KindProject    = entity.Id("dev.miren.core/kind.project")
-	Schema         = entity.Id("dev.miren.core/schema.v1alpha")
+	KindApp           = entity.Id("dev.miren.core/kind.app")
+	KindAppVersion    = entity.Id("dev.miren.core/kind.app_version")
+	KindArtifact      = entity.Id("dev.miren.core/kind.artifact")
+	KindConfigVersion = entity.Id("dev.miren.core/kind.config_version")
+	KindDeployment    = entity.Id("dev.miren.core/kind.deployment")
+	KindMetadata      = entity.Id("dev.miren.core/kind.metadata")
+	KindProject       = entity.Id("dev.miren.core/kind.project")
+	Schema            = entity.Id("dev.miren.core/schema.v1alpha")
 )
 
 func init() {
 	schema.Register("dev.miren.core", "v1alpha", func(sb *schema.SchemaBuilder) {
+		(&ConfigSpec{}).InitSchema(sb)
 		(&App{}).InitSchema(sb)
 		(&AppVersion{}).InitSchema(sb)
 		(&Artifact{}).InitSchema(sb)
+		(&ConfigVersion{}).InitSchema(sb)
 		(&Deployment{}).InitSchema(sb)
 		(&Metadata{}).InitSchema(sb)
 		(&Project{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.core", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xa4Y˲\xe3&\x13~\x8d\xff\xcf=\x93\xfb\xa4J\x99T6Y\xe5U(,\xda\x12\xc7\x12h\x00\xf9\x8c\xb3˵\x92\xca[d.o\x98\xacSЀ\x11F\x12\xe7\xcc\xc6E\xb7\xdc\x1f\xd07\xba\xe1\x15\x13t\x04\xc1\xe0܌\\\x81hZ\xa9\x00N\\0\xfd\xe6~\xc9\xfd\xc6r\x1b:Mo\x9c\x8cʾ\xd2iB\xb9\x7f\x8fL\x8e\x94\x8b\f\xf4x\xe400\xfd\xf3\xcb\x03g/>\xbe\x15nhk\xf8\x19\xc8\x19\x94\xe6R\xe0\xba2\x9e\xb9Lp\xe0\xccA\xbcS\x80\x98\x94\xbc\x83\xd68\xd9.\x10^\xa8\xf3 \xdd\xf9[:L=\x1d&\xc5G\xaa.\xc4.\xba\xa5\xd3\xf4\xe2\xdd\xd2~=\n\xee\xf9\x9c\xfd\xc3\x7f\xac\xd9\xf7On\xd1\xef\x95\x01\x1ay/@\xb9)\x00\x87v\xd1Gm\x14\x17\xdd\xe6\xc2\xc3.o\x90\xd1X\xca\xf0#\r\xab\xcf\xed\x19\xbe\xd6,\xffW\xb7\xfc\\C\x01\xc1z\x85\x9b\xc2\xeaqa\xa5\x8f\xd6$F*\xf8\x114ڪ\x8fT\xb2o'\xffŞ<a\xbc\v02g&h\xaf,\xda\akh\xdaP3k\ar\xf4c+\xcb@\xcc\xe3\xc9\xfe\x903\x1df\xd0\x7f\x1f\xd1#oԍBއ{\xaaڞ\x9f\xe1v\xc2\xf07\xff}Ӵ}X]ٶ#\x18ʨ\xa1eۆ\xaf5\xb6\xfd\xa5\xa8\x9b\x80\xd0\f\xf4\x00\x83f#\x15\x97\x7fPC\x9ec5\x04n\\\xf4\xed\b`e\xd8\xf5'7\xf1\x87kr\x8f\x8e\xe6>@\xdcl\xcai\x8e\xc14\xc8\xcb\b\xc2\xc7ŋ\xffg\xff\xba\xfe\xa1F}\x7f\xb9]<YŰ\xc1A\xe2\xf6\xfbH\xe5z\xf8l\x1b!͋\xa7\x94\x91\xe3|\xba\x8es\x98\xf9\xc0\xc8 ;t\xf5\xbb\x84~\x00J;\xccڀ\"\x9c!JB\xe7(\x9fo\xa0\xc8q\x1a\xc0\x00#\x14M<,8y\xe8nh\a\x87\xc0\xc8\xe1\x82\xdaI\x19\x16\x87[d)@\x98\xebț>\x83mʰ\xf5\x19\xb2\xac6\a\xd2\x18>\x826t\xc4Tɯd\x9d' ȬA\x11\x18)\x1fP\xf9\t\x9dÔ]2\x81\xf1\x06\xec\x02Q\xe7\x03\t@\xf4j~%kO\xae\xbb\x80v\xb8\x143}b\tPJ*2\x82ִ\xc3\xf9\xc6%+w\x96\x8d`\xec\xb8!\\\x1c%\x06c\xa4v\xdc\xe4ɺ\x9b\x04\x88\x1a\x1f\xf9\xf3e)\xd3\x06\x84\x86Φ\x97X\x06\x1c\xfd87ɪ\xecAQ\xd1\xf6(\xebǹ\xec\xd7k\xb2\xad\x1cGn\bN\x998\x97.}\xc8Q\xbf\xdcA]z\xfdt\xc3\xcd\xf1\xf2\x8a!\xe2qM\x18W\x06c\xbc\x8f\x94;\xa7\x0fR\x0e\xc5\xc3$J\xa7\xde\xd3\x15\xfc\xa6\x181QZ\xc1$57R\xe1\xecw\t\x9dc\xe45R\xc4\xd0=\xc5\x1a\xc9\x0er\xa9\xaf֤\xee\xa5:q\xd1\x11\xa3\x00HO5\x9a\xf8\xf9-\xbb\xbab츱\xc8Eu%~=\xf5T\xa3\xba\x00\x87\xf9\x92\x9buY-g\xd5\x02\xb9rB\xaa1\xc5/{.\x90\"\x97\v\xb5\a$\x1c\vs\xb3\xef\xd0ڄCՇ}\xa1\xc7\b\xff\xa8\t\xf7?\x8ag`\x02\xd2P6rA\x8c<A8\xd8\x13\xc6^\xec/\x80\xd6\n\xf0O\xb6\x84|\x81\xe9\v\x93@y\xf1W+\x8dZ\x14o\xa58\xf2\x0em\xe1\xc7;i4Ckn\xd1j\xd4\xfa\xfb\xeb\x926P\xdee\x1d*XZ\xaf\xf6\x91\xb7\xb3\xbc\xa7\xbbˋ\xf0\xf5\xadn\xeej\x01!@aF\n\xc4^q\x1c\xa55\xa83o}>\vDm(D\x8d\x14\xc3\xcdo\x15\x84Q\x97Ir\x81\xfeq\x97\xd0\xf9*\xf38\xf1\b\x93T(\xcb\xdc\xc8J\xb5\\\x98-\xf3\xf9\x9d,\xcc\x17yoo\xbe\x00U\x15\xbdn\x9d\xef\xe7\x1d\x9cGh\x18קt\x99\x80\x8c\x9d5>\xab_#\xceP\x15\x10\xe5\\nś#\x1f@_\xb4\x81\x11\xad\x98л\xf5\xa2\x03\x18\x80jp絜њ㒵\xe7\xb2\b3\xcaY\x182Q\x83\a\xd8]B\xe7\x007\xed\x98\x03\xd8\xe9\"s\x7fB!\x05\x94\x11)\x06<\xb6\xf9\x95\\V\ry\xeb\x8a\u009a\xff\b\xa4;\xf8\x10\xf3Dp\xe2\xcd\xf8B_x]*\a\xa2uA\x9c\x13\xefi-\xb9\xe3;\xcd\x03|\aĹ\xbai\xc9o\xb5@\x9c\x9b\x13\xa0\xcaZ;\xc8u\x9d\xab\xcb\nh\x10\x9a\x1b~\xf6\xfd\xc0\x95\\j:\xb7\xad\x13u5\x81?\xd3q\x9c\xcf\xf8\xbf\x82\x98\xbb\x91\xc1\xd0\xc3am\xf6\xb3\xba~\xb9\x19\xdb|\f\xa5\"\xe0pO\x03Qr\xc7KW\xe5VRe\xf1\xb2t!\x94\xf4`W2\x9fv\x1b\xc1Y\xe8\x8a\xe0ȼ\xa3\xca{\x87\x88\xe0\a\xa4\x95\xa2\x9d\x95\x02Ѣ\xe3\xe8҇\x1d\a\xff\xe1\x01\x0e^\x80\xafq\xf8ߊ\xbdf\x01\xac\x19%\xf3Ft\xa3\\\xa5\xcf* \xc4<\x12.\xb4\xa1\u009e^.u.Y\v3\x7f_\x81\xa8\xe0\xf9\f\xdah2َ\xdd\xe38\xe4\xb9\xfci1\xc3w\x153\xe8\x96\x0e@\x98\xbc\x17\x84\xc1@ј\xd3\r7WG\x15t?\x1b\a\x91\x1e&\xd3\r\xb76\x8c\x95\x9f#\x99b\xbb\xe8\t\xbeS\xbcc\t\xfee\xa82\xb6\xb3\x846v{2g&+ܪe\xceTqz\x18 \xade\"\xef\xedk\x99\x00\xf5\xf8\xeb\xfb\x80\xb0\x9d\xed\xf3\xe4\x11\xa5*S~\xae\x9d\xab\xfc~\xde\xcf3t\x94}t\xf2\x8f\x16\xd8\xfc\x97\xefg\x8a\xb7`\xa9)\xdc\xe9@f\x85\xf7%\xfcJ\xe6\x1b\xd9j\xc3*\x9fB\x9eV@Ծ\x86\x14\xeb\xbd\x140\xbdm\xee\n7͛\xdaK\xaf\xa7\xf3?\x9eto\x0f\x19|a\xb4\xdd\xea\xda+c|\xd9\xdaz\x96\xdby#\t_\xaf\x0f\x02\x9bO)\xe9\r\xc1\xce\xcbA\xba\xc5\xddۄ\xff\x00\x00\x00\xff\xff\x01\x00\x00\xff\xff5J5ke\x1d\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.core", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xacZ\xdb\xce\xdc4\x10~\rN\xe5P\xceE\xa4-\x05A\x85\xa8\xc4\x15\x127<B\xe4Mf\x13\xff\x9bة\xed\xec\xff/w\x1c\x05\xe2-h\vO\b\xd7(>$\xce\xc4I\x9c\xfcܬl'\xf3y<'\xcf\xcc\xe6y\xceH\r,\x87sRS\x01,ɸ\x008Q\x96˿\xafǫ\xf7\xbbՄ4\xcd_\x9aF\xa0\xa7\xa4i\fݿǜׄ2\x04z<R\xa8r\xf9ӳ\x03\xcdoޚ\x12'$S\xf4\f\xe9\x19\x84\xa4\x9c\x19\xbeК\xba4p\xa0\xf9,\x04eTQR\xa5\x19gGZ\x18\b\xb4\xe6C\xbc\x12\x80h\x04\xbf\x82Li\xda\xc2M,Qa\xf9(\xce\x0fIՔ\xa4j\x04\xad\x89\xb8\xa4ݹ3\xd247\xaf\x86DfQ\x8c\xd8\xce\xe8\r\xfb0Ft?h\xa6_\v\x03$\xfc\x9a\x81\xd0[\x80\x19vL\x1f\xa5\x12\x94\x15\x8b\x8c\xbbSN\x90\x8d\xbe\x85\xa2G\xe2\xb8\xc7&\xe1\x9eư\xff\xb3f\x1fK\xc8!t\x86\xa5\xb7\xe8\xe48\xd2қs\x145a\xf4\b\xd2\xe8\xaa\xecg\u07b95\xfd\xfbk\xf4iN\v\a\xc3\xf1\xa2\x87\xf6\xbcC{}\x0eM*\xa2Z\xa9A\x8ev\xdc\xd1\xe6\xc0\xda\xfa\xd4\xfd\xa4gR\xb5 \xff<\x1a\xa3\x9e\x88\xdb\x10Y7(\x89\xc8Jz\x86\xe9\x86\xee5\xfb|Q\xb5\xa5\xe3.\xac\xdb\x1a\x14ɉ\"aݺ\xa7Q^\x1d\x94\x8dCH*r\x80J\xe65a\x97\x7f\x8c\x84\xecJ'!\xd0\xe3\xa0m\xf7\x00\x1dM>\xfc`\x15\xbf1G\xb7ۛK\a19\x94\x96\\\x0eM\xc5/50\xeb\x177/\xa3\xb7\x86\x17b\xc4\xf7\x87>\xc5\xddY\x8c\xce9\xd2\xfe\xf8e?\xc3rxw\x19\xc1\x0f\xad'\x7f\x01\xe3\xbc3\x8fshi\x95\xa7\x15/\x8c\xa9_y\xf3\r(Y\xd5J\x05\"\xa5\xb9A\xf1\xe6\x18\xe5\xbd\x05\x14^7\x15(\xc8SbT\\\x8dV\xb0\xeb.H\xc7\f!O\x0f\x17#\x1d\x7f\xa1á\x1d2g\xc0\xd40\xb2\xaaG\xb0I\x186>B\x86ŦA\x12Ek\x90\x8a\xd4&T\xd2a\x1ag\t\x06\xa4\x95 R\xa8\t\xad\x8c\xf0\xbd9\x86\t\x9b\xa4\ac\x15X\xb8I\x9c\rx\x00\xbdU\xd3a\x1a{s]9\xb4\xc3%\x18\xe9=M\x80\x10\\\xa45HI\n\xb3_=^\xc2Ʋ\xe0\x8c\x05U)eGn\x9c\xb1\x9f\xad\x98\xc9\xddy3q\x1016\xf2\xfb\xb3P\xa4u\b\tiU\xc9M\x1ap\xb4c\xac\x92Yڃ ,+\r\xad\x1dcڏ\xe6h3^\xd7T\xa5fKϸd\xe8\x01F\xfd`\x05ul\xf5\xcdd\x15\xe3ጡǣ2ͩP\xc6\xc7\xcb~\xa6\xef\xe9\x03\xe7U\xf02\xe9\xa9}\xeb)\x02v\x13\xf4\x98\x9eZ@\xc3%U\\\x98ݯ\xbc9\xc6\xc09R\x8f!Kbr\xa4n\x80\xa9>\x9c\xa3\xba\xe6\xe2DY\x91*\x01\x90\x96D\x1a\x15?\x9d.Gg\x8c\x05U\x1drP\\\x9e]7%\x91F\\`\x86\x98\xe5d\x9eV\xf2Vd\x90\x0e+.Ԩ\xe0\x935\x13\xf0\x91Éچ\x80\xd3\xc1L\xce\xed\xaa#w\xa9Z\xb7\x0f\xd4\x18\xee\x8dxw\xc7w\xa0\a\x92\x90\xbc\xa6,U\xfc\x04\xeeb\xf7\x16\xd6|\x7f\x044\x97\x80\xbf\xbdDd\x13L\x9b\x98\xb8\x99%\x7f>S\xa8\xf5\xe4^\xa1v\xf4\n\xb4\x850\x8aВ)Z\x8cX\x7f}\x11\x92\x86\xa1\xd7Q\x87\xb0\xdc\xcfW\xcb~m\x85\xbd{\xab\xec\xf5\xf01|\xfe\x18t1\x87\xe0\xa0LDr\x93\xb5丧\x96 \xce4\xb3\xf1\xccMb]\xa1\x97H\xd0\xdd\xecQ\x81)qi8e\xc6>\xae\xbc9\xe6\x12\xfb\x89Eh\xb80\xb4\xb9\x1euT\x19ejI}\xf6$#\xf5\xf5k\xb7W\x9f\x83\x8aQ\xdfo\x9a\xcf;\xb8\x82\xb3\bIN\xe5\xc9g\x13\xcc\xc2\n\x8f\x0f\xe2y4;D9D8\x96w\xe4ɑV /RAm\xb4\xe8\xcdW\xf3E\rP\x01\x91\xa0\xefk\xde\x1am\xd6\xe3\xa55\x93505o\x99J\x1b\xa2\xcc\x05v\xe5\xcd1\xc0\xa4\x1c\xd3\x00+U$\xb6'C$\x80\xe4)g\x95\xb9\xb6\xe90\x1dg\r\xb8t5Ē~\x0fiq\xb0.f'Έ\x17\xfd\xcb\xd8\u008bP:\xd0k\x17\xd8ٳ\x9e\xac\x9b\xae\xd8N\xb2\xc1v\x80\x9dc,\xe7\x97\xee\xf8\xb8\xab\x05윜\xc0\x88,\xeb\x06k\n\xea\b\xb8\xa0\x055\x97\xd8ю1\x19\x96rG&\x81I\xaa\xe8ٖ\x11\xc3t\xac\xa0Ў&\x95\xb0\xa9\x80\x19\xe3\x1d_\n\x90\xe9F\x8e\xf1X3\x8c\r\x9a\x9d\x8a\x9e-\x86\x04Z\xbb\f\x13\xccpM\x02=\xe5\x8aq\xcf\xd2\xcdD\xd8`\x8fuD\xe4\x95n\xc3\x14o\xbb\x8c\xa054 \xe8).\xc4p\xc9\xd1#\xd8A\x9aq\x96\xb5B\x00ˌ\xbd\xc9Ѓ\x15\xbfx\xb2\xc1/\x02\xf0\xd1~2)Q\x03`I\xcds\xabD=\xc2\"}\x10\x01\xc1\xda:\xa5L*ºKOG\xdc\xf1\xd2H\xcd_D \nxڂT2m\xbaB\xdf\xe2h\xe46\xfch\xb4ã\x88\x1ddF*Hs~\xcd\xd2\x1c*b\x94\xd9LV\xb18\xa2\xa0\xcbVi\b\xff\x0ej&\xab\xb1n,\xec\x1e\xde\x16˹\x92\xb3\x9d`k\xc6ٗ\"Bu\x05)d}\x91\xc8\xf1\xa2\xc7\xe1R\nt&\x82\x92C\x05~\nԯ\xdd>\x05rP\xf1f\x8f\xaf0\x87\xb0|I\xe0\xd3\xf5T\x117\x05\x0e<=m\xe4u1\xbbwĝ\x81\xa3{O\xbb\xfb\xe2起\xf8\x96-\xa1\x82݀\xa9\x1a\xc7\xff\xb4\xa15\xbf\xfe\xc3=<\x1fJ_Ri+L\xb7\x87\x0eS,\x93\xa5\"2\xf2\x8f\x9c{\x11\x10\xb1\xff\xe5\x04\xb3U\x1f\xd0\x17N\x11\xe8\x93/*\xc2o\xaeOvэ\x82\xb1\xb8\xad\xeba\xbb\x19\xbf\x14_/b\xdb\x1f\xe3\x04\v\xfd`\xcf\x13\xd1\xc9\x062s/\xe9\xd1J\x1c\xc1V\xd3?wg\xef@\xe2\xbb\xe2\xf7c\xe0\"\vN\x1d:?\x8e\x02\xbcM1\x89vH\x96w\x88\xef\x06}\xb6\x89\xf3\xd5&\x81V\xfd㭘\xe3\x9c\xeb\xb4!\xd7z\xbcI,ɮ4\xeb\xc9\xee\xe3\xace_\xdf\xecGޖ\x94}\xb7\x7f\xa3\xdb\xe5j\xdf\xee\xdfxg\nw\x9b\x1d\xff\xdf\xcc\xee\xe6\x8eٱ\xdb\xd0\xed\xe7m\xf7\"\x94p\xaep\xbb\xaf\xc9\xf3h\x9b\x93l\xec\xf3lt\x8f\xcdm\xa0\xaf\xf7\xe0o\xee\x12\xed:ņ&\x12.\x8b\xa2\xf0W\xca\xf0\xaf\xf6`F\xb6\xa0\xbe܃\xbd\xbfCu=u\x95\xa1g\xf5p\x1b/\xdb;Y\x0f\xb79Ȗf\xd6\xd6\vv\xb5ٵѐ\"{a\x1bս\xa1U\xb6\x83߈\xaa\xe8\xf3\xed\xa8\xbb\xeb\xa5vj\x9b\xae\xf5\xb61|\xaf6\xe4>ن\xb7\x12\x1f6\xa2-5\xef6\xca;\xba\xa5\xb7\aw\xa5ѷ\xdcm\x99\xeaR\xf3\xf1i\x1c\x1f{\xda*\xf8\x7f\xe90\xb4\xab\xc9\xfd\u06dd\x0e\x8b\x1b[\xf1+{\xc4G\xaf8\x13ꁗCW\\(\x1c\xc0\"\xe2V\\t\x19 #\x83\xd6VN#\"V\x9c\x85\r\x90\xbbÕ\x1cL\xbcG[n0x\f,\xbe\x88\xfa:\xf8ݓ,;\x7f4\xdf{g\xa4i\xe6\xbe\xf9\xee?\x12^\xfa\xc2y\xe5sS\xf7t\xf8\xb6r\xf1\xabT\xffc\x8b\x95\x8f0G\xfd\x96\xb5\x0f3\x90Hb\xfa3\xff\x01\x00\x00\xff\xff\x01\x00\x00\xff\xff\x1e/\xde.&/\x00\x00"))
 }

@@ -40,6 +40,7 @@ import (
 	"time"
 
 	"miren.dev/runtime/api/compute/compute_v1alpha"
+	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/concurrency"
@@ -725,12 +726,18 @@ func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1al
 			poolID := foundPool.ID
 
 			// Get service concurrency and create strategy for version->pool mapping
-			svcConcurrency, err := core_v1alpha.GetServiceConcurrency(ver, service)
+			spec, err := coreutil.ResolveConfig(ctx, a.eac, ver)
+			if err != nil {
+				a.mu.Unlock()
+				return nil, fmt.Errorf("failed to resolve config: %w", err)
+			}
+			svcConcurrency, err := coreutil.GetServiceConcurrency(spec, service)
 			if err != nil {
 				a.mu.Unlock()
 				return nil, fmt.Errorf("failed to get service concurrency: %w", err)
 			}
-			strategy := concurrency.NewStrategy(&svcConcurrency)
+			sc := core_v1alpha.ServiceConcurrency(svcConcurrency)
+			strategy := concurrency.NewStrategy(&sc)
 
 			// Cache the pool state before releasing lock
 			a.pools[key] = &poolState{
@@ -1075,6 +1082,13 @@ func (a *localActivator) watchSandboxes(ctx context.Context) {
 			var appVer core_v1alpha.AppVersion
 			appVer.Decode(verResp.Entity().Entity())
 
+			// Resolve config from ConfigVersion if available
+			spec, err := coreutil.ResolveConfig(ctx, a.eac, &appVer)
+			if err != nil {
+				a.log.Error("failed to resolve config for sandbox", "error", err, "sandbox", sb.ID)
+				return nil
+			}
+
 			// Build HTTP URL
 			// For PENDING sandboxes, we track them even without network addresses
 			// so we can notify waiters if they crash during boot
@@ -1092,8 +1106,11 @@ func (a *localActivator) watchSandboxes(ctx context.Context) {
 				}
 			} else {
 				port := int64(3000)
-				if appVer.Config.Port > 0 {
-					port = appVer.Config.Port
+				for _, svc := range spec.Services {
+					if svc.Name == "web" && svc.Port > 0 {
+						port = svc.Port
+						break
+					}
 				}
 
 				var err error
@@ -1105,12 +1122,13 @@ func (a *localActivator) watchSandboxes(ctx context.Context) {
 			}
 
 			// Get service concurrency and create strategy/tracker
-			svcConcurrency, err := core_v1alpha.GetServiceConcurrency(&appVer, service)
+			svcConcurrency, err := coreutil.GetServiceConcurrency(spec, service)
 			if err != nil {
 				a.log.Error("failed to get service concurrency", "error", err, "sandbox", sb.ID, "service", service)
 				return nil
 			}
-			strategy := concurrency.NewStrategy(&svcConcurrency)
+			sc := core_v1alpha.ServiceConcurrency(svcConcurrency)
+			strategy := concurrency.NewStrategy(&sc)
 			tracker := strategy.InitializeTracker()
 
 			lsb := &sandbox{
@@ -1257,6 +1275,13 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 		var appVer core_v1alpha.AppVersion
 		appVer.Decode(verResp.Entity().Entity())
 
+		// Resolve config from ConfigVersion if available
+		spec, err := coreutil.ResolveConfig(ctx, a.eac, &appVer)
+		if err != nil {
+			a.log.Error("failed to resolve config for sandbox", "error", err, "sandbox", sb.ID)
+			continue
+		}
+
 		// Extract HTTP port from sandbox spec (canonical source of truth)
 		port, found := extractHTTPPort(&sb.Spec)
 		if !found {
@@ -1276,12 +1301,13 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 		}
 
 		// Get service-specific concurrency configuration and create strategy
-		svcConcurrency, err := core_v1alpha.GetServiceConcurrency(&appVer, service)
+		svcConcurrency, err := coreutil.GetServiceConcurrency(spec, service)
 		if err != nil {
 			a.log.Error("failed to get service concurrency for sandbox", "error", err, "sandbox", sb.ID, "service", service)
 			continue
 		}
-		strategy := concurrency.NewStrategy(&svcConcurrency)
+		sc := core_v1alpha.ServiceConcurrency(svcConcurrency)
+		strategy := concurrency.NewStrategy(&sc)
 
 		// Initialize tracker for recovered sandbox (starts empty)
 		tracker := strategy.InitializeTracker()
@@ -1362,13 +1388,21 @@ func (a *localActivator) recoverPools(ctx context.Context) error {
 		var appVer core_v1alpha.AppVersion
 		appVer.Decode(verResp.Entity().Entity())
 
+		// Resolve config from ConfigVersion if available
+		spec, err := coreutil.ResolveConfig(ctx, a.eac, &appVer)
+		if err != nil {
+			a.log.Error("failed to resolve config for pool", "error", err, "pool", pool.ID)
+			continue
+		}
+
 		// Get service concurrency and create strategy
-		svcConcurrency, err := core_v1alpha.GetServiceConcurrency(&appVer, pool.Service)
+		svcConcurrency, err := coreutil.GetServiceConcurrency(spec, pool.Service)
 		if err != nil {
 			a.log.Error("failed to get service concurrency for pool", "pool", pool.ID, "service", pool.Service, "error", err)
 			continue
 		}
-		strategy := concurrency.NewStrategy(&svcConcurrency)
+		sc := core_v1alpha.ServiceConcurrency(svcConcurrency)
+		strategy := concurrency.NewStrategy(&sc)
 
 		a.mu.Lock()
 

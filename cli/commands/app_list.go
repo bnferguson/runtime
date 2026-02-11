@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"miren.dev/runtime/api/compute/compute_v1alpha"
+	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/ingress"
@@ -111,12 +112,16 @@ func AppList(ctx *Context, opts struct {
 		return err
 	}
 
-	// Build version map
+	// Build version map and resolved config spec map
 	versionMap := make(map[string]*core_v1alpha.AppVersion)
+	specMap := make(map[string]*core_v1alpha.ConfigSpec)
 	for _, e := range versionsRes.Values() {
 		v := new(core_v1alpha.AppVersion)
 		v.Decode(e.Entity())
 		versionMap[v.ID.String()] = v
+		if resolvedCfg, err := coreutil.ResolveConfig(ctx, eac, v); err == nil {
+			specMap[v.ID.String()] = resolvedCfg
+		}
 	}
 
 	// Build deployment map (most recent deployment per app)
@@ -184,9 +189,9 @@ func AppList(ctx *Context, opts struct {
 		}
 
 		// Check concurrency mode from the app's active version config
-		if version, ok := versionMap[pool.SandboxSpec.Version.String()]; ok {
-			for _, svc := range version.Config.Services {
-				if svc.Name == pool.Service && svc.ServiceConcurrency.Mode == "fixed" {
+		if spec, ok := specMap[pool.SandboxSpec.Version.String()]; ok {
+			for _, svc := range spec.Services {
+				if svc.Name == pool.Service && svc.Concurrency.Mode == "fixed" {
 					state.isAutoscale = false
 				}
 			}

@@ -96,6 +96,21 @@ metadata:
 spec:
   project: project/sample
 ---
+kind: dev.miren.core/config_version
+version: v1alpha
+metadata:
+  name: abcdef-cfg
+spec:
+  app: app/nginx
+  spec:
+    services:
+      - name: web
+        port: 80
+        concurrency:
+          mode: auto
+          requests_per_instance: 10
+          scale_down_delay: "15m"
+---
 kind: dev.miren.core/app_version
 version: v1alpha
 metadata:
@@ -104,14 +119,7 @@ spec:
   app: app/nginx
   version: abcdef
   image_url: docker.io/library/nginx:latest
-  config:
-    port: 80
-    services:
-      - name: web
-        service_concurrency:
-          mode: auto
-          requests_per_instance: 10
-          scale_down_delay: "15m"
+  config_version: config_version/abcdef-cfg
 ---
 kind: dev.miren.ingress/http_route
 version: v1alpha

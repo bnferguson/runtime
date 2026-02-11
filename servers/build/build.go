@@ -16,6 +16,7 @@ import (
 	"github.com/tonistiigi/fsutil"
 	"miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/build/build_v1alpha"
+	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
@@ -97,20 +98,20 @@ func NewBuilder(log *slog.Logger, eas *entityserver_v1alpha.EntityAccessClient, 
 // - Manual vars (source="manual") always persist and shadow config vars with the same key
 // - app.toml vars (source="config") override existing config vars but never manual vars
 // - Removing a var from app.toml only deletes it if source="config"
-func mergeServiceEnvVars(existingEnvs []core_v1alpha.Env, newEnvs []core_v1alpha.Env) []core_v1alpha.Env {
+func mergeServiceEnvVars(existingEnvs []core_v1alpha.ConfigSpecServicesEnv, newEnvs []core_v1alpha.ConfigSpecServicesEnv) []core_v1alpha.ConfigSpecServicesEnv {
 	// If no new env vars from app.toml, preserve all existing
 	if len(newEnvs) == 0 {
 		return existingEnvs
 	}
 
 	// Build map of app.toml env vars
-	newEnvMap := make(map[string]core_v1alpha.Env)
+	newEnvMap := make(map[string]core_v1alpha.ConfigSpecServicesEnv)
 	for _, e := range newEnvs {
 		newEnvMap[e.Key] = e
 	}
 
 	// Build result by merging
-	envMap := make(map[string]core_v1alpha.Env)
+	envMap := make(map[string]core_v1alpha.ConfigSpecServicesEnv)
 
 	// Keep manual vars - they shadow config vars with the same key
 	for _, e := range existingEnvs {
@@ -119,7 +120,8 @@ func mergeServiceEnvVars(existingEnvs []core_v1alpha.Env, newEnvs []core_v1alpha
 			source = "manual" // backward compatibility: preserve unknown-source vars
 		}
 
-		if source == "manual" {
+		isManual := source == "manual"
+		if isManual {
 			envMap[e.Key] = e
 		}
 		// config vars only kept if still in app.toml (checked below)
@@ -133,7 +135,7 @@ func mergeServiceEnvVars(existingEnvs []core_v1alpha.Env, newEnvs []core_v1alpha
 	}
 
 	// Convert back to slice
-	result := make([]core_v1alpha.Env, 0, len(envMap))
+	result := make([]core_v1alpha.ConfigSpecServicesEnv, 0, len(envMap))
 	for _, e := range envMap {
 		result = append(result, e)
 	}
@@ -146,8 +148,8 @@ var errNoServices = errors.New("no services defined: please define at least one 
 
 // validateServicesExist checks that at least one service is defined in the config.
 // Returns an error if no services are found.
-func validateServicesExist(cfg core_v1alpha.Config) error {
-	if len(cfg.Services) == 0 {
+func validateServicesExist(spec core_v1alpha.ConfigSpec) error {
+	if len(spec.Services) == 0 {
 		return errNoServices
 	}
 	return nil
@@ -157,7 +159,7 @@ func validateServicesExist(cfg core_v1alpha.Config) error {
 // resolves defaults, and returns the final service configurations.
 // This is the core logic for determining which services exist in an app_version
 // and what their concurrency settings should be.
-func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[string]string) []core_v1alpha.Services {
+func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[string]string) []core_v1alpha.ConfigSpecServices {
 	// Build command map from app config
 	srvMap := map[string]string{}
 	if appConfig != nil {
@@ -201,13 +203,14 @@ func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[st
 		ac.ResolveDefaults(allServiceNames)
 	}
 
-	// Build Config.Services[] from fully-resolved appconfig
+	// Build ConfigSpec.Services[] from fully-resolved appconfig
 	// IMPORTANT: Iterate over allServiceNames, not srvMap, because services
 	// may have concurrency config without commands
-	var services []core_v1alpha.Services
+	var services []core_v1alpha.ConfigSpecServices
 	for _, serviceName := range allServiceNames {
-		svc := core_v1alpha.Services{
-			Name: serviceName,
+		svc := core_v1alpha.ConfigSpecServices{
+			Name:    serviceName,
+			Command: srvMap[serviceName],
 		}
 
 		// Map from appconfig to entity schema
@@ -234,7 +237,7 @@ func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[st
 			}
 
 			if serviceConfig.Concurrency != nil {
-				svc.ServiceConcurrency = core_v1alpha.ServiceConcurrency{
+				svc.Concurrency = core_v1alpha.ConfigSpecServicesConcurrency{
 					Mode:                serviceConfig.Concurrency.Mode,
 					NumInstances:        int64(serviceConfig.Concurrency.NumInstances),
 					RequestsPerInstance: int64(serviceConfig.Concurrency.RequestsPerInstance),
@@ -245,9 +248,9 @@ func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[st
 
 			// Convert disk configurations
 			if len(serviceConfig.Disks) > 0 {
-				svc.Disks = make([]core_v1alpha.Disks, 0, len(serviceConfig.Disks))
+				svc.Disks = make([]core_v1alpha.ConfigSpecServicesDisks, 0, len(serviceConfig.Disks))
 				for _, disk := range serviceConfig.Disks {
-					svc.Disks = append(svc.Disks, core_v1alpha.Disks{
+					svc.Disks = append(svc.Disks, core_v1alpha.ConfigSpecServicesDisks{
 						Name:         disk.Name,
 						MountPath:    disk.MountPath,
 						ReadOnly:     disk.ReadOnly,
@@ -260,9 +263,9 @@ func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[st
 
 			// Convert service-specific environment variables
 			if len(serviceConfig.EnvVars) > 0 {
-				svc.Env = make([]core_v1alpha.Env, 0, len(serviceConfig.EnvVars))
+				svc.Env = make([]core_v1alpha.ConfigSpecServicesEnv, 0, len(serviceConfig.EnvVars))
 				for _, envVar := range serviceConfig.EnvVars {
-					svc.Env = append(svc.Env, core_v1alpha.Env{
+					svc.Env = append(svc.Env, core_v1alpha.ConfigSpecServicesEnv{
 						Key:    envVar.Key,
 						Value:  envVar.Value,
 						Source: "config",
@@ -289,7 +292,7 @@ type ConfigInputs struct {
 	ProcfileServices map[string]string
 
 	// ExistingConfig is the current config to preserve manual env vars from
-	ExistingConfig core_v1alpha.Config
+	ExistingConfig core_v1alpha.ConfigSpec
 
 	// CliEnvVars are environment variables passed via CLI flags (e.g., miren deploy -e KEY=VALUE)
 	// These are applied with source="manual" and take precedence over app.toml vars
@@ -298,26 +301,26 @@ type ConfigInputs struct {
 
 // buildVersionConfig builds the app version config from all inputs.
 // This is a pure function that can be easily tested.
-func buildVersionConfig(inputs ConfigInputs) core_v1alpha.Config {
-	var cfg core_v1alpha.Config
+func buildVersionConfig(inputs ConfigInputs) core_v1alpha.ConfigSpec {
+	var spec core_v1alpha.ConfigSpec
 
 	res := inputs.BuildResult
 	ac := inputs.AppConfig
 	procfileServices := inputs.ProcfileServices
 
 	// Preserve existing variables for merging later
-	cfg.Variable = inputs.ExistingConfig.Variable
+	spec.Variables = inputs.ExistingConfig.Variables
 
 	// Set entrypoint from stack build result
 	if res != nil && res.Entrypoint != "" {
-		cfg.Entrypoint = res.Entrypoint
+		spec.Entrypoint = res.Entrypoint
 	}
 
 	// Set start directory from build result, defaulting to /app
 	if res != nil && res.WorkingDir != "" {
-		cfg.StartDirectory = res.WorkingDir
+		spec.StartDirectory = res.WorkingDir
 	} else {
-		cfg.StartDirectory = "/app"
+		spec.StartDirectory = "/app"
 	}
 
 	// If no web service defined in app config or Procfile, but we have a command or entrypoint,
@@ -339,67 +342,41 @@ func buildVersionConfig(inputs ConfigInputs) core_v1alpha.Config {
 	}
 
 	// Build service configurations with concurrency settings from app.toml/Procfile
-	cfg.Services = buildServicesConfig(ac, procfileServices)
+	// Commands are set directly on each service (svc.Command) by buildServicesConfig
+	spec.Services = buildServicesConfig(ac, procfileServices)
 
 	// Merge env vars: preserve manual vars from existing services
-	existingServices := inputs.ExistingConfig.Services
-	for i := range cfg.Services {
-		serviceName := cfg.Services[i].Name
+	for i := range spec.Services {
+		serviceName := spec.Services[i].Name
 
 		// Find matching service in existing config
-		for _, existingSvc := range existingServices {
+		for _, existingSvc := range inputs.ExistingConfig.Services {
 			if existingSvc.Name == serviceName {
 				// Merge env vars: app.toml vars override, but manual vars persist
-				cfg.Services[i].Env = mergeServiceEnvVars(existingSvc.Env, cfg.Services[i].Env)
+				spec.Services[i].Env = mergeServiceEnvVars(existingSvc.Env, spec.Services[i].Env)
 				break
 			}
 		}
 	}
 
-	// Build commands list for services that have explicit commands
-	var serviceCmds []core_v1alpha.Commands
-	for _, svc := range cfg.Services {
-		// Check if this service has a command from app config or procfile
-		var cmd string
-		if ac != nil {
-			if svcConfig, ok := ac.Services[svc.Name]; ok && svcConfig != nil && svcConfig.Command != "" {
-				cmd = svcConfig.Command
-			}
-		}
-		if cmd == "" {
-			if procCmd, ok := procfileServices[svc.Name]; ok {
-				cmd = procCmd
-			}
-		}
-
-		if cmd != "" {
-			serviceCmds = append(serviceCmds, core_v1alpha.Commands{
-				Service: svc.Name,
-				Command: cmd,
-			})
-		}
-	}
-
-	cfg.Commands = serviceCmds
-
 	// Merge environment variables from app config
 	// Preserves existing variables when app.toml has no [[env]] section
-	cfg.Variable = mergeVariablesFromAppConfig(cfg.Variable, ac)
+	spec.Variables = mergeVariablesFromAppConfig(spec.Variables, ac)
 
 	// Apply CLI-provided env vars last (highest precedence, always source="manual")
-	cfg.Variable = mergeCliEnvVars(cfg.Variable, inputs.CliEnvVars)
+	spec.Variables = mergeCliEnvVars(spec.Variables, inputs.CliEnvVars)
 
-	return cfg
+	return spec
 }
 
-func buildVariablesFromAppConfig(appConfig *appconfig.AppConfig) []core_v1alpha.Variable {
+func buildVariablesFromAppConfig(appConfig *appconfig.AppConfig) []core_v1alpha.ConfigSpecVariables {
 	if appConfig == nil || len(appConfig.EnvVars) == 0 {
 		return nil
 	}
 
-	variables := make([]core_v1alpha.Variable, 0, len(appConfig.EnvVars))
+	variables := make([]core_v1alpha.ConfigSpecVariables, 0, len(appConfig.EnvVars))
 	for _, envVar := range appConfig.EnvVars {
-		variables = append(variables, core_v1alpha.Variable{
+		variables = append(variables, core_v1alpha.ConfigSpecVariables{
 			Key:    envVar.Key,
 			Value:  envVar.Value,
 			Source: "config",
@@ -414,7 +391,7 @@ func buildVariablesFromAppConfig(appConfig *appconfig.AppConfig) []core_v1alpha.
 // - Variables from app.toml (source="config") override existing config vars but never manual vars
 // - If a variable is removed from app.toml, it's only deleted if it was originally from config
 // - If appConfig is nil or has no env vars, all existing variables are preserved.
-func mergeVariablesFromAppConfig(existingVars []core_v1alpha.Variable, appConfig *appconfig.AppConfig) []core_v1alpha.Variable {
+func mergeVariablesFromAppConfig(existingVars []core_v1alpha.ConfigSpecVariables, appConfig *appconfig.AppConfig) []core_v1alpha.ConfigSpecVariables {
 	appConfigVars := buildVariablesFromAppConfig(appConfig)
 
 	// If no app.toml vars, preserve all existing vars
@@ -423,13 +400,13 @@ func mergeVariablesFromAppConfig(existingVars []core_v1alpha.Variable, appConfig
 	}
 
 	// Build a map of app.toml variables for quick lookup
-	appConfigMap := make(map[string]core_v1alpha.Variable)
+	appConfigMap := make(map[string]core_v1alpha.ConfigSpecVariables)
 	for _, v := range appConfigVars {
 		appConfigMap[v.Key] = v
 	}
 
 	// Build result by merging
-	varMap := make(map[string]core_v1alpha.Variable)
+	varMap := make(map[string]core_v1alpha.ConfigSpecVariables)
 
 	// First, add all existing manual variables - these always persist
 	for _, v := range existingVars {
@@ -454,7 +431,7 @@ func mergeVariablesFromAppConfig(existingVars []core_v1alpha.Variable, appConfig
 	}
 
 	// Convert map back to slice
-	result := make([]core_v1alpha.Variable, 0, len(varMap))
+	result := make([]core_v1alpha.ConfigSpecVariables, 0, len(varMap))
 	for _, v := range varMap {
 		result = append(result, v)
 	}
@@ -464,20 +441,20 @@ func mergeVariablesFromAppConfig(existingVars []core_v1alpha.Variable, appConfig
 
 // mergeCliEnvVars merges CLI-provided environment variables into the existing config.
 // CLI vars are always marked with source="manual" and override any existing var with the same key.
-func mergeCliEnvVars(existingVars []core_v1alpha.Variable, cliVars []*build_v1alpha.EnvironmentVariable) []core_v1alpha.Variable {
+func mergeCliEnvVars(existingVars []core_v1alpha.ConfigSpecVariables, cliVars []*build_v1alpha.EnvironmentVariable) []core_v1alpha.ConfigSpecVariables {
 	if len(cliVars) == 0 {
 		return existingVars
 	}
 
 	// Build a map of existing vars
-	varMap := make(map[string]core_v1alpha.Variable)
+	varMap := make(map[string]core_v1alpha.ConfigSpecVariables)
 	for _, v := range existingVars {
 		varMap[v.Key] = v
 	}
 
-	// CLI vars always override (marked as manual)
+	// CLI vars always override (marked as user-provided)
 	for _, cv := range cliVars {
-		varMap[cv.Key()] = core_v1alpha.Variable{
+		varMap[cv.Key()] = core_v1alpha.ConfigSpecVariables{
 			Key:       cv.Key(),
 			Value:     cv.Value(),
 			Sensitive: cv.Sensitive(),
@@ -486,7 +463,7 @@ func mergeCliEnvVars(existingVars []core_v1alpha.Variable, cliVars []*build_v1al
 	}
 
 	// Convert map back to slice
-	result := make([]core_v1alpha.Variable, 0, len(varMap))
+	result := make([]core_v1alpha.ConfigSpecVariables, 0, len(varMap))
 	for _, v := range varMap {
 		result = append(result, v)
 	}
@@ -497,6 +474,7 @@ func mergeCliEnvVars(existingVars []core_v1alpha.Variable, cliVars []*build_v1al
 func (b *Builder) nextVersion(ctx context.Context, name string) (
 	*core_v1alpha.App,
 	*core_v1alpha.AppVersion,
+	core_v1alpha.ConfigSpec,
 	string,
 	error,
 ) {
@@ -505,29 +483,34 @@ func (b *Builder) nextVersion(ctx context.Context, name string) (
 	err := b.ec.Get(ctx, name, &appRec)
 	if err != nil {
 		if !errors.Is(err, cond.ErrNotFound{}) {
-			return nil, nil, "", err
+			return nil, nil, core_v1alpha.ConfigSpec{}, "", err
 		}
 
 		appRec.Project = "project/default"
 
 		id, err := b.ec.Create(ctx, name, &appRec)
 		if err != nil {
-			return nil, nil, "", err
+			return nil, nil, core_v1alpha.ConfigSpec{}, "", err
 		}
 		appRec.ID = id
 	}
 
-	var currentCfg core_v1alpha.Config
+	var currentCfg core_v1alpha.ConfigSpec
 
 	if appRec.ActiveVersion != "" {
 		var verRec core_v1alpha.AppVersion
 
 		err := b.ec.GetById(ctx, appRec.ActiveVersion, &verRec)
 		if err != nil {
-			return nil, nil, "", err
+			return nil, nil, core_v1alpha.ConfigSpec{}, "", err
 		}
 
-		currentCfg = verRec.Config
+		// Resolve config from ConfigVersion if available, otherwise use inline
+		resolvedCfg, err := coreutil.ResolveConfig(ctx, b.ec.EAC(), &verRec)
+		if err != nil {
+			return nil, nil, core_v1alpha.ConfigSpec{}, "", fmt.Errorf("failed to resolve config: %w", err)
+		}
+		currentCfg = *resolvedCfg
 	}
 
 	ver := name + "-" + idgen.Gen("v")
@@ -539,10 +522,9 @@ func (b *Builder) nextVersion(ctx context.Context, name string) (
 	av.App = appRec.ID
 	av.Version = ver
 	av.ImageUrl = "cluster.local:5000/" + name + ":" + art
-	av.Config = currentCfg
 	av.AdminToken = idgen.GenAdminToken()
 
-	return &appRec, &av, art, nil
+	return &appRec, &av, currentCfg, art, nil
 }
 
 func (b *Builder) loadAppConfig(dfs fsutil.FS) (*appconfig.AppConfig, error) {
@@ -596,7 +578,7 @@ func isSystemEnvVar(key string) bool {
 // into the build process. It reuses the same merge logic as runtime config:
 // existing config vars + app.toml vars + CLI vars, then filters out system-managed vars.
 func computeBuildEnvVars(
-	existingVars []core_v1alpha.Variable,
+	existingVars []core_v1alpha.ConfigSpecVariables,
 	ac *appconfig.AppConfig,
 	cliVars []*build_v1alpha.EnvironmentVariable,
 ) map[string]string {
@@ -734,7 +716,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		Log:    b.Log,
 	}
 
-	appRec, mrv, _, err := b.nextVersion(ctx, name)
+	appRec, mrv, existingCfg, _, err := b.nextVersion(ctx, name)
 	if err != nil {
 		b.Log.Error("error getting next version", "error", err)
 		b.sendErrorStatus(ctx, status, "Error getting next version: %v", err)
@@ -750,7 +732,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	}
 
 	// Compute env vars to inject into the build process
-	buildEnvVars := computeBuildEnvVars(mrv.Config.Variable, ac, args.EnvVars())
+	buildEnvVars := computeBuildEnvVars(existingCfg.Variables, ac, args.EnvVars())
 	if len(buildEnvVars) > 0 {
 		b.Log.Info("injecting env vars into build", "count", len(buildEnvVars))
 	}
@@ -890,17 +872,17 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	}
 
 	// Build the version config from all inputs
-	mrv.Config = buildVersionConfig(ConfigInputs{
+	configSpec := buildVersionConfig(ConfigInputs{
 		BuildResult:      res,
 		AppConfig:        ac,
 		ProcfileServices: procfileServices,
-		ExistingConfig:   mrv.Config,
+		ExistingConfig:   existingCfg,
 		CliEnvVars:       args.EnvVars(),
 	})
 
 	// Fail the deploy if no services are defined - this prevents deploying an app
 	// that can't serve any traffic
-	if err := validateServicesExist(mrv.Config); err != nil {
+	if err := validateServicesExist(configSpec); err != nil {
 		b.sendErrorStatus(ctx, status, "%s. See https://miren.md/services", err)
 		return err
 	}
@@ -914,6 +896,19 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	} else {
 		b.Log.Debug("no new env vars from app config, preserving existing variables")
 	}
+
+	// Create ConfigVersion as the sole config store (inline Config is no longer written)
+	configVer := &core_v1alpha.ConfigVersion{
+		App:  mrv.App,
+		Spec: configSpec,
+	}
+	cvName := mrv.Version + "-cfg"
+	cvid, err := b.ec.Create(ctx, cvName, configVer)
+	if err != nil {
+		return fmt.Errorf("error creating config version: %w", err)
+	}
+	mrv.ConfigVersion = cvid
+	mrv.Config = core_v1alpha.Config{}
 
 	id, err := b.ec.Create(ctx, mrv.Version, mrv)
 	if err != nil {
@@ -1191,31 +1186,25 @@ func (b *Builder) AnalyzeApp(ctx context.Context, state *build_v1alpha.BuilderAn
 	}
 
 	// Use buildVersionConfig to compute services - same logic as BuildFromTar
-	cfg := buildVersionConfig(ConfigInputs{
+	spec := buildVersionConfig(ConfigInputs{
 		BuildResult:      &buildResult,
 		AppConfig:        ac,
 		ProcfileServices: procfileServices,
 	})
 
-	result.SetWorkingDir(cfg.StartDirectory)
+	result.SetWorkingDir(spec.StartDirectory)
 
-	// Build a map of commands for quick lookup
-	commandMap := make(map[string]string)
-	for _, cmd := range cfg.Commands {
-		commandMap[cmd.Service] = cmd.Command
-	}
-
-	// Convert cfg.Services to ServiceInfo with source tracking
+	// Convert spec.Services to ServiceInfo with source tracking
 	// This includes ALL services, even those without explicit commands (they use image default)
 	var services []build_v1alpha.ServiceInfo
-	for _, svc := range cfg.Services {
+	for _, svc := range spec.Services {
 		var svcInfo build_v1alpha.ServiceInfo
 		svcInfo.SetName(svc.Name)
 
-		if cmd, hasCommand := commandMap[svc.Name]; hasCommand {
-			svcInfo.SetCommand(cmd)
+		if svc.Command != "" {
+			svcInfo.SetCommand(svc.Command)
 			// Determine source for this service
-			source := determineServiceSource(svc.Name, cmd, ac, procfileServices, &buildResult)
+			source := determineServiceSource(svc.Name, svc.Command, ac, procfileServices, &buildResult)
 			svcInfo.SetSource(source)
 
 			// Add event when we inject a synthetic web service from stack detection

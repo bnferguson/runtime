@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"miren.dev/runtime/api/compute/compute_v1alpha"
+	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/cond"
@@ -89,14 +90,20 @@ func (l *Launcher) reconcileAppVersion(ctx context.Context, app *core_v1alpha.Ap
 	var ver core_v1alpha.AppVersion
 	ver.Decode(verResp.Entity().Entity())
 
+	// Resolve config from ConfigVersion if available, otherwise use inline
+	spec, err := coreutil.ResolveConfig(ctx, l.EAC, &ver)
+	if err != nil {
+		return fmt.Errorf("failed to resolve config: %w", err)
+	}
+
 	l.Log.Info("reconciling app version",
 		"app", app.ID,
 		"version", ver.Version,
-		"services", len(ver.Config.Services))
+		"services", len(spec.Services))
 
 	// For each service, ensure a pool exists
-	for _, svc := range ver.Config.Services {
-		if err := l.ensurePoolForService(ctx, app, &ver, svc.Name); err != nil {
+	for _, svc := range spec.Services {
+		if err := l.ensurePoolForService(ctx, app, &ver, spec, svc.Name); err != nil {
 			l.Log.Error("failed to ensure pool for service",
 				"app", app.ID,
 				"service", svc.Name,
@@ -118,16 +125,16 @@ func (l *Launcher) reconcileAppVersion(ctx context.Context, app *core_v1alpha.Ap
 }
 
 // ensurePoolForService creates or reuses a pool for the given service
-func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.App, ver *core_v1alpha.AppVersion, serviceName string) error {
+func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.App, ver *core_v1alpha.AppVersion, spec *core_v1alpha.ConfigSpec, serviceName string) error {
 	// Get service config
-	svcConcurrency, err := core_v1alpha.GetServiceConcurrency(ver, serviceName)
+	svcConcurrency, err := coreutil.GetServiceConcurrency(spec, serviceName)
 	if err != nil {
 		return fmt.Errorf("failed to get service concurrency: %w", err)
 	}
 
 	// Determine which image to use
 	image := ver.ImageUrl
-	for _, svc := range ver.Config.Services {
+	for _, svc := range spec.Services {
 		if svc.Name == serviceName && svc.Image != "" {
 			image = containerdx.NormalizeImageReference(svc.Image)
 			l.Log.Info("using custom image for service",
@@ -148,7 +155,7 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 	appMD.Decode(appResp.Entity().Entity())
 
 	// Build the desired sandbox spec
-	spec, err := l.buildSandboxSpec(ctx, app, ver, serviceName, image)
+	sbSpec, err := l.buildSandboxSpec(ctx, app, ver, spec, serviceName, image)
 	if err != nil {
 		return fmt.Errorf("failed to build sandbox spec: %w", err)
 	}
@@ -163,7 +170,7 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 	}
 
 	// Try to find existing pool with matching spec
-	poolWithEntity, err := l.findMatchingPool(ctx, app.ID, serviceName, spec)
+	poolWithEntity, err := l.findMatchingPool(ctx, app.ID, serviceName, sbSpec)
 	if err != nil {
 		return fmt.Errorf("failed to find matching pool: %w", err)
 	}
@@ -176,6 +183,12 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 			"app", app.ID)
 
 		needsUpdate := false
+
+		// Update the pool's sandbox spec version to track the current AppVersion
+		if poolWithEntity.Pool.SandboxSpec.Version != ver.ID {
+			poolWithEntity.Pool.SandboxSpec.Version = ver.ID
+			needsUpdate = true
+		}
 
 		// Add this version to referenced_by_versions if not already present
 		if !containsRef(poolWithEntity.Pool.ReferencedByVersions, ver.ID) {
@@ -218,7 +231,7 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 	pool := &compute_v1alpha.SandboxPool{
 		App:                  app.ID,
 		Service:              serviceName,
-		SandboxSpec:          *spec,
+		SandboxSpec:          *sbSpec,
 		DesiredInstances:     desiredInstances,
 		ReferencedByVersions: []entity.Id{ver.ID},
 		SandboxLabels: types.LabelSet(
@@ -261,6 +274,7 @@ func (l *Launcher) buildSandboxSpec(
 	ctx context.Context,
 	app *core_v1alpha.App,
 	ver *core_v1alpha.AppVersion,
+	cfgSpec *core_v1alpha.ConfigSpec,
 	serviceName string,
 	image string,
 ) (
@@ -276,14 +290,14 @@ func (l *Launcher) buildSandboxSpec(
 	var appMD core_v1alpha.Metadata
 	appMD.Decode(appResp.Entity().Entity())
 
-	spec := &compute_v1alpha.SandboxSpec{
+	sbSpec := &compute_v1alpha.SandboxSpec{
 		Version:      ver.ID,
 		LogEntity:    app.ID.String(),
 		LogAttribute: types.LabelSet("stage", "app-run", "service", serviceName),
 	}
 
 	// Determine start directory, defaulting to /app
-	startDir := ver.Config.StartDirectory
+	startDir := cfgSpec.StartDirectory
 	if startDir == "" {
 		startDir = "/app"
 	}
@@ -298,14 +312,13 @@ func (l *Launcher) buildSandboxSpec(
 		Directory: startDir,
 	}
 
-	// Determine port configuration from service config, falling back to global config, then defaults
+	// Determine port configuration from service config
 	port := int64(0)
 	portName := ""
 	portType := ""
 	shutdownTimeout := ""
 
-	// Check for per-service configuration
-	for _, svc := range ver.Config.Services {
+	for _, svc := range cfgSpec.Services {
 		if svc.Name == serviceName {
 			if svc.Port > 0 {
 				port = svc.Port
@@ -316,17 +329,11 @@ func (l *Launcher) buildSandboxSpec(
 			if svc.PortType != "" {
 				portType = svc.PortType
 			}
-			if svc.ServiceConcurrency.ShutdownTimeout != "" {
-				shutdownTimeout = svc.ServiceConcurrency.ShutdownTimeout
+			if svc.Concurrency.ShutdownTimeout != "" {
+				shutdownTimeout = svc.Concurrency.ShutdownTimeout
 			}
 			break
 		}
-	}
-
-	// Fall back to global port config (for web service only)
-	// Background services (worker, etc) don't get the global port automatically
-	if port == 0 && serviceName == "web" && ver.Config.Port > 0 {
-		port = ver.Config.Port
 	}
 
 	// Default to 3000 for web service if still no port configured
@@ -336,7 +343,6 @@ func (l *Launcher) buildSandboxSpec(
 
 	// Add port configuration if a port was determined
 	if port > 0 {
-		// Default port name and type to "http" if not specified
 		if portName == "" {
 			portName = "http"
 		}
@@ -355,14 +361,14 @@ func (l *Launcher) buildSandboxSpec(
 
 	// Add user-supplied config env vars, stripping any system-managed keys
 	envMap := make(map[string]string)
-	for _, x := range ver.Config.Variable {
+	for _, x := range cfgSpec.Variables {
 		if !isSystemEnvVar(x.Key) {
 			envMap[x.Key] = x.Value
 		}
 	}
 
 	// Find and merge per-service env vars (these override global vars)
-	for _, svc := range ver.Config.Services {
+	for _, svc := range cfgSpec.Services {
 		if svc.Name == serviceName {
 			for _, x := range svc.Env {
 				if !isSystemEnvVar(x.Key) {
@@ -387,24 +393,22 @@ func (l *Launcher) buildSandboxSpec(
 	}
 
 	// Find service command
-	for _, s := range ver.Config.Commands {
-		if s.Service == serviceName && s.Command != "" {
-			if ver.Config.Entrypoint != "" {
-				appCont.Command = ver.Config.Entrypoint + " " + s.Command
+	for _, svc := range cfgSpec.Services {
+		if svc.Name == serviceName && svc.Command != "" {
+			if cfgSpec.Entrypoint != "" {
+				appCont.Command = cfgSpec.Entrypoint + " " + svc.Command
 			} else {
-				appCont.Command = s.Command
+				appCont.Command = svc.Command
 			}
 			break
 		}
 	}
 
 	// Add disk volumes and mounts for this service
-	for _, svc := range ver.Config.Services {
+	for _, svc := range cfgSpec.Services {
 		if svc.Name == serviceName {
-			// Only add disks for fixed concurrency services
 			if len(svc.Disks) > 0 {
-				// Verify this is a fixed mode service
-				svcConcurrency, err := core_v1alpha.GetServiceConcurrency(ver, serviceName)
+				svcConcurrency, err := coreutil.GetServiceConcurrency(cfgSpec, serviceName)
 				if err != nil {
 					return nil, fmt.Errorf("failed to get service concurrency: %w", err)
 				}
@@ -418,7 +422,7 @@ func (l *Launcher) buildSandboxSpec(
 			}
 
 			for _, disk := range svc.Disks {
-				spec.Volume = append(spec.Volume, compute_v1alpha.SandboxSpecVolume{
+				sbSpec.Volume = append(sbSpec.Volume, compute_v1alpha.SandboxSpecVolume{
 					Name:         disk.Name,
 					Provider:     "miren",
 					DiskName:     disk.Name,
@@ -429,7 +433,6 @@ func (l *Launcher) buildSandboxSpec(
 					LeaseTimeout: disk.LeaseTimeout,
 				})
 
-				// Add mount to container
 				appCont.Mount = append(appCont.Mount, compute_v1alpha.SandboxSpecContainerMount{
 					Source:      disk.Name,
 					Destination: disk.MountPath,
@@ -439,14 +442,13 @@ func (l *Launcher) buildSandboxSpec(
 		}
 	}
 
-	// Set shutdown timeout if configured
 	if shutdownTimeout != "" {
 		appCont.ShutdownTimeout = shutdownTimeout
 	}
 
-	spec.Container = []compute_v1alpha.SandboxSpecContainer{appCont}
+	sbSpec.Container = []compute_v1alpha.SandboxSpecContainer{appCont}
 
-	return spec, nil
+	return sbSpec, nil
 }
 
 // findMatchingPool searches for an existing pool with matching spec

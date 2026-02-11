@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"miren.dev/runtime/api/compute/compute_v1alpha"
+	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
@@ -88,8 +89,14 @@ func (s *Server) Exec(ctx context.Context, req *exec_v1alpha.SandboxExecExec) er
 		var appVer core_v1alpha.AppVersion
 		appVer.Decode(verEnt.Entity().Entity())
 
+		// Resolve config from ConfigVersion if available
+		cfgSpec, err := coreutil.ResolveConfig(ctx, s.EAC, &appVer)
+		if err != nil {
+			return fmt.Errorf("failed to resolve config for app version %s: %w", appVer.ID, err)
+		}
+
 		// Create ephemeral sandbox for this console session
-		sbEnt, cleanupFn, err := s.createEphemeralSandbox(ctx, &appEnt, &appVer)
+		sbEnt, cleanupFn, err := s.createEphemeralSandbox(ctx, &appEnt, &appVer, cfgSpec)
 		if err != nil {
 			return fmt.Errorf("failed to create ephemeral sandbox: %w", err)
 		}
@@ -164,9 +171,10 @@ func (s *Server) createEphemeralSandbox(
 	ctx context.Context,
 	app *core_v1alpha.App,
 	ver *core_v1alpha.AppVersion,
+	cfgSpec *core_v1alpha.ConfigSpec,
 ) (*entity.Entity, func(), error) {
 	// Build sandbox spec
-	spec, err := s.buildSandboxSpec(ctx, app, ver)
+	spec, err := s.buildSandboxSpec(ctx, app, ver, cfgSpec)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to build sandbox spec: %w", err)
 	}
@@ -306,6 +314,7 @@ func (s *Server) buildSandboxSpec(
 	ctx context.Context,
 	app *core_v1alpha.App,
 	ver *core_v1alpha.AppVersion,
+	cfgSpec *core_v1alpha.ConfigSpec,
 ) (*compute_v1alpha.SandboxSpec, error) {
 	// Get app metadata
 	appResp, err := s.EAC.Get(ctx, app.ID.String())
@@ -323,7 +332,7 @@ func (s *Server) buildSandboxSpec(
 	}
 
 	// Determine start directory, defaulting to /app
-	startDir := ver.Config.StartDirectory
+	startDir := cfgSpec.StartDirectory
 	if startDir == "" {
 		startDir = "/app"
 	}
@@ -342,7 +351,7 @@ func (s *Server) buildSandboxSpec(
 
 	// Add global config env vars
 	envMap := make(map[string]string)
-	for _, x := range ver.Config.Variable {
+	for _, x := range cfgSpec.Variables {
 		envMap[x.Key] = x.Value
 	}
 

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"miren.dev/runtime/api/compute/compute_v1alpha"
+	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/concurrency"
@@ -577,15 +578,23 @@ func (m *Manager) checkAllPoolsForScaleDown(ctx context.Context) error {
 		var ver core_v1alpha.AppVersion
 		ver.Decode(verResp.Entity().Entity())
 
+		// Resolve config from ConfigVersion if available
+		spec, err := coreutil.ResolveConfig(ctx, m.eac, &ver)
+		if err != nil {
+			m.log.Error("failed to resolve config for pool", "pool", pool.ID, "error", err)
+			continue
+		}
+
 		// Get service concurrency config
-		svcConcurrency, err := core_v1alpha.GetServiceConcurrency(&ver, pool.Service)
+		svcConcurrency, err := coreutil.GetServiceConcurrency(spec, pool.Service)
 		if err != nil {
 			m.log.Error("failed to get service concurrency", "pool", pool.ID, "error", err)
 			continue
 		}
 
 		// Use concurrency strategy to determine scale-down delay
-		strategy := concurrency.NewStrategy(&svcConcurrency)
+		sc := core_v1alpha.ServiceConcurrency(svcConcurrency)
+		strategy := concurrency.NewStrategy(&sc)
 		scaleDownDelay := strategy.ScaleDownDelay()
 
 		// Skip pools that never scale down (fixed mode)

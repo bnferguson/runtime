@@ -10,6 +10,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
@@ -104,7 +105,7 @@ func (s *Server) Exec(ctx context.Context, req *exec_v1alpha.SandboxExecExec) er
 		return err
 	}
 
-	var ver *core_v1alpha.AppVersion
+	var cfgSpec *core_v1alpha.ConfigSpec
 
 	if verId != "" {
 		res, err := s.EAC.Get(ctx, verId)
@@ -115,27 +116,31 @@ func (s *Server) Exec(ctx context.Context, req *exec_v1alpha.SandboxExecExec) er
 		var v core_v1alpha.AppVersion
 		v.Decode(res.Entity().Entity())
 
-		s.Log.Debug("found version", "id", verId)
-
-		// Only use the app version config (entrypoint, console command) if the container
-		// is using the app's built image. Service containers with custom images
-		// (like postgres) should not have the app's entrypoint applied.
-		containerImage, err := firstContainer.Image(ctx)
+		// Resolve config from ConfigVersion if available
+		resolvedCfg, err := coreutil.ResolveConfig(ctx, s.EAC, &v)
 		if err == nil {
-			containerImageName := containerImage.Name()
-			if imageMatchesAppVersion(containerImageName, v.ImageUrl) {
-				ver = &v
+			s.Log.Debug("found version", "id", verId)
+
+			// Only use the app version config (entrypoint, console command) if the container
+			// is using the app's built image. Service containers with custom images
+			// (like postgres) should not have the app's entrypoint applied.
+			containerImage, err := firstContainer.Image(ctx)
+			if err == nil {
+				containerImageName := containerImage.Name()
+				if imageMatchesAppVersion(containerImageName, v.ImageUrl) {
+					cfgSpec = resolvedCfg
+				} else {
+					s.Log.Debug("container image differs from app version, skipping entrypoint",
+						"container_image", containerImageName,
+						"app_image", v.ImageUrl)
+				}
 			} else {
-				s.Log.Debug("container image differs from app version, skipping entrypoint",
-					"container_image", containerImageName,
-					"app_image", v.ImageUrl)
+				s.Log.Debug("failed to get container image, skipping entrypoint", "error", err)
 			}
-		} else {
-			s.Log.Debug("failed to get container image, skipping entrypoint", "error", err)
 		}
 	}
 
-	pspec, err := s.spec(args.Options(), spec, ver)
+	pspec, err := s.spec(args.Options(), spec, cfgSpec)
 	if err != nil {
 		return err
 	}
@@ -208,20 +213,20 @@ func (s *Server) Exec(ctx context.Context, req *exec_v1alpha.SandboxExecExec) er
 	return nil
 }
 
-func (e *Server) command(ver *core_v1alpha.AppVersion, service string) string {
-	for _, cmd := range ver.Config.Commands {
-		if cmd.Service == service && cmd.Command != "" {
-			if ver.Config.Entrypoint != "" {
-				return ver.Config.Entrypoint + " " + cmd.Command
+func (e *Server) command(cfgSpec *core_v1alpha.ConfigSpec, service string) string {
+	for _, svc := range cfgSpec.Services {
+		if svc.Name == service && svc.Command != "" {
+			if cfgSpec.Entrypoint != "" {
+				return cfgSpec.Entrypoint + " " + svc.Command
 			}
-			return cmd.Command
+			return svc.Command
 		}
 	}
 
 	return ""
 }
 
-func (e *Server) spec(opts *exec_v1alpha.ShellOptions, spec *oci.Spec, ver *core_v1alpha.AppVersion) (*specs.Process, error) {
+func (e *Server) spec(opts *exec_v1alpha.ShellOptions, spec *oci.Spec, cfgSpec *core_v1alpha.ConfigSpec) (*specs.Process, error) {
 	proc := &specs.Process{
 		Cwd:  spec.Process.Cwd,
 		Env:  spec.Process.Env,
@@ -229,15 +234,15 @@ func (e *Server) spec(opts *exec_v1alpha.ShellOptions, spec *oci.Spec, ver *core
 	}
 
 	var ep string
-	if ver != nil {
-		ep = ver.Config.Entrypoint
+	if cfgSpec != nil {
+		ep = cfgSpec.Entrypoint
 	}
 
 	args := opts.Command()
 
 	if len(args) == 0 {
-		if ver != nil {
-			if con := e.command(ver, "console"); con != "" {
+		if cfgSpec != nil {
+			if con := e.command(cfgSpec, "console"); con != "" {
 				// CommandFor already prepends the entrypoint
 				args = []string{"/bin/sh", "-c", "exec " + con}
 			} else if ep != "" {

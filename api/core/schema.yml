@@ -27,6 +27,10 @@ kinds:
       type: ref
       doc: The version of the project that should be used
 
+    initial_config:
+      type: ref
+      doc: Reference to the initial ConfigVersion entity created before the first deploy
+
   artifact:
     app:
       type: ref
@@ -121,6 +125,9 @@ kinds:
                 source:
                   type: string
                   doc: The source of the variable (config or manual). Defaults to config for backward compatibility.
+                origin:
+                  type: string
+                  doc: The provenance of the variable (user, file, generated, detected).
             service_concurrency:
               type: component
               doc: Concurrency configuration for this service
@@ -197,6 +204,13 @@ kinds:
             source:
               type: string
               doc: The source of the variable (config or manual). Defaults to config for backward compatibility.
+            origin:
+              type: string
+              doc: The provenance of the variable (user, file, generated, detected).
+
+    config_version:
+      type: ref
+      doc: Reference to the ConfigVersion entity containing the resolved configuration for this version
 
     admin_token:
       type: string
@@ -291,4 +305,127 @@ kinds:
           type: string
           doc: Git repository remote URL
 
+  config_version:
+    app:
+      type: ref
+      doc: The application this config version belongs to
+      indexed: true
+      tags: [dev.miren.app_ref]
 
+    spec:
+      type: config_spec
+      doc: The configuration specification
+
+components:
+  config_spec:
+    variables:
+      type: component
+      doc: Environment variables and configuration values
+      many: true
+      attrs:
+        key:
+          type: string
+          doc: The name of the variable
+        value:
+          type: string
+          doc: The value of the variable
+        sensitive:
+          type: bool
+          doc: Whether or not the value is sensitive
+        source:
+          type: string
+          doc: The source of the variable (config or manual). Defaults to config for backward compatibility.
+        origin:
+          type: string
+          doc: The provenance of the variable (user, file, generated, detected).
+    services:
+      type: component
+      doc: Per-service configuration
+      many: true
+      attrs:
+        name:
+          type: string
+          doc: The service name (e.g. web, worker)
+        command:
+          type: string
+          doc: The command to run for the service
+        port:
+          type: int
+          doc: The TCP port the service listens on
+        port_name:
+          type: string
+          doc: The name of the port (e.g. http, grpc)
+        port_type:
+          type: string
+          doc: The type of the port (e.g. http, tcp)
+        image:
+          type: string
+          doc: Optional container image for this service
+        env:
+          type: component
+          doc: Environment variables for this service only
+          many: true
+          attrs:
+            key:
+              type: string
+              doc: The name of the variable
+            value:
+              type: string
+              doc: The value of the variable
+            sensitive:
+              type: bool
+              doc: Whether or not the value is sensitive
+            source:
+              type: string
+              doc: The source of the variable (config or manual). Defaults to config for backward compatibility.
+            origin:
+              type: string
+              doc: The provenance of the variable (user, file, generated, detected)
+        concurrency:
+          type: component
+          doc: Concurrency configuration for this service
+          attrs:
+            mode:
+              type: string
+              doc: The concurrency mode (auto or fixed)
+            requests_per_instance:
+              type: int
+              doc: For auto mode, number of concurrent requests per instance
+            scale_down_delay:
+              type: string
+              doc: For auto mode, delay before scaling down idle instances
+            num_instances:
+              type: int
+              doc: For fixed mode, number of instances to maintain
+            shutdown_timeout:
+              type: string
+              doc: Time to wait for graceful shutdown before force-killing
+        disks:
+          type: component
+          doc: Disk attachments for this service
+          many: true
+          attrs:
+            name:
+              type: string
+              doc: The name of the disk entity to attach
+            mount_path:
+              type: string
+              doc: The path inside the container where the disk will be mounted
+            read_only:
+              type: bool
+              doc: Whether to mount the disk as read-only
+            size_gb:
+              type: int
+              doc: Size in GB for auto-creating the disk if it doesn't exist
+            filesystem:
+              type: string
+              doc: Filesystem type (ext4, xfs, btrfs) for auto-creating the disk
+            lease_timeout:
+              type: string
+              doc: Timeout for acquiring the disk lease
+    entrypoint:
+      type: string
+      doc: The container entrypoint command
+    start_directory:
+      type: string
+      doc: Directory to start the process in (defaults to /app)
