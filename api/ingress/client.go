@@ -301,7 +301,7 @@ func (c *Client) AttachOIDCProviderToRoute(ctx context.Context, route *ingress_v
 	route.ClaimMappings = claimMappings
 
 	// Update the route
-	_, err = c.ec.CreateOrUpdate(ctx, string(route.ID), route)
+	err = c.ec.Update(ctx, route)
 	if err != nil {
 		return nil, fmt.Errorf("failed to attach OIDC provider to route: %w", err)
 	}
@@ -330,7 +330,7 @@ func (c *Client) DetachOIDCProviderFromRoute(ctx context.Context, route *ingress
 	route.ClaimMappings = nil
 
 	// Update the route
-	_, err := c.ec.CreateOrUpdate(ctx, string(route.ID), route)
+	err := c.ec.Update(ctx, route)
 	if err != nil {
 		return nil, fmt.Errorf("failed to detach OIDC provider from route: %w", err)
 	}
