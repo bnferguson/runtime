@@ -11,7 +11,7 @@ import (
 
 // Upgrade upgrades the miren CLI to the latest or specified version
 func Upgrade(ctx *Context, opts struct {
-	Version string `short:"v" long:"version" description:"Specific version to upgrade to (e.g., v0.2.0)"`
+	Version string `short:"V" long:"version" description:"Specific version to upgrade to (e.g., v0.2.0)"`
 	Channel string `long:"channel" description:"Channel to use: 'latest' (stable releases, default) or 'main' (bleeding edge)"`
 	Check   bool   `short:"c" long:"check" description:"Check for available updates only"`
 	Force   bool   `short:"f" long:"force" description:"Force upgrade even if already up to date or server running"`

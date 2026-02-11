@@ -31,7 +31,6 @@ func DebugConnection(ctx *Context, opts struct {
 	Cluster  string `short:"c" long:"cluster" description:"Cluster name from config to test"`
 	Server   string `short:"s" long:"server" description:"Server hostname or IP address to test directly"`
 	Insecure bool   `long:"insecure" description:"Skip TLS certificate verification"`
-	Verbose  bool   `short:"v" long:"verbose" description:"Show detailed connection information"`
 }) error {
 	// Determine which server to test
 	var testServer string
@@ -68,7 +67,7 @@ func DebugConnection(ctx *Context, opts struct {
 	// Step 1: Test basic connectivity
 	ctx.Info("")
 	ctx.Info("Step 1: Testing network connectivity...")
-	if err := testNetworkConnectivity(ctx, testServer, opts.Verbose); err != nil {
+	if err := testNetworkConnectivity(ctx, testServer, ctx.Verbose()); err != nil {
 		ctx.Warn("Network connectivity test failed: %v", err)
 		return err
 	}
@@ -268,7 +267,7 @@ func DebugConnection(ctx *Context, opts struct {
 		ctx.Info("Server may be an older version without debug support")
 	case http.StatusUnauthorized:
 		ctx.Warn("Authentication failed (401)")
-		if opts.Verbose && len(body) > 0 {
+		if ctx.Verbose() && len(body) > 0 {
 			ctx.Info("Server response: %s", string(body))
 		}
 		return fmt.Errorf("authentication failed")
@@ -276,7 +275,7 @@ func DebugConnection(ctx *Context, opts struct {
 		var debugResp DebugAuthResponse
 		if err := json.Unmarshal(body, &debugResp); err != nil {
 			ctx.Warn("Failed to parse debug response: %v", err)
-			if opts.Verbose {
+			if ctx.Verbose() {
 				ctx.Info("Raw response: %s", string(body))
 			}
 		} else {
@@ -304,7 +303,7 @@ func DebugConnection(ctx *Context, opts struct {
 		}
 	default:
 		ctx.Warn("Unexpected status code: %d", resp.StatusCode)
-		if opts.Verbose && len(body) > 0 {
+		if ctx.Verbose() && len(body) > 0 {
 			ctx.Info("Server response: %s", string(body))
 		}
 		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)

@@ -60,6 +60,10 @@ func (c *Context) Level() slog.Level {
 	return c.levelVar.Level()
 }
 
+func (c *Context) Verbose() bool {
+	return c.verbose > 0
+}
+
 func setup(ctx context.Context, flags *GlobalFlags, opts any) *Context {
 	s := &Context{
 		verbose:     len(flags.Verbose),

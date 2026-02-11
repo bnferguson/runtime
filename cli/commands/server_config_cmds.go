@@ -54,7 +54,6 @@ func ServerConfigGenerate(ctx *Context, opts struct {
 // ServerConfigValidate validates a server configuration file
 func ServerConfigValidate(ctx *Context, opts struct {
 	ConfigFile string `short:"f" long:"file" description:"Configuration file to validate" required:"true"`
-	Verbose    bool   `short:"v" long:"verbose" description:"Show detailed configuration"`
 }) error {
 	// Load the configuration
 	cfg, err := serverconfig.Load(opts.ConfigFile, nil, ctx.Log)
@@ -64,7 +63,7 @@ func ServerConfigValidate(ctx *Context, opts struct {
 
 	ctx.UILog.Info("Configuration is valid", "file", opts.ConfigFile)
 
-	if opts.Verbose {
+	if ctx.Verbose() {
 		// Print the loaded configuration
 		data, err := toml.Marshal(cfg)
 		if err != nil {

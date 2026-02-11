@@ -23,7 +23,7 @@ func DebugDiskCreate(ctx *Context, opts struct {
 	Filesystem string `short:"f" long:"filesystem" description:"Filesystem type (ext4, xfs, btrfs)" default:"ext4"`
 	CreatedBy  string `short:"c" long:"created-by" description:"Creator ID for the disk"`
 	RemoteOnly bool   `short:"r" long:"remote-only" description:"Store disk only in remote storage (no local replica)"`
-	VolumeID   string `short:"v" long:"volume-id" description:"Attach to existing LSVD volume instead of creating new one"`
+	VolumeID   string `short:"V" long:"volume-id" description:"Attach to existing LSVD volume instead of creating new one"`
 }) error {
 	// Use the context's RPC client
 	client, err := ctx.RPCClient("entities")
