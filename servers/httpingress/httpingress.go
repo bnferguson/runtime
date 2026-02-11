@@ -19,6 +19,11 @@ import (
 	"syscall"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
+
 	"miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
@@ -32,6 +37,8 @@ import (
 	"miren.dev/runtime/pkg/oidc"
 	"miren.dev/runtime/pkg/rpc"
 )
+
+var httpingressTracer = otel.Tracer("miren.dev/runtime/httpingress")
 
 const (
 	timeoutMessage = "Request timeout"
@@ -124,7 +131,7 @@ func NewServer(
 	if httpMetrics == nil {
 		serv.Log.Warn("HTTPMetrics is nil in httpingress")
 	} else {
-		serv.Log.Info("HTTPMetrics initialized in httpingress")
+		serv.Log.Debug("HTTPMetrics initialized in httpingress")
 	}
 
 	go serv.checkLeases(ctx)
@@ -323,6 +330,16 @@ func (h *Server) handleRequest(w http.ResponseWriter, req *http.Request) {
 		}
 	}()
 
+	ctx, span := httpingressTracer.Start(req.Context(), "httpingress",
+		trace.WithSpanKind(trace.SpanKindServer),
+		trace.WithAttributes(
+			attribute.String("http.method", req.Method),
+			attribute.String("url.path", req.URL.Path),
+			attribute.String("server.address", req.Host),
+		))
+	defer span.End()
+	req = req.WithContext(ctx)
+
 	// Handle Miren server health check endpoint before routing
 	// Using .well-known per RFC 8615 to avoid collision with app routes
 	if req.URL.Path == "/.well-known/miren/health" {
@@ -354,6 +371,11 @@ func (h *Server) handleRequest(w http.ResponseWriter, req *http.Request) {
 			appName = "unknown"
 		}
 	}
+
+	span.SetAttributes(
+		attribute.Int("http.response.status_code", statusCode),
+		attribute.String("miren.app.name", appName),
+	)
 
 	if h.httpMetrics != nil {
 		if appName == "" {
@@ -466,10 +488,6 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 // serveAuthenticatedRequest handles the request after authentication (if any)
 func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Request, targetAppId entity.Id, routeType string, appName *string) {
 	ctx := req.Context()
-	onlyHost, _, err := net.SplitHostPort(req.Host)
-	if err != nil {
-		onlyHost = req.Host
-	}
 
 	// Get app details first to have the name for metrics
 	gr, err := h.eac.Get(ctx, targetAppId.String())
@@ -488,7 +506,13 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 	// Store app name for metrics
 	*appName = appMD.Name
 
-	h.Log.Info("routing request", "host", onlyHost, "app", targetAppId, "name", *appName, "type", routeType)
+	ctx, leaseSpan := httpingressTracer.Start(ctx, "httpingress.lease",
+		trace.WithAttributes(
+			attribute.String("miren.app.id", targetAppId.String()),
+			attribute.String("miren.app.name", *appName),
+			attribute.String("miren.route.type", routeType),
+		))
+	defer leaseSpan.End()
 
 	// Common lease handling logic
 	curLease, err := h.useLease(ctx, targetAppId.String())
@@ -499,10 +523,16 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 	}
 
 	if curLease != nil {
-		h.Log.Info("using existing lease", "app", targetAppId, "url", curLease.Lease.URL)
+		leaseSpan.SetAttributes(
+			attribute.Bool("miren.lease.cached", true),
+			attribute.String("miren.lease.url", curLease.Lease.URL),
+		)
+		req = req.WithContext(ctx)
 		h.forwardToLease(ctx, w, req, curLease, targetAppId.String(), *appName)
 		return
 	}
+
+	leaseSpan.SetAttributes(attribute.Bool("miren.lease.cached", false))
 
 	if app.ActiveVersion == "" {
 		h.Log.Debug("no active version for app", "app", targetAppId)
@@ -519,6 +549,10 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 
 	var av core_v1alpha.AppVersion
 	av.Decode(vr.Entity().Entity())
+
+	leaseSpan.SetAttributes(
+		attribute.String("miren.app.version", app.ActiveVersion.String()),
+	)
 
 	// Give lease acquisition a generous timeout to complete sandbox boot
 	// even if the client request times out. This prevents dangling resources.
@@ -544,8 +578,11 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 		return
 	}
 
+	leaseSpan.SetAttributes(attribute.String("miren.lease.url", actLease.URL))
+
 	localLease := h.retainLease(ctx, targetAppId.String(), actLease)
 
+	req = req.WithContext(ctx)
 	err = h.proxyToLease(w, req, actLease.URL, targetAppId.String(), *appName)
 	if err != nil {
 		// Connection error on a fresh lease - the sandbox may have died
@@ -618,6 +655,9 @@ func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetUR
 
 			// Mark this as a public request (strip any client-provided value first)
 			outReq.Header.Set("X-Miren-Access", "public")
+
+			// Inject trace context so user apps can continue the trace
+			otel.GetTextMapPropagator().Inject(outReq.Context(), propagation.HeaderCarrier(outReq.Header))
 		},
 		ErrorHandler: func(rw http.ResponseWriter, r *http.Request, err error) {
 			proxyErr = err

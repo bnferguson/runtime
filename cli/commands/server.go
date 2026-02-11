@@ -74,6 +74,23 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	versionInfo := version.GetInfo()
 	ctx.UILog.Info("starting miren server", "version", versionInfo.Version, "commit", versionInfo.Commit)
 
+	// Auto-enable OTel tracing when the standard OTLP endpoint env var is set
+	if os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != "" {
+		tracingShutdown, err := rpc.SetupTracing(sub)
+		if err != nil {
+			ctx.Log.Error("failed to set up tracing", "error", err)
+			return err
+		}
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := tracingShutdown(shutdownCtx); err != nil {
+				ctx.Log.Error("failed to shut down tracing", "error", err)
+			}
+		}()
+		ctx.Log.Info("OTel tracing enabled", "endpoint", os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+	}
+
 	switch cfg.GetMode() {
 	case "standalone":
 		// Mode defaults are already applied by serverconfig.Load
