@@ -313,9 +313,22 @@ func requestScheme(r *http.Request) string {
 	return "http"
 }
 
+// oidcProviderMatches returns true if the cached handler's provider config
+// matches the current provider entity. This detects updates to client_id,
+// client_secret, provider_url, or scopes without requiring a server restart.
+func oidcProviderMatches(cached *oidcHandler, current *ingress_v1alpha.OidcProvider) bool {
+	cp := cached.provider
+	return cp.ID == current.ID &&
+		cp.ClientId == current.ClientId &&
+		cp.ClientSecret == current.ClientSecret &&
+		cp.ProviderUrl == current.ProviderUrl &&
+		cp.Scopes == current.Scopes
+}
+
 // getOrCreateOIDCHandler returns a cached oidcHandler for the given route,
-// creating one on first access. The handler (and its oidc.Client) is reused
-// across requests so that discovery and JWKS caches are effective.
+// creating one on first access or when the provider config has changed. The
+// handler (and its oidc.Client) is reused across requests so that discovery
+// and JWKS caches are effective.
 func (s *Server) getOrCreateOIDCHandler(route *ingress_v1alpha.HttpRoute, baseURL string) (*oidcHandler, error) {
 	// Key by route host; default routes use a sentinel.
 	key := route.Host
@@ -323,8 +336,17 @@ func (s *Server) getOrCreateOIDCHandler(route *ingress_v1alpha.HttpRoute, baseUR
 		key = "__default__"
 	}
 
+	// Always resolve the provider so we can detect config changes.
+	resp, err := s.eac.Get(context.Background(), string(route.OidcProvider))
+	if err != nil {
+		return nil, fmt.Errorf("failed to get OIDC provider: %w", err)
+	}
+
+	var provider ingress_v1alpha.OidcProvider
+	provider.Decode(resp.Entity().Entity())
+
 	s.oidcMu.RLock()
-	if h, ok := s.oidcHandlers[key]; ok {
+	if h, ok := s.oidcHandlers[key]; ok && oidcProviderMatches(h, &provider) {
 		s.oidcMu.RUnlock()
 		return h, nil
 	}
@@ -334,18 +356,9 @@ func (s *Server) getOrCreateOIDCHandler(route *ingress_v1alpha.HttpRoute, baseUR
 	defer s.oidcMu.Unlock()
 
 	// Double-check after acquiring write lock
-	if h, ok := s.oidcHandlers[key]; ok {
+	if h, ok := s.oidcHandlers[key]; ok && oidcProviderMatches(h, &provider) {
 		return h, nil
 	}
-
-	// Resolve the OIDC provider entity
-	resp, err := s.eac.Get(context.Background(), string(route.OidcProvider))
-	if err != nil {
-		return nil, fmt.Errorf("failed to get OIDC provider: %w", err)
-	}
-
-	var provider ingress_v1alpha.OidcProvider
-	provider.Decode(resp.Entity().Entity())
 
 	var resource string
 	if route.Default {
