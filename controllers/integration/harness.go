@@ -72,11 +72,15 @@ func NewTestHarness(t *testing.T) *TestHarness {
 	lsvdMntCtrl := lsvdserver.NewMountController(log, dataPath, testNodeId, lsvdState, mntOps)
 	lsvdMntCtrl.SetEAC(eac)
 
-	// Create disk controllers
+	// Create disk controllers and force LSVD mode so they create lsvd_volume
+	// and lsvd_mount entities instead of falling back to directory mode.
+	// The mock ops above handle the actual volume/mount operations.
 	diskCtrl := disk.NewDiskController(log, eac, testNodeId)
 	diskCtrl.Init(ctx) //nolint:errcheck
+	diskCtrl.ForceLSVDMode()
 	diskLeaseCtrl := disk.NewDiskLeaseController(log, eac, testNodeId)
 	diskLeaseCtrl.Init(ctx) //nolint:errcheck
+	diskLeaseCtrl.ForceLSVDMode()
 
 	// Create ReconcileControllers for each.
 	// We do NOT create watch controllers because ReconcileAll already reconciles

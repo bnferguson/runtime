@@ -84,6 +84,13 @@ func (d *DiskLeaseController) GetTestDisk(diskId entity.Id) *storage_v1alpha.Dis
 	return d.testDiskCache[diskId.String()]
 }
 
+// ForceLSVDMode forces the controller to use lsvd_mount entities instead of
+// directory mode, regardless of NBD availability. This is used by integration
+// tests where the LSVD volume/mount ops are mocked.
+func (d *DiskLeaseController) ForceLSVDMode() {
+	d.directoryMode = false
+}
+
 // Init initializes the disk lease controller
 func (d *DiskLeaseController) Init(ctx context.Context) error {
 	// Check if NBD is available
