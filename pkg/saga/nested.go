@@ -1,0 +1,147 @@
+package saga
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+)
+
+// NestedResult wraps the outputs from a completed child saga execution.
+type NestedResult struct {
+	ExecutionID string
+	outputs     map[string]json.RawMessage
+}
+
+// Get deserializes a named output from the child saga into target.
+func (nr *NestedResult) Get(key string, target any) error {
+	raw, ok := nr.outputs[key]
+	if !ok {
+		return fmt.Errorf("nested output %q not found", key)
+	}
+	if err := json.Unmarshal(raw, target); err != nil {
+		return fmt.Errorf("deserializing nested output %q: %w", key, err)
+	}
+	return nil
+}
+
+// Has returns true if the child saga produced an output with the given key.
+func (nr *NestedResult) Has(key string) bool {
+	_, ok := nr.outputs[key]
+	return ok
+}
+
+// NestedOption configures a RunNested call.
+type NestedOption func(*nestedConfig)
+
+type nestedConfig struct {
+	inputs map[string]any
+	id     string
+}
+
+// WithNestedInput adds an initial input to the child saga.
+func WithNestedInput(key string, value any) NestedOption {
+	return func(c *nestedConfig) {
+		c.inputs[key] = value
+	}
+}
+
+// WithNestedID sets a specific execution ID for the child saga.
+func WithNestedID(id string) NestedOption {
+	return func(c *nestedConfig) {
+		c.id = id
+	}
+}
+
+// RunNested executes a child saga from within a parent saga action. It reuses
+// the parent executor's registry and storage for durability and observability.
+// The child execution's ParentExecutionID is set to the current execution.
+func RunNested(ctx context.Context, sagaName string, opts ...NestedOption) (*NestedResult, error) {
+	parent, ok := executorFromContext(ctx)
+	if !ok {
+		return nil, fmt.Errorf("RunNested called outside of a saga execution (no executor in context)")
+	}
+
+	cfg := &nestedConfig{
+		inputs: make(map[string]any),
+	}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
+	// Look up definition from parent's registry
+	def, ok := parent.registry.Get(sagaName)
+	if !ok {
+		return nil, fmt.Errorf("nested saga definition %q not found in registry", sagaName)
+	}
+
+	// Generate child execution ID
+	childID := cfg.id
+	if childID == "" {
+		childID = generateID()
+	}
+
+	// Create child execution with parent link
+	parentExecID, _ := executionIDFromContext(ctx)
+	exec, err := parent.createChildExecution(ctx, def, cfg.inputs, childID, parentExecID)
+	if err != nil {
+		return nil, fmt.Errorf("creating nested execution: %w", err)
+	}
+
+	// Run the child saga
+	if err := parent.runExecution(ctx, def, exec); err != nil {
+		return nil, err
+	}
+
+	return collectOutputs(def, exec), nil
+}
+
+// createChildExecution builds and persists a new Execution linked to a parent.
+func (e *Executor) createChildExecution(ctx context.Context, def *Definition, inputs map[string]any, id, parentExecID string) (*Execution, error) {
+	exec, err := e.storage.Get(ctx, id)
+	if err == nil {
+		// Execution already exists (idempotent retry)
+		return exec, nil
+	}
+
+	now := time.Now()
+	exec = &Execution{
+		ID:                id,
+		DefinitionName:    def.Name,
+		DefinitionVersion: def.Version,
+		InitialInputs:     inputs,
+		ParentExecutionID: parentExecID,
+		Status:            StatusPending,
+		ExecutedActions:   make(map[string]*ActionResult),
+		ExecutionOrder:    []string{},
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+
+	if err := e.storage.Save(ctx, exec); err != nil {
+		return nil, fmt.Errorf("persisting initial state: %w", err)
+	}
+
+	return exec, nil
+}
+
+// UndoNested compensates a previously completed nested saga. Call this from
+// an undo handler to roll back the child saga's actions.
+func UndoNested(ctx context.Context, executionID string) error {
+	parent, ok := executorFromContext(ctx)
+	if !ok {
+		return fmt.Errorf("UndoNested called outside of a saga execution (no executor in context)")
+	}
+
+	exec, err := parent.storage.Get(ctx, executionID)
+	if err != nil {
+		return fmt.Errorf("loading nested execution %q: %w", executionID, err)
+	}
+
+	def, ok := parent.registry.Get(exec.DefinitionName)
+	if !ok {
+		return fmt.Errorf("saga definition %q not found for nested undo", exec.DefinitionName)
+	}
+
+	return parent.runUndo(ctx, def, exec)
+}

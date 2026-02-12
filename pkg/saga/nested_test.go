@@ -1,0 +1,348 @@
+package saga
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// --- Child saga types ---
+
+type ChildStepIn struct {
+	Value int `saga:"value"`
+}
+
+type ChildStepOut struct {
+	Doubled int `saga:"doubled"`
+}
+
+func ChildStep(ctx context.Context, in ChildStepIn) (ChildStepOut, error) {
+	ctrl := Get[*nestedTestController](ctx)
+	ctrl.childCalls++
+	if ctrl.failChild {
+		return ChildStepOut{}, errors.New("child step failed")
+	}
+	return ChildStepOut{Doubled: in.Value * 2}, nil
+}
+
+func UndoChildStep(ctx context.Context, in ChildStepIn, out ChildStepOut) error {
+	ctrl := Get[*nestedTestController](ctx)
+	ctrl.childUndoCalls++
+	return nil
+}
+
+// --- Parent saga types ---
+
+type ParentStepIn struct {
+	Value int `saga:"value"`
+}
+
+type ParentStepOut struct {
+	ChildExecID string `saga:"childexecid"`
+	Result      int    `saga:"result"`
+}
+
+type ParentFinalIn struct {
+	Result int `saga:"result"`
+}
+
+type ParentFinalOut struct {
+	Done bool `saga:"done"`
+}
+
+type nestedTestController struct {
+	childCalls     int
+	childUndoCalls int
+	parentCalls    int
+	failChild      bool
+	failParent     bool
+}
+
+func ParentStep(ctx context.Context, in ParentStepIn) (ParentStepOut, error) {
+	ctrl := Get[*nestedTestController](ctx)
+	ctrl.parentCalls++
+	if ctrl.failParent {
+		return ParentStepOut{}, errors.New("parent step failed")
+	}
+
+	result, err := RunNested(ctx, "child-saga",
+		WithNestedInput("value", in.Value),
+	)
+	if err != nil {
+		return ParentStepOut{}, err
+	}
+
+	var doubled int
+	if err := result.Get("doubled", &doubled); err != nil {
+		return ParentStepOut{}, err
+	}
+
+	return ParentStepOut{
+		ChildExecID: result.ExecutionID,
+		Result:      doubled,
+	}, nil
+}
+
+func UndoParentStep(ctx context.Context, in ParentStepIn, out ParentStepOut) error {
+	if out.ChildExecID != "" {
+		return UndoNested(ctx, out.ChildExecID)
+	}
+	return nil
+}
+
+func ParentFinal(ctx context.Context, in ParentFinalIn) (ParentFinalOut, error) {
+	return ParentFinalOut{Done: true}, nil
+}
+
+func UndoParentFinal(ctx context.Context, in ParentFinalIn, out ParentFinalOut) error {
+	return nil
+}
+
+func setupNestedSagas(t *testing.T, ctrl *nestedTestController) (*Registry, Storage) {
+	t.Helper()
+
+	registry := NewRegistry()
+
+	err := Define("child-saga").
+		Using(ctrl).
+		Action(ChildStep).Undo(UndoChildStep).
+		RegisterTo(registry)
+	require.NoError(t, err)
+
+	err = Define("parent-saga").
+		Using(ctrl).
+		Action(ParentStep).Undo(UndoParentStep).
+		Action(ParentFinal).Undo(UndoParentFinal).
+		RegisterTo(registry)
+	require.NoError(t, err)
+
+	storage := NewMemoryStorage()
+	return registry, storage
+}
+
+func TestRunNested_Success(t *testing.T) {
+	ctrl := &nestedTestController{}
+	registry, storage := setupNestedSagas(t, ctrl)
+
+	executor := NewExecutor(storage, WithRegistry(registry))
+	err := executor.Start("parent-saga").
+		Input("value", 5).
+		WithID("parent-1").
+		Execute(context.Background())
+	require.NoError(t, err)
+
+	// Both parent and child should have been called
+	assert.Equal(t, 1, ctrl.parentCalls)
+	assert.Equal(t, 1, ctrl.childCalls)
+
+	// Parent execution should be completed
+	exec, err := storage.Get(context.Background(), "parent-1")
+	require.NoError(t, err)
+	assert.Equal(t, StatusCompleted, exec.Status)
+
+	// Verify the result flowed through: 5 * 2 = 10
+	result, err := executor.ExecutionOutputs(context.Background(), "parent-1")
+	require.NoError(t, err)
+
+	var done bool
+	require.NoError(t, result.Get("done", &done))
+	assert.True(t, done)
+}
+
+func TestRunNested_ChildOutputsAccessible(t *testing.T) {
+	ctrl := &nestedTestController{}
+	registry, storage := setupNestedSagas(t, ctrl)
+
+	executor := NewExecutor(storage, WithRegistry(registry))
+	err := executor.Start("parent-saga").
+		Input("value", 7).
+		WithID("parent-2").
+		Execute(context.Background())
+	require.NoError(t, err)
+
+	// Find child execution via storage to verify its outputs
+	result, err := executor.ExecutionOutputs(context.Background(), "parent-2")
+	require.NoError(t, err)
+
+	var finalResult int
+	require.NoError(t, result.Get("result", &finalResult))
+	assert.Equal(t, 14, finalResult) // 7 * 2
+}
+
+func TestRunNested_ParentExecutionIDSet(t *testing.T) {
+	ctrl := &nestedTestController{}
+	registry, storage := setupNestedSagas(t, ctrl)
+
+	executor := NewExecutor(storage, WithRegistry(registry))
+	err := executor.Start("parent-saga").
+		Input("value", 3).
+		WithID("parent-3").
+		Execute(context.Background())
+	require.NoError(t, err)
+
+	// Get the parent execution to find child execution ID
+	parentResult, err := executor.ExecutionOutputs(context.Background(), "parent-3")
+	require.NoError(t, err)
+
+	var childExecID string
+	require.NoError(t, parentResult.Get("childexecid", &childExecID))
+	require.NotEmpty(t, childExecID)
+
+	// Get the child execution and verify ParentExecutionID
+	childExec, err := storage.Get(context.Background(), childExecID)
+	require.NoError(t, err)
+	assert.Equal(t, "parent-3", childExec.ParentExecutionID)
+}
+
+func TestRunNested_ChildFailurePropagates(t *testing.T) {
+	ctrl := &nestedTestController{failChild: true}
+	registry, storage := setupNestedSagas(t, ctrl)
+
+	executor := NewExecutor(storage, WithRegistry(registry))
+	err := executor.Start("parent-saga").
+		Input("value", 5).
+		WithID("parent-4").
+		Execute(context.Background())
+	require.Error(t, err)
+
+	// Parent should be in failed state (child failure triggers parent undo)
+	exec, err := storage.Get(context.Background(), "parent-4")
+	require.NoError(t, err)
+	assert.Equal(t, StatusFailed, exec.Status)
+
+	// Child step was called, and parent undo should not call UndoNested
+	// because ParentStep itself failed (so ParentStepOut is empty)
+	assert.Equal(t, 1, ctrl.childCalls)
+}
+
+func TestRunNested_ChildUsesParentStorage(t *testing.T) {
+	ctrl := &nestedTestController{}
+	registry, storage := setupNestedSagas(t, ctrl)
+
+	executor := NewExecutor(storage, WithRegistry(registry))
+	err := executor.Start("parent-saga").
+		Input("value", 5).
+		WithID("parent-5").
+		Execute(context.Background())
+	require.NoError(t, err)
+
+	// Child execution should be persisted in the same storage
+	parentResult, err := executor.ExecutionOutputs(context.Background(), "parent-5")
+	require.NoError(t, err)
+
+	var childExecID string
+	require.NoError(t, parentResult.Get("childexecid", &childExecID))
+
+	childExec, err := storage.Get(context.Background(), childExecID)
+	require.NoError(t, err)
+	assert.Equal(t, StatusCompleted, childExec.Status)
+	assert.Equal(t, "child-saga", childExec.DefinitionName)
+}
+
+func TestRunNested_OutsideContext(t *testing.T) {
+	// RunNested outside of a saga should return an error
+	_, err := RunNested(context.Background(), "some-saga")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no executor in context")
+}
+
+func TestUndoNested_OutsideContext(t *testing.T) {
+	err := UndoNested(context.Background(), "some-id")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no executor in context")
+}
+
+func TestRunNested_WithNestedID(t *testing.T) {
+	ctrl := &nestedTestController{}
+	registry := NewRegistry()
+
+	// Register child saga with explicit ID test
+	err := Define("id-child").
+		Using(ctrl).
+		Action(ChildStep).Undo(UndoChildStep).
+		RegisterTo(registry)
+	require.NoError(t, err)
+
+	// Use a parent that calls RunNested with WithNestedID
+	parentWithIDFn := func(ctx context.Context, in ParentStepIn) (ParentStepOut, error) {
+		ctrl := Get[*nestedTestController](ctx)
+		ctrl.parentCalls++
+
+		result, err := RunNested(ctx, "id-child",
+			WithNestedInput("value", in.Value),
+			WithNestedID("custom-child-id"),
+		)
+		if err != nil {
+			return ParentStepOut{}, err
+		}
+
+		var doubled int
+		if err := result.Get("doubled", &doubled); err != nil {
+			return ParentStepOut{}, err
+		}
+
+		return ParentStepOut{
+			ChildExecID: result.ExecutionID,
+			Result:      doubled,
+		}, nil
+	}
+
+	err = Define("id-parent").
+		Using(ctrl).
+		Action("parent-step", parentWithIDFn).Undo(UndoParentStep).
+		RegisterTo(registry)
+	require.NoError(t, err)
+
+	storage := NewMemoryStorage()
+	executor := NewExecutor(storage, WithRegistry(registry))
+	err = executor.Start("id-parent").
+		Input("value", 4).
+		WithID("id-parent-1").
+		Execute(context.Background())
+	require.NoError(t, err)
+
+	// Verify the child used the custom ID
+	childExec, err := storage.Get(context.Background(), "custom-child-id")
+	require.NoError(t, err)
+	assert.Equal(t, StatusCompleted, childExec.Status)
+	assert.Equal(t, "id-child", childExec.DefinitionName)
+}
+
+func TestNestedResult_Get(t *testing.T) {
+	nr := &NestedResult{
+		ExecutionID: "test",
+		outputs: map[string]json.RawMessage{
+			"name":  json.RawMessage(`"hello"`),
+			"count": json.RawMessage(`42`),
+		},
+	}
+
+	var name string
+	require.NoError(t, nr.Get("name", &name))
+	assert.Equal(t, "hello", name)
+
+	var count int
+	require.NoError(t, nr.Get("count", &count))
+	assert.Equal(t, 42, count)
+
+	// Missing key
+	err := nr.Get("missing", &name)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestNestedResult_Has(t *testing.T) {
+	nr := &NestedResult{
+		ExecutionID: "test",
+		outputs: map[string]json.RawMessage{
+			"name": json.RawMessage(`"hello"`),
+		},
+	}
+
+	assert.True(t, nr.Has("name"))
+	assert.False(t, nr.Has("missing"))
+}

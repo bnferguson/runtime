@@ -10,6 +10,19 @@ import (
 	"miren.dev/runtime/pkg/idgen"
 )
 
+type executorCtxKey struct{}
+type executionIDCtxKey struct{}
+
+func executorFromContext(ctx context.Context) (*Executor, bool) {
+	e, ok := ctx.Value(executorCtxKey{}).(*Executor)
+	return e, ok
+}
+
+func executionIDFromContext(ctx context.Context) (string, bool) {
+	id, ok := ctx.Value(executionIDCtxKey{}).(string)
+	return id, ok
+}
+
 // Storage persists saga execution state.
 type Storage interface {
 	// Save persists the execution state.
@@ -140,8 +153,10 @@ func (e *Executor) runExecution(ctx context.Context, def *Definition, exec *Exec
 		return fmt.Errorf("persisting running state: %w", err)
 	}
 
-	// Inject dependencies into context
+	// Inject dependencies, executor, and execution ID into context
 	ctx = injectDependencies(ctx, def.dependencies)
+	ctx = context.WithValue(ctx, executorCtxKey{}, e)
+	ctx = context.WithValue(ctx, executionIDCtxKey{}, exec.ID)
 
 	// Build outputs map from already-executed actions
 	outputs := make(map[string]json.RawMessage)
@@ -315,8 +330,10 @@ func (e *Executor) runUndo(ctx context.Context, def *Definition, exec *Execution
 		log.Error("failed to persist undoing state", "error", err)
 	}
 
-	// Inject dependencies into context
+	// Inject dependencies, executor, and execution ID into context
 	ctx = injectDependencies(ctx, def.dependencies)
+	ctx = context.WithValue(ctx, executorCtxKey{}, e)
+	ctx = context.WithValue(ctx, executionIDCtxKey{}, exec.ID)
 
 	// Build outputs map from executed actions
 	outputs := make(map[string]json.RawMessage)
@@ -504,6 +521,47 @@ func extractOutputs(node *ActionNode, outputBytes []byte, outputs map[string]jso
 	}
 
 	return nil
+}
+
+// ExecutionOutputs loads a completed execution from storage and collects its
+// outputs into a NestedResult. Useful for reading saga results without a
+// capture struct.
+func (e *Executor) ExecutionOutputs(ctx context.Context, executionID string) (*NestedResult, error) {
+	exec, err := e.storage.Get(ctx, executionID)
+	if err != nil {
+		return nil, fmt.Errorf("loading execution %q: %w", executionID, err)
+	}
+
+	if exec.Status != StatusCompleted {
+		return nil, fmt.Errorf("execution %q has status %q, expected %q", executionID, exec.Status, StatusCompleted)
+	}
+
+	def, ok := e.registry.Get(exec.DefinitionName)
+	if !ok {
+		return nil, fmt.Errorf("saga definition %q not found", exec.DefinitionName)
+	}
+
+	return collectOutputs(def, exec), nil
+}
+
+// collectOutputs gathers all action outputs from a completed execution into
+// a NestedResult.
+func collectOutputs(def *Definition, exec *Execution) *NestedResult {
+	outputs := make(map[string]json.RawMessage)
+	for actionName, result := range exec.ExecutedActions {
+		if result.UndoneAt != nil {
+			continue
+		}
+		node := def.Actions[actionName]
+		if node == nil {
+			continue
+		}
+		_ = extractOutputs(node, result.Output, outputs)
+	}
+	return &NestedResult{
+		ExecutionID: exec.ID,
+		outputs:     outputs,
+	}
 }
 
 // generateID creates a unique execution ID.

@@ -69,6 +69,9 @@ type Execution struct {
 	// ExecutionOrder records the order actions were executed for reverse undo.
 	ExecutionOrder []string `json:"execution_order"`
 
+	// ParentExecutionID links this execution to a parent saga when run as a nested child.
+	ParentExecutionID string `json:"parent_execution_id,omitempty"`
+
 	// Error is set if the saga failed.
 	Error string `json:"error,omitempty"`
 
