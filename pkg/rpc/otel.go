@@ -94,6 +94,7 @@ func SetupTracing(ctx context.Context, attrs ...attribute.KeyValue) (shutdown fu
 		sdkresource.WithAttributes(resAttrs...),
 	)
 	if err != nil {
+		_ = exporter.Shutdown(ctx)
 		return nil, err
 	}
 
