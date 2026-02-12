@@ -35,7 +35,7 @@ func (s *AddonsServer) CreateInstance(ctx context.Context, state *app_v1alpha.Ad
 	args := state.Args()
 	appName := args.App()
 	addonSpec := args.Addon()
-	planOverride := args.Plan()
+	variantOverride := args.Variant()
 
 	if appName == "" {
 		return fmt.Errorf("app name is required")
@@ -44,13 +44,13 @@ func (s *AddonsServer) CreateInstance(ctx context.Context, state *app_v1alpha.Ad
 		return fmt.Errorf("addon name is required")
 	}
 
-	// Resolve addon and plan
-	addonName, planName, err := s.registry.ResolveAddonAndPlan(addonSpec)
+	// Resolve addon and variant
+	addonName, variantName, err := s.registry.ResolveAddonAndVariant(addonSpec)
 	if err != nil {
 		return err
 	}
-	if planOverride != "" {
-		planName = planOverride
+	if variantOverride != "" {
+		variantName = variantOverride
 	}
 
 	// Look up the app entity
@@ -82,7 +82,7 @@ func (s *AddonsServer) CreateInstance(ctx context.Context, state *app_v1alpha.Ad
 	assoc := &addon_v1alpha.AddonAssociation{
 		App:    app.ID,
 		Addon:  addonEntity.ID,
-		Plan:   planName,
+		Variant: variantName,
 		Status: "pending",
 	}
 
@@ -97,7 +97,7 @@ func (s *AddonsServer) CreateInstance(ctx context.Context, state *app_v1alpha.Ad
 		"id", id,
 		"app", appName,
 		"addon", addonName,
-		"plan", planName,
+		"variant", variantName,
 	)
 
 	return nil
@@ -128,7 +128,7 @@ func (s *AddonsServer) ListInstances(ctx context.Context, state *app_v1alpha.Add
 		instance.SetId(string(assoc.ID))
 		instance.SetName(addonNameFromRef(assoc.Addon))
 		instance.SetAddon(string(assoc.Addon))
-		instance.SetPlan(assoc.Plan)
+		instance.SetVariant(assoc.Variant)
 		addons = append(addons, instance)
 	}
 

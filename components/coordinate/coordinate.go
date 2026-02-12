@@ -17,6 +17,7 @@ import (
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"miren.dev/runtime/api/addon/addon_v1alpha"
 	"miren.dev/runtime/api/admin/admin_v1alpha"
 	appclient "miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/app/app_v1alpha"
@@ -36,17 +37,16 @@ import (
 	"miren.dev/runtime/components/autotls"
 	"miren.dev/runtime/components/buildkit"
 	"miren.dev/runtime/components/netresolve"
-	"miren.dev/runtime/api/addon/addon_v1alpha"
-	artifactctrl "miren.dev/runtime/controllers/artifact"
 	addonctrl "miren.dev/runtime/controllers/addon"
+	artifactctrl "miren.dev/runtime/controllers/artifact"
 	certctrl "miren.dev/runtime/controllers/certificate"
 	deploymentctrl "miren.dev/runtime/controllers/deployment"
 	"miren.dev/runtime/controllers/sandboxpool"
 	schedulerctrl "miren.dev/runtime/controllers/scheduler"
-	"miren.dev/runtime/pkg/addon"
-	"miren.dev/runtime/pkg/addon/postgresql"
 	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/observability"
+	"miren.dev/runtime/pkg/addon"
+	"miren.dev/runtime/pkg/addon/postgresql"
 	"miren.dev/runtime/pkg/caauth"
 	"miren.dev/runtime/pkg/cloudauth"
 	"miren.dev/runtime/pkg/controller"
@@ -792,6 +792,18 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	)
 	c.cm.AddController(launcherController)
 
+	// Watch AddonAssociation changes to re-trigger launcher when addons become ready
+	addonLauncherController := controller.NewReconcileController(
+		"deploymentlauncher-addons",
+		c.Log,
+		entity.Ref(entity.EntityKind, addon_v1alpha.KindAddonAssociation),
+		eac,
+		launcher.AddonAssociationHandler(),
+		0, // No resync — driven entirely by watch events
+		1,
+	)
+	c.cm.AddController(addonLauncherController)
+
 	// Add sandbox pool controller (reconciles pool desired_instances to actual sandboxes)
 	poolController := controller.NewReconcileController(
 		"sandboxpool",
@@ -879,18 +891,26 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	eps := execproxy.NewServer(c.Log, eac, rs)
 	server.ExposeValue("dev.miren.runtime/exec", exec_v1alpha.AdaptSandboxExec(eps))
 
-	// Create app client for the builder
-	appClient := appclient.NewClient(c.Log, loopback)
-
-	bs := build.NewBuilder(c.Log, eac, appClient, c.Resolver, c.TempDir, c.LogWriter, c.CloudAuth.DNSHostname, c.BuildKit)
-	server.ExposeValue("dev.miren.runtime/build", build_v1alpha.AdaptBuilder(bs))
-
 	ai := app.NewAppInfo(c.Log, ec, c.Cpu, c.Mem, c.HTTP)
 	server.ExposeValue("dev.miren.runtime/app", app_v1alpha.AdaptCrud(ai))
 	server.ExposeValue("dev.miren.runtime/app-status", app_v1alpha.AdaptAppStatus(ai))
 
 	addonsServer := app.NewAddonsServer(c.Log, ec, addonRegistry)
 	server.ExposeValue("dev.miren.runtime/addons", app_v1alpha.AdaptAddons(addonsServer))
+
+	// Create addons loopback connection (separate from entities loopback)
+	addonsLoopback, err := rs.Connect(rs.LoopbackAddr(), "dev.miren.runtime/addons")
+	if err != nil {
+		c.Log.Error("failed to connect to addons RPC service", "error", err)
+		return err
+	}
+	addonsClient := app_v1alpha.NewAddonsClient(addonsLoopback)
+
+	// Create app client for the builder
+	appClient := appclient.NewClient(c.Log, loopback)
+
+	bs := build.NewBuilder(c.Log, eac, appClient, addonsClient, c.Resolver, c.TempDir, c.LogWriter, c.CloudAuth.DNSHostname, c.BuildKit)
+	server.ExposeValue("dev.miren.runtime/build", build_v1alpha.AdaptBuilder(bs))
 
 	ls := logs.NewServer(c.Log, ec, c.Logs)
 	server.ExposeValue("dev.miren.runtime/logs", app_v1alpha.AdaptLogs(ls))

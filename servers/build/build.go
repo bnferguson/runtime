@@ -19,6 +19,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 	"miren.dev/runtime/api/app"
+	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/build/build_v1alpha"
 	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
@@ -71,6 +72,7 @@ type Builder struct {
 	EAS           *entityserver_v1alpha.EntityAccessClient
 	ec            *entityserver.Client
 	appClient     *app.Client
+	addonsClient  *app_v1alpha.AddonsClient
 	ingressClient *ingress.Client
 	TempDir       string
 	Registry      string
@@ -84,11 +86,12 @@ type Builder struct {
 	BuildKit *buildkit.Component
 }
 
-func NewBuilder(log *slog.Logger, eas *entityserver_v1alpha.EntityAccessClient, appClient *app.Client, res netresolve.Resolver, tmpdir string, logWriter observability.LogWriter, dnsHostname string, bk *buildkit.Component) *Builder {
+func NewBuilder(log *slog.Logger, eas *entityserver_v1alpha.EntityAccessClient, appClient *app.Client, addonsClient *app_v1alpha.AddonsClient, res netresolve.Resolver, tmpdir string, logWriter observability.LogWriter, dnsHostname string, bk *buildkit.Component) *Builder {
 	return &Builder{
 		Log:           log.With("module", "builder"),
 		EAS:           eas,
 		appClient:     appClient,
+		addonsClient:  addonsClient,
 		ingressClient: ingress.NewClient(log, eas),
 		Resolver:      res,
 		TempDir:       tmpdir,
@@ -970,6 +973,14 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 
 	// -- build.activate span
 	activateCtx, activateSpan := buildTracer.Start(ctx, "build.activate")
+
+	// Provision addons before activating the version so that AddonAssociation
+	// entities exist when the launcher runs. The addon controller will create
+	// a new AppVersion with addon vars once provisioning completes.
+	if ac != nil && b.addonsClient != nil {
+		b.provisionAddons(ctx, name, ac)
+	}
+
 	b.Log.Info("updating app entity with new version", "app", name, "version", mrv.Version)
 	err = b.appClient.SetActiveVersion(activateCtx, name, string(id))
 	if err != nil {
@@ -1041,6 +1052,27 @@ func (b *Builder) getAccessInfo(ctx context.Context, appName string) *build_v1al
 	}
 
 	return info
+}
+
+func (b *Builder) provisionAddons(ctx context.Context, appName string, ac *appconfig.AppConfig) {
+	for addonName, cfg := range ac.Addons {
+		variant := ""
+		if cfg != nil {
+			variant = cfg.Variant
+		}
+
+		_, err := b.addonsClient.CreateInstance(ctx, "", addonName, variant, appName)
+		if err != nil {
+			// "already attached" is expected on redeploys
+			if strings.Contains(err.Error(), "already attached") {
+				b.Log.Debug("addon already attached", "addon", addonName, "app", appName)
+				continue
+			}
+			b.Log.Warn("failed to provision addon from app.toml", "addon", addonName, "app", appName, "error", err)
+			continue
+		}
+		b.Log.Info("addon provisioned from app.toml", "addon", addonName, "variant", variant, "app", appName)
+	}
 }
 
 func (b *Builder) logDeployment(ctx context.Context, appName, version, artifact string) {

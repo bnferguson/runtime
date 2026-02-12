@@ -10,20 +10,20 @@ import (
 
 func testDefinition() AddonDefinition {
 	return AddonDefinition{
-		Name:        "test-addon",
-		DisplayName: "Test Addon",
-		Description: "A test addon",
-		DefaultPlan: "small",
-		Plans: []PlanDefinition{
+		Name:           "test-addon",
+		DisplayName:    "Test Addon",
+		Description:    "A test addon",
+		DefaultVariant: "small",
+		Variants: []VariantDefinition{
 			{
 				Name:        "small",
-				Description: "Small plan",
+				Description: "Small variant",
 				Details:     map[string]string{"CPU": "0.5"},
 				Config:      map[string]string{"cpu": "500m"},
 			},
 			{
 				Name:        "large",
-				Description: "Large plan",
+				Description: "Large variant",
 				Details:     map[string]string{"CPU": "2"},
 				Config:      map[string]string{"cpu": "2000m"},
 			},
@@ -33,7 +33,7 @@ func testDefinition() AddonDefinition {
 
 type mockProvider struct{}
 
-func (m *mockProvider) Provision(ctx context.Context, app App, plan Plan) (*ProvisionResult, error) {
+func (m *mockProvider) Provision(ctx context.Context, app App, variant Variant) (*ProvisionResult, error) {
 	return &ProvisionResult{}, nil
 }
 func (m *mockProvider) AdjustEnvVars(ctx context.Context, result *ProvisionResult, assoc AddonAssociation, collisions []string) ([]Variable, error) {
@@ -80,67 +80,67 @@ func TestRegistryListAddons(t *testing.T) {
 	assert.True(t, names["addon-b"])
 }
 
-func TestResolveAddonAndPlanExplicit(t *testing.T) {
+func TestResolveAddonAndVariantExplicit(t *testing.T) {
 	r := NewRegistry()
 	r.Register("test-addon", &mockProvider{}, testDefinition())
 
-	name, plan, err := r.ResolveAddonAndPlan("test-addon:large")
+	name, variant, err := r.ResolveAddonAndVariant("test-addon:large")
 	require.NoError(t, err)
 	assert.Equal(t, "test-addon", name)
-	assert.Equal(t, "large", plan)
+	assert.Equal(t, "large", variant)
 }
 
-func TestResolveAddonAndPlanDefault(t *testing.T) {
+func TestResolveAddonAndVariantDefault(t *testing.T) {
 	r := NewRegistry()
 	r.Register("test-addon", &mockProvider{}, testDefinition())
 
-	name, plan, err := r.ResolveAddonAndPlan("test-addon")
+	name, variant, err := r.ResolveAddonAndVariant("test-addon")
 	require.NoError(t, err)
 	assert.Equal(t, "test-addon", name)
-	assert.Equal(t, "small", plan) // default plan
+	assert.Equal(t, "small", variant) // default variant
 }
 
-func TestResolveAddonAndPlanUnknownAddon(t *testing.T) {
+func TestResolveAddonAndVariantUnknownAddon(t *testing.T) {
 	r := NewRegistry()
 
-	_, _, err := r.ResolveAddonAndPlan("unknown")
+	_, _, err := r.ResolveAddonAndVariant("unknown")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown addon")
 }
 
-func TestResolveAddonAndPlanUnknownPlan(t *testing.T) {
+func TestResolveAddonAndVariantUnknownVariant(t *testing.T) {
 	r := NewRegistry()
 	r.Register("test-addon", &mockProvider{}, testDefinition())
 
-	_, _, err := r.ResolveAddonAndPlan("test-addon:nonexistent")
+	_, _, err := r.ResolveAddonAndVariant("test-addon:nonexistent")
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "unknown plan")
+	assert.Contains(t, err.Error(), "unknown variant")
 }
 
-func TestGetPlanConfig(t *testing.T) {
+func TestGetVariantConfig(t *testing.T) {
 	r := NewRegistry()
 	r.Register("test-addon", &mockProvider{}, testDefinition())
 
-	config, err := r.GetPlanConfig("test-addon", "small")
+	config, err := r.GetVariantConfig("test-addon", "small")
 	require.NoError(t, err)
 	assert.Equal(t, "500m", config["cpu"])
 
-	config, err = r.GetPlanConfig("test-addon", "large")
+	config, err = r.GetVariantConfig("test-addon", "large")
 	require.NoError(t, err)
 	assert.Equal(t, "2000m", config["cpu"])
 }
 
-func TestGetPlanConfigUnknownAddon(t *testing.T) {
+func TestGetVariantConfigUnknownAddon(t *testing.T) {
 	r := NewRegistry()
 
-	_, err := r.GetPlanConfig("unknown", "small")
+	_, err := r.GetVariantConfig("unknown", "small")
 	assert.Error(t, err)
 }
 
-func TestGetPlanConfigUnknownPlan(t *testing.T) {
+func TestGetVariantConfigUnknownVariant(t *testing.T) {
 	r := NewRegistry()
 	r.Register("test-addon", &mockProvider{}, testDefinition())
 
-	_, err := r.GetPlanConfig("test-addon", "nonexistent")
+	_, err := r.GetVariantConfig("test-addon", "nonexistent")
 	assert.Error(t, err)
 }

@@ -20,7 +20,7 @@ import (
 
 type mockProvider struct{}
 
-func (m *mockProvider) Provision(ctx context.Context, app addon.App, plan addon.Plan) (*addon.ProvisionResult, error) {
+func (m *mockProvider) Provision(ctx context.Context, app addon.App, variant addon.Variant) (*addon.ProvisionResult, error) {
 	return &addon.ProvisionResult{}, nil
 }
 
@@ -46,8 +46,8 @@ func setupAddonsTest(t *testing.T) (context.Context, *app_v1alpha.AddonsClient, 
 	registry.Register("miren-postgresql", &mockProvider{}, addon.AddonDefinition{
 		Name:        "miren-postgresql",
 		DisplayName: "PostgreSQL",
-		DefaultPlan: "small-local",
-		Plans: []addon.PlanDefinition{
+		DefaultVariant: "small-local",
+		Variants: []addon.VariantDefinition{
 			{Name: "small-local", Description: "Small local"},
 			{Name: "shared", Description: "Shared"},
 		},
@@ -79,14 +79,14 @@ func TestAddonsCreateInstance(t *testing.T) {
 	assert.NotEmpty(t, result.Id())
 }
 
-func TestAddonsCreateInstanceDefaultPlan(t *testing.T) {
+func TestAddonsCreateInstanceDefaultVariant(t *testing.T) {
 	ctx, client, ec := setupAddonsTest(t)
 
 	app := &core_v1alpha.App{}
 	_, err := ec.Create(ctx, "myapp", app)
 	require.NoError(t, err)
 
-	// Create with empty plan — should use default
+	// Create with empty variant — should use default
 	result, err := client.CreateInstance(ctx, "test", "miren-postgresql", "", "myapp")
 	require.NoError(t, err)
 	assert.NotEmpty(t, result.Id())
@@ -142,7 +142,7 @@ func TestAddonsListInstances(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, result.Addons(), 1)
 	assert.Equal(t, "miren-postgresql", result.Addons()[0].Name())
-	assert.Equal(t, "small-local", result.Addons()[0].Plan())
+	assert.Equal(t, "small-local", result.Addons()[0].Variant())
 }
 
 func TestAddonsDeleteInstance(t *testing.T) {

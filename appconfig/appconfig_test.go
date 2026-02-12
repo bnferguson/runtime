@@ -673,18 +673,18 @@ size_gb = 100
 }
 
 func TestParseAppConfigWithAddons(t *testing.T) {
-	t.Run("parse addon with plan", func(t *testing.T) {
+	t.Run("parse addon with variant", func(t *testing.T) {
 		config := `
 name = "my-app"
 
 [addons.miren-postgresql]
-plan = "small-local"
+variant = "small-local"
 `
 		ac, err := Parse([]byte(config))
 		require.NoError(t, err)
 		require.NotNil(t, ac.Addons)
 		require.Contains(t, ac.Addons, "miren-postgresql")
-		assert.Equal(t, "small-local", ac.Addons["miren-postgresql"].Plan)
+		assert.Equal(t, "small-local", ac.Addons["miren-postgresql"].Variant)
 	})
 
 	t.Run("parse multiple addons", func(t *testing.T) {
@@ -692,30 +692,30 @@ plan = "small-local"
 name = "my-app"
 
 [addons.miren-postgresql]
-plan = "small-local"
+variant = "small-local"
 
 [addons.miren-redis]
-plan = "shared"
+variant = "shared"
 `
 		ac, err := Parse([]byte(config))
 		require.NoError(t, err)
 		require.Len(t, ac.Addons, 2)
-		assert.Equal(t, "small-local", ac.Addons["miren-postgresql"].Plan)
-		assert.Equal(t, "shared", ac.Addons["miren-redis"].Plan)
+		assert.Equal(t, "small-local", ac.Addons["miren-postgresql"].Variant)
+		assert.Equal(t, "shared", ac.Addons["miren-redis"].Variant)
 	})
 
-	t.Run("parse addon without plan uses default", func(t *testing.T) {
+	t.Run("parse addon without variant uses default", func(t *testing.T) {
 		config := `
 name = "my-app"
 
 [addons.miren-postgresql]
-plan = ""
+variant = ""
 `
 		ac, err := Parse([]byte(config))
 		require.NoError(t, err)
 		require.NotNil(t, ac.Addons)
 		require.Contains(t, ac.Addons, "miren-postgresql")
-		assert.Equal(t, "", ac.Addons["miren-postgresql"].Plan)
+		assert.Equal(t, "", ac.Addons["miren-postgresql"].Variant)
 	})
 
 	t.Run("no addons section", func(t *testing.T) {

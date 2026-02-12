@@ -58,28 +58,28 @@ func (r *Registry) EnsureEntities(ctx context.Context, ec *entityserver.Client) 
 	for name, ra := range r.providers {
 		def := ra.definition
 
-		var plans []addon_v1alpha.Plans
-		for _, pd := range def.Plans {
+		var variants []addon_v1alpha.Variants
+		for _, vd := range def.Variants {
 			var details []addon_v1alpha.Details
-			for k, v := range pd.Details {
+			for k, v := range vd.Details {
 				details = append(details, addon_v1alpha.Details{
 					Key:   k,
 					Value: v,
 				})
 			}
-			plans = append(plans, addon_v1alpha.Plans{
-				Name:        pd.Name,
-				Description: pd.Description,
+			variants = append(variants, addon_v1alpha.Variants{
+				Name:        vd.Name,
+				Description: vd.Description,
 				Details:     details,
 			})
 		}
 
 		addonEntity := &addon_v1alpha.Addon{
-			Name:        name,
-			DisplayName: def.DisplayName,
-			Description: def.Description,
-			DefaultPlan: def.DefaultPlan,
-			Plans:       plans,
+			Name:           name,
+			DisplayName:    def.DisplayName,
+			Description:    def.Description,
+			DefaultVariant: def.DefaultVariant,
+			Variants:       variants,
 		}
 
 		_, err := ec.CreateOrUpdate(ctx, name, addonEntity)
@@ -90,9 +90,9 @@ func (r *Registry) EnsureEntities(ctx context.Context, ec *entityserver.Client) 
 	return nil
 }
 
-// ResolveAddonAndPlan parses a spec like "miren-postgresql:small-local" into
-// addon name and plan name. If no plan is specified, the default plan is used.
-func (r *Registry) ResolveAddonAndPlan(spec string) (addonName, planName string, err error) {
+// ResolveAddonAndVariant parses a spec like "miren-postgresql:small-local" into
+// addon name and variant name. If no variant is specified, the default variant is used.
+func (r *Registry) ResolveAddonAndVariant(spec string) (addonName, variantName string, err error) {
 	parts := strings.SplitN(spec, ":", 2)
 	addonName = parts[0]
 
@@ -102,33 +102,33 @@ func (r *Registry) ResolveAddonAndPlan(spec string) (addonName, planName string,
 	}
 
 	if len(parts) == 2 {
-		planName = parts[1]
+		variantName = parts[1]
 	} else {
-		planName = def.DefaultPlan
+		variantName = def.DefaultVariant
 	}
 
-	// Validate the plan exists
-	for _, p := range def.Plans {
-		if p.Name == planName {
-			return addonName, planName, nil
+	// Validate the variant exists
+	for _, v := range def.Variants {
+		if v.Name == variantName {
+			return addonName, variantName, nil
 		}
 	}
 
-	return "", "", fmt.Errorf("unknown plan %q for addon %q", planName, addonName)
+	return "", "", fmt.Errorf("unknown variant %q for addon %q", variantName, addonName)
 }
 
-// GetPlanConfig returns the provider-internal config for a specific plan.
-func (r *Registry) GetPlanConfig(addonName, planName string) (map[string]string, error) {
+// GetVariantConfig returns the provider-internal config for a specific variant.
+func (r *Registry) GetVariantConfig(addonName, variantName string) (map[string]string, error) {
 	_, def, ok := r.Get(addonName)
 	if !ok {
 		return nil, fmt.Errorf("unknown addon %q", addonName)
 	}
 
-	for _, p := range def.Plans {
-		if p.Name == planName {
-			return p.Config, nil
+	for _, v := range def.Variants {
+		if v.Name == variantName {
+			return v.Config, nil
 		}
 	}
 
-	return nil, fmt.Errorf("unknown plan %q for addon %q", planName, addonName)
+	return nil, fmt.Errorf("unknown variant %q for addon %q", variantName, addonName)
 }

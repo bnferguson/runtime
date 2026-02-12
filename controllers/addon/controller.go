@@ -11,6 +11,7 @@ import (
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/addon"
 	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/idgen"
 )
 
 // Controller reconciles AddonAssociation entities, driving provisioning
@@ -58,7 +59,7 @@ func (c *Controller) Reconcile(ctx context.Context, assoc *addon_v1alpha.AddonAs
 }
 
 func (c *Controller) provision(ctx context.Context, assoc *addon_v1alpha.AddonAssociation, meta *entity.Meta) error {
-	c.log.Info("provisioning addon", "association", assoc.ID, "addon", assoc.Addon, "plan", assoc.Plan)
+	c.log.Info("provisioning addon", "association", assoc.ID, "addon", assoc.Addon, "variant", assoc.Variant)
 
 	// Step 1: Set status to provisioning
 	if err := meta.Update((&addon_v1alpha.AddonAssociation{Status: "provisioning"}).Encode()); err != nil {
@@ -72,10 +73,10 @@ func (c *Controller) provision(ctx context.Context, assoc *addon_v1alpha.AddonAs
 		return c.setError(meta, fmt.Errorf("unknown addon %q", addonName))
 	}
 
-	// Resolve plan config
-	planConfig, err := c.registry.GetPlanConfig(addonName, assoc.Plan)
+	// Resolve variant config
+	variantConfig, err := c.registry.GetVariantConfig(addonName, assoc.Variant)
 	if err != nil {
-		return c.setError(meta, fmt.Errorf("resolving plan config: %w", err))
+		return c.setError(meta, fmt.Errorf("resolving variant config: %w", err))
 	}
 
 	// Look up the app to get its name
@@ -88,9 +89,9 @@ func (c *Controller) provision(ctx context.Context, assoc *addon_v1alpha.AddonAs
 	result, err := provider.Provision(ctx, addon.App{
 		ID:   assoc.App,
 		Name: appName,
-	}, addon.Plan{
-		Name:   assoc.Plan,
-		Config: planConfig,
+	}, addon.Variant{
+		Name:   assoc.Variant,
+		Config: variantConfig,
 	})
 	if err != nil {
 		return c.setError(meta, fmt.Errorf("provisioning: %w", err))
@@ -116,7 +117,7 @@ func (c *Controller) provision(ctx context.Context, assoc *addon_v1alpha.AddonAs
 			ID:     assoc.ID,
 			App:    assoc.App,
 			Addon:  assoc.Addon,
-			Plan:   assoc.Plan,
+			Variant: assoc.Variant,
 			Entity: meta.Entity,
 		}, collisions)
 		if err != nil {
@@ -125,9 +126,10 @@ func (c *Controller) provision(ctx context.Context, assoc *addon_v1alpha.AddonAs
 		envVars = adjusted
 	}
 
-	// Step 5: Inject env vars into app ConfigVersion and store on association
-	if err := c.injectEnvVars(ctx, assoc.App, envVars); err != nil {
-		return c.setError(meta, fmt.Errorf("injecting env vars: %w", err))
+	// Step 5: Create a new AppVersion with addon env vars merged in and activate it.
+	// This ensures the launcher always reads a version that has all vars baked in.
+	if err := c.createVersionWithAddonVars(ctx, assoc.App, envVars); err != nil {
+		return c.setError(meta, fmt.Errorf("creating version with addon vars: %w", err))
 	}
 
 	// Store variables on the association for later removal
@@ -167,11 +169,18 @@ func (c *Controller) deprovision(ctx context.Context, assoc *addon_v1alpha.Addon
 		ID:     assoc.ID,
 		App:    assoc.App,
 		Addon:  assoc.Addon,
-		Plan:   assoc.Plan,
+		Variant: assoc.Variant,
 		Entity: meta.Entity,
 	})
 	if err != nil {
-		return c.setError(meta, fmt.Errorf("deprovisioning: %w", err))
+		// Try to set error status, but don't fail if the update is rejected
+		// (e.g., the app was deleted and the entity server rejects the patch
+		// due to a dangling app reference). The entity stays at "deprovisioning"
+		// so the controller will retry.
+		if setErr := c.setError(meta, fmt.Errorf("deprovisioning: %w", err)); setErr != nil {
+			c.log.Warn("failed to set error status during deprovision", "error", setErr)
+		}
+		return fmt.Errorf("deprovisioning: %w", err)
 	}
 
 	// Step 2: Remove addon env vars from app ConfigVersion
@@ -231,8 +240,10 @@ func (c *Controller) getAppVariables(ctx context.Context, appID entity.Id) ([]co
 	return version.Config.Variable, nil
 }
 
-// injectEnvVars adds addon environment variables to the app's active version config.
-func (c *Controller) injectEnvVars(ctx context.Context, appID entity.Id, envVars []addon.Variable) error {
+// createVersionWithAddonVars creates a new AppVersion with addon env vars merged in
+// and sets it as the active version. This ensures the launcher always reads a version
+// that already contains all addon variables.
+func (c *Controller) createVersionWithAddonVars(ctx context.Context, appID entity.Id, envVars []addon.Variable) error {
 	if len(envVars) == 0 {
 		return nil
 	}
@@ -250,15 +261,35 @@ func (c *Controller) injectEnvVars(ctx context.Context, appID entity.Id, envVars
 		return fmt.Errorf("getting app version: %w", err)
 	}
 
-	// Merge addon vars into existing variables.
-	// Addon vars use source="addon" and never override manual vars.
-	merged := mergeAddonVars(version.Config.Variable, envVars)
-	version.Config.Variable = merged
+	// Merge addon vars into existing variables
+	version.Config.Variable = mergeAddonVars(version.Config.Variable, envVars)
 
-	// Patch the AppVersion with the updated config
-	return c.ec.Patch(ctx, app.ActiveVersion, 0,
-		entity.Component(core_v1alpha.AppVersionConfigId, version.Config.Encode()),
-	)
+	// Resolve app name for the new version name
+	appName, err := c.resolveAppName(ctx, appID)
+	if err != nil {
+		return fmt.Errorf("resolving app name: %w", err)
+	}
+
+	// Create new version with a fresh ID
+	newVersionName := appName + "-" + idgen.Gen("v")
+	version.Version = newVersionName
+
+	newID, err := c.ec.Create(ctx, newVersionName, &version)
+	if err != nil {
+		return fmt.Errorf("creating new app version: %w", err)
+	}
+
+	// Set the new version as active — triggers the deployment launcher via App watch
+	if err := c.ec.Patch(ctx, appID, 0,
+		entity.Ref(core_v1alpha.AppActiveVersionId, newID),
+	); err != nil {
+		return fmt.Errorf("setting active version: %w", err)
+	}
+
+	c.log.Info("created new app version with addon vars",
+		"app", appID, "old_version", app.ActiveVersion, "new_version", newID)
+
+	return nil
 }
 
 // removeEnvVars removes addon-sourced variables from the app's active version config.

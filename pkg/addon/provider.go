@@ -10,7 +10,7 @@ import (
 type AddonProvider interface {
 	// Provision creates the backing resources for an addon and returns the
 	// environment variables and entity attributes to store.
-	Provision(ctx context.Context, app App, plan Plan) (*ProvisionResult, error)
+	Provision(ctx context.Context, app App, variant Variant) (*ProvisionResult, error)
 
 	// AdjustEnvVars is called when provisioned env vars collide with existing
 	// app env vars. The provider can rename or adjust variables.
@@ -26,8 +26,8 @@ type App struct {
 	Name string
 }
 
-// Plan describes the plan selected for provisioning.
-type Plan struct {
+// Variant describes the variant selected for provisioning.
+type Variant struct {
 	Name   string
 	Config map[string]string
 }
@@ -47,24 +47,24 @@ type ProvisionResult struct {
 
 // AddonAssociation holds the state needed for deprovisioning.
 type AddonAssociation struct {
-	ID     entity.Id
-	App    entity.Id
-	Addon  entity.Id
-	Plan   string
-	Entity *entity.Entity
+	ID      entity.Id
+	App     entity.Id
+	Addon   entity.Id
+	Variant string
+	Entity  *entity.Entity
 }
 
-// AddonDefinition describes an addon's metadata and available plans.
+// AddonDefinition describes an addon's metadata and available variants.
 type AddonDefinition struct {
-	Name        string
-	DisplayName string
-	Description string
-	DefaultPlan string
-	Plans       []PlanDefinition
+	Name           string
+	DisplayName    string
+	Description    string
+	DefaultVariant string
+	Variants       []VariantDefinition
 }
 
-// PlanDefinition describes a single plan within an addon.
-type PlanDefinition struct {
+// VariantDefinition describes a single variant within an addon.
+type VariantDefinition struct {
 	Name        string
 	Description string
 	Details     map[string]string // display key-value pairs shown to users

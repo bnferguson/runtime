@@ -133,7 +133,7 @@ types:
       - name: addon
         type: string
         index: 2
-      - name: plan
+      - name: variant
         type: string
         index: 3
 
@@ -213,7 +213,7 @@ interfaces:
             type: string
           - name: addon
             type: string
-          - name: plan
+          - name: variant
             type: string
           - name: app
             type: string

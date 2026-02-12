@@ -9,9 +9,9 @@ kinds:
       type: string
     description:
       type: string
-    default_plan:
+    default_variant:
       type: string
-    plans:
+    variants:
       type: component
       many: true
       attrs:
@@ -36,7 +36,7 @@ kinds:
     addon:
       type: ref
       indexed: true
-    plan:
+    variant:
       type: string
     status:
       type: string
@@ -58,7 +58,7 @@ kinds:
     addon_name:
       type: string
       indexed: true
-    plan:
+    variant:
       type: string
     sandbox_pool:
       type: ref

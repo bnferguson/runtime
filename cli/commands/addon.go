@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"strings"
 
 	"miren.dev/runtime/api/addon/addon_v1alpha"
 	"miren.dev/runtime/api/app/app_v1alpha"
@@ -33,37 +34,49 @@ func AddonListAvailable(ctx *Context, opts struct {
 
 	if opts.IsJSON() {
 		type addonInfo struct {
-			Name        string `json:"name"`
-			DisplayName string `json:"display_name"`
-			Description string `json:"description"`
-			DefaultPlan string `json:"default_plan"`
+			Name           string   `json:"name"`
+			DisplayName    string   `json:"display_name"`
+			Description    string   `json:"description"`
+			DefaultVariant string   `json:"default_variant"`
+			Variants       []string `json:"variants"`
 		}
 
 		var addons []addonInfo
 		for _, e := range res.Values() {
 			var addon addon_v1alpha.Addon
 			addon.Decode(e.Entity())
+			var variantNames []string
+			for _, v := range addon.Variants {
+				variantNames = append(variantNames, v.Name)
+			}
 			addons = append(addons, addonInfo{
-				Name:        addon.Name,
-				DisplayName: addon.DisplayName,
-				Description: addon.Description,
-				DefaultPlan: addon.DefaultPlan,
+				Name:           addon.Name,
+				DisplayName:    addon.DisplayName,
+				Description:    addon.Description,
+				DefaultVariant: addon.DefaultVariant,
+				Variants:       variantNames,
 			})
 		}
 		return PrintJSON(addons)
 	}
 
 	var rows []ui.Row
-	headers := []string{"ADDON", "DESCRIPTION", "DEFAULT PLAN"}
+	headers := []string{"ADDON", "DESCRIPTION", "VARIANTS", "DEFAULT VARIANT"}
 
 	for _, e := range res.Values() {
 		var addon addon_v1alpha.Addon
 		addon.Decode(e.Entity())
 
+		var variantNames []string
+		for _, v := range addon.Variants {
+			variantNames = append(variantNames, v.Name)
+		}
+
 		rows = append(rows, ui.Row{
 			addon.Name,
 			addon.Description,
-			addon.DefaultPlan,
+			strings.Join(variantNames, ", "),
+			addon.DefaultVariant,
 		})
 	}
 
@@ -72,7 +85,8 @@ func AddonListAvailable(ctx *Context, opts struct {
 		return nil
 	}
 
-	columns := ui.AutoSizeColumns(headers, rows, nil)
+	columns := ui.AutoSizeColumns(headers, rows,
+		ui.Columns().MaxWidth(2, 30).WordWrap(2))
 	table := ui.NewTable(
 		ui.WithColumns(columns),
 		ui.WithRows(rows),
@@ -82,7 +96,7 @@ func AddonListAvailable(ctx *Context, opts struct {
 	return nil
 }
 
-func AddonPlans(ctx *Context, opts struct {
+func AddonVariants(ctx *Context, opts struct {
 	FormatOptions
 	ConfigCentric
 	Addon string `position:"0" usage:"Addon name (e.g., miren-postgresql)" required:"true"`
@@ -104,48 +118,48 @@ func AddonPlans(ctx *Context, opts struct {
 	addon.Decode(addonRes.Entity().Entity())
 
 	if opts.IsJSON() {
-		type planInfo struct {
+		type variantInfo struct {
 			Name        string            `json:"name"`
 			Description string            `json:"description"`
 			Details     map[string]string `json:"details,omitempty"`
 			Default     bool              `json:"default,omitempty"`
 		}
 
-		var plans []planInfo
-		for _, p := range addon.Plans {
+		var variants []variantInfo
+		for _, v := range addon.Variants {
 			details := make(map[string]string)
-			for _, d := range p.Details {
+			for _, d := range v.Details {
 				details[d.Key] = d.Value
 			}
-			plans = append(plans, planInfo{
-				Name:        p.Name,
-				Description: p.Description,
+			variants = append(variants, variantInfo{
+				Name:        v.Name,
+				Description: v.Description,
 				Details:     details,
-				Default:     p.Name == addon.DefaultPlan,
+				Default:     v.Name == addon.DefaultVariant,
 			})
 		}
-		return PrintJSON(plans)
+		return PrintJSON(variants)
 	}
 
-	ctx.Printf("Plans for %s:\n\n", addon.DisplayName)
+	ctx.Printf("Variants for %s:\n\n", addon.DisplayName)
 
 	var rows []ui.Row
-	headers := []string{"PLAN", "DESCRIPTION", "DEFAULT"}
+	headers := []string{"VARIANT", "DESCRIPTION", "DEFAULT"}
 
-	for _, p := range addon.Plans {
+	for _, v := range addon.Variants {
 		def := ""
-		if p.Name == addon.DefaultPlan {
+		if v.Name == addon.DefaultVariant {
 			def = "yes"
 		}
 		rows = append(rows, ui.Row{
-			p.Name,
-			p.Description,
+			v.Name,
+			v.Description,
 			def,
 		})
 	}
 
 	if len(rows) == 0 {
-		ctx.Printf("No plans available\n")
+		ctx.Printf("No variants available\n")
 		return nil
 	}
 
@@ -157,10 +171,10 @@ func AddonPlans(ctx *Context, opts struct {
 
 	ctx.Printf("%s\n", table.Render())
 
-	for _, p := range addon.Plans {
-		if len(p.Details) > 0 {
-			ctx.Printf("\n%s:\n", p.Name)
-			for _, d := range p.Details {
+	for _, v := range addon.Variants {
+		if len(v.Details) > 0 {
+			ctx.Printf("\n%s:\n", v.Name)
+			for _, d := range v.Details {
 				ctx.Printf("  %s: %s\n", d.Key, d.Value)
 			}
 		}
@@ -209,29 +223,29 @@ func AddonList(ctx *Context, opts struct {
 
 	if opts.IsJSON() {
 		type addonInfo struct {
-			ID   string `json:"id"`
-			Name string `json:"name"`
-			Plan string `json:"plan"`
+			ID      string `json:"id"`
+			Name    string `json:"name"`
+			Variant string `json:"variant"`
 		}
 
 		var infos []addonInfo
 		for _, a := range addons {
 			infos = append(infos, addonInfo{
-				ID:   a.Id(),
-				Name: a.Name(),
-				Plan: a.Plan(),
+				ID:      a.Id(),
+				Name:    a.Name(),
+				Variant: a.Variant(),
 			})
 		}
 		return PrintJSON(infos)
 	}
 
 	var rows []ui.Row
-	headers := []string{"ADDON", "PLAN"}
+	headers := []string{"ADDON", "VARIANT"}
 
 	for _, a := range addons {
 		rows = append(rows, ui.Row{
 			a.Name(),
-			a.Plan(),
+			a.Variant(),
 		})
 	}
 

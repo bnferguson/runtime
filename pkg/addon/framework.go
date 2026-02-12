@@ -38,14 +38,19 @@ type CreateSandboxPoolSpec struct {
 	Name             string
 	Image            string
 	Env              []string
+	Ports            []compute_v1alpha.SandboxSpecContainerPort
 	DesiredInstances int64
 	Labels           types.Labels
 	SandboxPrefix    string
 	Mounts           []compute_v1alpha.SandboxSpecContainerMount
+	Volumes          []compute_v1alpha.SandboxSpecVolume
 }
 
 // CreateSandboxPool creates a fixed-mode SandboxPool entity.
 func (fw *ProviderFramework) CreateSandboxPool(ctx context.Context, spec CreateSandboxPoolSpec) (entity.Id, error) {
+	name := idgen.GenNS("pool")
+	poolID := entity.Id("pool/" + name)
+
 	pool := &compute_v1alpha.SandboxPool{
 		DesiredInstances: spec.DesiredInstances,
 		SandboxLabels:    spec.Labels,
@@ -59,26 +64,26 @@ func (fw *ProviderFramework) CreateSandboxPool(ctx context.Context, spec CreateS
 		Name:  "addon",
 		Image: spec.Image,
 		Env:   spec.Env,
+		Port:  spec.Ports,
 		Mount: spec.Mounts,
 	}
 
 	pool.SandboxSpec.Container = append(pool.SandboxSpec.Container, container)
-
-	name := idgen.GenNS("pool")
+	pool.SandboxSpec.Volume = spec.Volumes
 
 	_, err := fw.EAC.Create(ctx, entity.New(
 		(&core_v1alpha.Metadata{
 			Name:   name,
 			Labels: spec.Labels,
 		}).Encode,
-		entity.DBId, entity.Id("pool/"+name),
+		entity.DBId, poolID,
 		pool.Encode,
 	).Attrs())
 	if err != nil {
 		return "", fmt.Errorf("creating sandbox pool: %w", err)
 	}
 
-	return entity.Id("pool/" + name), nil
+	return poolID, nil
 }
 
 // WaitForPool watches a pool entity until it has at least one ready instance
@@ -151,4 +156,46 @@ func (fw *ProviderFramework) CreateService(ctx context.Context, name string, mat
 // DeleteService deletes a network Service entity.
 func (fw *ProviderFramework) DeleteService(ctx context.Context, serviceID entity.Id) error {
 	return fw.EC.Delete(ctx, serviceID)
+}
+
+// GetServiceAddress reads the Service entity and returns its first allocated IP.
+func (fw *ProviderFramework) GetServiceAddress(ctx context.Context, serviceID entity.Id) (string, error) {
+	var svc network_v1alpha.Service
+	if err := fw.EC.GetById(ctx, serviceID, &svc); err != nil {
+		return "", fmt.Errorf("getting service %s: %w", serviceID, err)
+	}
+
+	if len(svc.Ip) == 0 {
+		return "", fmt.Errorf("service %s has no IP address assigned", serviceID)
+	}
+
+	return svc.Ip[0], nil
+}
+
+// WaitForServiceAddress watches a Service entity until it has an IP address
+// or the timeout is reached.
+func (fw *ProviderFramework) WaitForServiceAddress(ctx context.Context, serviceID entity.Id, timeout time.Duration) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	ch := fw.EC.WatchEntity(ctx, serviceID)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return "", fmt.Errorf("timed out waiting for service %s to get an IP", serviceID)
+		case e, ok := <-ch:
+			if !ok {
+				return "", fmt.Errorf("service %s watch closed unexpectedly", serviceID)
+			}
+
+			var svc network_v1alpha.Service
+			svc.Decode(e)
+
+			if len(svc.Ip) > 0 {
+				fw.Log.Info("service address assigned", "service", serviceID, "ip", svc.Ip[0])
+				return svc.Ip[0], nil
+			}
+		}
+	}
 }

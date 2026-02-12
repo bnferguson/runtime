@@ -194,7 +194,7 @@ func (a *AppInfo) AppInfo(ctx context.Context, state *app_v1alpha.AppStatusAppIn
 			instance.SetId(string(assoc.ID))
 			instance.SetName(addonNameFromRef(assoc.Addon))
 			instance.SetAddon(string(assoc.Addon))
-			instance.SetPlan(assoc.Plan)
+			instance.SetVariant(assoc.Variant)
 			addons = append(addons, instance)
 		}
 		if len(addons) > 0 {

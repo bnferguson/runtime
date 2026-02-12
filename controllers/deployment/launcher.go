@@ -13,12 +13,14 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
+	"miren.dev/runtime/api/addon/addon_v1alpha"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/containerdx"
+	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/idgen"
@@ -91,12 +93,90 @@ func (l *Launcher) Reconcile(ctx context.Context, app *core_v1alpha.App, meta *e
 	span.SetAttributes(attribute.String("miren.app.active_version", current.ActiveVersion.String()))
 
 	l.Log.Info("reconciling app", "app", current.ID, "version", current.ActiveVersion)
+	ready, err := l.addonsReady(ctx, current.ID)
+	if err != nil {
+		l.Log.Error("failed to check addon readiness", "app", current.ID, "error", err)
+	} else if !ready {
+		l.Log.Info("deferring pool creation, addons not yet ready", "app", current.ID)
+		return nil
+	}
+
 	err = l.reconcileAppVersion(ctx, &current)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 	}
 	return err
+}
+
+// addonsReady returns true if the app has no pending or provisioning addon associations.
+// Apps without any addons are always considered ready.
+func (l *Launcher) addonsReady(ctx context.Context, appID entity.Id) (bool, error) {
+	results, err := l.EAC.List(ctx, entity.Ref(addon_v1alpha.AddonAssociationAppId, appID))
+	if err != nil {
+		return false, fmt.Errorf("listing addon associations: %w", err)
+	}
+
+	for _, ent := range results.Values() {
+		var assoc addon_v1alpha.AddonAssociation
+		assoc.Decode(ent.Entity())
+
+		if assoc.Status == "pending" || assoc.Status == "provisioning" {
+			l.Log.Info("addon not ready", "association", assoc.ID, "status", assoc.Status)
+			return false, nil
+		}
+	}
+
+	return true, nil
+}
+
+// AddonAssociationHandler returns a controller.HandlerFunc that watches AddonAssociation
+// changes and re-triggers app reconciliation so the launcher can re-evaluate addon readiness.
+func (l *Launcher) AddonAssociationHandler() controller.HandlerFunc {
+	return func(ctx context.Context, event controller.Event) ([]entity.Attr, error) {
+		if event.Type == controller.EventDeleted || event.Entity == nil {
+			return nil, nil
+		}
+
+		var assoc addon_v1alpha.AddonAssociation
+		assoc.Decode(event.Entity)
+
+		if assoc.App == "" {
+			return nil, nil
+		}
+
+		l.Log.Info("addon association changed, reconciling app",
+			"association", assoc.ID, "status", assoc.Status, "app", assoc.App)
+
+		// Fetch the app and run the same reconcile logic
+		appResp, err := l.EAC.Get(ctx, assoc.App.String())
+		if err != nil {
+			if errors.Is(err, cond.ErrNotFound{}) {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("failed to get app: %w", err)
+		}
+
+		var app core_v1alpha.App
+		app.Decode(appResp.Entity().Entity())
+
+		if app.ActiveVersion == "" {
+			return nil, nil
+		}
+
+		ready, err := l.addonsReady(ctx, app.ID)
+		if err != nil {
+			l.Log.Error("failed to check addon readiness", "app", app.ID, "error", err)
+			return nil, nil
+		}
+		if !ready {
+			l.Log.Info("addons still not ready, deferring", "app", app.ID)
+			return nil, nil
+		}
+
+		l.Log.Info("addons ready, triggering app reconciliation", "app", app.ID)
+		return nil, l.reconcileAppVersion(ctx, &app)
+	}
 }
 
 // reconcileAppVersion ensures pools exist for all services in the active version

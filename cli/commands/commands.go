@@ -54,7 +54,7 @@ func RegisterAll(d *mflags.Dispatcher) {
 	// Addon commands
 	d.Dispatch("addon", Section("addon", "Addon management commands", ""))
 	d.Dispatch("addon list-available", Infer("addon list-available", "List available addons", AddonListAvailable))
-	d.Dispatch("addon plans", Infer("addon plans", "Show plans for an addon", AddonPlans))
+	d.Dispatch("addon variants", Infer("addon variants", "Show variants for an addon", AddonVariants))
 	d.Dispatch("addon create", Infer("addon create", "Attach an addon to an application", AddonCreate))
 	d.Dispatch("addon list", Infer("addon list", "List addons attached to an application", AddonList))
 	d.Dispatch("addon destroy", Infer("addon destroy", "Remove an addon from an application", AddonDestroy))
