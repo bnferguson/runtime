@@ -51,6 +51,16 @@ func (l Labels) Equal(o Labels) bool {
 	return true
 }
 
+// SubsetOf reports whether every label in l exists in o.
+func (l Labels) SubsetOf(o Labels) bool {
+	for _, a := range l {
+		if !slices.Contains(o, a) {
+			return false
+		}
+	}
+	return true
+}
+
 func LabelSet(vals ...string) Labels {
 	if len(vals)%2 != 0 {
 		panic("LabelSet must have even number of values")
