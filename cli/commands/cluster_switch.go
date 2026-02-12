@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"time"
 
+	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/cloudauth"
 	"miren.dev/runtime/pkg/ui"
@@ -97,6 +98,12 @@ func ClusterSwitch(ctx *Context, opts struct {
 	}
 
 	ctx.Printf("Switched to cluster: %s\n", clusterName)
+
+	// Also update per-app state if we're in an app directory.
+	if ac, _ := appconfig.LoadAppConfig(); ac != nil && ac.Name != "" {
+		_ = appconfig.SaveAppState(ac.Name, &appconfig.AppState{Cluster: clusterName})
+	}
+
 	return nil
 }
 

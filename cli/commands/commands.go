@@ -79,6 +79,7 @@ func RegisterAll(d *mflags.Dispatcher) {
 	d.Dispatch("cluster switch", Infer("cluster switch", "Switch to a different cluster", ClusterSwitch))
 	d.Dispatch("cluster add", Infer("cluster add", "Add a new cluster configuration", ClusterAdd))
 	d.Dispatch("cluster remove", Infer("cluster remove", "Remove a cluster from the configuration", ClusterRemove))
+	d.Dispatch("cluster current", Infer("cluster current", "Show the pinned cluster for this app", ClusterCurrent))
 
 	// Runner commands (distributed runners) - behind feature flag
 	if labs.DistributedRunners() {

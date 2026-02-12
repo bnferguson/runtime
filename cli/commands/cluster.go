@@ -5,6 +5,7 @@ import (
 	"net"
 
 	"github.com/charmbracelet/lipgloss"
+	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/ui"
 )
@@ -47,20 +48,26 @@ func ClusterList(ctx *Context, opts struct {
 	var rows []ui.Row
 	headers := []string{"", "CLUSTER", "ADDRESS", "IDENTITY"}
 
+	// Determine the effective cluster for the current app context.
+	globalCluster := cfg.ActiveCluster()
+	effectiveCluster := globalCluster
+
+	if ac, _ := appconfig.LoadAppConfig(); ac != nil && ac.Name != "" {
+		if state, _ := appconfig.LoadAppState(ac.Name); state != nil && state.Cluster != "" {
+			effectiveCluster = state.Cluster
+		}
+	}
+
 	err = cfg.IterateClusters(func(name string, ccfg *clientconfig.ClusterConfig) error {
-		// Determine if this is the active cluster
-		isActive := false
-		if opts.Cluster != "" {
-			isActive = (name == opts.Cluster)
-		} else {
-			isActive = (name == cfg.ActiveCluster())
+		// Use a star for the effective cluster, g for the global default when it differs.
+		prefix := " "
+		if name == effectiveCluster {
+			prefix = "*"
+		} else if name == globalCluster && effectiveCluster != globalCluster {
+			prefix = "g"
 		}
 
-		// Use a star for active cluster
-		prefix := " "
-		if isActive {
-			prefix = "*"
-		}
+		isActive := name == effectiveCluster
 
 		// Get identity info if present
 		identity := ccfg.Identity
