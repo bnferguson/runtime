@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -26,6 +27,11 @@ type Definition struct {
 
 	// dependencies is stored to inject into context during execution.
 	dependencies []any
+}
+
+// ExecutionOrder returns the computed execution order for the saga's actions.
+func (d *Definition) ExecutionOrder() []string {
+	return d.executionOrder
 }
 
 // ActionNode describes a single action within a saga definition.
@@ -306,17 +312,25 @@ func (b *Builder) Build() (*Definition, error) {
 }
 
 // topologicalSort returns actions in dependency order, or an error if there's a cycle.
+// Actions at the same dependency level are sorted alphabetically for determinism.
 func topologicalSort(actions map[string]*ActionNode) ([]string, error) {
+	// Collect sorted action names for deterministic iteration
+	actionNames := make([]string, 0, len(actions))
+	for name := range actions {
+		actionNames = append(actionNames, name)
+	}
+	slices.Sort(actionNames)
+
 	// Kahn's algorithm - compute in-degree (number of dependencies) for each node
 	inDegree := make(map[string]int)
 	for _, node := range actions {
 		inDegree[node.Name] = len(node.Dependencies)
 	}
 
-	// Find all nodes with no dependencies
+	// Find all nodes with no dependencies (sorted)
 	var queue []string
-	for name, degree := range inDegree {
-		if degree == 0 {
+	for _, name := range actionNames {
+		if inDegree[name] == 0 {
 			queue = append(queue, name)
 		}
 	}
@@ -328,17 +342,20 @@ func topologicalSort(actions map[string]*ActionNode) ([]string, error) {
 		queue = queue[1:]
 		order = append(order, name)
 
-		// Reduce in-degree of dependents
-		for depName, node := range actions {
+		// Reduce in-degree of dependents, collect newly ready ones sorted
+		var ready []string
+		for _, depName := range actionNames {
+			node := actions[depName]
 			for _, dep := range node.Dependencies {
 				if dep == name {
 					inDegree[depName]--
 					if inDegree[depName] == 0 {
-						queue = append(queue, depName)
+						ready = append(ready, depName)
 					}
 				}
 			}
 		}
+		queue = append(queue, ready...)
 	}
 
 	if len(order) != len(actions) {

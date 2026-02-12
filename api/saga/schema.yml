@@ -29,6 +29,11 @@ kinds:
       type: bytes
       doc: JSON-encoded array of action names in execution order
 
+    parent_execution_id:
+      type: ref
+      doc: Reference to the parent saga execution (set for child/nested sagas)
+      indexed: true
+
     error:
       type: string
       doc: Error message if the saga failed

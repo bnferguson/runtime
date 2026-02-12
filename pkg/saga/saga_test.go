@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -134,7 +135,7 @@ func (m *memoryStorage) Get(ctx context.Context, id string) (*Execution, error) 
 	defer m.mu.Unlock()
 	exec, ok := m.executions[id]
 	if !ok {
-		return nil, errors.New("not found")
+		return nil, fmt.Errorf("%w: %s", ErrExecutionNotFound, id)
 	}
 	return exec, nil
 }

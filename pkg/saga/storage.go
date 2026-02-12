@@ -3,6 +3,7 @@ package saga
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -50,6 +51,7 @@ func (s *EntityStorage) Save(ctx context.Context, exec *Execution) error {
 		ID:                entity.Id(exec.ID),
 		DefinitionName:    exec.DefinitionName,
 		DefinitionVersion: int64(exec.DefinitionVersion),
+		ParentExecutionId: entity.Id(exec.ParentExecutionID),
 		Status:            status,
 		InitialInputs:     initialInputs,
 		ExecutedActions:   executedActions,
@@ -75,6 +77,9 @@ func (s *EntityStorage) Save(ctx context.Context, exec *Execution) error {
 func (s *EntityStorage) Get(ctx context.Context, id string) (*Execution, error) {
 	ent, err := s.store.GetEntity(ctx, entity.Id(id))
 	if err != nil {
+		if errors.Is(err, entity.ErrEntityNotFound) {
+			return nil, fmt.Errorf("%w: %s", ErrExecutionNotFound, id)
+		}
 		return nil, fmt.Errorf("getting saga entity: %w", err)
 	}
 
@@ -192,6 +197,7 @@ func entityToExecution(sagaEntity *saga_v1alpha.Saga) (*Execution, error) {
 		ID:                string(sagaEntity.ID),
 		DefinitionName:    sagaEntity.DefinitionName,
 		DefinitionVersion: int(sagaEntity.DefinitionVersion),
+		ParentExecutionID: string(sagaEntity.ParentExecutionId),
 		Status:            statusFromEntity(sagaEntity.Status),
 		Error:             sagaEntity.Error,
 	}

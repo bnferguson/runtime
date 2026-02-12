@@ -12,6 +12,7 @@ const (
 	SagaExecutedActionsId   = entity.Id("dev.miren.saga/saga.executed_actions")
 	SagaExecutionOrderId    = entity.Id("dev.miren.saga/saga.execution_order")
 	SagaInitialInputsId     = entity.Id("dev.miren.saga/saga.initial_inputs")
+	SagaParentExecutionIdId = entity.Id("dev.miren.saga/saga.parent_execution_id")
 	SagaStatusId            = entity.Id("dev.miren.saga/saga.status")
 	SagaStatusPendingId     = entity.Id("dev.miren.saga/status.pending")
 	SagaStatusRunningId     = entity.Id("dev.miren.saga/status.running")
@@ -28,6 +29,7 @@ type Saga struct {
 	ExecutedActions   []byte     `cbor:"executed_actions,omitempty" json:"executed_actions,omitempty"`
 	ExecutionOrder    []byte     `cbor:"execution_order,omitempty" json:"execution_order,omitempty"`
 	InitialInputs     []byte     `cbor:"initial_inputs,omitempty" json:"initial_inputs,omitempty"`
+	ParentExecutionId entity.Id  `cbor:"parent_execution_id,omitempty" json:"parent_execution_id,omitempty"`
 	Status            SagaStatus `cbor:"status,omitempty" json:"status,omitempty"`
 }
 
@@ -63,6 +65,9 @@ func (o *Saga) Decode(e entity.AttrGetter) {
 	}
 	if a, ok := e.Get(SagaInitialInputsId); ok && a.Value.Kind() == entity.KindBytes {
 		o.InitialInputs = a.Value.Bytes()
+	}
+	if a, ok := e.Get(SagaParentExecutionIdId); ok && a.Value.Kind() == entity.KindId {
+		o.ParentExecutionId = a.Value.Id()
 	}
 	if a, ok := e.Get(SagaStatusId); ok && a.Value.Kind() == entity.KindId {
 		o.Status = sagastatusFromId[a.Value.Id()]
@@ -104,6 +109,9 @@ func (o *Saga) Encode() (attrs []entity.Attr) {
 	if len(o.InitialInputs) > 0 {
 		attrs = append(attrs, entity.Bytes(SagaInitialInputsId, o.InitialInputs))
 	}
+	if !entity.Empty(o.ParentExecutionId) {
+		attrs = append(attrs, entity.Ref(SagaParentExecutionIdId, o.ParentExecutionId))
+	}
 	if a, ok := sagastatusToId[o.Status]; ok {
 		attrs = append(attrs, entity.Ref(SagaStatusId, a))
 	}
@@ -130,6 +138,9 @@ func (o *Saga) Empty() bool {
 	if len(o.InitialInputs) > 0 {
 		return false
 	}
+	if !entity.Empty(o.ParentExecutionId) {
+		return false
+	}
 	if o.Status != "" {
 		return false
 	}
@@ -143,6 +154,7 @@ func (o *Saga) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Bytes("executed_actions", "dev.miren.saga/saga.executed_actions", schema.Doc("JSON-encoded map of action name to ActionResult"))
 	sb.Bytes("execution_order", "dev.miren.saga/saga.execution_order", schema.Doc("JSON-encoded array of action names in execution order"))
 	sb.Bytes("initial_inputs", "dev.miren.saga/saga.initial_inputs", schema.Doc("JSON-encoded initial inputs for the saga"))
+	sb.Ref("parent_execution_id", "dev.miren.saga/saga.parent_execution_id", schema.Doc("Reference to the parent saga execution (set for child/nested sagas)"), schema.Indexed)
 	sb.Singleton("dev.miren.saga/status.pending")
 	sb.Singleton("dev.miren.saga/status.running")
 	sb.Singleton("dev.miren.saga/status.undoing")
@@ -160,5 +172,5 @@ func init() {
 	schema.Register("dev.miren.saga", "v1alpha", func(sb *schema.SchemaBuilder) {
 		(&Saga{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.saga", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\x84\x93\xdfJ\xf40\x10\xc5_\xe3\xfbD\x11T\xbc\xac\xf8D%ۙd\x87M'!\x7fJ\xfa\x04>\x87\xb8\xfa\x88^K\x92\xe2b̮7e8s\xceo\xa6!9\x02\x8b\x19\x19p\x19frȃ\x17J\xe0\x81\x18\xfck\xfa\xf7S~\xcar\xa9>J\xca7\xedS\xf4S\x82\x99\x05qÕ\x92P\x83\x7fy\xdb\x11\xa4\xfbNz\x00\x94\xc4\x14\xc8\xf0\x98'\x941\xa6\x15\xc3jQ\xfa\xe0\x88U!=\xfeAZ\xd0y2\\`\xae\xa3g\xdeD\x1c\n\xec\x7f\x0f\x86\xce\x19W\xf2X\xcbv\x85\x87n*\xe1\x14\x03\xc2(\xa6<\xcf\x17\x80\xfd\xa5f\x16\xeeր\xfe\xfc\xb9\xd4P^\xda8\xc0\xba\x8ai\xc5\x06t\xd7\x03\x95\x7f\x17z$\xb61ԍ\xb8\xd1N\x98c\xc6\\\xf50>\x88\x10k\\nu\x8e\x01r\x9c\x0f\xf93.BG\xf4\xefR\n\xd2\b麥\x94\xd0P\xbb\xca\"\x03\xb1J7}\xd7\xd6V.2_\xb0mm\x15\x19\xcc\x05\xdb֦\xc9\xccVc@H\xb7}\xe3\xb7Am7E-\xcfB۽\xd0\xd6\xd1,\xdc:\xe6\xcb\x0e9\xd2:\x0e~o\\\x18\xeb;*\x8e\xf3\x8f\xe9\v\x00\x00\xff\xff\x01\x00\x00\xff\xff\x84\xdaF\x10\x83\x03\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.saga", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\x84\x93oJ\x031\x10ů\xa1\xa2\b*\xfam\xc5\x13\x85tg\x92\x0e\xcdNB\xfe,\xdb\x1bx\r\xb1zD?K\x92\xc5bL\xeb\x97\x12\u07bc\xf7\xcb\xeb\x929\x00\xcb\t\x19p\x1e&\xf2\xc8C\x90Z\xe2\x8e\x18\xc2\xdbr\xf1[~\xcer9}\x96Th\xc6\xc7\xe8\x97\x02;I↫\x14\xa1\x81\xf0\xfa\xbe!X\xee;\xe9\x01P\x11S$\xcb\"\xdfP\xae\xb1\xad\x18\xf7\x0eU\x88\x9eX\x17\xd2\xe3?\xa4\x19} \xcb\x05\xe6;z\xe6\x8dı\xc0.{0\xf4\xde\xfa\x92\xc7zl+<tS\v\x8e)\"\b9\xe6\xfbB\x01\xb8?jf\xe1f\x1f1\x9c\xfe.5\x94K[\x0fX\xab\xd8Vl@w=P\xf9\xef\xd2\bb\x97bmč\xd6`\x9ez\x18'=r\x14\xc7\x06\x04\xf5I\xf4\x06\x19\xb8!8d\xdaU\x8f\x16\xa2\x8c\xa9\x96Q\xeb9g\x009M\xbb\xfc#fi\x12\x86\x0f\xa5$\x19\x84庥\x94\xd0P\xa7\xda!\x03\xb1^n\xfa\xaeu\xac}b>c[\xc7:1\xd83\xb6uL\xa3\x9d\x9c\xc1\x88\xb0\xdc\xf6\x8d?\x06\xbd\xbe;=\xbfH\xe3\xb6\xd28O\x93\xf4{\x91W\ar\xa4u\xec\xc2\xd6\xfa(\xeaV\x16\xc7\xe9\xd5\xfc\x06\x00\x00\xff\xff\x01\x00\x00\xff\xff\xce\xdck\x92\xd1\x03\x00\x00"))
 }

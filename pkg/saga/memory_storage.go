@@ -2,7 +2,7 @@ package saga
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"sync"
 )
 
@@ -45,7 +45,7 @@ func (m *MemoryStorage) Get(ctx context.Context, id string) (*Execution, error) 
 
 	exec, ok := m.executions[id]
 	if !ok {
-		return nil, errors.New("execution not found")
+		return nil, fmt.Errorf("%w: %s", ErrExecutionNotFound, id)
 	}
 	return exec, nil
 }
