@@ -313,9 +313,16 @@ type sandboxWithMeta struct {
 
 // listSandboxes returns all sandboxes for a pool with their metadata
 func (m *Manager) listSandboxes(ctx context.Context, pool *compute_v1alpha.SandboxPool) ([]*sandboxWithMeta, error) {
-	// Query sandboxes by version index (reduces O(N) to O(N_version))
-	// We can now query by the nested sandbox.spec.version field directly!
-	resp, err := m.eac.List(ctx, entity.Ref(compute_v1alpha.SandboxSpecVersionId, pool.SandboxSpec.Version))
+	var indexAttr entity.Attr
+	if pool.SandboxSpec.Version != "" {
+		// Query by version index for app pools (reduces O(N) to O(N_version))
+		indexAttr = entity.Ref(compute_v1alpha.SandboxSpecVersionId, pool.SandboxSpec.Version)
+	} else {
+		// Addon pools have no version; fall back to listing all sandboxes by kind
+		indexAttr = entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox)
+	}
+
+	resp, err := m.eac.List(ctx, indexAttr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list sandboxes: %w", err)
 	}
@@ -568,6 +575,12 @@ func (m *Manager) checkAllPoolsForScaleDown(ctx context.Context) error {
 	for _, ent := range resp.Values() {
 		var pool compute_v1alpha.SandboxPool
 		pool.Decode(ent.Entity())
+
+		// Skip pools without a version (e.g. addon pools) — they don't use
+		// concurrency-based scale-down.
+		if pool.SandboxSpec.Version == "" {
+			continue
+		}
 
 		// Get AppVersion to derive concurrency config
 		verResp, err := m.eac.Get(ctx, pool.SandboxSpec.Version.String())
