@@ -24,6 +24,7 @@ import (
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/components/lsvd"
+	lsvdserver "miren.dev/runtime/components/lsvd/server"
 	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/controllers/disk"
 	"miren.dev/runtime/controllers/ingress"
@@ -86,7 +87,8 @@ type RunnerDeps struct {
 	// Entity server address for lsvd-server (required for disk operations)
 	EntityServerAddr string
 
-	// SkipLSVD skips starting the lsvd-server component (for tests that don't need disk)
+	// SkipLSVD skips starting the lsvd-server as an outboard process
+	// and instead runs the LSVD volume and mount controllers in-process.
 	SkipLSVD bool
 
 	// IsCoordinator indicates this runner is the coordinator node.
@@ -108,6 +110,10 @@ type RunnerDeps struct {
 const (
 	DefaulWorkers = 3
 )
+
+type shutdownCloser struct{ s interface{ Shutdown() } }
+
+func (c shutdownCloser) Close() error { c.s.Shutdown(); return nil }
 
 func NewRunner(log *slog.Logger, deps RunnerDeps, cfg RunnerConfig) (*Runner, error) {
 	if cfg.DataPath == "" {
@@ -481,9 +487,6 @@ func (r *Runner) SetupControllers(
 		return nil, fmt.Errorf("failed to create disk data path: %w", err)
 	}
 
-	var diskController *disk.DiskController
-	var diskLeaseController *disk.DiskLeaseController
-
 	// Start lsvd component unless explicitly skipped (for tests)
 	if !r.deps.SkipLSVD {
 		if r.deps.EntityServerAddr == "" {
@@ -542,12 +545,36 @@ func (r *Runner) SetupControllers(
 
 		r.closers = append(r.closers, lsvdComp)
 	} else {
-		log.Info("Skipping LSVD component (test mode)")
+		log.Info("Running LSVD controllers in-process")
+
+		volumeOps := lsvdserver.NewRealVolumeOps(log, nil, "")
+		mountOps := lsvdserver.NewRealMountOps(log, nil, "")
+
+		lsvdState := lsvdserver.NewState()
+		lsvdState.SetPath(dataPath)
+
+		vc := lsvdserver.NewVolumeController(log, dataPath, r.Id, lsvdState, volumeOps)
+		vc.SetEAC(eas)
+
+		mc := lsvdserver.NewMountController(log, dataPath, r.Id, lsvdState, mountOps)
+		mc.SetEAC(eas)
+
+		r.closers = append(r.closers, shutdownCloser{mc})
+
+		volHandler := controller.AdaptReconcileController[storage_v1alpha.LsvdVolume](vc)
+		cm.AddController(controller.NewReconcileController(
+			"lsvd-volume", log, vc.Index(), eas, volHandler, 0, 1,
+		))
+
+		mntHandler := controller.AdaptReconcileController[storage_v1alpha.LsvdMount](mc)
+		cm.AddController(controller.NewReconcileController(
+			"lsvd-mount", log, mc.Index(), eas, mntHandler, 0, 1,
+		))
 	}
 
 	// Use entity mode controllers
-	diskController = disk.NewDiskController(log, eas, r.Id)
-	diskLeaseController = disk.NewDiskLeaseController(log, eas, r.Id)
+	diskController := disk.NewDiskController(log, eas, r.Id)
+	diskLeaseController := disk.NewDiskLeaseController(log, eas, r.Id)
 
 	// Add disk controller to closers list so it gets cleaned up on shutdown
 	r.closers = append(r.closers, diskController)
@@ -703,6 +730,21 @@ func (r *Runner) SetupControllers(
 			eas,
 			controller.AdaptController(volumeWatchController),
 			0, // No periodic resync needed
+			1,
+		),
+	)
+
+	// Add mount watch controller to trigger disk lease re-reconciliation when
+	// lsvd_mount entities change (e.g. mount becomes MNT_MOUNTED after mounting)
+	mountWatchController := disk.NewMountWatchController(log, eas, diskLeaseRC)
+	cm.AddController(
+		controller.NewReconcileController(
+			"mount-watch",
+			log,
+			entity.Ref(entity.EntityKind, storage_v1alpha.KindLsvdMount),
+			eas,
+			controller.AdaptController(mountWatchController),
+			0,
 			1,
 		),
 	)
