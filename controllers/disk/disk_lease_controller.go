@@ -399,9 +399,11 @@ func (d *DiskLeaseController) handlePendingLease(ctx context.Context, lease *sto
 				"lease", leaseId,
 				"lsvd_mount", existingMount.ID)
 			if _, err := d.EAC.Delete(ctx, existingMount.ID.String()); err != nil {
-				d.Log.Warn("failed to delete stale lsvd_mount",
+				d.Log.Warn("failed to delete stale lsvd_mount, aborting mount creation",
 					"lsvd_mount", existingMount.ID,
 					"error", err)
+				d.cleanupLeaseReservation(diskId)
+				return nil
 			}
 			// Fall through to create a new mount entity
 

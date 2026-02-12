@@ -162,7 +162,7 @@ func TestStopDuringMountCreation(t *testing.T) {
 			h.reconcileByIndex(ctx, entity.Ref(storage.LsvdVolumeNodeIdId, nodeId), h.LsvdVolRC)
 			h.reconcileKind(ctx, storage.KindDiskLease, h.DiskLeaseRC)
 		}
-		mount = getMountForLease(t, ctx, h, leaseID)
+		_ = getMountForLease(t, ctx, h, leaseID)
 	}
 
 	// Stop sandbox BEFORE mount controller runs
@@ -257,9 +257,7 @@ func TestReplacementMountPathCollision(t *testing.T) {
 	// This is the worst case ordering that exposes the path collision bug.
 	for i := 0; i < 3; i++ {
 		err = h.ReconcileEntity(ctx, mountBID)
-		if err != nil {
-			break
-		}
+		require.NoError(t, err, "ReconcileEntity for mount-B should not fail")
 		bState := getMountByID(t, ctx, h, mountBID)
 		if bState.ActualState == storage.MNT_MOUNTED {
 			break

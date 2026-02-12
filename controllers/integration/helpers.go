@@ -45,18 +45,6 @@ func getSandbox(t *testing.T, ctx context.Context, h *TestHarness, id entity.Id)
 	return &sb
 }
 
-// getPool fetches a SandboxPool entity by ID.
-func getPool(t *testing.T, ctx context.Context, h *TestHarness, id entity.Id) *compute.SandboxPool {
-	t.Helper()
-	resp, err := h.EAC.Get(ctx, id.String())
-	if err != nil {
-		t.Fatalf("getPool(%s): %v", id, err)
-	}
-	var pool compute.SandboxPool
-	pool.Decode(resp.Entity().Entity())
-	return &pool
-}
-
 // listLeases lists all DiskLease entities in the store.
 func listLeases(t *testing.T, ctx context.Context, h *TestHarness) []*storage.DiskLease {
 	t.Helper()
@@ -132,19 +120,6 @@ func leasesForSandbox(t *testing.T, ctx context.Context, h *TestHarness, sandbox
 	var result []*storage.DiskLease
 	for _, l := range all {
 		if l.SandboxId == sandboxID {
-			result = append(result, l)
-		}
-	}
-	return result
-}
-
-// leasesForDisk returns all leases for a specific disk.
-func leasesForDisk(t *testing.T, ctx context.Context, h *TestHarness, diskID entity.Id) []*storage.DiskLease {
-	t.Helper()
-	all := listLeases(t, ctx, h)
-	var result []*storage.DiskLease
-	for _, l := range all {
-		if l.DiskId == diskID {
 			result = append(result, l)
 		}
 	}

@@ -359,7 +359,7 @@ func faultRestartSandbox(t *testing.T, ctx context.Context, h *TestHarness, rng 
 
 	leaseID, err := h.FakeSandbox.AcquireDiskLease(ctx, slot.diskID, newSbID, "", "/data", false)
 	if err != nil {
-		return true
+		return false
 	}
 
 	cs.newSlot(newSbID, slot.diskID, slot.diskName, leaseID)
@@ -544,10 +544,10 @@ func validateChaosInvariants(t *testing.T, ctx context.Context, h *TestHarness, 
 		leaseByID[l.ID] = l
 	}
 
-	mountByLeaseID := make(map[entity.Id]*storage.LsvdMount)
+	mountsByLeaseID := make(map[entity.Id][]*storage.LsvdMount)
 	for _, m := range allMounts {
 		if m.DiskLeaseId != "" {
-			mountByLeaseID[m.DiskLeaseId] = m
+			mountsByLeaseID[m.DiskLeaseId] = append(mountsByLeaseID[m.DiskLeaseId], m)
 		}
 	}
 
@@ -587,12 +587,15 @@ func validateChaosInvariants(t *testing.T, ctx context.Context, h *TestHarness, 
 		if lease.Status != storage.BOUND {
 			continue
 		}
-		mount := mountByLeaseID[lease.ID]
-		if mount == nil {
+		mounts := mountsByLeaseID[lease.ID]
+		if len(mounts) == 0 {
 			t.Errorf("INVARIANT 2 violated: BOUND lease %s has no mount", lease.ID)
 			violations++
-		} else if mount.ActualState != storage.MNT_MOUNTED {
-			t.Errorf("INVARIANT 2 violated: BOUND lease %s mount %s is %s (expected MNT_MOUNTED)", lease.ID, mount.ID, mount.ActualState)
+		} else if len(mounts) > 1 {
+			t.Errorf("INVARIANT 2 violated: BOUND lease %s has %d mounts (expected 1)", lease.ID, len(mounts))
+			violations++
+		} else if mounts[0].ActualState != storage.MNT_MOUNTED {
+			t.Errorf("INVARIANT 2 violated: BOUND lease %s mount %s is %s (expected MNT_MOUNTED)", lease.ID, mounts[0].ID, mounts[0].ActualState)
 			violations++
 		}
 	}

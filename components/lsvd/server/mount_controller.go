@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -13,6 +14,7 @@ import (
 
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 )
 
@@ -982,11 +984,17 @@ func (c *MountController) reconnectNBD(ctx context.Context, entityId string, mou
 func (c *MountController) shouldSkipReconnect(ctx context.Context, entityId string) bool {
 	resp, err := c.eac.Get(ctx, entityId)
 	if err != nil {
-		c.log.Info("mount entity not found, skipping reconnect",
+		if errors.Is(err, cond.ErrNotFound{}) {
+			c.log.Info("mount entity not found, skipping reconnect",
+				"entity_id", entityId,
+			)
+			return true
+		}
+		c.log.Warn("failed to check mount entity, allowing reconnect",
 			"entity_id", entityId,
 			"error", err,
 		)
-		return true
+		return false
 	}
 
 	var mount storage_v1alpha.LsvdMount

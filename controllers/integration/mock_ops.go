@@ -92,6 +92,7 @@ func (m *mockMountOps) NBDLoopback(_ context.Context, _ uint64) (uint32, net.Con
 	cleanup := func() error {
 		clientConn.Close()
 		serverConn.Close()
+		_ = tmpFile.Close()
 		os.Remove(tmpFile.Name())
 		return nil
 	}

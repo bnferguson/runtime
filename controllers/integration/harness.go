@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"testing"
 
@@ -155,7 +156,7 @@ func (h *TestHarness) ReconcileEntity(ctx context.Context, id entity.Id) error {
 
 	rc := h.controllerForEntity(id)
 	if rc == nil {
-		return nil
+		return fmt.Errorf("no controller for entity %s", id)
 	}
 
 	return rc.ProcessEventForTest(ctx, event)
@@ -221,6 +222,7 @@ func (h *TestHarness) ReconcileAll(ctx context.Context, maxIterations int) {
 func (h *TestHarness) reconcileByIndex(ctx context.Context, index entity.Attr, rc *controller.ReconcileController) {
 	resp, err := h.EAC.List(ctx, index)
 	if err != nil {
+		h.T.Errorf("reconcileByIndex: List(%s) failed: %v", index, err)
 		return
 	}
 

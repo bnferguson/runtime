@@ -26,6 +26,7 @@ func concurrentReconcileEntities(ctx context.Context, h *TestHarness, index enti
 
 	resp, err := h.EAC.List(ctx, index)
 	if err != nil {
+		h.T.Errorf("concurrentReconcileEntities: List(%s) failed: %v", index, err)
 		return
 	}
 
@@ -55,7 +56,9 @@ func concurrentReconcileEntities(ctx context.Context, h *TestHarness, index enti
 		go func() {
 			defer wg.Done()
 			for event := range ch {
-				_ = rc.ProcessEventForTest(ctx, event)
+				if err := rc.ProcessEventForTest(ctx, event); err != nil {
+					h.T.Errorf("concurrentReconcileEntities: ProcessEventForTest(%s) failed: %v", event.Id, err)
+				}
 			}
 		}()
 	}
@@ -175,7 +178,9 @@ func reconcileAllPools(t *testing.T, ctx context.Context, h *TestHarness, mgr *s
 	for _, e := range resp.Values() {
 		var pool compute.SandboxPool
 		pool.Decode(e.Entity())
-		_ = mgr.Reconcile(ctx, &pool, nil)
+		if err := mgr.Reconcile(ctx, &pool, nil); err != nil {
+			t.Errorf("reconcileAllPools: Reconcile(%s) failed: %v", pool.ID, err)
+		}
 	}
 }
 
@@ -339,24 +344,6 @@ func markPendingSandboxesRunning(t *testing.T, ctx context.Context, h *TestHarne
 			markSandboxRunning(t, ctx, h, sb.ID)
 		}
 	}
-}
-
-// poolForLabel returns the first pool matching the given metadata label.
-func poolForLabel(t *testing.T, ctx context.Context, h *TestHarness, key, value string) *compute.SandboxPool {
-	t.Helper()
-	resp, err := h.EAC.List(ctx, entity.Ref(entity.EntityKind, compute.KindSandboxPool))
-	require.NoError(t, err)
-
-	for _, e := range resp.Values() {
-		var pool compute.SandboxPool
-		pool.Decode(e.Entity())
-		var md core.Metadata
-		md.Decode(e.Entity())
-		if v, ok := md.Labels.Get(key); ok && v == value {
-			return &pool
-		}
-	}
-	return nil
 }
 
 func TestRapidRedeployWithDisk(t *testing.T) {
