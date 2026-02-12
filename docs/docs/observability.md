@@ -27,9 +27,11 @@ Miren participates in [W3C Trace Context](https://www.w3.org/TR/trace-context/) 
 
 ## Connecting Your App's Traces
 
-To participate in Miren's traces, configure your app with an OpenTelemetry SDK and point it at an OTLP-compatible backend. The SDK will automatically read the `traceparent` header from incoming requests and create child spans.
+Miren's tracing and your app's tracing are configured independently — Miren handles its own trace export, and your app handles its own. The `traceparent` header is what connects them: when both sides send traces to the same backend, they show up as one unified trace because they share the same trace ID.
 
-Set these environment variables on your app:
+To participate, add an OpenTelemetry SDK to your app and point it at your OTLP-compatible backend. The SDK will automatically read the `traceparent` header from incoming requests and create child spans.
+
+Set these environment variables on your app in `.miren/app.toml`:
 
 ```toml
 [[env]]
@@ -45,7 +47,7 @@ key = "OTEL_SERVICE_NAME"
 value = "my-app"
 ```
 
-This works with any OTel-compatible backend: Grafana Tempo, Honeycomb, Datadog, Jaeger, and others.
+This works with any OTel-compatible backend: Grafana Tempo, Honeycomb, Datadog, Jaeger, and others. You can use the same backend as your Miren cluster or a different one — as long as traces with the same trace ID end up in the same place, they'll be correlated.
 
 ### Python Example
 
@@ -101,7 +103,7 @@ The `--require` flag loads the auto-instrumentation before your app starts, auto
 
 A typical request trace shows the full path through Miren:
 
-```
+```text
 httpingress                          [350ms]
 ├─ httpingress.lease                 [200ms]  (cold start)
 │  ├─ rpc.call.AcquireLease         [195ms]
@@ -113,7 +115,7 @@ httpingress                          [350ms]
 
 On a warm request where a sandbox is already running:
 
-```
+```text
 httpingress                          [15ms]
 ├─ httpingress.lease                 [0.1ms]  (cached lease)
 ├─ [proxy to app]                   [14ms]
