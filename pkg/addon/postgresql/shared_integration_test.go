@@ -2,6 +2,7 @@ package postgresql_test
 
 import (
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -33,6 +34,10 @@ type integrationEnv struct {
 func TestSharedPostgreSQL_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
+	}
+
+	if _, err := os.Stat("/dev/nbd0"); err != nil {
+		t.Skip("skipping integration test: nbd not available")
 	}
 
 	err := testserver.TestServer(t)
