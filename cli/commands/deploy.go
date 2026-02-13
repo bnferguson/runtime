@@ -14,6 +14,11 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/moby/buildkit/client"
 	"github.com/moby/buildkit/util/progress/progresswriter"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/term"
 
 	"miren.dev/runtime/api/app/app_v1alpha"
@@ -25,11 +30,14 @@ import (
 	"miren.dev/runtime/pkg/deploygating"
 	"miren.dev/runtime/pkg/git"
 	"miren.dev/runtime/pkg/progress/upload"
+	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/standard"
 	"miren.dev/runtime/pkg/rpc/stream"
 	"miren.dev/runtime/pkg/tarx"
 	"miren.dev/runtime/pkg/ui"
 )
+
+var deployTracer = otel.Tracer("miren.dev/runtime/cli/deploy")
 
 func Deploy(ctx *Context, opts struct {
 	AppCentric
@@ -181,6 +189,32 @@ func Deploy(ctx *Context, opts struct {
 		return nil
 	}
 
+	// Set up OTel tracing if an OTLP endpoint is configured
+	if os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != "" {
+		shutdown, tracingErr := rpc.SetupTracing(ctx.Context, semconv.ServiceName("miren-cli"))
+		if tracingErr != nil {
+			ctx.Log.Debug("Failed to set up tracing", "error", tracingErr)
+		} else {
+			defer func() {
+				shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_ = shutdown(shutdownCtx)
+			}()
+		}
+	}
+
+	// Start root deploy span
+	deployCtxTraced, deploySpan := deployTracer.Start(ctx.Context, "deploy",
+		trace.WithAttributes(
+			attribute.String("miren.app.name", name),
+			attribute.String("miren.cluster", ctx.ClusterName),
+		),
+	)
+	defer deploySpan.End()
+
+	// Replace the context so downstream calls inherit the trace
+	ctx.Context = deployCtxTraced
+
 	// Confirm deployment unless --force is used, stdin is not a TTY, or only one cluster is configured
 	hasSingleCluster := ctx.ClientConfig != nil && ctx.ClientConfig.GetClusterCount() == 1
 	if !opts.Force && isInteractive && !hasSingleCluster {
@@ -258,10 +292,15 @@ func Deploy(ctx *Context, opts struct {
 	}
 
 	// Create deployment as "in_progress" with a temporary app version
-	createResult, err := depClient.CreateDeployment(ctx, name, ctx.ClusterName, "pending-build", deploymentGitInfo)
+	createDepCtx, createDepSpan := deployTracer.Start(ctx.Context, "deploy.create_deployment")
+	createResult, err := depClient.CreateDeployment(createDepCtx, name, ctx.ClusterName, "pending-build", deploymentGitInfo)
 	if err != nil {
+		createDepSpan.RecordError(err)
+		createDepSpan.SetStatus(codes.Error, err.Error())
+		createDepSpan.End()
 		return fmt.Errorf("failed to create deployment record: %w", err)
 	}
+	createDepSpan.End()
 
 	if createResult.HasError() && createResult.Error() != "" {
 		// Check if we have structured lock info
@@ -410,8 +449,14 @@ func Deploy(ctx *Context, opts struct {
 	// Update phase to building
 	updateDeploymentPhase("building")
 
+	// Start upload span covering tar creation + BuildFromTar
+	_, uploadSpan := deployTracer.Start(buildCtx, "deploy.upload")
+
 	r, err := tarx.MakeTar(dir, includePatterns)
 	if err != nil {
+		uploadSpan.RecordError(err)
+		uploadSpan.SetStatus(codes.Error, err.Error())
+		uploadSpan.End()
 		updateDeploymentOnError(fmt.Sprintf("Failed to create tar: %v", err))
 		return err
 	}
@@ -478,6 +523,10 @@ func Deploy(ctx *Context, opts struct {
 
 		results, err = bc.BuildFromTar(buildCtx, name, stream.ServeReader(buildCtx, r), cb, envVars)
 		if err != nil {
+			uploadSpan.RecordError(err)
+			uploadSpan.SetStatus(codes.Error, err.Error())
+			uploadSpan.End()
+
 			// Check if this was a context cancellation
 			if buildCtx.Err() != nil {
 				ctx.Printf("\n\n❌ Deploy cancelled.\n")
@@ -508,6 +557,9 @@ func Deploy(ctx *Context, opts struct {
 		<-pw.Done()
 
 		if pw.Err() != nil {
+			uploadSpan.RecordError(pw.Err())
+			uploadSpan.SetStatus(codes.Error, pw.Err().Error())
+			uploadSpan.End()
 			return pw.Err()
 		}
 	} else {
@@ -589,6 +641,10 @@ func Deploy(ctx *Context, opts struct {
 		}
 
 		if err != nil {
+			uploadSpan.RecordError(err)
+			uploadSpan.SetStatus(codes.Error, err.Error())
+			uploadSpan.End()
+
 			// Check if this was a user interruption (via UI flag or context cancellation)
 			dm, isDeploy := finalModel.(*deployInfo)
 			if (isDeploy && dm.interrupted) || deployCtx.Err() != nil {
@@ -632,11 +688,18 @@ func Deploy(ctx *Context, opts struct {
 	}
 
 	if results.Version() == "" {
+		noVersionErr := fmt.Errorf("build failed: no version returned")
+		uploadSpan.RecordError(noVersionErr)
+		uploadSpan.SetStatus(codes.Error, noVersionErr.Error())
+		uploadSpan.End()
 		ctx.Printf("\n\nError detected in building %s. No version returned.\n", name)
 		printBuildErrors(ctx, buildErrors, buildLogs)
 		updateDeploymentOnError("Build failed: no version returned")
-		return fmt.Errorf("build failed: no version returned")
+		return noVersionErr
 	}
+
+	// Upload + build completed successfully
+	uploadSpan.End()
 
 	ctx.Log.Debug("Build completed", "version", results.Version())
 
@@ -664,12 +727,16 @@ func Deploy(ctx *Context, opts struct {
 	// Update phase to activating
 	updateDeploymentPhase("activating")
 
+	// Wrap finalization in a span
+	finalizeCtx, finalizeSpan := deployTracer.Start(ctx.Context, "deploy.finalize")
+
 	// Mark deployment as active
-	_, err = depClient.UpdateDeploymentStatus(ctx, deploymentId, "active", "")
+	_, err = depClient.UpdateDeploymentStatus(finalizeCtx, deploymentId, "active", "")
 	if err != nil {
 		// Log error but don't fail - deployment is already done
 		ctx.Log.Error("Failed to update deployment status", "error", err)
 	}
+	finalizeSpan.End()
 
 	ctx.Printf("\n\nUpdated version %s deployed. All traffic moved to new version.\n", results.Version())
 

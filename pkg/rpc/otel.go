@@ -89,7 +89,20 @@ func SetupTracing(ctx context.Context, attrs ...attribute.KeyValue) (shutdown fu
 		return nil, err
 	}
 
-	resAttrs := append([]attribute.KeyValue{semconv.ServiceName("miren")}, attrs...)
+	// Only add default service name if the caller hasn't provided one
+	hasServiceName := false
+	for _, a := range attrs {
+		if a.Key == semconv.ServiceNameKey {
+			hasServiceName = true
+			break
+		}
+	}
+	resAttrs := make([]attribute.KeyValue, 0, len(attrs)+1)
+	if !hasServiceName {
+		resAttrs = append(resAttrs, semconv.ServiceName("miren"))
+	}
+	resAttrs = append(resAttrs, attrs...)
+
 	res, err := sdkresource.New(ctx,
 		sdkresource.WithAttributes(resAttrs...),
 	)
