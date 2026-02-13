@@ -1392,10 +1392,10 @@ func (c *SandboxController) buildSpec(
 		specOpts = append(specOpts, oci.WithHostNamespace(specs.NetworkNamespace))
 	}
 
-	id := sb.ID.String()
+	snapshotId := pauseContainerId(sb.ID)
 
 	opts = append(opts,
-		containerd.WithNewSnapshot(id, img),
+		containerd.WithNewSnapshot(snapshotId, img),
 		containerd.WithNewSpec(specOpts...),
 		containerd.WithRuntime("io.containerd.runc.v2", nil),
 		containerd.WithAdditionalContainerLabels(lbls),
@@ -1792,8 +1792,6 @@ func (c *SandboxController) buildSubContainerSpec(
 		opts []containerd.NewContainerOpts
 	)
 
-	id := fmt.Sprintf("%s-%s", sb.ID, co.Name)
-
 	resolvePath := c.sandboxPath(sb, "resolv.conf")
 
 	mounts := []specs.Mount{
@@ -2003,8 +2001,10 @@ func (c *SandboxController) buildSubContainerSpec(
 		lbls[shutdownTimeoutLabel] = co.ShutdownTimeout
 	}
 
+	snapshotId := fmt.Sprintf("%s-%s", containerPrefix(sb.ID), co.Name)
+
 	opts = append(opts,
-		containerd.WithNewSnapshot(id, img),
+		containerd.WithNewSnapshot(snapshotId, img),
 		containerd.WithNewSpec(specOpts...),
 		containerd.WithRuntime("io.containerd.runc.v2", nil),
 		containerd.WithAdditionalContainerLabels(lbls),
