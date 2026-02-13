@@ -89,10 +89,31 @@ jobs:
       with:
         ref: ${{ inputs.ref }}
 
+    - name: Set up Go
+      uses: actions/setup-go@v6
+      with:
+        go-version-file: 'go.mod'
+
     - name: Set test matrix
       id: set-matrix
       run: |
+        # Find all packages that have test files
+        ALL_TEST_PKGS=$(go list -f '{{if .TestGoFiles}}{{.ImportPath}}{{end}}' ./... | grep -v '^$' | sort)
+
+        # Get packages already assigned to groups
+        GROUPED_PKGS=$(jq -r '.groups[].packages[]' hack/test-groups.json | sort)
+
+        # Find packages with tests that aren't in any group
+        UNGROUPED=$(comm -23 <(echo "$ALL_TEST_PKGS") <(echo "$GROUPED_PKGS"))
+
         MATRIX=$(jq -c '.groups' hack/test-groups.json)
+
+        if [ -n "$UNGROUPED" ]; then
+          echo "::warning::Packages not in test-groups.json (will run in extra group): $(echo $UNGROUPED | tr '\n' ' ')"
+          EXTRA_PKGS=$(echo "$UNGROUPED" | jq -R -s 'split("\n") | map(select(. != ""))')
+          MATRIX=$(echo "$MATRIX" | jq -c --argjson pkgs "$EXTRA_PKGS" '. + [{"runner": (length + 1), "estimated_s": 0, "packages": $pkgs}]')
+        fi
+
         echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
 
   test:
@@ -174,53 +195,53 @@ jobs:
         go-version-file: 'go.mod'
         cache: true
 
-    - name: Install iso
+    - name: Resolve iso version
+      id: iso-version
       run: |
-        go install miren.dev/iso/cmd/iso@latest
-        echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+        ISO_VERSION=$(go list -m -f '{{.Version}}' miren.dev/iso@latest)
+        echo "version=$ISO_VERSION" >> $GITHUB_OUTPUT
+
+    - name: Cache iso binary
+      id: iso-cache
+      uses: actions/cache@v4
+      with:
+        path: ~/go/bin/iso
+        key: iso-binary-${{ steps.iso-version.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
+
+    - name: Install iso
+      if: steps.iso-cache.outputs.cache-hit != 'true'
+      run: go install miren.dev/iso/cmd/iso@latest
+
+    - name: Add Go bin to PATH
+      run: echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+
+    - name: Restore iso cache
+      uses: actions/cache@v4
+      with:
+        path: /tmp/iso-cache
+        key: iso-cache-e2e-${{ hashFiles('go.sum') }}
+        restore-keys: iso-cache-e2e-
+
+    - name: Restore Docker image cache
+      id: docker-image-cache
+      uses: actions/cache@v4
+      with:
+        path: /tmp/iso-image.tar
+        key: iso-image-${{ hashFiles('.iso/Dockerfile', '.iso/.bashrc', 'hack/containerd-config.toml') }}
+
+    - name: Load cached Docker image
+      if: steps.docker-image-cache.outputs.cache-hit == 'true'
+      run: docker load < /tmp/iso-image.tar
 
     - name: Test
-      run: make test-e2e
+      run: ISO_CACHE_DIR=/tmp/iso-cache iso run bash hack/test.sh ./e2e --tags=e2e -count=1 -failfast
 
-  build-binaries:
-    # Skip when called from release.yml - it has its own build-binaries with signing
-    if: github.event_name != 'workflow_call'
-    strategy:
-      matrix:
-        include:
-          - os: linux
-            arch: amd64
-            runner: depot-ubuntu-latest
-          - os: linux
-            arch: arm64
-            runner: depot-ubuntu-latest-arm
-          - os: darwin
-            arch: amd64
-            runner: macos-latest
-          - os: darwin
-            arch: arm64
-            runner: macos-latest
-    runs-on: ${{ matrix.runner }}
-    permissions:
-      id-token: write
-      attestations: write
-      contents: read
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ inputs.ref }}
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: 'go.mod'
-      - name: Build binary for ${{ matrix.os }}-${{ matrix.arch }}
-        run: |
-          GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} make bin/miren
-          # Create a zip file with the binary
-          zip -j miren-${{ matrix.os }}-${{ matrix.arch }}.zip bin/miren
+    - name: Save Docker image to cache
+      if: steps.docker-image-cache.outputs.cache-hit != 'true'
+      run: docker save runtime-shell -o /tmp/iso-image.tar
 
   build:
-    # Skip when called from release.yml - it has its own build jobs
+    # Skip when called from release.yml - it has its own build jobs with signing
     if: github.event_name != 'workflow_call'
     runs-on: ubuntu-latest
     steps:
@@ -232,6 +253,12 @@ jobs:
       uses: actions/setup-go@v6
       with:
         go-version-file: 'go.mod'
+        cache: true
 
-    - name: Build
-      run: make bin/miren
+    - name: Cross-compile all targets
+      run: |
+        for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+          GOOS="${target%/*}" GOARCH="${target#*/}"
+          echo "Building $GOOS/$GOARCH..."
+          GOOS=$GOOS GOARCH=$GOARCH go build -o /dev/null ./cmd/miren
+        done
