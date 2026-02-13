@@ -650,18 +650,11 @@ func TestEnumFieldEmptiness(t *testing.T) {
 
 	emptyMethod := code[emptyMethodStart : emptyMethodStart+emptyMethodEnd+2]
 
-	// The fix ensures that when an enum field has a value (!= ""),
-	// the Empty() method returns false (entity is not empty)
-	// Look for the corrected check: if o.Status != "" { return false }
-	if !strings.Contains(emptyMethod, `if o.Status != ""`) {
-		t.Error("Empty() method should check if enum Status is not empty string")
+	// With a single field, the generator optimizes to a direct return.
+	// Verify that Empty() returns true when status is empty.
+	if !strings.Contains(emptyMethod, `return o.Status == ""`) {
+		t.Error("Empty() method should return true when enum Status is empty string")
 		t.Logf("Empty() method:\n%s", emptyMethod)
-	}
-
-	// Verify the structure of the emptiness check
-	// It should return false when enum has a value (meaning entity is not empty)
-	if !strings.Contains(emptyMethod, `return false`) {
-		t.Error("Empty() method should return false when enum fields have values")
 	}
 }
 
@@ -1331,15 +1324,10 @@ func TestRefFieldWithMany(t *testing.T) {
 		}
 		emptyMethod := code[emptyStart : emptyStart+emptyEnd]
 
-		// Many ref fields should be checked for non-zero length
-		if !strings.Contains(emptyMethod, "len(o.ReferencedBy) != 0") {
-			t.Error("Empty() should check if ReferencedBy slice has elements")
+		// With a single field, the generator optimizes to a direct return.
+		if !strings.Contains(emptyMethod, "return len(o.ReferencedBy) == 0") {
+			t.Error("Empty() should return true when ReferencedBy slice is empty")
 			t.Logf("Empty method:\n%s", emptyMethod)
-		}
-
-		// Should return false when slice has elements
-		if !strings.Contains(emptyMethod, "return false") {
-			t.Error("Empty() should return false when ref slice has elements")
 		}
 	})
 
