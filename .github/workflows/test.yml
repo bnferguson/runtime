@@ -96,6 +96,7 @@ jobs:
         echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
 
   test:
+    name: test (runner ${{ matrix.group.runner }})
     needs: test-groups
     runs-on: depot-ubuntu-latest
     strategy:
