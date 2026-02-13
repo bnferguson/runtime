@@ -14,6 +14,10 @@ import (
 
 	"github.com/moby/buildkit/client"
 	"github.com/tonistiigi/fsutil"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/build/build_v1alpha"
 	coreutil "miren.dev/runtime/api/core"
@@ -33,6 +37,8 @@ import (
 	"miren.dev/runtime/pkg/stackbuild"
 	"miren.dev/runtime/pkg/tarx"
 )
+
+var buildTracer = otel.Tracer("miren.dev/runtime/build")
 
 // buildLogWriter writes build log entries to VictoriaLogs with version metadata
 type buildLogWriter struct {
@@ -619,18 +625,28 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 
 	b.Log.Debug("receiving tar data", "app", name, "tempdir", path)
 
+	// -- build.receive_tar span
+	ctx, recvSpan := buildTracer.Start(ctx, "build.receive_tar",
+		trace.WithAttributes(attribute.String("miren.app.name", name)))
 	r := stream.ToReader(ctx, td)
 
 	tr, err := tarx.TarFS(r, path)
 	if err != nil {
+		recvSpan.RecordError(err)
+		recvSpan.SetStatus(codes.Error, err.Error())
+		recvSpan.End()
 		b.sendErrorStatus(ctx, status, "Error untaring data: %v", err)
 		return fmt.Errorf("error untaring data: %w", err)
 	}
+	recvSpan.End()
 
 	if status != nil {
 		so.Update().SetMessage("Launching builder")
 		_, _ = status.Send(ctx, so)
 	}
+
+	// -- build.setup span: app config, stack detection, buildkit connect
+	ctx, setupSpan := buildTracer.Start(ctx, "build.setup")
 
 	ac, err := b.loadAppConfig(tr)
 	if err != nil {
@@ -678,6 +694,9 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		}
 		_, err := stackbuild.DetectStack(buildStack.CodeDir, detectOpts)
 		if err != nil {
+			setupSpan.RecordError(err)
+			setupSpan.SetStatus(codes.Error, err.Error())
+			setupSpan.End()
 			b.Log.Error("stack detection failed", "error", err, "app", name, "codeDir", buildStack.CodeDir)
 			b.sendErrorStatus(ctx, status, "No supported stack detected for app %s: %v", name, err)
 			return fmt.Errorf("no supported stack detected for app %s: %w", name, err)
@@ -689,6 +708,9 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	b.Log.Debug("setting up buildkit")
 
 	if b.BuildKit == nil {
+		setupSpan.RecordError(fmt.Errorf("buildkit component not configured"))
+		setupSpan.SetStatus(codes.Error, "buildkit component not configured")
+		setupSpan.End()
 		b.Log.Error("buildkit component not configured")
 		b.sendErrorStatus(ctx, status, "BuildKit not configured - ensure server is running with BuildKit enabled")
 		return fmt.Errorf("buildkit component not configured")
@@ -697,6 +719,9 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	b.Log.Info("connecting to buildkit daemon")
 	bkc, err := b.BuildKit.Client(ctx)
 	if err != nil {
+		setupSpan.RecordError(err)
+		setupSpan.SetStatus(codes.Error, err.Error())
+		setupSpan.End()
 		b.Log.Error("failed to get buildkit client", "error", err)
 		b.sendErrorStatus(ctx, status, "Failed to connect to BuildKit: %v", err)
 		return err
@@ -710,6 +735,9 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	} else {
 		b.Log.Debug("buildkitd info", "version", ci.BuildkitVersion.Version, "rev", ci.BuildkitVersion.Revision)
 	}
+
+	setupSpan.SetAttributes(attribute.String("miren.build.stack", buildStack.Stack))
+	setupSpan.End()
 
 	bk := &Buildkit{
 		Client: bkc,
@@ -826,12 +854,19 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 
 	imgName := mrv.ImageUrl
 
-	res, err := bk.BuildImage(ctx, tr, buildStack, name, imgName, tos...)
+	// -- build.buildkit span
+	bkCtx, bkSpan := buildTracer.Start(ctx, "build.buildkit",
+		trace.WithAttributes(attribute.String("miren.build.image", imgName)))
+	res, err := bk.BuildImage(bkCtx, tr, buildStack, name, imgName, tos...)
 	if err != nil {
+		bkSpan.RecordError(err)
+		bkSpan.SetStatus(codes.Error, err.Error())
+		bkSpan.End()
 		b.Log.Error("error building image", "error", err)
 		b.sendErrorStatus(ctx, status, "Error building image: %v", err)
 		return err
 	}
+	bkSpan.End()
 
 	// Log detection events from stack analysis
 	for _, event := range res.DetectionEvents {
@@ -844,13 +879,21 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		return fmt.Errorf("build did not return manifest digest")
 	}
 
+	// -- build.locate_artifact span
+	_, locateSpan := buildTracer.Start(ctx, "build.locate_artifact",
+		trace.WithAttributes(attribute.String("miren.build.manifest_digest", res.ManifestDigest)))
+
 	var artifact core_v1alpha.Artifact
 
 	err = b.ec.OneAtIndex(ctx, entity.String(core_v1alpha.ArtifactManifestDigestId, res.ManifestDigest), &artifact)
 	if err != nil {
+		locateSpan.RecordError(err)
+		locateSpan.SetStatus(codes.Error, err.Error())
+		locateSpan.End()
 		b.Log.Error("error locating artifact by digest", "digest", res.ManifestDigest, "error", err)
 		return fmt.Errorf("error locating artifact by digest %s: %w", res.ManifestDigest, err)
 	}
+	locateSpan.End()
 
 	b.Log.Debug("located stored artifact", "artifact", artifact.ID, "digest", res.ManifestDigest)
 
@@ -897,6 +940,10 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		b.Log.Debug("no new env vars from app config, preserving existing variables")
 	}
 
+	// -- build.create_version span
+	_, createVerSpan := buildTracer.Start(ctx, "build.create_version",
+		trace.WithAttributes(attribute.String("miren.app.version", mrv.Version)))
+
 	// Create ConfigVersion as the sole config store (inline Config is no longer written)
 	configVer := &core_v1alpha.ConfigVersion{
 		App:  mrv.App,
@@ -905,6 +952,9 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	cvName := mrv.Version + "-cfg"
 	cvid, err := b.ec.Create(ctx, cvName, configVer)
 	if err != nil {
+		createVerSpan.RecordError(err)
+		createVerSpan.SetStatus(codes.Error, err.Error())
+		createVerSpan.End()
 		return fmt.Errorf("error creating config version: %w", err)
 	}
 	mrv.ConfigVersion = cvid
@@ -912,14 +962,24 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 
 	id, err := b.ec.Create(ctx, mrv.Version, mrv)
 	if err != nil {
+		createVerSpan.RecordError(err)
+		createVerSpan.SetStatus(codes.Error, err.Error())
+		createVerSpan.End()
 		return fmt.Errorf("error creating app version: %w", err)
 	}
+	createVerSpan.End()
 
+	// -- build.activate span
+	_, activateSpan := buildTracer.Start(ctx, "build.activate")
 	b.Log.Info("updating app entity with new version", "app", name, "version", mrv.Version)
 	err = b.appClient.SetActiveVersion(ctx, name, string(id))
 	if err != nil {
+		activateSpan.RecordError(err)
+		activateSpan.SetStatus(codes.Error, err.Error())
+		activateSpan.End()
 		return fmt.Errorf("error updating app entity: %w", err)
 	}
+	activateSpan.End()
 
 	b.Log.Info("app version updated", "app", name, "version", mrv.Version)
 

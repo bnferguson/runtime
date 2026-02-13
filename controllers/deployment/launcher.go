@@ -8,6 +8,11 @@ import (
 	"strings"
 	"sync"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
@@ -19,6 +24,8 @@ import (
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/labs"
 )
+
+var launcherTracer = otel.Tracer("miren.dev/runtime/deployment/launcher")
 
 // Launcher watches App entities and proactively creates SandboxPools when ActiveVersion changes.
 // This enables immediate startup for fixed-mode services and pool reuse across deployments.
@@ -48,6 +55,10 @@ func (l *Launcher) Init(ctx context.Context) error {
 }
 
 func (l *Launcher) Reconcile(ctx context.Context, app *core_v1alpha.App, meta *entity.Meta) error {
+	ctx, span := launcherTracer.Start(ctx, "launcher.reconcile",
+		trace.WithAttributes(attribute.String("miren.app.id", app.ID.String())))
+	defer span.End()
+
 	// Serialize reconciles for the same app to avoid races between rapid deploys.
 	val, _ := l.appMu.LoadOrStore(app.ID, &sync.Mutex{})
 	mu := val.(*sync.Mutex)
@@ -64,6 +75,8 @@ func (l *Launcher) Reconcile(ctx context.Context, app *core_v1alpha.App, meta *e
 			l.Log.Debug("app not found in store, skipping", "app", app.ID)
 			return nil
 		}
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return fmt.Errorf("failed to get app from store: %w", err)
 	}
 
@@ -75,8 +88,15 @@ func (l *Launcher) Reconcile(ctx context.Context, app *core_v1alpha.App, meta *e
 		return nil
 	}
 
+	span.SetAttributes(attribute.String("miren.app.active_version", current.ActiveVersion.String()))
+
 	l.Log.Info("reconciling app", "app", current.ID, "version", current.ActiveVersion)
-	return l.reconcileAppVersion(ctx, &current)
+	err = l.reconcileAppVersion(ctx, &current)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	return err
 }
 
 // reconcileAppVersion ensures pools exist for all services in the active version

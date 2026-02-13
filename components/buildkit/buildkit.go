@@ -13,6 +13,7 @@ import (
 	"time"
 
 	buildkitclient "github.com/moby/buildkit/client"
+	"go.opentelemetry.io/otel"
 
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
@@ -263,7 +264,9 @@ func (c *Component) Client(ctx context.Context) (*buildkitclient.Client, error) 
 		return nil, fmt.Errorf("buildkit component not running")
 	}
 
-	return buildkitclient.New(ctx, "unix://"+socketPath)
+	return buildkitclient.New(ctx, "unix://"+socketPath,
+		buildkitclient.WithTracerProvider(otel.GetTracerProvider()),
+	)
 }
 
 func (c *Component) generateConfig(gcKeepStorage, gcKeepDuration int64, registryHost string) string {
@@ -343,6 +346,20 @@ func (c *Component) SetRegistryIP(ip string) error {
 }
 
 func (c *Component) createContainer(ctx context.Context, image containerd.Image, dataPath, configPath, hostsPath string) (containerd.Container, error) {
+	// Collect OTEL env vars to forward to buildkitd so the daemon can export its internal spans.
+	// The daemon shares host network namespace so the collector is reachable.
+	var otelEnv []string
+	for _, key := range []string{
+		"OTEL_EXPORTER_OTLP_ENDPOINT",
+		"OTEL_EXPORTER_OTLP_HEADERS",
+		"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+		"OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+	} {
+		if v := os.Getenv(key); v != "" {
+			otelEnv = append(otelEnv, key+"="+v)
+		}
+	}
+
 	opts := []oci.SpecOpts{
 		oci.WithImageConfig(image),
 		oci.WithHostNamespace(specs.NetworkNamespace), // Required for DNS resolution
@@ -386,6 +403,10 @@ func (c *Component) createContainer(ctx context.Context, image containerd.Image,
 				Options:     []string{"rbind", "rw"},
 			},
 		}),
+	}
+
+	if len(otelEnv) > 0 {
+		opts = append(opts, oci.WithEnv(otelEnv))
 	}
 
 	container, err := c.CC.NewContainer(
