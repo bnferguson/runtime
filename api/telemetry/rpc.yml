@@ -1,0 +1,10 @@
+apiVersion: miren.dev/rpc/v1
+kind: IDL
+
+interfaces:
+  - name: Telemetry
+    methods:
+      - name: reportSpans
+        parameters:
+          - name: span_data
+            type: bytes

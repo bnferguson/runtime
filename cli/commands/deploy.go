@@ -29,8 +29,8 @@ import (
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/deploygating"
 	"miren.dev/runtime/pkg/git"
+	"miren.dev/runtime/pkg/otelproxy"
 	"miren.dev/runtime/pkg/progress/upload"
-	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/standard"
 	"miren.dev/runtime/pkg/rpc/stream"
 	"miren.dev/runtime/pkg/tarx"
@@ -189,11 +189,13 @@ func Deploy(ctx *Context, opts struct {
 		return nil
 	}
 
-	// Set up OTel tracing if an OTLP endpoint is configured
-	if os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != "" {
-		shutdown, tracingErr := rpc.SetupTracing(ctx.Context, semconv.ServiceName("miren-cli"))
-		if tracingErr != nil {
-			ctx.Log.Debug("Failed to set up tracing", "error", tracingErr)
+	// Set up OTel tracing via the server's telemetry proxy.
+	// Spans are shipped through the existing RPC connection — no client-side
+	// OTLP config needed. If the server isn't reachable, tracing is a no-op.
+	if proxyClient, err := ctx.RPCClient("dev.miren.runtime/telemetry"); err == nil {
+		shutdown, setupErr := otelproxy.SetupProxyTracing(ctx.Context, proxyClient, ctx.Log, semconv.ServiceName("miren-cli"))
+		if setupErr != nil {
+			ctx.Log.Debug("failed to set up proxy tracing", "error", setupErr)
 		} else {
 			defer func() {
 				shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -201,6 +203,8 @@ func Deploy(ctx *Context, opts struct {
 				_ = shutdown(shutdownCtx)
 			}()
 		}
+	} else {
+		ctx.Log.Debug("telemetry proxy unavailable", "error", err)
 	}
 
 	// Start root deploy span

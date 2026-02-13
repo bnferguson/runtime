@@ -30,6 +30,7 @@ import (
 	"miren.dev/runtime/api/exec/exec_v1alpha"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/api/runner/runner_v1alpha"
+	"miren.dev/runtime/api/telemetry/telemetry_v1alpha"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/components/activator"
 	"miren.dev/runtime/components/autotls"
@@ -60,6 +61,7 @@ import (
 	"miren.dev/runtime/servers/httpingress"
 	"miren.dev/runtime/servers/logs"
 	runnerserver "miren.dev/runtime/servers/runner"
+	telemetrysrv "miren.dev/runtime/servers/telemetry"
 	"miren.dev/runtime/version"
 )
 
@@ -881,6 +883,9 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	runnerReg := runnerserver.NewRegistrationServer(c.Log, c.authority, eac, c.Address, c.EtcdEndpoints, c.Prefix, c.NetworkBackend)
 	server.ExposeValue(rpc.ServiceRunner, runner_v1alpha.AdaptRunnerRegistration(runnerReg))
+
+	ts := telemetrysrv.NewServer(c.Log)
+	server.ExposeValue("dev.miren.runtime/telemetry", telemetry_v1alpha.AdaptTelemetry(ts))
 
 	c.Log.Info("started RPC server")
 
