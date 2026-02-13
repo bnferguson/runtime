@@ -12,6 +12,9 @@ import (
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"miren.dev/runtime/pkg/slogout"
 )
 
@@ -192,7 +195,12 @@ func (c *ContainerdComponent) Start(ctx context.Context, config *Config) error {
 	c.log.Info("containerd socket is ready", "socket", config.SocketPath)
 
 	// Create client for the newly started containerd
-	client, err := containerd.New(config.SocketPath)
+	client, err := containerd.New(config.SocketPath,
+		containerd.WithDialOpts([]grpc.DialOption{
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+			grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+		}),
+	)
 	if err != nil {
 		c.log.Warn("failed to create containerd client", "error", err)
 		// Don't fail here, containerd is running

@@ -330,7 +330,10 @@ func (h *Server) handleRequest(w http.ResponseWriter, req *http.Request) {
 		}
 	}()
 
-	ctx, span := httpingressTracer.Start(req.Context(), "httpingress",
+	// Extract inbound trace context (traceparent/tracestate headers)
+	ctx := otel.GetTextMapPropagator().Extract(req.Context(), propagation.HeaderCarrier(req.Header))
+
+	ctx, span := httpingressTracer.Start(ctx, "httpingress",
 		trace.WithSpanKind(trace.SpanKindServer),
 		trace.WithAttributes(
 			attribute.String("http.method", req.Method),

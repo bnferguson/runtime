@@ -29,6 +29,7 @@ const sidebars: SidebarsConfig = {
         'route-oidc',
         'admin-interface',
         'working-with-miren-cloud',
+        'observability',
       ],
     },
     {
