@@ -282,6 +282,286 @@ func TestEntityServer_WatchIndex(t *testing.T) {
 	}
 }
 
+func TestEntityServer_WatchEntity_DeleteIncludesEntity(t *testing.T) {
+	r := require.New(t)
+
+	store := entity.NewMockStore()
+	server := &EntityServer{
+		Log:   slog.Default(),
+		Store: store,
+	}
+
+	sc := v1alpha.EntityAccessClient{
+		Client: rpc.LocalClient(v1alpha.AdaptEntityAccess(server)),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Create an entity first
+	testEntity := entity.New(
+		entity.Ref(entity.DBId, "test/watch-delete"),
+		entity.Keyword(entity.Ident, "test/watch-delete"),
+		entity.String(entity.Doc, "entity to be deleted"),
+	)
+	created, err := store.CreateEntity(ctx, testEntity)
+	r.NoError(err)
+
+	// Track received events
+	var receivedOps []*v1alpha.EntityOp
+	deleteReceived := make(chan struct{})
+	watchDone := make(chan error, 1)
+
+	// Start watch in background
+	go func() {
+		_, err := sc.WatchEntity(ctx, created.Id().String(), stream.Callback(func(op *v1alpha.EntityOp) error {
+			receivedOps = append(receivedOps, op)
+			if op.Operation() == int64(v1alpha.EntityOperationDelete) {
+				close(deleteReceived)
+			}
+			return nil
+		}))
+		watchDone <- err
+	}()
+
+	// Wait for watch to be established
+	err = store.WaitForEntityWatcher(ctx, created.Id())
+	r.NoError(err)
+
+	// Delete the entity
+	err = store.DeleteEntity(ctx, created.Id())
+	r.NoError(err)
+
+	// Wait for delete event
+	select {
+	case <-deleteReceived:
+		// Find the delete event
+		var deleteOp *v1alpha.EntityOp
+		for _, op := range receivedOps {
+			if op.Operation() == int64(v1alpha.EntityOperationDelete) {
+				deleteOp = op
+				break
+			}
+		}
+		r.NotNil(deleteOp, "should have received a delete event")
+		r.True(deleteOp.HasEntity(), "delete event should include entity data")
+
+		ae := deleteOp.Entity()
+		r.Equal(created.Id().String(), ae.Id())
+		r.Contains(ae.Attrs(), entity.String(entity.Doc, "entity to be deleted"))
+		cancel()
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timed out waiting for delete event")
+	}
+
+	select {
+	case <-watchDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timed out waiting for watch to finish")
+	}
+}
+
+func TestEntityServer_WatchIndex_DeleteIncludesEntity(t *testing.T) {
+	r := require.New(t)
+
+	store := entity.NewMockStore()
+	server := &EntityServer{
+		Log:   slog.Default(),
+		Store: store,
+	}
+
+	sc := v1alpha.EntityAccessClient{
+		Client: rpc.LocalClient(v1alpha.AdaptEntityAccess(server)),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	index := entity.Keyword(entity.Ident, "test/index-delete")
+
+	// Track received events
+	deleteReceived := make(chan *v1alpha.EntityOp, 1)
+	watchDone := make(chan error, 1)
+
+	// Start watch in background
+	go func() {
+		_, err := sc.WatchIndex(ctx, index, stream.Callback(func(op *v1alpha.EntityOp) error {
+			if op.Operation() == int64(v1alpha.EntityOperationDelete) {
+				deleteReceived <- op
+			}
+			return nil
+		}))
+		watchDone <- err
+	}()
+
+	// Wait for watch to be established
+	err := store.WaitForIndexWatcher(ctx, index)
+	r.NoError(err)
+
+	// Create an entity that matches the watch index
+	testEntity := entity.New(
+		entity.Ref(entity.DBId, "test/entity-delete"),
+		index,
+		entity.String(entity.Doc, "will be deleted"),
+	)
+	created, err := store.CreateEntity(ctx, testEntity)
+	r.NoError(err)
+
+	// Delete the entity
+	err = store.DeleteEntity(ctx, created.Id())
+	r.NoError(err)
+
+	// Wait for delete event
+	select {
+	case deleteOp := <-deleteReceived:
+		r.True(deleteOp.HasEntity(), "delete event should include entity data")
+
+		ae := deleteOp.Entity()
+		r.Equal(created.Id().String(), ae.Id())
+		r.Contains(ae.Attrs(), entity.String(entity.Doc, "will be deleted"))
+		cancel()
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timed out waiting for delete event")
+	}
+
+	select {
+	case <-watchDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timed out waiting for watch to finish")
+	}
+}
+
+func TestEntityServer_WatchEntity_DeleteIncludesEntity_Etcd(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	client, prefix := setupTestEtcd(t)
+	store, err := entity.NewEtcdStore(ctx, slog.Default(), client, prefix)
+	require.NoError(t, err)
+
+	server, err := NewEntityServer(slog.Default(), store)
+	require.NoError(t, err)
+
+	sc := v1alpha.EntityAccessClient{
+		Client: rpc.LocalClient(v1alpha.AdaptEntityAccess(server)),
+	}
+
+	// Create an entity
+	created, err := store.CreateEntity(ctx, entity.New(
+		entity.String(entity.Ident, "test-watch-delete-etcd"),
+		entity.String(entity.Doc, "entity for etcd delete test"),
+	))
+	require.NoError(t, err)
+
+	deleteReceived := make(chan *v1alpha.EntityOp, 1)
+	watchDone := make(chan error, 1)
+
+	go func() {
+		_, err := sc.WatchEntity(ctx, created.Id().String(), stream.Callback(func(op *v1alpha.EntityOp) error {
+			if op.Operation() == int64(v1alpha.EntityOperationDelete) {
+				deleteReceived <- op
+			}
+			return nil
+		}))
+		watchDone <- err
+	}()
+
+	// Give the watch time to establish
+	time.Sleep(100 * time.Millisecond)
+
+	// Delete the entity
+	err = store.DeleteEntity(ctx, created.Id())
+	require.NoError(t, err)
+
+	select {
+	case deleteOp := <-deleteReceived:
+		require.True(t, deleteOp.HasEntity(), "delete event should include entity data")
+		ae := deleteOp.Entity()
+		assert.Equal(t, created.Id().String(), ae.Id())
+		assert.Contains(t, ae.Attrs(), entity.String(entity.Doc, "entity for etcd delete test"))
+		cancel()
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timed out waiting for delete event")
+	}
+
+	select {
+	case <-watchDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timed out waiting for watch to finish")
+	}
+}
+
+func TestEntityServer_WatchIndex_DeleteIncludesEntity_Etcd(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	client, prefix := setupTestEtcd(t)
+	store, err := entity.NewEtcdStore(ctx, slog.Default(), client, prefix)
+	require.NoError(t, err)
+
+	server, err := NewEntityServer(slog.Default(), store)
+	require.NoError(t, err)
+
+	sc := v1alpha.EntityAccessClient{
+		Client: rpc.LocalClient(v1alpha.AdaptEntityAccess(server)),
+	}
+
+	// Create an indexed attribute schema
+	indexAttr, err := store.CreateEntity(ctx, entity.New(
+		entity.String(entity.Ident, "test/watch-idx"),
+		entity.Ref(entity.Type, entity.TypeStr),
+		entity.Bool(entity.Index, true),
+	))
+	require.NoError(t, err)
+
+	index := entity.String(indexAttr.Id(), "watch-val")
+
+	deleteReceived := make(chan *v1alpha.EntityOp, 1)
+	watchDone := make(chan error, 1)
+
+	go func() {
+		_, err := sc.WatchIndex(ctx, index, stream.Callback(func(op *v1alpha.EntityOp) error {
+			if op.Operation() == int64(v1alpha.EntityOperationDelete) {
+				deleteReceived <- op
+			}
+			return nil
+		}))
+		watchDone <- err
+	}()
+
+	// Give the watch time to establish
+	time.Sleep(100 * time.Millisecond)
+
+	// Create an entity that matches the watch index
+	created, err := store.CreateEntity(ctx, entity.New(
+		entity.String(entity.Ident, "test-idx-delete-etcd"),
+		index,
+		entity.String(entity.Doc, "indexed entity for delete test"),
+	))
+	require.NoError(t, err)
+
+	// Delete the entity
+	err = store.DeleteEntity(ctx, created.Id())
+	require.NoError(t, err)
+
+	select {
+	case deleteOp := <-deleteReceived:
+		require.True(t, deleteOp.HasEntity(), "delete event should include entity data")
+		ae := deleteOp.Entity()
+		assert.Equal(t, created.Id().String(), ae.Id())
+		assert.Contains(t, ae.Attrs(), entity.String(entity.Doc, "indexed entity for delete test"))
+		cancel()
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timed out waiting for delete event")
+	}
+
+	select {
+	case <-watchDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timed out waiting for watch to finish")
+	}
+}
+
 func TestEntityServer_List(t *testing.T) {
 	store := entity.NewMockStore()
 	server := &EntityServer{

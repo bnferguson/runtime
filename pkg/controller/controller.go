@@ -199,8 +199,9 @@ func (c *ReconcileController) Start(top context.Context) error {
 					ev.Rev = aen.Revision()
 				}
 
-				// Skip watch events for revisions we recently wrote to reduce reconciliation noise
-				if ev.Rev > 0 && c.recentWrites.Contains(ev.Rev) {
+				// Skip watch events for revisions we recently wrote to reduce reconciliation noise.
+				// Never skip delete events — a delete is always meaningful regardless of who caused it.
+				if ev.Type != EventDeleted && ev.Rev > 0 && c.recentWrites.Contains(ev.Rev) {
 					return nil
 				}
 

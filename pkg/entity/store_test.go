@@ -868,6 +868,41 @@ func TestWatchIndex(t *testing.T) {
 	}
 }
 
+func TestWatchEntity_DeleteIncludesEntity(t *testing.T) {
+	ctx := context.Background()
+	client := setupTestEtcd(t)
+	store, err := NewEtcdStore(t.Context(), slog.Default(), client, "/test-entities")
+	require.NoError(t, err)
+
+	// Create an entity
+	created, err := store.CreateEntity(ctx, New(
+		String(Ident, "test-watch-delete"),
+		String(Doc, "entity to be deleted"),
+	))
+	require.NoError(t, err)
+
+	// Start watching the entity
+	watcher, err := store.WatchEntity(ctx, created.Id())
+	require.NoError(t, err)
+
+	// Delete the entity
+	err = store.DeleteEntity(ctx, created.Id())
+	require.NoError(t, err)
+
+	// The delete event should include the entity data from before deletion
+	select {
+	case op := <-watcher:
+		assert.Equal(t, EntityOpDelete, op.Type)
+		require.NotNil(t, op.Entity, "delete event should include the entity")
+		assert.Equal(t, created.Id(), op.Id())
+		doc, ok := op.Get(Doc)
+		require.True(t, ok, "entity should have doc attribute")
+		assert.Equal(t, "entity to be deleted", doc.Value.String())
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timeout waiting for delete event")
+	}
+}
+
 func TestWatchIndex_DBID(t *testing.T) {
 	ctx := context.Background()
 	client := setupTestEtcd(t)

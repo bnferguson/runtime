@@ -122,18 +122,13 @@ func (e *EntityServer) WatchEntity(ctx context.Context, req *entityserver_v1alph
 				return nil
 			}
 
-			var (
-				eventType int
-				read      bool
-			)
+			var eventType int
 
 			switch event.Type {
 			case entity.EntityOpCreate:
 				eventType = 1
-				read = true
 			case entity.EntityOpUpdate, entity.EntityOpStated:
 				eventType = 2
-				read = true
 			case entity.EntityOpDelete:
 				eventType = 3
 			default:
@@ -143,7 +138,7 @@ func (e *EntityServer) WatchEntity(ctx context.Context, req *entityserver_v1alph
 			var op entityserver_v1alpha.EntityOp
 			op.SetOperation(int64(eventType))
 
-			if read {
+			if event.Entity != nil {
 				en = event.Entity
 				var rpcEntity entityserver_v1alpha.Entity
 				rpcEntity.SetId(en.Id().String())
@@ -489,8 +484,29 @@ func (e *EntityServer) WatchIndex(ctx context.Context, req *entityserver_v1alpha
 
 					op.SetEntity(&rpcEntity)
 				} else if event.PrevKv != nil {
-					op.SetEntityId(string(event.PrevKv.Value))
+					entityId := entity.Id(event.PrevKv.Value)
+					op.SetEntityId(string(entityId))
 					op.SetPrevious(event.PrevKv.ModRevision)
+
+					// Try to fetch the entity data for the delete event.
+					// Index entries are deleted before the entity key, so the entity
+					// may still exist. Fall back to a revision-based read if not.
+					en, err := e.Store.GetEntity(ctx, entityId)
+					if err != nil {
+						en, err = e.Store.GetEntityAtRevision(ctx, entityId, event.Kv.ModRevision)
+					}
+					if err != nil {
+						e.Log.Error("failed to get entity for delete event", "error", err, "id", entityId)
+					} else {
+						var rpcEntity entityserver_v1alpha.Entity
+						rpcEntity.SetId(en.Id().String())
+						rpcEntity.SetCreatedAt(en.GetCreatedAt().UnixMilli())
+						rpcEntity.SetUpdatedAt(en.GetUpdatedAt().UnixMilli())
+						rpcEntity.SetRevision(en.GetRevision())
+						rpcEntity.SetAttrs(en.Attrs())
+
+						op.SetEntity(&rpcEntity)
+					}
 				}
 
 				_, err = send.Send(ctx, &op)

@@ -13,6 +13,7 @@ import (
 type MockStore struct {
 	mu              sync.RWMutex
 	Entities        map[Id]*Entity
+	deletedEntities map[Id]*Entity // Tracks recently deleted entities for revision-based reads
 	OnWatchIndex    func(ctx context.Context, attr Attr) (clientv3.WatchChan, error)
 	GetEntitiesFunc func(ctx context.Context, ids []Id) ([]*Entity, error)
 	OnListIndex     func(ctx context.Context, attr Attr) ([]Id, error) // Hook to track ListIndex calls
@@ -32,9 +33,10 @@ var _ Store = &MockStore{}
 
 func NewMockStore() *MockStore {
 	return &MockStore{
-		Entities:      make(map[Id]*Entity),
-		watchers:      make(map[Id][]chan EntityOp),
-		indexWatchers: make(map[string][]chan clientv3.WatchResponse),
+		Entities:        make(map[Id]*Entity),
+		deletedEntities: make(map[Id]*Entity),
+		watchers:        make(map[Id][]chan EntityOp),
+		indexWatchers:   make(map[string][]chan clientv3.WatchResponse),
 	}
 }
 
@@ -49,6 +51,18 @@ func (m *MockStore) GetEntity(ctx context.Context, id Id) (*Entity, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	if e, ok := m.Entities[id]; ok {
+		return e, nil
+	}
+	return nil, cond.NotFound("entity", id)
+}
+
+func (m *MockStore) GetEntityAtRevision(ctx context.Context, id Id, rev int64) (*Entity, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if e, ok := m.Entities[id]; ok {
+		return e, nil
+	}
+	if e, ok := m.deletedEntities[id]; ok {
 		return e, nil
 	}
 	return nil, cond.NotFound("entity", id)
@@ -221,10 +235,13 @@ func (m *MockStore) DeleteEntity(ctx context.Context, id Id) error {
 	m.mu.Lock()
 	entity, existed := m.Entities[id]
 	delete(m.Entities, id)
+	if existed {
+		m.deletedEntities[id] = entity
+	}
 	m.mu.Unlock()
 
-	// Notify index watchers of the deletion
 	if existed {
+		go m.notifyWatchers(id, EntityOp{Type: EntityOpDelete, Entity: entity})
 		go m.notifyIndexWatchers(entity, clientv3.EventTypeDelete, entity)
 	}
 
@@ -259,6 +276,27 @@ func (m *MockStore) WatchIndex(ctx context.Context, attr Attr) (clientv3.WatchCh
 	}()
 
 	return ch, nil
+}
+
+// WaitForEntityWatcher blocks until at least one watcher is registered for the given entity ID,
+// or the context is cancelled.
+func (m *MockStore) WaitForEntityWatcher(ctx context.Context, id Id) error {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			m.watchersMu.RLock()
+			hasWatcher := len(m.watchers[id]) > 0
+			m.watchersMu.RUnlock()
+			if hasWatcher {
+				return nil
+			}
+		}
+	}
 }
 
 // WaitForIndexWatcher blocks until at least one watcher is registered for the given attribute,

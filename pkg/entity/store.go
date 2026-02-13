@@ -31,6 +31,7 @@ type EtcdStore struct {
 
 type Store interface {
 	GetEntity(ctx context.Context, id Id) (*Entity, error)
+	GetEntityAtRevision(ctx context.Context, id Id, rev int64) (*Entity, error)
 	GetEntities(ctx context.Context, ids []Id) ([]*Entity, error)
 	WatchEntity(ctx context.Context, id Id) (chan EntityOp, error)
 	GetAttributeSchema(ctx context.Context, name Id) (*AttributeSchema, error)
@@ -338,6 +339,34 @@ func (s *EtcdStore) GetEntity(ctx context.Context, id Id) (*Entity, error) {
 	return &entity, nil
 }
 
+// GetEntityAtRevision reads an entity at a specific etcd revision.
+// This is used to retrieve entity data for delete events where the entity
+// may no longer exist at the current revision.
+func (s *EtcdStore) GetEntityAtRevision(ctx context.Context, id Id, rev int64) (*Entity, error) {
+	key := s.buildKey(id)
+
+	resp, err := s.client.Get(ctx, key, clientv3.WithRev(rev))
+	if err != nil {
+		return nil, fmt.Errorf("failed to get entity at revision %d: %w", rev, err)
+	}
+
+	if len(resp.Kvs) == 0 {
+		return nil, cond.NotFound("entity", id)
+	}
+
+	var entity Entity
+
+	err = decoder.Unmarshal(resp.Kvs[0].Value, &entity)
+	if err != nil {
+		return nil, cond.Corruption("entity", "failed to deserialize entity: %s", err)
+	}
+
+	entity.SetRevision(resp.Kvs[0].ModRevision)
+	entity.postUnmarshal()
+
+	return &entity, nil
+}
+
 func (s *EtcdStore) GetEntities(ctx context.Context, ids []Id) ([]*Entity, error) {
 	if len(ids) == 0 {
 		return []*Entity{}, nil
@@ -441,7 +470,7 @@ type EntityOp struct {
 
 func (s *EtcdStore) WatchEntity(ctx context.Context, id Id) (chan EntityOp, error) {
 	key := s.buildKey(id)
-	wc := s.client.Watch(ctx, key)
+	wc := s.client.Watch(ctx, key, clientv3.WithPrevKV())
 
 	och := make(chan EntityOp)
 
@@ -491,6 +520,17 @@ func (s *EtcdStore) WatchEntity(ctx context.Context, id Id) (chan EntityOp, erro
 
 						entity.postUnmarshal()
 						op.Entity = &entity
+					} else if eventType == EntityOpDelete && event.PrevKv != nil {
+						var entity Entity
+
+						err := decoder.Unmarshal(event.PrevKv.Value, &entity)
+						if err != nil {
+							s.log.Error("failed to decode previous entity for delete event", "error", err)
+						} else {
+							entity.SetRevision(event.PrevKv.ModRevision)
+							entity.postUnmarshal()
+							op.Entity = &entity
+						}
 					}
 
 					select {
