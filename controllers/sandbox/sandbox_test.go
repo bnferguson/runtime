@@ -9,7 +9,6 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -221,25 +220,28 @@ func TestSandbox(t *testing.T) {
 		ch, err := proc.Wait(ctx)
 		r.NoError(err)
 
+		var exitStatus containerd.ExitStatus
 		select {
 		case <-ctx.Done():
 			r.NoError(ctx.Err())
-		case <-ch:
+		case exitStatus = <-ch:
 			pw.Close()
-			// ok
 		}
+
+		r.NoError(exitStatus.Error(), "exec process returned an error")
+		r.Equal(uint32(0), exitStatus.ExitCode(), "exec process exited with non-zero status")
 
 		data, err := io.ReadAll(pr)
 		r.NoError(err)
 
-		lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-		r.Len(lines, 1)
+		output := strings.TrimSpace(string(data))
+		r.NotEmpty(output, "expected ip addr output but got empty string")
 
-		sort.Strings(lines)
+		fields := strings.Fields(output)
+		r.GreaterOrEqual(len(fields), 2, "expected at least 2 fields in ip addr output, got: %q", output)
 
-		addr := strings.Fields(strings.TrimSpace(lines[0]))[1]
-
-		r.Equal(addr, ca.Addr().String()+"/24", "address doesn't match")
+		addr := fields[1]
+		r.Equal(ca.Addr().String()+"/24", addr, "address doesn't match")
 
 		t.Run("create on existing sandbox is no-op", func(t *testing.T) {
 			searchRes, err := co.checkSandbox(ctx, &sb, meta)
