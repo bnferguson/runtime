@@ -89,16 +89,15 @@ jobs:
       with:
         ref: ${{ inputs.ref }}
 
-    - name: Set up Go
-      uses: actions/setup-go@v6
-      with:
-        go-version-file: 'go.mod'
-
     - name: Set test matrix
       id: set-matrix
       run: |
-        # Find all packages that have test files
-        ALL_TEST_PKGS=$(go list -f '{{if .TestGoFiles}}{{.ImportPath}}{{end}}' ./... | grep -v '^$' | sort)
+        MODULE=$(head -1 go.mod | awk '{print $2}')
+
+        # Find all packages with test files via filesystem scan
+        ALL_TEST_PKGS=$(find . -name '*_test.go' -not -path './vendor/*' -not -path './e2e/*' \
+          | xargs -I{} dirname {} | sort -u \
+          | sed "s|^\./|${MODULE}/|" | sed "s|^\.$$|${MODULE}|")
 
         # Get packages already assigned to groups
         GROUPED_PKGS=$(jq -r '.groups[].packages[]' hack/test-groups.json | sort)
@@ -257,8 +256,15 @@ jobs:
 
     - name: Cross-compile all targets
       run: |
+        pids=()
         for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
           GOOS="${target%/*}" GOARCH="${target#*/}"
           echo "Building $GOOS/$GOARCH..."
-          GOOS=$GOOS GOARCH=$GOARCH go build -o /dev/null ./cmd/miren
+          GOOS=$GOOS GOARCH=$GOARCH go build -o /dev/null ./cmd/miren &
+          pids+=($!)
         done
+        failed=0
+        for pid in "${pids[@]}"; do
+          wait "$pid" || failed=1
+        done
+        exit $failed
