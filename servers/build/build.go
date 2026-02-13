@@ -978,7 +978,9 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	// entities exist when the launcher runs. The addon controller will create
 	// a new AppVersion with addon vars once provisioning completes.
 	if ac != nil && b.addonsClient != nil {
-		b.provisionAddons(ctx, name, ac)
+		if err := b.provisionAddons(ctx, name, ac); err != nil {
+			return fmt.Errorf("addon provisioning failed: %w", err)
+		}
 	}
 
 	b.Log.Info("updating app entity with new version", "app", name, "version", mrv.Version)
@@ -1054,7 +1056,7 @@ func (b *Builder) getAccessInfo(ctx context.Context, appName string) *build_v1al
 	return info
 }
 
-func (b *Builder) provisionAddons(ctx context.Context, appName string, ac *appconfig.AppConfig) {
+func (b *Builder) provisionAddons(ctx context.Context, appName string, ac *appconfig.AppConfig) error {
 	for addonName, cfg := range ac.Addons {
 		variant := ""
 		if cfg != nil {
@@ -1068,11 +1070,11 @@ func (b *Builder) provisionAddons(ctx context.Context, appName string, ac *appco
 				b.Log.Debug("addon already attached", "addon", addonName, "app", appName)
 				continue
 			}
-			b.Log.Warn("failed to provision addon from app.toml", "addon", addonName, "app", appName, "error", err)
-			continue
+			return fmt.Errorf("provisioning addon %q for app %q: %w", addonName, appName, err)
 		}
 		b.Log.Info("addon provisioned from app.toml", "addon", addonName, "variant", variant, "app", appName)
 	}
+	return nil
 }
 
 func (b *Builder) logDeployment(ctx context.Context, appName, version, artifact string) {

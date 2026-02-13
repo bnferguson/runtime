@@ -741,7 +741,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	}
 
 	// Set up addon registry and register providers
-	addonFw := addon.NewProviderFramework(c.Log, ec, eac)
+	addonFw := addon.NewProviderFramework(c.Log, ec, eac, etcdStore)
 	addonRegistry := addon.NewRegistry()
 	addonRegistry.Register(postgresql.AddonName, postgresql.NewProvider(addonFw), postgresql.Definition())
 

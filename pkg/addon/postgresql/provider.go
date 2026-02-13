@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/url"
 
 	"miren.dev/runtime/pkg/addon"
 )
@@ -46,7 +47,13 @@ func (p *Provider) Deprovision(ctx context.Context, assoc addon.AddonAssociation
 
 // buildDatabaseURL constructs a postgres:// connection URL.
 func buildDatabaseURL(host string, port int, user, password, database string) string {
-	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s", user, password, host, port, database)
+	u := &url.URL{
+		Scheme: "postgres",
+		User:   url.UserPassword(user, password),
+		Host:   fmt.Sprintf("%s:%d", host, port),
+		Path:   database,
+	}
+	return u.String()
 }
 
 // buildEnvVars creates the standard set of PostgreSQL environment variables.

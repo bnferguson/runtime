@@ -19,17 +19,19 @@ import (
 // ProviderFramework provides common operations that addon providers need
 // when creating backing infrastructure (pools, services, etc).
 type ProviderFramework struct {
-	EC  *entityserver.Client
-	EAC *entityserver_v1alpha.EntityAccessClient
-	Log *slog.Logger
+	EC    *entityserver.Client
+	EAC   *entityserver_v1alpha.EntityAccessClient
+	Store entity.Store
+	Log   *slog.Logger
 }
 
 // NewProviderFramework creates a new provider framework.
-func NewProviderFramework(log *slog.Logger, ec *entityserver.Client, eac *entityserver_v1alpha.EntityAccessClient) *ProviderFramework {
+func NewProviderFramework(log *slog.Logger, ec *entityserver.Client, eac *entityserver_v1alpha.EntityAccessClient, store entity.Store) *ProviderFramework {
 	return &ProviderFramework{
-		EC:  ec,
-		EAC: eac,
-		Log: log,
+		EC:    ec,
+		EAC:   eac,
+		Store: store,
+		Log:   log,
 	}
 }
 

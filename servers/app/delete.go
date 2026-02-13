@@ -37,20 +37,21 @@ func DeleteAppTransitive(ctx context.Context, client *entityserver.Client, log *
 	// provider.Deprovision() (delete watch events don't include entity data).
 	addonAssocIDs := make(map[entity.Id]bool)
 	assocList, err := client.List(ctx, entity.Ref(addon_v1alpha.AddonAssociationAppId, appId))
-	if err == nil {
-		for assocList.Next() {
-			var assoc addon_v1alpha.AddonAssociation
-			if err := assocList.Read(&assoc); err != nil {
-				continue
-			}
-			if assoc.ID != "" {
-				addonAssocIDs[assoc.ID] = true
-				if err := client.Patch(ctx, assoc.ID, 0,
-					entity.String(addon_v1alpha.AddonAssociationStatusId, "deprovisioning")); err != nil {
-					log.Warn("failed to set addon association to deprovisioning", "id", assoc.ID, "error", err)
-				} else {
-					log.Info("triggered addon deprovisioning", "associationId", assoc.ID)
-				}
+	if err != nil {
+		return fmt.Errorf("listing addon associations for app %s: %w", appId, err)
+	}
+	for assocList.Next() {
+		var assoc addon_v1alpha.AddonAssociation
+		if err := assocList.Read(&assoc); err != nil {
+			continue
+		}
+		if assoc.ID != "" {
+			addonAssocIDs[assoc.ID] = true
+			if err := client.Patch(ctx, assoc.ID, 0,
+				entity.String(addon_v1alpha.AddonAssociationStatusId, "deprovisioning")); err != nil {
+				log.Warn("failed to set addon association to deprovisioning", "id", assoc.ID, "error", err)
+			} else {
+				log.Info("triggered addon deprovisioning", "associationId", assoc.ID)
 			}
 		}
 	}

@@ -2,12 +2,14 @@ package postgresql
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"miren.dev/runtime/api/addon/addon_v1alpha"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/pkg/addon"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/idgen"
@@ -267,23 +269,31 @@ type FindOrCreateSharedServerOut struct {
 func FindOrCreateSharedServer(ctx context.Context, in FindOrCreateSharedServerIn) (FindOrCreateSharedServerOut, error) {
 	fw := saga.Get[*addon.ProviderFramework](ctx)
 
-	// Try to find an existing active shared server
+	// Try to find an existing shared server
 	var server addon_v1alpha.PostgresServer
 	err := fw.EC.Get(ctx, sharedServerName, &server)
-	if err == nil && server.Status == "active" {
-		serviceHost, err := fw.GetServiceAddress(ctx, server.Service)
-		if err != nil {
-			return FindOrCreateSharedServerOut{}, fmt.Errorf("resolving existing shared service address: %w", err)
+	if err == nil {
+		switch server.Status {
+		case "active":
+			serviceHost, err := fw.GetServiceAddress(ctx, server.Service)
+			if err != nil {
+				return FindOrCreateSharedServerOut{}, fmt.Errorf("resolving existing shared service address: %w", err)
+			}
+			return FindOrCreateSharedServerOut{
+				ServerID:          server.ID,
+				SuperuserPassword: server.SuperuserPassword,
+				ServiceHost:       serviceHost,
+			}, nil
+		default:
+			return FindOrCreateSharedServerOut{}, fmt.Errorf("shared server exists but has status %q; retry later", server.Status)
 		}
-
-		return FindOrCreateSharedServerOut{
-			ServerID:          server.ID,
-			SuperuserPassword: server.SuperuserPassword,
-			ServiceHost:       serviceHost,
-		}, nil
 	}
 
-	// No active shared server — run the EnsureSharedServerSaga as a nested saga.
+	if !errors.Is(err, cond.ErrNotFound{}) {
+		return FindOrCreateSharedServerOut{}, fmt.Errorf("looking up shared server: %w", err)
+	}
+
+	// No shared server found — run the EnsureSharedServerSaga as a nested saga.
 	superuserPassword := idgen.Gen("su")
 
 	result, err := saga.RunNested(ctx, "ensure-shared-server",
@@ -775,7 +785,7 @@ func (p *Provider) provisionShared(ctx context.Context, app addon.App, variant a
 		return nil, fmt.Errorf("registering shared saga: %w", err)
 	}
 
-	storage := saga.NewMemoryStorage()
+	storage := saga.NewEntityStorage(p.fw.Store, p.log)
 	executor := saga.NewExecutor(storage, saga.WithRegistry(registry), saga.WithLogger(p.log))
 
 	err := executor.Start("provision-shared-postgresql").
@@ -802,7 +812,7 @@ func (p *Provider) deprovisionShared(ctx context.Context, assoc addon.AddonAssoc
 		return fmt.Errorf("registering deprovision saga: %w", err)
 	}
 
-	storage := saga.NewMemoryStorage()
+	storage := saga.NewEntityStorage(p.fw.Store, p.log)
 	executor := saga.NewExecutor(storage, saga.WithRegistry(registry), saga.WithLogger(p.log))
 
 	err := executor.Start("deprovision-shared-postgresql").

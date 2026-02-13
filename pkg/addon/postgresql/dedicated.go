@@ -497,7 +497,7 @@ func (p *Provider) provisionDedicated(ctx context.Context, app addon.App, varian
 		return nil, fmt.Errorf("registering dedicated saga: %w", err)
 	}
 
-	storage := saga.NewMemoryStorage()
+	storage := saga.NewEntityStorage(p.fw.Store, p.log)
 	executor := saga.NewExecutor(storage, saga.WithRegistry(registry), saga.WithLogger(p.log))
 
 	err := executor.Start("provision-dedicated-postgresql").
@@ -526,7 +526,7 @@ func (p *Provider) deprovisionDedicated(ctx context.Context, assoc addon.AddonAs
 		return fmt.Errorf("registering deprovision saga: %w", err)
 	}
 
-	storage := saga.NewMemoryStorage()
+	storage := saga.NewEntityStorage(p.fw.Store, p.log)
 	executor := saga.NewExecutor(storage, saga.WithRegistry(registry), saga.WithLogger(p.log))
 
 	err := executor.Start("deprovision-dedicated-postgresql").

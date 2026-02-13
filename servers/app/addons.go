@@ -50,6 +50,9 @@ func (s *AddonsServer) CreateInstance(ctx context.Context, state *app_v1alpha.Ad
 		return err
 	}
 	if variantOverride != "" {
+		if _, err := s.registry.GetVariantConfig(addonName, variantOverride); err != nil {
+			return fmt.Errorf("invalid variant override: %w", err)
+		}
 		variantName = variantOverride
 	}
 
@@ -72,7 +75,9 @@ func (s *AddonsServer) CreateInstance(ctx context.Context, state *app_v1alpha.Ad
 	}
 	for existing.Next() {
 		var assoc addon_v1alpha.AddonAssociation
-		existing.Read(&assoc)
+		if err := existing.Read(&assoc); err != nil {
+			return fmt.Errorf("reading addon association: %w", err)
+		}
 		if assoc.Addon == addonEntity.ID {
 			return fmt.Errorf("addon %q is already attached to app %q", addonName, appName)
 		}
@@ -122,7 +127,9 @@ func (s *AddonsServer) ListInstances(ctx context.Context, state *app_v1alpha.Add
 	var addons []*app_v1alpha.AddonInstance
 	for results.Next() {
 		var assoc addon_v1alpha.AddonAssociation
-		results.Read(&assoc)
+		if err := results.Read(&assoc); err != nil {
+			return fmt.Errorf("reading addon association: %w", err)
+		}
 
 		instance := &app_v1alpha.AddonInstance{}
 		instance.SetId(string(assoc.ID))
@@ -160,7 +167,9 @@ func (s *AddonsServer) DeleteInstance(ctx context.Context, state *app_v1alpha.Ad
 
 	for results.Next() {
 		var assoc addon_v1alpha.AddonAssociation
-		results.Read(&assoc)
+		if err := results.Read(&assoc); err != nil {
+			return fmt.Errorf("reading addon association: %w", err)
+		}
 
 		if addonNameFromRef(assoc.Addon) == addonName {
 			// Set status to deprovisioning so the controller handles cleanup
