@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"miren.dev/runtime/api/addon/addon_v1alpha"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
@@ -290,6 +291,43 @@ func TestDeleteAppTransitive(t *testing.T) {
 		// Sandboxes are NOT deleted - they reference app_versions, not apps directly
 		require.True(t, entityExists(sandbox1ID), "sandbox1 should still exist (cleaned up by controller)")
 		require.True(t, entityExists(sandbox2ID), "sandbox2 should still exist (cleaned up by controller)")
+	})
+
+	t.Run("triggers addon deprovisioning before deletion", func(t *testing.T) {
+		// Create app
+		app := &core_v1alpha.App{}
+		appID, err := client.Create(ctx, "app-with-addon", app)
+		require.NoError(t, err)
+
+		// Create addon association with status "active"
+		assoc := &addon_v1alpha.AddonAssociation{
+			App:     appID,
+			Addon:   entity.Id("some-addon"),
+			Variant: "shared",
+			Status:  "active",
+		}
+		assocID, err := client.Create(ctx, "app-with-addon/postgresql", assoc)
+		require.NoError(t, err)
+
+		// Verify both exist
+		require.True(t, entityExists(appID), "app should exist")
+		require.True(t, entityExists(assocID), "addon association should exist")
+
+		// Delete the app
+		err = DeleteAppTransitive(ctx, client, log, appID)
+		require.NoError(t, err)
+
+		// Association should still exist (not deleted) with status "deprovisioning"
+		require.True(t, entityExists(assocID), "addon association should still exist for deprovisioning")
+
+		var updated addon_v1alpha.AddonAssociation
+		ent, err := inmem.Store.GetEntity(ctx, assocID)
+		require.NoError(t, err)
+		updated.Decode(ent)
+		require.Equal(t, "deprovisioning", updated.Status, "addon association should have deprovisioning status")
+
+		// App should be deleted
+		require.False(t, entityExists(appID), "app should be deleted")
 	})
 
 	t.Run("handles app with active_version self-reference", func(t *testing.T) {

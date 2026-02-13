@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"miren.dev/runtime/api/addon/addon_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/pkg/entity"
@@ -28,6 +29,31 @@ func DeleteAppTransitive(ctx context.Context, client *entityserver.Client, log *
 	if err := client.Patch(ctx, appId, 0, entity.Ref(core_v1alpha.AppActiveVersionId, entity.Id(""))); err != nil {
 		log.Warn("failed to clear active version (app may already be deleted)", "appId", appId, "error", err)
 		// Continue anyway - the app might already be partially deleted
+	}
+
+	// Trigger addon deprovisioning before deleting entities.
+	// We set status to "deprovisioning" rather than deleting directly
+	// because the addon controller needs the entity data to call
+	// provider.Deprovision() (delete watch events don't include entity data).
+	addonAssocIDs := make(map[entity.Id]bool)
+	assocList, err := client.List(ctx, entity.Ref(addon_v1alpha.AddonAssociationAppId, appId))
+	if err != nil {
+		return fmt.Errorf("listing addon associations for app %s: %w", appId, err)
+	}
+	for assocList.Next() {
+		var assoc addon_v1alpha.AddonAssociation
+		if err := assocList.Read(&assoc); err != nil {
+			continue
+		}
+		if assoc.ID != "" {
+			addonAssocIDs[assoc.ID] = true
+			if err := client.Patch(ctx, assoc.ID, 0,
+				entity.String(addon_v1alpha.AddonAssociationStatusId, "deprovisioning")); err != nil {
+				log.Warn("failed to set addon association to deprovisioning", "id", assoc.ID, "error", err)
+			} else {
+				log.Info("triggered addon deprovisioning", "associationId", assoc.ID)
+			}
+		}
 	}
 
 	// Find all the attributes that reference apps by id
@@ -64,7 +90,11 @@ func DeleteAppTransitive(ctx context.Context, client *entityserver.Client, log *
 		"total", len(referencingEntities))
 
 	// Delete all referencing entities (app_versions, pools, etc.)
+	// Skip addon associations — they'll be deleted by the addon controller after deprovisioning.
 	for _, id := range referencingEntities {
+		if addonAssocIDs[id] {
+			continue
+		}
 		log.Info("deleting entity", "id", id)
 		if err := client.Delete(ctx, id); err != nil {
 			return fmt.Errorf("failed to delete entity %s: %w", id, err)

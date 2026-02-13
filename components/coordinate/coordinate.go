@@ -17,6 +17,7 @@ import (
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"miren.dev/runtime/api/addon/addon_v1alpha"
 	"miren.dev/runtime/api/admin/admin_v1alpha"
 	appclient "miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/app/app_v1alpha"
@@ -36,6 +37,7 @@ import (
 	"miren.dev/runtime/components/autotls"
 	"miren.dev/runtime/components/buildkit"
 	"miren.dev/runtime/components/netresolve"
+	addonctrl "miren.dev/runtime/controllers/addon"
 	artifactctrl "miren.dev/runtime/controllers/artifact"
 	certctrl "miren.dev/runtime/controllers/certificate"
 	deploymentctrl "miren.dev/runtime/controllers/deployment"
@@ -43,6 +45,8 @@ import (
 	schedulerctrl "miren.dev/runtime/controllers/scheduler"
 	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/observability"
+	"miren.dev/runtime/pkg/addon"
+	"miren.dev/runtime/pkg/addon/postgresql"
 	"miren.dev/runtime/pkg/caauth"
 	"miren.dev/runtime/pkg/cloudauth"
 	"miren.dev/runtime/pkg/controller"
@@ -50,6 +54,7 @@ import (
 	"miren.dev/runtime/pkg/entity/schema"
 	"miren.dev/runtime/pkg/labs"
 	"miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/pkg/saga"
 	"miren.dev/runtime/pkg/sysstats"
 	"miren.dev/runtime/servers/admin"
 	"miren.dev/runtime/servers/app"
@@ -736,6 +741,18 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		return err
 	}
 
+	// Set up addon registry; only register providers when the addons lab flag is enabled
+	addonRegistry := addon.NewRegistry()
+	if labs.Addons() {
+		addonFw := addon.NewProviderFramework(c.Log, ec, eac, saga.NewEntityStorage(etcdStore, c.Log))
+		addonRegistry.Register(postgresql.AddonName, postgresql.NewProvider(addonFw), postgresql.Definition())
+
+		if err := addonRegistry.EnsureEntities(ctx, ec); err != nil {
+			c.Log.Error("failed to ensure addon entities", "error", err)
+			return err
+		}
+	}
+
 	// Migrate app versions before starting components that depend on them
 	migrationCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
@@ -777,6 +794,20 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		1,           // Single worker to prevent race conditions
 	)
 	c.cm.AddController(launcherController)
+
+	if labs.Addons() {
+		// Watch AddonAssociation changes to re-trigger launcher when addons become ready
+		addonLauncherController := controller.NewReconcileController(
+			"deploymentlauncher-addons",
+			c.Log,
+			entity.Ref(entity.EntityKind, addon_v1alpha.KindAddonAssociation),
+			eac,
+			launcher.AddonAssociationHandler(),
+			0, // No resync — driven entirely by watch events
+			1,
+		)
+		c.cm.AddController(addonLauncherController)
+	}
 
 	// Add sandbox pool controller (reconciles pool desired_instances to actual sandboxes)
 	poolController := controller.NewReconcileController(
@@ -830,6 +861,26 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		c.cm.AddController(certCtrl)
 	}
 
+	if labs.Addons() {
+		// Add addon controller (reconciles addon associations for provisioning/deprovisioning)
+		addonController := addonctrl.NewController(c.Log, ec, eac, addonRegistry)
+		if err := addonController.Init(ctx); err != nil {
+			c.Log.Error("failed to initialize addon controller", "error", err)
+			return err
+		}
+
+		addonReconciler := controller.NewReconcileController(
+			"addon",
+			c.Log,
+			entity.Ref(entity.EntityKind, addon_v1alpha.KindAddonAssociation),
+			eac,
+			controller.AdaptReconcileController[addon_v1alpha.AddonAssociation](addonController),
+			time.Minute,
+			1,
+		)
+		c.cm.AddController(addonReconciler)
+	}
+
 	// Start the controller manager
 	if err := c.cm.Start(ctx); err != nil {
 		c.Log.Error("failed to start controller manager", "error", err)
@@ -847,15 +898,28 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	eps := execproxy.NewServer(c.Log, eac, rs)
 	server.ExposeValue("dev.miren.runtime/exec", exec_v1alpha.AdaptSandboxExec(eps))
 
-	// Create app client for the builder
-	appClient := appclient.NewClient(c.Log, loopback)
-
-	bs := build.NewBuilder(c.Log, eac, appClient, c.Resolver, c.TempDir, c.LogWriter, c.CloudAuth.DNSHostname, c.BuildKit)
-	server.ExposeValue("dev.miren.runtime/build", build_v1alpha.AdaptBuilder(bs))
-
 	ai := app.NewAppInfo(c.Log, ec, c.Cpu, c.Mem, c.HTTP)
 	server.ExposeValue("dev.miren.runtime/app", app_v1alpha.AdaptCrud(ai))
 	server.ExposeValue("dev.miren.runtime/app-status", app_v1alpha.AdaptAppStatus(ai))
+
+	var addonsClient *app_v1alpha.AddonsClient
+	if labs.Addons() {
+		addonsServer := app.NewAddonsServer(c.Log, ec, addonRegistry)
+		server.ExposeValue("dev.miren.runtime/addons", app_v1alpha.AdaptAddons(addonsServer))
+
+		addonsLoopback, err := rs.Connect(rs.LoopbackAddr(), "dev.miren.runtime/addons")
+		if err != nil {
+			c.Log.Error("failed to connect to addons RPC service", "error", err)
+			return err
+		}
+		addonsClient = app_v1alpha.NewAddonsClient(addonsLoopback)
+	}
+
+	// Create app client for the builder
+	appClient := appclient.NewClient(c.Log, loopback)
+
+	bs := build.NewBuilder(c.Log, eac, appClient, addonsClient, c.Resolver, c.TempDir, c.LogWriter, c.CloudAuth.DNSHostname, c.BuildKit)
+	server.ExposeValue("dev.miren.runtime/build", build_v1alpha.AdaptBuilder(bs))
 
 	ls := logs.NewServer(c.Log, ec, c.Logs)
 	server.ExposeValue("dev.miren.runtime/logs", app_v1alpha.AdaptLogs(ls))

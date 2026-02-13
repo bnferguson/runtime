@@ -43,6 +43,11 @@ type schemaAttr struct {
 	Attrs map[string]*schemaAttr `yaml:"attrs,omitempty"` // for nested attributes
 }
 
+type emptyCheck struct {
+	notEmpty j.Code // true when field has a value (used in multi-field if-checks)
+	isEmpty  j.Code // true when field is empty (used in single-field return)
+}
+
 type gen struct {
 	kind        string
 	name        string
@@ -69,7 +74,7 @@ type gen struct {
 	decodeouter []j.Code
 	decoders    []j.Code
 	encoders    []j.Code
-	empties     []j.Code
+	emptyChecks []emptyCheck // per-field emptiness checks
 
 	subgen []*gen // for nested attributes
 }
@@ -344,8 +349,10 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 					j.Id("attrs").Op("=").Append(j.Id("attrs"), j.Qual(top, method).Call(g.Ident(fname), j.Id("v"))),
 				),
 			)
-			g.empties = append(g.empties,
-				j.If(j.Len(j.Id("o").Dot(fname)).Op("!=").Lit(0)).Block(j.Return(j.False())))
+			g.emptyChecks = append(g.emptyChecks, emptyCheck{
+				notEmpty: j.Len(j.Id("o").Dot(fname)).Op("!=").Lit(0),
+				isEmpty:  j.Len(j.Id("o").Dot(fname)).Op("==").Lit(0),
+			})
 		} else {
 			// Special handling for required fields and bool type to always encode, even zero values
 			// Required int/duration fields need to encode 0 (scale-to-zero, zero duration, etc.)
@@ -362,8 +369,10 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 				)
 			}
 			// All field types (including bool) should be considered in Empty() check
-			g.empties = append(g.empties,
-				j.If(j.Op("!").Qual(top, "Empty").Call(j.Id("o").Dot(fname))).Block(j.Return(j.False())))
+			g.emptyChecks = append(g.emptyChecks, emptyCheck{
+				notEmpty: j.Op("!").Qual(top, "Empty").Call(j.Id("o").Dot(fname)),
+				isEmpty:  j.Qual(top, "Empty").Call(j.Id("o").Dot(fname)),
+			})
 		}
 	}
 
@@ -459,16 +468,20 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 						Call(g.Ident(fname), j.Id("v").Dot("Encode").Call())),
 				),
 			)
-			g.empties = append(g.empties,
-				j.If(j.Len(j.Id("o").Dot(fname)).Op("!=").Lit(0)).Block(j.Return(j.False())))
+			g.emptyChecks = append(g.emptyChecks, emptyCheck{
+				notEmpty: j.Len(j.Id("o").Dot(fname)).Op("!=").Lit(0),
+				isEmpty:  j.Len(j.Id("o").Dot(fname)).Op("==").Lit(0),
+			})
 		} else {
 			g.encoders = append(g.encoders,
 				j.If(j.Op("!").Id("o").Dot(fname).Dot("Empty").Call()).Block(
 					j.Id("attrs").Op("=").Append(j.Id("attrs"), j.Qual(top, "Component").
 						Call(g.Ident(fname), j.Id("o").Dot(fname).Dot("Encode").Call()))),
 			)
-			g.empties = append(g.empties,
-				j.If(j.Op("!").Id("o").Dot(fname).Dot("Empty").Call()).Block(j.Return(j.False())))
+			g.emptyChecks = append(g.emptyChecks, emptyCheck{
+				notEmpty: j.Op("!").Id("o").Dot(fname).Dot("Empty").Call(),
+				isEmpty:  j.Id("o").Dot(fname).Dot("Empty").Call(),
+			})
 		}
 
 		simpleDecl("Component")
@@ -547,8 +560,10 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 					j.Id("attrs").Op("=").Append(j.Id("attrs"), j.Qual(top, "Ref").Call(g.Ident(fname), j.Id("v"))),
 				),
 			)
-			g.empties = append(g.empties,
-				j.If(j.Len(j.Id("o").Dot(fname)).Op("!=").Lit(0)).Block(j.Return(j.False())))
+			g.emptyChecks = append(g.emptyChecks, emptyCheck{
+				notEmpty: j.Len(j.Id("o").Dot(fname)).Op("!=").Lit(0),
+				isEmpty:  j.Len(j.Id("o").Dot(fname)).Op("==").Lit(0),
+			})
 			simpleDecl("Ref")
 			simpleField("id")
 		} else {
@@ -575,16 +590,20 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 					j.Id("attrs").Op("=").Append(j.Id("attrs"), j.Qual(top, "Bytes").Call(g.Ident(fname), j.Id("v"))),
 				),
 			)
-			g.empties = append(g.empties,
-				j.If(j.Len(j.Id("o").Dot(fname)).Op("!=").Lit(0)).Block(j.Return(j.False())))
+			g.emptyChecks = append(g.emptyChecks, emptyCheck{
+				notEmpty: j.Len(j.Id("o").Dot(fname)).Op("!=").Lit(0),
+				isEmpty:  j.Len(j.Id("o").Dot(fname)).Op("==").Lit(0),
+			})
 		} else {
 			g.encoders = append(g.encoders,
 				j.If(j.Len(j.Id("o").Dot(fname)).Op(">").Lit(0)).Block(
 					j.Id("attrs").Op("=").Append(j.Id("attrs"), j.Qual(top, "Bytes").Call(g.Ident(fname), j.Id("o").Dot(fname))),
 				),
 			)
-			g.empties = append(g.empties,
-				j.If(j.Len(j.Id("o").Dot(fname)).Op(">").Lit(0)).Block(j.Return(j.False())))
+			g.emptyChecks = append(g.emptyChecks, emptyCheck{
+				notEmpty: j.Len(j.Id("o").Dot(fname)).Op("!=").Lit(0),
+				isEmpty:  j.Len(j.Id("o").Dot(fname)).Op("==").Lit(0),
+			})
 		}
 
 	case "label":
@@ -595,16 +614,20 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 					j.Id("attrs").Op("=").Append(j.Id("attrs"), j.Qual(top, "Label").Call(g.Ident(fname), j.Id("v").Dot("Key"), j.Id("v").Dot("Value"))),
 				),
 			)
-			g.empties = append(g.empties,
-				j.If(j.Len(j.Id("o").Dot(fname)).Op("!=").Lit(0)).Block(j.Return(j.False())))
+			g.emptyChecks = append(g.emptyChecks, emptyCheck{
+				notEmpty: j.Len(j.Id("o").Dot(fname)).Op("!=").Lit(0),
+				isEmpty:  j.Len(j.Id("o").Dot(fname)).Op("==").Lit(0),
+			})
 		} else {
 			g.fields = append(g.fields, j.Id(fname).Qual(topt, "Label").Tag(tag))
 			g.encoders = append(g.encoders,
 				j.If(j.Op("!").Qual(top, "Empty").Call(j.Id("o").Dot(fname))).Block(
 					j.Id("attrs").Op("=").Append(j.Id("attrs"), j.Qual(top, "Label").Call(g.Ident(fname), j.Id("o").Dot(fname).Dot("Key"), j.Id("o").Dot(fname).Dot("Value")))),
 			)
-			g.empties = append(g.empties,
-				j.If(j.Op("!").Qual(top, "Empty").Call(j.Id("o").Dot(fname))).Block(j.Return(j.False())))
+			g.emptyChecks = append(g.emptyChecks, emptyCheck{
+				notEmpty: j.Op("!").Qual(top, "Empty").Call(j.Id("o").Dot(fname)),
+				isEmpty:  j.Qual(top, "Empty").Call(j.Id("o").Dot(fname)),
+			})
 		}
 		simpleDecoder("KindLabel", "Label")
 		simpleDecl("Label")
@@ -687,8 +710,10 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 			j.Id("attrs").Op("=").Append(j.Id("attrs"), j.Qual(top, "Ref").Call(g.Ident(fname), j.Id("a"))),
 		)
 		g.encoders = append(g.encoders, enc)
-		g.empties = append(g.empties,
-			j.If(j.Id("o").Dot(fname).Op("!=").Lit("")).Block(j.Return(j.False())))
+		g.emptyChecks = append(g.emptyChecks, emptyCheck{
+			notEmpty: j.Id("o").Dot(fname).Op("!=").Lit(""),
+			isEmpty:  j.Id("o").Dot(fname).Op("==").Lit(""),
+		})
 
 		var call []j.Code
 		call = append(call, j.Lit(name), j.Lit(eid))
@@ -831,16 +856,20 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 						Call(g.Ident(fname), j.Id("v").Dot("Encode").Call())),
 				),
 			)
-			g.empties = append(g.empties,
-				j.If(j.Len(j.Id("o").Dot(fname)).Op("!=").Lit(0)).Block(j.Return(j.False())))
+			g.emptyChecks = append(g.emptyChecks, emptyCheck{
+				notEmpty: j.Len(j.Id("o").Dot(fname)).Op("!=").Lit(0),
+				isEmpty:  j.Len(j.Id("o").Dot(fname)).Op("==").Lit(0),
+			})
 		} else {
 			g.encoders = append(g.encoders,
 				j.If(j.Op("!").Id("o").Dot(fname).Dot("Empty").Call()).Block(
 					j.Id("attrs").Op("=").Append(j.Id("attrs"), j.Qual(top, "Component").
 						Call(g.Ident(fname), j.Id("o").Dot(fname).Dot("Encode").Call()))),
 			)
-			g.empties = append(g.empties,
-				j.If(j.Op("!").Id("o").Dot(fname).Dot("Empty").Call()).Block(j.Return(j.False())))
+			g.emptyChecks = append(g.emptyChecks, emptyCheck{
+				notEmpty: j.Op("!").Id("o").Dot(fname).Dot("Empty").Call(),
+				isEmpty:  j.Id("o").Dot(fname).Dot("Empty").Call(),
+			})
 		}
 		simpleDecl("Component")
 
@@ -963,10 +992,14 @@ func (g *gen) generate() {
 		Params(j.Id("o").Op("*").Id(structName)).Id("Empty").
 		Params().Params(j.Bool()).
 		BlockFunc(func(b *j.Group) {
-			for _, d := range g.empties {
-				b.Add(d)
+			if len(g.emptyChecks) == 1 {
+				b.Return(g.emptyChecks[0].isEmpty)
+			} else {
+				for _, c := range g.emptyChecks {
+					b.If(c.notEmpty).Block(j.Return(j.False()))
+				}
+				b.Return(j.True())
 			}
-			b.Return(j.True())
 		})
 
 	f.Line()

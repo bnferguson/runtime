@@ -129,13 +129,13 @@ func (o *Saga) Empty() bool {
 	if !entity.Empty(o.Error) {
 		return false
 	}
-	if len(o.ExecutedActions) > 0 {
+	if len(o.ExecutedActions) != 0 {
 		return false
 	}
-	if len(o.ExecutionOrder) > 0 {
+	if len(o.ExecutionOrder) != 0 {
 		return false
 	}
-	if len(o.InitialInputs) > 0 {
+	if len(o.InitialInputs) != 0 {
 		return false
 	}
 	if !entity.Empty(o.ParentExecutionId) {

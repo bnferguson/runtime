@@ -123,11 +123,11 @@ func TestIsEnabledFunction(t *testing.T) {
 func TestAllFeatures(t *testing.T) {
 	features := AllFeatures()
 
-	if len(features) != 5 {
-		t.Errorf("Expected 5 features, got %d", len(features))
+	if len(features) != 6 {
+		t.Errorf("Expected 6 features, got %d", len(features))
 	}
 
-	expected := []string{"globalrouter", "distributedrunners", "usersubdomains", "adminapi", "routeoidc"}
+	expected := []string{"globalrouter", "distributedrunners", "usersubdomains", "adminapi", "routeoidc", "addons"}
 	for _, name := range expected {
 		found := false
 		for _, f := range features {
@@ -145,8 +145,8 @@ func TestAllFeatures(t *testing.T) {
 func TestFeatureDescriptions(t *testing.T) {
 	descriptions := FeatureDescriptions()
 
-	if len(descriptions) != 5 {
-		t.Errorf("Expected 5 descriptions, got %d", len(descriptions))
+	if len(descriptions) != 6 {
+		t.Errorf("Expected 6 descriptions, got %d", len(descriptions))
 	}
 
 	if descriptions[FeatureGlobalRouter] == "" {
@@ -163,6 +163,9 @@ func TestFeatureDescriptions(t *testing.T) {
 	}
 	if descriptions[FeatureRouteOIDC] == "" {
 		t.Error("RouteOIDC description should not be empty")
+	}
+	if descriptions[FeatureAddons] == "" {
+		t.Error("Addons description should not be empty")
 	}
 }
 

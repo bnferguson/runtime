@@ -77,7 +77,10 @@ func (c *Controller) Reconcile(ctx context.Context, sandbox *compute_v1alpha.San
 		// Stateful sandboxes must run on the coordinator (for disk access)
 		assignedNode = c.findCoordinatorNode(nodes)
 		if assignedNode == nil {
-			c.log.Error("no coordinator node available for stateful sandbox", "sandbox", sandbox.ID)
+			for _, node := range nodes {
+				c.log.Debug("node observed when looking for coordinator", "node", node.ID, "constraints", node.Constraints)
+			}
+			c.log.Error("no coordinator node available for stateful sandbox", "sandbox", sandbox.ID, "nodes", len(nodes))
 			return nil
 		}
 		c.log.Debug("scheduling stateful sandbox to coordinator",

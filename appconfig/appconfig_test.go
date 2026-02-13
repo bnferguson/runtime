@@ -671,3 +671,59 @@ size_gb = 100
 		assert.Contains(t, err.Error(), "must have a mount_path")
 	})
 }
+
+func TestParseAppConfigWithAddons(t *testing.T) {
+	t.Run("parse addon with variant", func(t *testing.T) {
+		config := `
+name = "my-app"
+
+[addons.miren-postgresql]
+variant = "small"
+`
+		ac, err := Parse([]byte(config))
+		require.NoError(t, err)
+		require.NotNil(t, ac.Addons)
+		require.Contains(t, ac.Addons, "miren-postgresql")
+		assert.Equal(t, "small", ac.Addons["miren-postgresql"].Variant)
+	})
+
+	t.Run("parse multiple addons", func(t *testing.T) {
+		config := `
+name = "my-app"
+
+[addons.miren-postgresql]
+variant = "small"
+
+[addons.miren-redis]
+variant = "shared"
+`
+		ac, err := Parse([]byte(config))
+		require.NoError(t, err)
+		require.Len(t, ac.Addons, 2)
+		assert.Equal(t, "small", ac.Addons["miren-postgresql"].Variant)
+		assert.Equal(t, "shared", ac.Addons["miren-redis"].Variant)
+	})
+
+	t.Run("parse addon without variant uses default", func(t *testing.T) {
+		config := `
+name = "my-app"
+
+[addons.miren-postgresql]
+variant = ""
+`
+		ac, err := Parse([]byte(config))
+		require.NoError(t, err)
+		require.NotNil(t, ac.Addons)
+		require.Contains(t, ac.Addons, "miren-postgresql")
+		assert.Equal(t, "", ac.Addons["miren-postgresql"].Variant)
+	})
+
+	t.Run("no addons section", func(t *testing.T) {
+		config := `
+name = "my-app"
+`
+		ac, err := Parse([]byte(config))
+		require.NoError(t, err)
+		assert.Nil(t, ac.Addons)
+	})
+}

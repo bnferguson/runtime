@@ -70,8 +70,8 @@ func TestBytesFieldEncoding(t *testing.T) {
 		emptyMethod := code[emptyStart : emptyStart+emptyEnd]
 
 		// The Empty method should return false when bytes are non-empty
-		if !strings.Contains(emptyMethod, "if len(o.Content) > 0 {") {
-			t.Error("Empty() should check if bytes length > 0")
+		if !strings.Contains(emptyMethod, "if len(o.Content) != 0 {") {
+			t.Error("Empty() should check if bytes length != 0")
 			t.Logf("Empty method:\n%s", emptyMethod)
 		}
 

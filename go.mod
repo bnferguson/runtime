@@ -48,6 +48,7 @@ require (
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/hashicorp/hcl/v2 v2.23.0
 	github.com/ironpark/skiplist v0.0.0-20230103051251-d63941a7d606
+	github.com/jackc/pgx/v5 v5.8.0
 	github.com/kdomanski/iso9660 v0.4.0
 	github.com/lab47/cleo v0.0.0-20231211212820-67d5758db9ae
 	github.com/lab47/lsvd v0.0.0-20240924031640-ac13c6bb62f0
@@ -262,6 +263,8 @@ require (
 	github.com/iij/doapi v0.0.0-20190504054126-0bbf12d6d7df // indirect
 	github.com/in-toto/in-toto-golang v0.5.0 // indirect
 	github.com/infobloxopen/infoblox-go-client/v2 v2.10.0 // indirect
+	github.com/jackc/pgpassfile v1.0.0 // indirect
+	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jessevdk/go-flags v1.6.1 // indirect
 	github.com/jonboulle/clockwork v0.5.0 // indirect
 	github.com/json-iterator/go v1.1.13-0.20220915233716-71ac16282d12 // indirect

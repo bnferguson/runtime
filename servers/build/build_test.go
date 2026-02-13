@@ -741,6 +741,50 @@ func TestMergeVariablesFromAppConfig(t *testing.T) {
 				{Key: "NEW_VAR", Value: "new_value", Source: "config"},
 			},
 		},
+		{
+			name: "addon vars persist across deploys",
+			existingVars: []core_v1alpha.ConfigSpecVariables{
+				{Key: "DATABASE_URL", Value: "postgres://addon/db", Source: "addon", Sensitive: true},
+				{Key: "PGHOST", Value: "host.addon.app.miren", Source: "addon"},
+				{Key: "CONFIG_VAR", Value: "old", Source: "config"},
+			},
+			appConfig: &appconfig.AppConfig{
+				EnvVars: []appconfig.AppEnvVar{
+					{Key: "CONFIG_VAR", Value: "new"},
+				},
+			},
+			wantVars: []core_v1alpha.ConfigSpecVariables{
+				{Key: "DATABASE_URL", Value: "postgres://addon/db", Source: "addon", Sensitive: true},
+				{Key: "PGHOST", Value: "host.addon.app.miren", Source: "addon"},
+				{Key: "CONFIG_VAR", Value: "new", Source: "config"},
+			},
+		},
+		{
+			name: "addon vars not overridden by config vars",
+			existingVars: []core_v1alpha.ConfigSpecVariables{
+				{Key: "DATABASE_URL", Value: "postgres://addon/db", Source: "addon"},
+			},
+			appConfig: &appconfig.AppConfig{
+				EnvVars: []appconfig.AppEnvVar{
+					{Key: "DATABASE_URL", Value: "postgres://manual/db"},
+				},
+			},
+			wantVars: []core_v1alpha.ConfigSpecVariables{
+				{Key: "DATABASE_URL", Value: "postgres://addon/db", Source: "addon"},
+			},
+		},
+		{
+			name: "addon vars preserved when app.toml has no env section",
+			existingVars: []core_v1alpha.ConfigSpecVariables{
+				{Key: "DATABASE_URL", Value: "postgres://addon/db", Source: "addon"},
+				{Key: "MANUAL_VAR", Value: "val", Source: "manual"},
+			},
+			appConfig: nil,
+			wantVars: []core_v1alpha.ConfigSpecVariables{
+				{Key: "DATABASE_URL", Value: "postgres://addon/db", Source: "addon"},
+				{Key: "MANUAL_VAR", Value: "val", Source: "manual"},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -899,6 +943,32 @@ func TestMergeServiceEnvVars(t *testing.T) {
 			newEnvs: nil,
 			wantEnvs: []core_v1alpha.ConfigSpecServicesEnv{
 				{Key: "MANUAL_VAR", Value: "manual_value", Source: "manual"},
+			},
+		},
+		{
+			name: "addon vars persist across deploys",
+			existingEnvs: []core_v1alpha.ConfigSpecServicesEnv{
+				{Key: "DATABASE_URL", Value: "postgres://addon/db", Source: "addon"},
+				{Key: "CONFIG_VAR", Value: "old", Source: "config"},
+			},
+			newEnvs: []core_v1alpha.ConfigSpecServicesEnv{
+				{Key: "CONFIG_VAR", Value: "new", Source: "config"},
+			},
+			wantEnvs: []core_v1alpha.ConfigSpecServicesEnv{
+				{Key: "DATABASE_URL", Value: "postgres://addon/db", Source: "addon"},
+				{Key: "CONFIG_VAR", Value: "new", Source: "config"},
+			},
+		},
+		{
+			name: "addon vars not overridden by config vars",
+			existingEnvs: []core_v1alpha.ConfigSpecServicesEnv{
+				{Key: "DATABASE_URL", Value: "postgres://addon/db", Source: "addon"},
+			},
+			newEnvs: []core_v1alpha.ConfigSpecServicesEnv{
+				{Key: "DATABASE_URL", Value: "postgres://config/db", Source: "config"},
+			},
+			wantEnvs: []core_v1alpha.ConfigSpecServicesEnv{
+				{Key: "DATABASE_URL", Value: "postgres://addon/db", Source: "addon"},
 			},
 		},
 	}

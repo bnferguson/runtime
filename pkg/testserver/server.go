@@ -165,6 +165,7 @@ func TestServer(t *testing.T) error {
 		Resolver:        res,
 		SandboxMetrics:  sbMetrics,
 		SkipLSVD:        true,
+		IsCoordinator:   true,
 	}
 
 	r, err := runner.NewRunner(log, deps, runner.RunnerConfig{

@@ -23,3 +23,8 @@ features:
     predicate: RouteOIDC
     description: Enable OIDC authentication for HTTP routes
     default: false
+
+  - name: addons
+    predicate: Addons
+    description: Enable the addon system for managed backing services
+    default: false

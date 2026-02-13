@@ -1,0 +1,7 @@
+name = "bun-postgres"
+
+[services.web]
+command = "bun run index.ts"
+
+[addons.miren-postgresql]
+variant = "shared"

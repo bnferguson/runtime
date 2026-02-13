@@ -1562,10 +1562,10 @@ func (v *DiskConfig) UnmarshalJSON(data []byte) error {
 }
 
 type addonInstanceData struct {
-	Id    *string `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
-	Name  *string `cbor:"1,keyasint,omitempty" json:"name,omitempty"`
-	Addon *string `cbor:"2,keyasint,omitempty" json:"addon,omitempty"`
-	Plan  *string `cbor:"3,keyasint,omitempty" json:"plan,omitempty"`
+	Id      *string `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
+	Name    *string `cbor:"1,keyasint,omitempty" json:"name,omitempty"`
+	Addon   *string `cbor:"2,keyasint,omitempty" json:"addon,omitempty"`
+	Variant *string `cbor:"3,keyasint,omitempty" json:"variant,omitempty"`
 }
 
 type AddonInstance struct {
@@ -1617,19 +1617,19 @@ func (v *AddonInstance) SetAddon(addon string) {
 	v.data.Addon = &addon
 }
 
-func (v *AddonInstance) HasPlan() bool {
-	return v.data.Plan != nil
+func (v *AddonInstance) HasVariant() bool {
+	return v.data.Variant != nil
 }
 
-func (v *AddonInstance) Plan() string {
-	if v.data.Plan == nil {
+func (v *AddonInstance) Variant() string {
+	if v.data.Variant == nil {
 		return ""
 	}
-	return *v.data.Plan
+	return *v.data.Variant
 }
 
-func (v *AddonInstance) SetPlan(plan string) {
-	v.data.Plan = &plan
+func (v *AddonInstance) SetVariant(variant string) {
+	v.data.Variant = &variant
 }
 
 func (v *AddonInstance) MarshalCBOR() ([]byte, error) {
@@ -4669,10 +4669,10 @@ func (v DisksClient) Delete(ctx context.Context, id string) (*DisksClientDeleteR
 }
 
 type addonsCreateInstanceArgsData struct {
-	Name  *string `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
-	Addon *string `cbor:"1,keyasint,omitempty" json:"addon,omitempty"`
-	Plan  *string `cbor:"2,keyasint,omitempty" json:"plan,omitempty"`
-	App   *string `cbor:"3,keyasint,omitempty" json:"app,omitempty"`
+	Name    *string `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+	Addon   *string `cbor:"1,keyasint,omitempty" json:"addon,omitempty"`
+	Variant *string `cbor:"2,keyasint,omitempty" json:"variant,omitempty"`
+	App     *string `cbor:"3,keyasint,omitempty" json:"app,omitempty"`
 }
 
 type AddonsCreateInstanceArgs struct {
@@ -4702,15 +4702,15 @@ func (v *AddonsCreateInstanceArgs) Addon() string {
 	return *v.data.Addon
 }
 
-func (v *AddonsCreateInstanceArgs) HasPlan() bool {
-	return v.data.Plan != nil
+func (v *AddonsCreateInstanceArgs) HasVariant() bool {
+	return v.data.Variant != nil
 }
 
-func (v *AddonsCreateInstanceArgs) Plan() string {
-	if v.data.Plan == nil {
+func (v *AddonsCreateInstanceArgs) Variant() string {
+	if v.data.Variant == nil {
 		return ""
 	}
-	return *v.data.Plan
+	return *v.data.Variant
 }
 
 func (v *AddonsCreateInstanceArgs) HasApp() bool {
@@ -5072,11 +5072,11 @@ func (v *AddonsClientCreateInstanceResults) Id() string {
 	return *v.data.Id
 }
 
-func (v AddonsClient) CreateInstance(ctx context.Context, name string, addon string, plan string, app string) (*AddonsClientCreateInstanceResults, error) {
+func (v AddonsClient) CreateInstance(ctx context.Context, name string, addon string, variant string, app string) (*AddonsClientCreateInstanceResults, error) {
 	args := AddonsCreateInstanceArgs{}
 	args.data.Name = &name
 	args.data.Addon = &addon
-	args.data.Plan = &plan
+	args.data.Variant = &variant
 	args.data.App = &app
 
 	var ret addonsCreateInstanceResultsData

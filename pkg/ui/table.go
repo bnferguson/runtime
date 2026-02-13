@@ -19,6 +19,7 @@ type Column struct {
 	Title      string
 	Width      int
 	NoTruncate bool // If true, this column won't be truncated when scaling
+	WordWrap   bool // If true, text that exceeds Width is wrapped instead of truncated
 }
 
 // ColumnHint provides configuration hints for a specific column
@@ -26,6 +27,7 @@ type ColumnHint struct {
 	MaxWidth   int  // Maximum width (0 = no limit)
 	NoTruncate bool // If true, this column won't be scaled down
 	MinWidth   int  // Minimum width when scaling (0 = use default)
+	WordWrap   bool // If true, wrap text instead of truncating
 }
 
 // ColumnBuilder helps configure column options using a fluent API
@@ -61,6 +63,18 @@ func (b *ColumnBuilder) MinWidth(index, width int) *ColumnBuilder {
 	h := b.hints[index]
 	h.MinWidth = width
 	b.hints[index] = h
+	return b
+}
+
+// WordWrap marks the specified column indices as word-wrapping.
+// Wrapped columns split text across multiple lines at word boundaries
+// instead of truncating with an ellipsis.
+func (b *ColumnBuilder) WordWrap(indices ...int) *ColumnBuilder {
+	for _, i := range indices {
+		h := b.hints[i]
+		h.WordWrap = true
+		b.hints[i] = h
+	}
 	return b
 }
 
@@ -262,6 +276,7 @@ func AutoSizeColumns(headers []string, rows []Row, builder *ColumnBuilder) []Col
 			Title:      header,
 			Width:      widths[i],
 			NoTruncate: noTruncate[i],
+			WordWrap:   builder.getHint(i).WordWrap,
 		}
 	}
 
@@ -355,25 +370,30 @@ func (t *Table) renderRow(row Row) string {
 			value = row[i]
 		}
 
-		// Create a style for the cell content with fixed width
-		cellStyle := lipgloss.NewStyle().
-			Width(col.Width).
-			MaxWidth(col.Width).
-			Inline(true)
-
-		// Determine whether to truncate this cell
 		var renderedCell string
-		if col.NoTruncate {
-			// Don't truncate protected columns
-			renderedCell = cellStyle.Render(value)
-		} else if strings.Contains(value, "\x1b[") || strings.Contains(value, "\x1b]") {
-			// Already styled or contains hyperlinks - let lipgloss handle width constraints
-			// (runewidth.Truncate doesn't handle ANSI codes or OSC sequences well)
-			renderedCell = cellStyle.Render(value)
+		if col.WordWrap && measureDisplayWidth(value) > col.Width {
+			// Word wrap: split into multiple lines at word boundaries
+			wrapped := wordWrap(value, col.Width)
+			wrappedText := strings.Join(wrapped, "\n")
+			cellStyle := lipgloss.NewStyle().
+				Width(col.Width).
+				MaxWidth(col.Width)
+			renderedCell = cellStyle.Render(wrappedText)
 		} else {
-			// Plain text - truncate with ellipsis
-			truncated := runewidth.Truncate(value, col.Width, "…")
-			renderedCell = cellStyle.Render(truncated)
+			// Single-line rendering (truncate if needed)
+			cellStyle := lipgloss.NewStyle().
+				Width(col.Width).
+				MaxWidth(col.Width).
+				Inline(true)
+
+			if col.NoTruncate {
+				renderedCell = cellStyle.Render(value)
+			} else if strings.Contains(value, "\x1b[") || strings.Contains(value, "\x1b]") {
+				renderedCell = cellStyle.Render(value)
+			} else {
+				truncated := runewidth.Truncate(value, col.Width, "…")
+				renderedCell = cellStyle.Render(truncated)
+			}
 		}
 
 		// Apply cell styling
@@ -381,4 +401,29 @@ func (t *Table) renderRow(row Row) string {
 	}
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, cells...)
+}
+
+// wordWrap splits text into lines that fit within the given width,
+// breaking at word boundaries (spaces).
+func wordWrap(s string, width int) []string {
+	words := strings.Fields(s)
+	if len(words) == 0 {
+		return []string{""}
+	}
+
+	var lines []string
+	currentLine := words[0]
+
+	for _, word := range words[1:] {
+		testWidth := runewidth.StringWidth(currentLine) + 1 + runewidth.StringWidth(word)
+		if testWidth <= width {
+			currentLine += " " + word
+		} else {
+			lines = append(lines, currentLine)
+			currentLine = word
+		}
+	}
+	lines = append(lines, currentLine)
+
+	return lines
 }

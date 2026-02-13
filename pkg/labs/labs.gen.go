@@ -15,6 +15,7 @@ const (
 	FeatureUserSubdomains     = "usersubdomains"
 	FeatureAdminAPI           = "adminapi"
 	FeatureRouteOIDC          = "routeoidc"
+	FeatureAddons             = "addons"
 )
 
 // AllFeatures returns a list of all known feature names
@@ -25,6 +26,7 @@ func AllFeatures() []string {
 		FeatureUserSubdomains,
 		FeatureAdminAPI,
 		FeatureRouteOIDC,
+		FeatureAddons,
 	}
 }
 
@@ -36,6 +38,7 @@ func FeatureDescriptions() map[string]string {
 		FeatureUserSubdomains:     "Allow claiming custom subdomains",
 		FeatureAdminAPI:           "Enable the admin API for application management functions",
 		FeatureRouteOIDC:          "Enable OIDC authentication for HTTP routes",
+		FeatureAddons:             "Enable the addon system for managed backing services",
 	}
 }
 
@@ -51,6 +54,7 @@ var featureDefaults = map[string]bool{
 	FeatureUserSubdomains:     false,
 	FeatureAdminAPI:           false,
 	FeatureRouteOIDC:          false,
+	FeatureAddons:             false,
 }
 
 // Init initializes the labs feature flags from the provided flag strings.
@@ -155,4 +159,10 @@ func AdminAPI() bool {
 // Enable OIDC authentication for HTTP routes
 func RouteOIDC() bool {
 	return IsEnabled(FeatureRouteOIDC)
+}
+
+// Addons returns whether the addons feature is enabled.
+// Enable the addon system for managed backing services
+func Addons() bool {
+	return IsEnabled(FeatureAddons)
 }

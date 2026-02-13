@@ -53,6 +53,11 @@ type ServiceConfig struct {
 	Disks       []DiskConfig              `toml:"disks"`
 }
 
+// AddonConfig represents configuration for an addon in app.toml.
+type AddonConfig struct {
+	Variant string `toml:"variant"`
+}
+
 type AppConfig struct {
 	Name        string                    `toml:"name"`
 	PostImport  string                    `toml:"post_import"`
@@ -61,6 +66,7 @@ type AppConfig struct {
 	Services    map[string]*ServiceConfig `toml:"services"`
 	Build       *BuildConfig              `toml:"build"`
 	Include     []string                  `toml:"include"`
+	Addons      map[string]*AddonConfig   `toml:"addons"`
 }
 
 const AppConfigPath = ".miren/app.toml"

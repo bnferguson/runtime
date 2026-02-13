@@ -19,6 +19,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 	"miren.dev/runtime/api/app"
+	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/build/build_v1alpha"
 	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
@@ -71,6 +72,7 @@ type Builder struct {
 	EAS           *entityserver_v1alpha.EntityAccessClient
 	ec            *entityserver.Client
 	appClient     *app.Client
+	addonsClient  *app_v1alpha.AddonsClient
 	ingressClient *ingress.Client
 	TempDir       string
 	Registry      string
@@ -84,11 +86,12 @@ type Builder struct {
 	BuildKit *buildkit.Component
 }
 
-func NewBuilder(log *slog.Logger, eas *entityserver_v1alpha.EntityAccessClient, appClient *app.Client, res netresolve.Resolver, tmpdir string, logWriter observability.LogWriter, dnsHostname string, bk *buildkit.Component) *Builder {
+func NewBuilder(log *slog.Logger, eas *entityserver_v1alpha.EntityAccessClient, appClient *app.Client, addonsClient *app_v1alpha.AddonsClient, res netresolve.Resolver, tmpdir string, logWriter observability.LogWriter, dnsHostname string, bk *buildkit.Component) *Builder {
 	return &Builder{
 		Log:           log.With("module", "builder"),
 		EAS:           eas,
 		appClient:     appClient,
+		addonsClient:  addonsClient,
 		ingressClient: ingress.NewClient(log, eas),
 		Resolver:      res,
 		TempDir:       tmpdir,
@@ -119,15 +122,14 @@ func mergeServiceEnvVars(existingEnvs []core_v1alpha.ConfigSpecServicesEnv, newE
 	// Build result by merging
 	envMap := make(map[string]core_v1alpha.ConfigSpecServicesEnv)
 
-	// Keep manual vars - they shadow config vars with the same key
+	// Keep manual and addon vars - they shadow config vars with the same key
 	for _, e := range existingEnvs {
 		source := e.Source
 		if source == "" {
 			source = "manual" // backward compatibility: preserve unknown-source vars
 		}
 
-		isManual := source == "manual"
-		if isManual {
+		if source == "manual" || source == "addon" {
 			envMap[e.Key] = e
 		}
 		// config vars only kept if still in app.toml (checked below)
@@ -414,7 +416,7 @@ func mergeVariablesFromAppConfig(existingVars []core_v1alpha.ConfigSpecVariables
 	// Build result by merging
 	varMap := make(map[string]core_v1alpha.ConfigSpecVariables)
 
-	// First, add all existing manual variables - these always persist
+	// First, add all existing manual and addon variables - these always persist
 	for _, v := range existingVars {
 		// Backward compatibility: preserve unknown-source vars as manual
 		source := v.Source
@@ -422,8 +424,8 @@ func mergeVariablesFromAppConfig(existingVars []core_v1alpha.ConfigSpecVariables
 			source = "manual"
 		}
 
-		// Keep manual vars - they shadow config vars with the same key
-		if source == "manual" {
+		// Keep manual and addon vars - they shadow config vars with the same key
+		if source == "manual" || source == "addon" {
 			varMap[v.Key] = v
 		}
 		// config vars are only kept if still in app.toml (checked below)
@@ -971,6 +973,16 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 
 	// -- build.activate span
 	activateCtx, activateSpan := buildTracer.Start(ctx, "build.activate")
+
+	// Provision addons before activating the version so that AddonAssociation
+	// entities exist when the launcher runs. The addon controller will create
+	// a new AppVersion with addon vars once provisioning completes.
+	if ac != nil && b.addonsClient != nil {
+		if err := b.provisionAddons(ctx, name, ac); err != nil {
+			return fmt.Errorf("addon provisioning failed: %w", err)
+		}
+	}
+
 	b.Log.Info("updating app entity with new version", "app", name, "version", mrv.Version)
 	err = b.appClient.SetActiveVersion(activateCtx, name, string(id))
 	if err != nil {
@@ -1042,6 +1054,27 @@ func (b *Builder) getAccessInfo(ctx context.Context, appName string) *build_v1al
 	}
 
 	return info
+}
+
+func (b *Builder) provisionAddons(ctx context.Context, appName string, ac *appconfig.AppConfig) error {
+	for addonName, cfg := range ac.Addons {
+		variant := ""
+		if cfg != nil {
+			variant = cfg.Variant
+		}
+
+		_, err := b.addonsClient.CreateInstance(ctx, "", addonName, variant, appName)
+		if err != nil {
+			// "already attached" is expected on redeploys
+			if strings.Contains(err.Error(), "already attached") {
+				b.Log.Debug("addon already attached", "addon", addonName, "app", appName)
+				continue
+			}
+			return fmt.Errorf("provisioning addon %q for app %q: %w", addonName, appName, err)
+		}
+		b.Log.Info("addon provisioned from app.toml", "addon", addonName, "variant", variant, "app", appName)
+	}
+	return nil
 }
 
 func (b *Builder) logDeployment(ctx context.Context, appName, version, artifact string) {

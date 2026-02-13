@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 
+	"miren.dev/runtime/api/addon/addon_v1alpha"
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/pkg/addon"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/rpc/standard"
@@ -179,26 +181,27 @@ func (a *AppInfo) AppInfo(ctx context.Context, state *app_v1alpha.AppStatusAppIn
 		}
 	}
 
-	// Get instances from DB
-	/*
-		instances, err := a.DB.ListInstancesForApp(ac.Id)
-		if err != nil {
-			return err
-		}
+	// Get addon instances from entity store
+	addonResults, err := a.EC.List(ctx, entity.Ref(addon_v1alpha.AddonAssociationAppId, appRec.ID))
+	if err != nil {
+		a.Log.Warn("failed to list addon associations", "error", err)
+	} else {
+		var addons []*app_v1alpha.AddonInstance
+		for addonResults.Next() {
+			var assoc addon_v1alpha.AddonAssociation
+			addonResults.Read(&assoc)
 
-		// Convert to API format
-		addons := make([]*api.AddonInstance, len(instances))
-		for i, instance := range instances {
-			apiInstance := &api.AddonInstance{}
-			apiInstance.SetId(instance.Xid)
-			apiInstance.SetName(instance.Apps[0].Name)
-			apiInstance.SetAddon(instance.Addon)
-			apiInstance.SetPlan(instance.Plan)
-			addons[i] = apiInstance
+			instance := &app_v1alpha.AddonInstance{}
+			instance.SetId(string(assoc.ID))
+			instance.SetName(addon.NameFromRef(assoc.Addon))
+			instance.SetAddon(string(assoc.Addon))
+			instance.SetVariant(assoc.Variant)
+			addons = append(addons, instance)
 		}
-
-		rai.SetAddons(addons)
-	*/
+		if len(addons) > 0 {
+			rai.SetAddons(addons)
+		}
+	}
 
 	state.Results().SetStatus(&rai)
 

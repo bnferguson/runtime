@@ -51,6 +51,16 @@ func RegisterAll(d *mflags.Dispatcher) {
 	d.Dispatch("env list", Infer("env list", "List all environment variables", EnvList))
 	d.Dispatch("env delete", Infer("env delete", "Delete environment variables", EnvDelete))
 
+	// Addon commands (gated behind labs flag)
+	if labs.Addons() {
+		d.Dispatch("addon", Section("addon", "Addon management commands", ""))
+		d.Dispatch("addon list-available", Infer("addon list-available", "List available addons", AddonListAvailable))
+		d.Dispatch("addon variants", Infer("addon variants", "Show variants for an addon", AddonVariants))
+		d.Dispatch("addon create", Infer("addon create", "Attach an addon to an application", AddonCreate))
+		d.Dispatch("addon list", Infer("addon list", "List addons attached to an application", AddonList))
+		d.Dispatch("addon destroy", Infer("addon destroy", "Remove an addon from an application", AddonDestroy))
+	}
+
 	// Route commands
 	d.Dispatch("route", Infer("route", "List all HTTP routes", Route))
 	d.Dispatch("route list", Infer("route list", "List all HTTP routes", RouteList))
