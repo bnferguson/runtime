@@ -8,6 +8,7 @@ Also measures harness overhead by running hack/it with a no-test package.
 Output: JSON file with per-package timings for CI optimization analysis.
 """
 
+import argparse
 import json
 import subprocess
 import sys
@@ -31,6 +32,12 @@ def find_test_packages():
         if len(parts) == 3 and (int(parts[1]) > 0 or int(parts[2]) > 0):
             pkgs.append(parts[0])
     return sorted(pkgs)
+
+
+def load_existing(path):
+    """Load an existing test-times.json file."""
+    with open(path) as f:
+        return json.load(f)
 
 
 def run_package(pkg, timeout=600):
@@ -88,8 +95,53 @@ def run_harness_overhead(timeout=300):
     }
 
 
+def update_packages(existing, new_results):
+    """Merge new results into existing data, replacing any matching packages."""
+    by_pkg = {r["package"]: r for r in existing["packages"]}
+    for r in new_results:
+        by_pkg[r["package"]] = r
+
+    all_pkgs = sorted(by_pkg.values(), key=lambda r: -r["elapsed_s"])
+    total_test_time = sum(r["elapsed_s"] for r in all_pkgs)
+    passed = sum(1 for r in all_pkgs if r["status"] == "pass")
+    failed = sum(1 for r in all_pkgs if r["status"] != "pass")
+
+    existing["packages"] = all_pkgs
+    existing["summary"]["total_test_time_s"] = round(total_test_time, 2)
+    existing["summary"]["package_count"] = len(all_pkgs)
+    existing["summary"]["passed"] = passed
+    existing["summary"]["failed"] = failed
+    return existing
+
+
 def main():
-    output_file = sys.argv[1] if len(sys.argv) > 1 else "test-times.json"
+    parser = argparse.ArgumentParser(description="Measure test execution times")
+    parser.add_argument("output", nargs="?", default="test-times.json",
+                        help="Output file (default: test-times.json)")
+    parser.add_argument("--update", nargs="+", metavar="PKG",
+                        help="Measure only these packages and merge into existing output file")
+    args = parser.parse_args()
+
+    output_file = args.output
+
+    if args.update:
+        pkgs = args.update
+        print(f"Measuring {len(pkgs)} package(s)...\n")
+
+        results = []
+        for i, pkg in enumerate(pkgs, 1):
+            print(f"[{i}/{len(pkgs)}]")
+            r = run_package(pkg)
+            results.append(r)
+
+        existing = load_existing(output_file)
+        output = update_packages(existing, results)
+
+        with open(output_file, "w") as f:
+            json.dump(output, f, indent=2)
+
+        print(f"\nUpdated {len(pkgs)} package(s) in {output_file}")
+        return
 
     print("Discovering test packages...")
     pkgs = find_test_packages()
