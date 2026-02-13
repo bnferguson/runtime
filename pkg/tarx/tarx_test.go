@@ -13,10 +13,11 @@ import (
 
 func TestMakeTar(t *testing.T) {
 	tests := []struct {
-		name      string
-		files     map[string]string // filename -> content
-		gitignore string
-		expected  []string // files that should be in the tar
+		name             string
+		files            map[string]string // filename -> content
+		gitignore        string
+		nestedGitignores map[string]string // dir path -> content
+		expected         []string          // files that should be in the tar
 	}{
 		{
 			name: "no gitignore",
@@ -89,6 +90,60 @@ func TestMakeTar(t *testing.T) {
 			gitignore: "*.tmp\n*.bak\n",
 			expected:  []string{"file1.txt", "dir", "dir/keep.txt"},
 		},
+		{
+			name: "nested gitignore basic",
+			files: map[string]string{
+				"file1.txt":                     "content1",
+				"web/index.html":                "html",
+				"web/app.js":                    "js",
+				"web/node_modules/lib.js":       "library",
+				"web/node_modules/package.json": "package",
+			},
+			nestedGitignores: map[string]string{
+				"web": "node_modules\n",
+			},
+			expected: []string{"file1.txt", "web", "web/index.html", "web/app.js"},
+		},
+		{
+			name: "multiple nested gitignores",
+			files: map[string]string{
+				"file1.txt":               "content1",
+				"web/index.html":          "html",
+				"web/node_modules/lib.js": "library",
+				"api/main.go":             "package main",
+				"api/vendor/dep.go":       "dependency",
+			},
+			nestedGitignores: map[string]string{
+				"web": "node_modules\n",
+				"api": "vendor\n",
+			},
+			expected: []string{"file1.txt", "web", "web/index.html", "api", "api/main.go"},
+		},
+		{
+			name: "nested gitignore scoping",
+			files: map[string]string{
+				"web/style.css": "web css",
+				"web/app.js":    "js",
+				"api/style.css": "api css",
+				"api/main.go":   "package main",
+			},
+			nestedGitignores: map[string]string{
+				"web": "*.css\n",
+			},
+			expected: []string{"web", "web/app.js", "api", "api/style.css", "api/main.go"},
+		},
+		{
+			name: "nested gitignore files excluded from tar",
+			files: map[string]string{
+				"file1.txt":      "content1",
+				"web/index.html": "html",
+			},
+			gitignore: "*.log\n",
+			nestedGitignores: map[string]string{
+				"web": "*.tmp\n",
+			},
+			expected: []string{"file1.txt", "web", "web/index.html"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -110,6 +165,14 @@ func TestMakeTar(t *testing.T) {
 			if tt.gitignore != "" {
 				gitignorePath := filepath.Join(tmpDir, ".gitignore")
 				require.NoError(t, os.WriteFile(gitignorePath, []byte(tt.gitignore), 0644))
+			}
+
+			// Create nested .gitignore files
+			for dir, content := range tt.nestedGitignores {
+				dirPath := filepath.Join(tmpDir, dir)
+				require.NoError(t, os.MkdirAll(dirPath, 0755))
+				gitignorePath := filepath.Join(dirPath, ".gitignore")
+				require.NoError(t, os.WriteFile(gitignorePath, []byte(content), 0644))
 			}
 
 			// Create tar
