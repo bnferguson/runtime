@@ -1,4 +1,4 @@
-package service
+package target
 
 import (
 	"context"
@@ -22,16 +22,17 @@ import (
 	"miren.dev/runtime/pkg/testutils"
 )
 
-// newServiceController creates a ServiceController from TestDeps for testing.
-func newServiceController(d *testutils.TestDeps) (*ServiceController, error) {
-	cfg := ServiceControllerDeps{
-		Log:             d.Log,
-		EAC:             d.EAC,
-		IPv4Routable:    d.IPv4Routable,
-		ServicePrefixes: d.ServicePrefixes,
+// newTargetController creates a TargetController from TestDeps for testing.
+func newTargetController(d *testutils.TestDeps) (*TargetController, error) {
+	cfg := TargetControllerDeps{
+		Log:            d.Log,
+		EAC:            d.EAC,
+		IPv4Routable:   d.IPv4Routable,
+		TargetPrefixes: d.TargetPrefixes,
+
 		DisableLocalNet: false,
 	}
-	return NewServiceController(cfg)
+	return NewTargetController(cfg)
 }
 
 // newSandboxController creates a SandboxController from TestDeps for testing.
@@ -85,7 +86,7 @@ func TestServiceController(t *testing.T) {
 		testDeps, cleanup := testutils.NewTestDeps()
 		defer cleanup()
 
-		sc, err := newServiceController(testDeps)
+		sc, err := newTargetController(testDeps)
 		r.NoError(err)
 
 		err = sc.Init(ctx)
@@ -93,7 +94,7 @@ func TestServiceController(t *testing.T) {
 
 		// Create a service
 		svcID := entity.Id(svcName())
-		svc := &network_v1alpha.Service{
+		svc := &network_v1alpha.Target{
 			ID: svcID,
 			Match: types.Labels{
 				types.Label{Key: "app", Value: "test"},
@@ -127,7 +128,7 @@ func TestServiceController(t *testing.T) {
 
 		eac := testDeps.EAC
 
-		sc, err := newServiceController(testDeps)
+		sc, err := newTargetController(testDeps)
 		r.NoError(err)
 
 		sbC, err := newSandboxController(testDeps)
@@ -143,7 +144,7 @@ func TestServiceController(t *testing.T) {
 
 		// Create a service
 		svcID := entity.Id(svcName())
-		svc := &network_v1alpha.Service{
+		svc := &network_v1alpha.Target{
 			ID: svcID,
 			Match: types.Labels{
 				types.Label{Key: "app", Value: "nginx"},
@@ -230,7 +231,7 @@ func TestServiceController(t *testing.T) {
 		for _, epEntity := range endpoints.Values() {
 			var ep network_v1alpha.Endpoints
 			ep.Decode(epEntity.Entity())
-			if ep.Service == svcID {
+			if ep.Target == svcID {
 				found = true
 				r.Len(ep.Endpoint, 1)
 				r.NotEmpty(ep.Endpoint[0].Ip)
@@ -255,7 +256,7 @@ func TestServiceController(t *testing.T) {
 
 		eac := testDeps.EAC
 
-		sc, err := newServiceController(testDeps)
+		sc, err := newTargetController(testDeps)
 		r.NoError(err)
 
 		sbC, err := newSandboxController(testDeps)
@@ -271,7 +272,7 @@ func TestServiceController(t *testing.T) {
 
 		// Create a service
 		svcID := entity.Id(svcName())
-		svc := &network_v1alpha.Service{
+		svc := &network_v1alpha.Target{
 			ID: svcID,
 			Match: types.Labels{
 				types.Label{Key: "app", Value: "nginx"},
@@ -358,7 +359,7 @@ func TestServiceController(t *testing.T) {
 		for _, epEntity := range endpoints.Values() {
 			var ep network_v1alpha.Endpoints
 			ep.Decode(epEntity.Entity())
-			if ep.Service == svcID {
+			if ep.Target == svcID {
 				found = true
 				endpointID = ep.ID
 				r.Len(ep.Endpoint, 1)
@@ -403,7 +404,7 @@ func TestServiceController(t *testing.T) {
 		testDeps, cleanup := testutils.NewTestDeps()
 		defer cleanup()
 
-		sc, err := newServiceController(testDeps)
+		sc, err := newTargetController(testDeps)
 		r.NoError(err)
 
 		err = sc.Init(ctx)
@@ -411,7 +412,7 @@ func TestServiceController(t *testing.T) {
 
 		// Create initial service
 		svcID := entity.Id(svcName())
-		svc := &network_v1alpha.Service{
+		svc := &network_v1alpha.Target{
 			ID: svcID,
 			Match: types.Labels{
 				types.Label{Key: "app", Value: "nginx"},
@@ -458,7 +459,7 @@ func TestServiceController(t *testing.T) {
 
 		eac := testDeps.EAC
 
-		sc, err := newServiceController(testDeps)
+		sc, err := newTargetController(testDeps)
 		r.NoError(err)
 
 		sbC, err := newSandboxController(testDeps)
@@ -474,7 +475,7 @@ func TestServiceController(t *testing.T) {
 
 		// Create a service
 		svcID := entity.Id(svcName())
-		svc := &network_v1alpha.Service{
+		svc := &network_v1alpha.Target{
 			ID: svcID,
 			Match: types.Labels{
 				types.Label{Key: "app", Value: "nginx"},
@@ -601,7 +602,7 @@ func TestServiceController(t *testing.T) {
 		for _, epEntity := range endpoints.Values() {
 			var ep network_v1alpha.Endpoints
 			ep.Decode(epEntity.Entity())
-			if ep.Service == svcID {
+			if ep.Target == svcID {
 				serviceEndpoints++
 				// Each endpoint entity should have 1 endpoint (for one sandbox)
 				r.Len(ep.Endpoint, 1)
@@ -628,7 +629,7 @@ func TestServiceController(t *testing.T) {
 		for _, epEntity := range endpoints.Values() {
 			var ep network_v1alpha.Endpoints
 			ep.Decode(epEntity.Entity())
-			if ep.Service == svcID {
+			if ep.Target == svcID {
 				serviceEndpoints++
 				// Each endpoint entity should have 1 endpoint (for one sandbox)
 				r.Len(ep.Endpoint, 1)
@@ -652,7 +653,7 @@ func TestServiceController(t *testing.T) {
 
 		eac := testDeps.EAC
 
-		sc, err := newServiceController(testDeps)
+		sc, err := newTargetController(testDeps)
 		r.NoError(err)
 
 		err = sc.Init(ctx)
@@ -660,7 +661,7 @@ func TestServiceController(t *testing.T) {
 
 		// Create a service
 		svcID := entity.Id(svcName())
-		svc := &network_v1alpha.Service{
+		svc := &network_v1alpha.Target{
 			ID: svcID,
 			Match: types.Labels{
 				types.Label{Key: "app", Value: "nginx"},
@@ -694,8 +695,8 @@ func TestServiceController(t *testing.T) {
 		// Create endpoints
 		epID := entity.Id("endpoints-" + svcID.String())
 		eps := &network_v1alpha.Endpoints{
-			ID:      epID,
-			Service: svcID,
+			ID:     epID,
+			Target: svcID,
 			Endpoint: []network_v1alpha.Endpoint{
 				{
 					Ip:   "10.0.0.1",
@@ -727,7 +728,7 @@ func TestServiceController(t *testing.T) {
 
 		eac := testDeps.EAC
 
-		sc, err := newServiceController(testDeps)
+		sc, err := newTargetController(testDeps)
 		r.NoError(err)
 
 		err = sc.Init(ctx)
@@ -735,7 +736,7 @@ func TestServiceController(t *testing.T) {
 
 		// Create multiple services
 		svcID1 := entity.Id(svcName())
-		svc1 := &network_v1alpha.Service{
+		svc1 := &network_v1alpha.Target{
 			ID: svcID1,
 			Match: types.Labels{
 				types.Label{Key: "app", Value: "nginx"},
@@ -749,7 +750,7 @@ func TestServiceController(t *testing.T) {
 		}
 
 		svcID2 := entity.Id(svcName())
-		svc2 := &network_v1alpha.Service{
+		svc2 := &network_v1alpha.Target{
 			ID: svcID2,
 			Match: types.Labels{
 				types.Label{Key: "app", Value: "apache"},
@@ -799,8 +800,8 @@ func TestServiceController(t *testing.T) {
 		// Create endpoints for first service
 		epID := entity.Id("endpoints-" + svcID1.String())
 		eps := &network_v1alpha.Endpoints{
-			ID:      epID,
-			Service: svcID1,
+			ID:     epID,
+			Target: svcID1,
 			Endpoint: []network_v1alpha.Endpoint{
 				{
 					Ip:   "10.0.0.1",
@@ -860,7 +861,7 @@ func TestServiceController(t *testing.T) {
 		testDeps, cleanup := testutils.NewTestDeps()
 		defer cleanup()
 
-		sc, err := newServiceController(testDeps)
+		sc, err := newTargetController(testDeps)
 		r.NoError(err)
 
 		err = sc.Init(ctx)
@@ -868,7 +869,7 @@ func TestServiceController(t *testing.T) {
 
 		// Create a service with nodeport
 		svcID := entity.Id(svcName())
-		svc := &network_v1alpha.Service{
+		svc := &network_v1alpha.Target{
 			ID: svcID,
 			Match: types.Labels{
 				types.Label{Key: "app", Value: "nginx"},
@@ -903,14 +904,14 @@ func TestServiceController(t *testing.T) {
 
 		eac := testDeps.EAC
 
-		sc, err := newServiceController(testDeps)
+		sc, err := newTargetController(testDeps)
 		r.NoError(err)
 
 		// Set service prefixes for IP allocation
 		servicePrefixes := []netip.Prefix{
 			netip.MustParsePrefix("10.96.0.0/16"),
 		}
-		sc.ServicePrefixes = servicePrefixes
+		sc.TargetPrefixes = servicePrefixes
 
 		err = sc.Init(ctx)
 		r.NoError(err)
@@ -931,7 +932,7 @@ func TestServiceController(t *testing.T) {
 
 		// Create a service
 		svcID := entity.Id(svcName())
-		svc := &network_v1alpha.Service{
+		svc := &network_v1alpha.Target{
 			ID: svcID,
 			Match: types.Labels{
 				types.Label{Key: "app", Value: "nginx"},
@@ -969,14 +970,14 @@ func TestServiceController(t *testing.T) {
 		result, err := eac.Get(ctx, svcID.String())
 		r.NoError(err)
 
-		var updatedSvc network_v1alpha.Service
+		var updatedSvc network_v1alpha.Target
 		updatedSvc.Decode(result.Entity().Entity())
 
-		// Verify service was allocated an IP
+		// Verify target was allocated an IP
 		r.NotEmpty(updatedSvc.Ip)
 		r.Greater(len(updatedSvc.Ip), 0)
 		ip, err := netip.ParseAddr(updatedSvc.Ip[0])
 		r.NoError(err)
-		r.True(sc.ServicePrefixes[0].Contains(ip))
+		r.True(sc.TargetPrefixes[0].Contains(ip))
 	})
 }

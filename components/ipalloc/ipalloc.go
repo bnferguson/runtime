@@ -37,7 +37,7 @@ func NewAllocator(log *slog.Logger, subnets []netip.Prefix) *Allocator {
 }
 
 func (a *Allocator) Refresh(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient) error {
-	res, err := eac.List(ctx, entity.Ref(entity.EntityKind, network_v1alpha.KindService))
+	res, err := eac.List(ctx, entity.Ref(entity.EntityKind, network_v1alpha.KindTarget))
 	if err != nil {
 		return err
 	}
@@ -48,7 +48,7 @@ func (a *Allocator) Refresh(ctx context.Context, eac *entityserver_v1alpha.Entit
 	var rerr error
 
 	for _, ent := range res.Values() {
-		var serv network_v1alpha.Service
+		var serv network_v1alpha.Target
 		serv.Decode(ent.Entity())
 
 		for _, ip := range serv.Ip {
@@ -157,9 +157,9 @@ func generateRandomIPInSubnet(r *mrand.Rand, prefix netip.Prefix) (netip.Addr, e
 }
 
 func (a *Allocator) Watch(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient) error {
-	a.log.Info("watching for service changes")
+	a.log.Info("watching for target changes")
 
-	index := entity.Ref(entity.EntityKind, network_v1alpha.KindService)
+	index := entity.Ref(entity.EntityKind, network_v1alpha.KindTarget)
 
 	_, err := eac.WatchIndex(ctx, index, stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
 		if op == nil {
@@ -173,9 +173,9 @@ func (a *Allocator) Watch(ctx context.Context, eac *entityserver_v1alpha.EntityA
 			return nil
 		}
 
-		err := a.assignService(ctx, op.Entity().Entity(), eac)
+		err := a.assignTarget(ctx, op.Entity().Entity(), eac)
 		if err != nil {
-			a.log.Error("failed to assign sandbox", "error", err, "sandbox", op.Entity().Id())
+			a.log.Error("failed to assign target", "error", err, "target", op.Entity().Id())
 		}
 
 		return nil
@@ -183,13 +183,13 @@ func (a *Allocator) Watch(ctx context.Context, eac *entityserver_v1alpha.EntityA
 	return err
 }
 
-type service struct {
-	network_v1alpha.Service
+type tgt struct {
+	network_v1alpha.Target
 	*entity.Entity
 }
 
-func (a *Allocator) assignService(ctx context.Context, ent *entity.Entity, eac *entityserver_v1alpha.EntityAccessClient) error {
-	var srv service
+func (a *Allocator) assignTarget(ctx context.Context, ent *entity.Entity, eac *entityserver_v1alpha.EntityAccessClient) error {
+	var srv tgt
 	srv.Entity = ent
 	srv.Decode(srv.Entity)
 
@@ -211,7 +211,7 @@ func (a *Allocator) assignService(ctx context.Context, ent *entity.Entity, eac *
 	rpcE.SetAttrs(srv.Encode())
 
 	if _, err := eac.Put(ctx, &rpcE); err != nil {
-		a.log.Error("failed to assign service ips", "error", err, "service", srv.Id())
+		a.log.Error("failed to assign target ips", "error", err, "target", srv.Id())
 		return err
 	}
 

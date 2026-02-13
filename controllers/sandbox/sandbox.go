@@ -1008,7 +1008,7 @@ func (c *SandboxController) updateServices(
 	meta *entity.Meta,
 	ep *network.EndpointConfig,
 ) error {
-	sresp, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, network_v1alpha.KindService))
+	sresp, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, network_v1alpha.KindTarget))
 	if err != nil {
 		return err
 	}
@@ -1018,7 +1018,7 @@ func (c *SandboxController) updateServices(
 	c.Log.Debug("updating services", "id", co.ID, "labels", md.Labels, "services", len(sresp.Values()))
 
 	for _, ent := range sresp.Values() {
-		var srv network_v1alpha.Service
+		var srv network_v1alpha.Target
 		srv.Decode(ent.Entity())
 
 		if !srv.Match.SubsetOf(md.Labels) {
@@ -1039,7 +1039,7 @@ func (c *SandboxController) addEndpoint(
 	ctx context.Context,
 	sb *compute.Sandbox,
 	ep *network.EndpointConfig,
-	srv *network_v1alpha.Service,
+	srv *network_v1alpha.Target,
 ) error {
 	c.Log.Debug("adding endpoint to service", "service", srv.ID, "sandbox", sb.ID, "containers", len(sb.Spec.Container))
 
@@ -1060,7 +1060,7 @@ func (c *SandboxController) addEndpoint(
 
 			var eps network_v1alpha.Endpoints
 
-			eps.Service = srv.ID
+			eps.Target = srv.ID
 			eps.Endpoint = append(eps.Endpoint, network_v1alpha.Endpoint{
 				Ip:   ep.Addresses[0].Addr().String(),
 				Port: p.Port,
@@ -1074,7 +1074,7 @@ func (c *SandboxController) addEndpoint(
 				return fmt.Errorf("failed to update service: %w", err)
 			}
 
-			c.Log.Debug("updated service", "id", pr.Id(), "service", eps.Service)
+			c.Log.Debug("updated service", "id", pr.Id(), "service", eps.Target)
 		}
 	}
 

@@ -1,7 +1,7 @@
 domain: dev.miren.network
 version: v1alpha
 kinds:
-  service:
+  target:
     match:
       type: label
       doc: A label to match against a sandbox
@@ -9,12 +9,12 @@ kinds:
 
     ip:
       type: string
-      doc: The IP allocated to the service
+      doc: The IP allocated to the target
       many: true
 
     port:
       type: component
-      doc: A network port the service exposes
+      doc: A network port the target exposes
       many: true
       attrs:
         port:
@@ -41,9 +41,9 @@ kinds:
           doc: The port number that should be forwarded from the node to the container
 
   endpoints:
-    service:
+    target:
       type: ref
-      doc: The service that uses these endpoints
+      doc: The target that uses these endpoints
       indexed: true
 
     endpoint:

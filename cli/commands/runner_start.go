@@ -114,9 +114,9 @@ func RunnerStart(ctx *Context, opts struct {
 		// Resolver for network operations
 		Resolver: resolver,
 
-		// Service prefixes - same as coordinator
+		// Target prefixes - same as coordinator
 		// TODO: These should come from join response
-		ServicePrefixes: []netip.Prefix{
+		TargetPrefixes: []netip.Prefix{
 			netip.MustParsePrefix("10.10.0.0/16"),
 			netip.MustParsePrefix("fd47:cafe:d00d::/64"),
 		},

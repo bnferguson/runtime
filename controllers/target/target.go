@@ -1,4 +1,4 @@
-package service
+package target
 
 import (
 	"bytes"
@@ -23,20 +23,20 @@ import (
 	"miren.dev/runtime/pkg/set"
 )
 
-// ServiceControllerDeps holds required dependencies for ServiceController.
-type ServiceControllerDeps struct {
+// TargetControllerDeps holds required dependencies for TargetController.
+type TargetControllerDeps struct {
 	Log             *slog.Logger
 	EAC             *entityserver_v1alpha.EntityAccessClient
 	IPv4Routable    netip.Prefix
-	ServicePrefixes []netip.Prefix
+	TargetPrefixes  []netip.Prefix
 	DisableLocalNet bool
 }
 
-type ServiceController struct {
-	Log             *slog.Logger
-	EAC             *entityserver_v1alpha.EntityAccessClient
-	IPv4Routable    netip.Prefix
-	ServicePrefixes []netip.Prefix
+type TargetController struct {
+	Log            *slog.Logger
+	EAC            *entityserver_v1alpha.EntityAccessClient
+	IPv4Routable   netip.Prefix
+	TargetPrefixes []netip.Prefix
 
 	DisableLocalNet bool
 
@@ -49,73 +49,73 @@ type ServiceController struct {
 	chainEndpoints map[string][]string
 }
 
-// NewServiceController creates a new ServiceController with validated dependencies.
-func NewServiceController(cfg ServiceControllerDeps) (*ServiceController, error) {
+// NewTargetController creates a new TargetController with validated dependencies.
+func NewTargetController(cfg TargetControllerDeps) (*TargetController, error) {
 	if cfg.Log == nil {
-		return nil, fmt.Errorf("service: Log is required")
+		return nil, fmt.Errorf("target: Log is required")
 	}
 	if cfg.EAC == nil {
-		return nil, fmt.Errorf("service: entity access client is required")
+		return nil, fmt.Errorf("target: entity access client is required")
 	}
 	if !cfg.IPv4Routable.IsValid() {
-		return nil, fmt.Errorf("service: IPv4Routable must be a valid prefix")
+		return nil, fmt.Errorf("target: IPv4Routable must be a valid prefix")
 	}
 
-	return &ServiceController{
+	return &TargetController{
 		Log:             cfg.Log,
 		EAC:             cfg.EAC,
 		IPv4Routable:    cfg.IPv4Routable,
-		ServicePrefixes: cfg.ServicePrefixes,
+		TargetPrefixes:  cfg.TargetPrefixes,
 		DisableLocalNet: cfg.DisableLocalNet,
 	}, nil
 }
 
-func (s *ServiceController) UpdateEndpoints(ctx context.Context, event controller.Event) ([]entity.Attr, error) {
+func (s *TargetController) UpdateEndpoints(ctx context.Context, event controller.Event) ([]entity.Attr, error) {
 	if event.Type != controller.EventDeleted {
 		var eps network_v1alpha.Endpoints
 		eps.Decode(event.Entity)
 
-		gr, err := s.EAC.Get(ctx, eps.Service.String())
+		gr, err := s.EAC.Get(ctx, eps.Target.String())
 		if err != nil {
-			return nil, fmt.Errorf("failed to get service: %w", err)
+			return nil, fmt.Errorf("failed to get target: %w", err)
 		}
 
-		var srv network_v1alpha.Service
+		var srv network_v1alpha.Target
 		srv.Decode(gr.Entity().Entity())
 
 		meta := &entity.Meta{
 			Entity: gr.Entity().Entity(),
 		}
 
-		s.Log.Info("Endpoint updated, triggering service update", "service", srv.ID)
+		s.Log.Info("Endpoint updated, triggering target update", "target", srv.ID)
 
 		return nil, s.Create(ctx, &srv, meta)
 	}
 
 	// TODO when WatchIndex gives us the entities value pre-delete, we can use the
-	// same above logic. Until then, we just loop over all the services and update
+	// same above logic. Until then, we just loop over all the targets and update
 	// them all.
 
-	// List all services
-	serviceList, err := s.EAC.List(ctx, entity.Ref(entity.EntityKind, network_v1alpha.KindService))
+	// List all targets
+	targetList, err := s.EAC.List(ctx, entity.Ref(entity.EntityKind, network_v1alpha.KindTarget))
 	if err != nil {
-		return nil, fmt.Errorf("failed to list services: %w", err)
+		return nil, fmt.Errorf("failed to list targets: %w", err)
 	}
 
-	// Loop through all services and trigger an update
-	for _, srvEntity := range serviceList.Values() {
-		var srv network_v1alpha.Service
+	// Loop through all targets and trigger an update
+	for _, srvEntity := range targetList.Values() {
+		var srv network_v1alpha.Target
 		srv.Decode(srvEntity.Entity())
 
 		meta := &entity.Meta{
 			Entity: srvEntity.Entity(),
 		}
 
-		s.Log.Info("Endpoint deleted, triggering service update", "service", srv.ID)
+		s.Log.Info("Endpoint deleted, triggering target update", "target", srv.ID)
 
 		if err := s.Create(ctx, &srv, meta); err != nil {
-			s.Log.Error("Failed to update service after endpoint deletion", "service", srv.ID, "error", err)
-			// Continue updating other services even if one fails
+			s.Log.Error("Failed to update target after endpoint deletion", "target", srv.ID, "error", err)
+			// Continue updating other targets even if one fails
 		}
 	}
 
@@ -139,22 +139,22 @@ func (n *nftCommands) append(cmd string, args ...any) {
 	n.commands = append(n.commands, fmt.Sprintf(cmd, args...))
 }
 
-func (s *ServiceController) serviceChain(ip netip.Addr, port uint16) string {
+func (s *TargetController) serviceChain(ip netip.Addr, port uint16) string {
 	x := blake2b.Sum256([]byte(fmt.Sprintf("%s:%d", ip.String(), port)))
 	return fmt.Sprintf("service_%s", base58.Encode(x[:]))
 }
 
-func (s *ServiceController) endpointChain(ip netip.Addr, port uint16) string {
+func (s *TargetController) endpointChain(ip netip.Addr, port uint16) string {
 	x := blake2b.Sum256([]byte(fmt.Sprintf("%s:%d", ip.String(), port)))
 	return fmt.Sprintf("endpoint_%s", base58.Encode(x[:]))
 }
 
-func (s *ServiceController) nodeportChain(ip netip.Addr, port uint16) string {
+func (s *TargetController) nodeportChain(ip netip.Addr, port uint16) string {
 	x := blake2b.Sum256([]byte(fmt.Sprintf("%s:%d", ip.String(), port)))
 	return fmt.Sprintf("nodeport_%s", base58.Encode(x[:]))
 }
 
-func (s *ServiceController) createServiceChain(cmd *nftCommands, ip netip.Addr, port int) error {
+func (s *TargetController) createServiceChain(cmd *nftCommands, ip netip.Addr, port int) error {
 	srv := s.serviceChain(ip, uint16(port))
 	if cmd.knownChains.Contains(srv) {
 		return nil
@@ -171,7 +171,7 @@ func (s *ServiceController) createServiceChain(cmd *nftCommands, ip netip.Addr, 
 	return nil
 }
 
-func (s *ServiceController) updateServiceEndpoints(cmd *nftCommands, sip netip.Addr, sport int, endpoints []string) error {
+func (s *TargetController) updateServiceEndpoints(cmd *nftCommands, sip netip.Addr, sport int, endpoints []string) error {
 	if len(endpoints) == 0 {
 		return nil
 	}
@@ -208,7 +208,7 @@ func (s *ServiceController) updateServiceEndpoints(cmd *nftCommands, sip netip.A
 	return nil
 }
 
-func (s *ServiceController) setupNodePort(cmd *nftCommands, nport int, sip netip.Addr, sport int) error {
+func (s *TargetController) setupNodePort(cmd *nftCommands, nport int, sip netip.Addr, sport int) error {
 	chain := s.nodeportChain(sip, uint16(sport))
 
 	if cmd.knownChains.Contains(chain) {
@@ -235,7 +235,7 @@ func (s *ServiceController) setupNodePort(cmd *nftCommands, nport int, sip netip
 	return nil
 }
 
-func (s *ServiceController) setupEndpointChain(cmd *nftCommands, ip netip.Addr, port uint16) (string, error) {
+func (s *TargetController) setupEndpointChain(cmd *nftCommands, ip netip.Addr, port uint16) (string, error) {
 	endpoint := s.endpointChain(ip, port)
 	if cmd.knownChains.Contains(endpoint) {
 		return endpoint, nil
@@ -254,7 +254,7 @@ func (s *ServiceController) setupEndpointChain(cmd *nftCommands, ip netip.Addr, 
 	return endpoint, nil
 }
 
-func (s *ServiceController) systemTables() ([]string, error) {
+func (s *TargetController) systemTables() ([]string, error) {
 	cmd := exec.Command("nft", "-j", "list", "tables")
 	out, err := cmd.Output()
 	if err != nil {
@@ -285,7 +285,7 @@ func (s *ServiceController) systemTables() ([]string, error) {
 	return tables, nil
 }
 
-func (s *ServiceController) initNFT(table string, nc *nftCommands) error {
+func (s *TargetController) initNFT(table string, nc *nftCommands) error {
 	s.table = table
 
 	tables, err := s.systemTables()
@@ -395,9 +395,9 @@ func (s *ServiceController) initNFT(table string, nc *nftCommands) error {
 	return nil
 }
 
-func (s *ServiceController) Init(ctx context.Context) error {
+func (s *TargetController) Init(ctx context.Context) error {
 	s.chainEndpoints = make(map[string][]string)
-	s.routablePrefixes = append([]netip.Prefix{s.IPv4Routable}, s.ServicePrefixes...)
+	s.routablePrefixes = append([]netip.Prefix{s.IPv4Routable}, s.TargetPrefixes...)
 
 	s.Log.Info("Initializing service controller")
 
@@ -418,7 +418,7 @@ func (s *ServiceController) Init(ctx context.Context) error {
 	return s.apply(ctx, cmd)
 }
 
-func (s *ServiceController) apply(ctx context.Context, cmd *nftCommands) error {
+func (s *TargetController) apply(ctx context.Context, cmd *nftCommands) error {
 	if len(cmd.commands) == 0 {
 		return nil
 	}
@@ -443,14 +443,14 @@ func (s *ServiceController) apply(ctx context.Context, cmd *nftCommands) error {
 	return nil
 }
 
-func (s *ServiceController) Create(ctx context.Context, srv *network_v1alpha.Service, meta *entity.Meta) error {
-	s.Log.Info("Creating service", "service", srv)
+func (s *TargetController) Create(ctx context.Context, srv *network_v1alpha.Target, meta *entity.Meta) error {
+	s.Log.Info("Creating target", "target", srv)
 
 	if len(srv.Ip) == 0 {
 		return nil
 	}
 
-	lr, err := s.EAC.List(ctx, entity.Ref(network_v1alpha.EndpointsServiceId, srv.ID))
+	lr, err := s.EAC.List(ctx, entity.Ref(network_v1alpha.EndpointsTargetId, srv.ID))
 	if err != nil {
 		return fmt.Errorf("failed to list endpoints: %w", err)
 	}
@@ -523,6 +523,6 @@ func (s *ServiceController) Create(ctx context.Context, srv *network_v1alpha.Ser
 	return nil
 }
 
-func (s *ServiceController) Delete(ctx context.Context, id entity.Id) error {
+func (s *TargetController) Delete(ctx context.Context, id entity.Id) error {
 	return nil
 }

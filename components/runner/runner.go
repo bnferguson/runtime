@@ -29,7 +29,7 @@ import (
 	"miren.dev/runtime/controllers/disk"
 	"miren.dev/runtime/controllers/ingress"
 	"miren.dev/runtime/controllers/sandbox"
-	"miren.dev/runtime/controllers/service"
+	"miren.dev/runtime/controllers/target"
 	"miren.dev/runtime/network"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/controller"
@@ -75,7 +75,7 @@ type RunnerDeps struct {
 
 	// Network config
 	IPv4Routable    netip.Prefix
-	ServicePrefixes []netip.Prefix
+	TargetPrefixes  []netip.Prefix
 	DisableLocalNet bool
 
 	// Resolver
@@ -462,16 +462,16 @@ func (r *Runner) SetupControllers(
 
 	rs.ExposeValue("dev.miren.runtime/sandbox.metrics", metric_v1alpha.AdaptSandboxMetrics(sbc.Metrics))
 
-	// Create service controller with explicit dependencies
-	serviceController, err := service.NewServiceController(service.ServiceControllerDeps{
+	// Create target controller with explicit dependencies
+	targetController, err := target.NewTargetController(target.TargetControllerDeps{
 		Log:             r.Log,
 		EAC:             eas,
 		IPv4Routable:    r.deps.IPv4Routable,
-		ServicePrefixes: r.deps.ServicePrefixes,
+		TargetPrefixes:  r.deps.TargetPrefixes,
 		DisableLocalNet: r.deps.DisableLocalNet,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create service controller: %w", err)
+		return nil, fmt.Errorf("failed to create target controller: %w", err)
 	}
 
 	log := r.Log
@@ -584,7 +584,7 @@ func (r *Runner) SetupControllers(
 		return nil, err
 	}
 
-	err = serviceController.Init(ctx)
+	err = targetController.Init(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -629,11 +629,11 @@ func (r *Runner) SetupControllers(
 
 	cm.AddController(
 		controller.NewReconcileController(
-			"service",
+			"target",
 			log,
-			entity.Ref(entity.EntityKind, network_v1alpha.KindService),
+			entity.Ref(entity.EntityKind, network_v1alpha.KindTarget),
 			eas,
-			controller.AdaptController(serviceController),
+			controller.AdaptController(targetController),
 			time.Minute,
 			workers,
 		),
@@ -645,7 +645,7 @@ func (r *Runner) SetupControllers(
 			log,
 			entity.Ref(entity.EntityKind, network_v1alpha.KindEndpoints),
 			eas,
-			serviceController.UpdateEndpoints,
+			targetController.UpdateEndpoints,
 			0,
 			workers,
 		),

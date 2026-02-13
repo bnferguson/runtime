@@ -29,6 +29,7 @@ import (
 	esv1 "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
+	networkmigrate "miren.dev/runtime/api/network"
 	"miren.dev/runtime/api/runner/runner_v1alpha"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/components/activator"
@@ -734,6 +735,11 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	defer cancel()
 	if err := core_v1alpha.MigrateAppVersionConcurrency(migrationCtx, c.Log, eac); err != nil {
 		c.Log.Error("failed to migrate app versions", "error", err)
+		// Continue even if migration fails
+	}
+
+	if err := networkmigrate.MigrateServiceToTarget(migrationCtx, c.Log, eac); err != nil {
+		c.Log.Error("failed to migrate service entities to target", "error", err)
 		// Continue even if migration fails
 	}
 

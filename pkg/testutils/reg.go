@@ -35,12 +35,12 @@ type TestDeps struct {
 	Namespace string
 
 	// Network
-	Bridge          string
-	Subnet          *netdb.Subnet
-	IPv4Routable    netip.Prefix
-	ServicePrefixes []netip.Prefix
-	NetServ         *network.ServiceManager
-	Resolver        netresolve.Resolver
+	Bridge         string
+	Subnet         *netdb.Subnet
+	IPv4Routable   netip.Prefix
+	TargetPrefixes []netip.Prefix
+	NetServ        *network.ServiceManager
+	Resolver       netresolve.Resolver
 
 	// Paths
 	DataPath string
@@ -226,7 +226,7 @@ func NewTestDeps() (*TestDeps, func()) {
 		Bridge:       iface,
 		Subnet:       subnet,
 		IPv4Routable: subnet.Prefix(),
-		ServicePrefixes: []netip.Prefix{
+		TargetPrefixes: []netip.Prefix{
 			netip.MustParsePrefix("10.10.0.0/16"),
 			netip.MustParsePrefix("fd47:cafe:d00d::/64"),
 		},

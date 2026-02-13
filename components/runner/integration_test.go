@@ -85,7 +85,7 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 		LogWriter:       testDeps.LogWriter,
 		StatusMon:       testDeps.StatusMon,
 		IPv4Routable:    testDeps.IPv4Routable,
-		ServicePrefixes: testDeps.ServicePrefixes,
+		TargetPrefixes:  testDeps.TargetPrefixes,
 		DisableLocalNet: false,
 		Resolver:        res,
 		SandboxMetrics:  sbMetrics,

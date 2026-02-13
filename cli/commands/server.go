@@ -649,7 +649,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	time.Sleep(time.Second)
 
 	// Set service prefixes in ServerState
-	ctx.ServerState.ServicePrefixes = []netip.Prefix{
+	ctx.ServerState.TargetPrefixes = []netip.Prefix{
 		netip.MustParsePrefix("10.10.0.0/16"),
 		netip.MustParsePrefix("fd47:cafe:d00d::/64"),
 	}
@@ -736,7 +736,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	eac := entityserver_v1alpha.NewEntityAccessClient(client)
 	ec := entityserver.NewClient(ctx.Log, eac)
 
-	ipa := ipalloc.NewAllocator(ctx.Log, ctx.ServerState.ServicePrefixes)
+	ipa := ipalloc.NewAllocator(ctx.Log, ctx.ServerState.TargetPrefixes)
 	eg.Go(func() error {
 		return ipa.Watch(sub, eac)
 	})
@@ -782,7 +782,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		LogWriter:        logWriter,
 		StatusMon:        ctx.ServerState.StatusMon,
 		IPv4Routable:     ctx.ServerState.IPv4Routable,
-		ServicePrefixes:  ctx.ServerState.ServicePrefixes,
+		TargetPrefixes:   ctx.ServerState.TargetPrefixes,
 		DisableLocalNet:  false,
 		Resolver:         res,
 		SandboxMetrics:   ctx.ServerState.SandboxMetrics,

@@ -118,7 +118,7 @@ func TestServer(t *testing.T) error {
 	eac := entityserver_v1alpha.NewEntityAccessClient(client)
 	ec := entityserver.NewClient(log, eac)
 
-	ipa := ipalloc.NewAllocator(log, testDeps.ServicePrefixes)
+	ipa := ipalloc.NewAllocator(log, testDeps.TargetPrefixes)
 	eg.Go(func() error {
 		defer t.Log("ipallocator watch complete")
 		return ipa.Watch(ctx, eac)
@@ -160,7 +160,7 @@ func TestServer(t *testing.T) error {
 		LogWriter:       logWriter,
 		StatusMon:       statusMon,
 		IPv4Routable:    testDeps.IPv4Routable,
-		ServicePrefixes: testDeps.ServicePrefixes,
+		TargetPrefixes:  testDeps.TargetPrefixes,
 		DisableLocalNet: false,
 		Resolver:        res,
 		SandboxMetrics:  sbMetrics,

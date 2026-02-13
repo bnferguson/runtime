@@ -8,13 +8,13 @@ import (
 
 const (
 	EndpointsEndpointId = entity.Id("dev.miren.network/endpoints.endpoint")
-	EndpointsServiceId  = entity.Id("dev.miren.network/endpoints.service")
+	EndpointsTargetId   = entity.Id("dev.miren.network/endpoints.target")
 )
 
 type Endpoints struct {
 	ID       entity.Id  `json:"id"`
 	Endpoint []Endpoint `cbor:"endpoint,omitempty" json:"endpoint,omitempty"`
-	Service  entity.Id  `cbor:"service,omitempty" json:"service,omitempty"`
+	Target   entity.Id  `cbor:"target,omitempty" json:"target,omitempty"`
 }
 
 func (o *Endpoints) Decode(e entity.AttrGetter) {
@@ -26,8 +26,8 @@ func (o *Endpoints) Decode(e entity.AttrGetter) {
 			o.Endpoint = append(o.Endpoint, v)
 		}
 	}
-	if a, ok := e.Get(EndpointsServiceId); ok && a.Value.Kind() == entity.KindId {
-		o.Service = a.Value.Id()
+	if a, ok := e.Get(EndpointsTargetId); ok && a.Value.Kind() == entity.KindId {
+		o.Target = a.Value.Id()
 	}
 }
 
@@ -51,8 +51,8 @@ func (o *Endpoints) Encode() (attrs []entity.Attr) {
 	for _, v := range o.Endpoint {
 		attrs = append(attrs, entity.Component(EndpointsEndpointId, v.Encode()))
 	}
-	if !entity.Empty(o.Service) {
-		attrs = append(attrs, entity.Ref(EndpointsServiceId, o.Service))
+	if !entity.Empty(o.Target) {
+		attrs = append(attrs, entity.Ref(EndpointsTargetId, o.Target))
 	}
 	attrs = append(attrs, entity.Ref(entity.EntityKind, KindEndpoints))
 	return
@@ -62,7 +62,7 @@ func (o *Endpoints) Empty() bool {
 	if len(o.Endpoint) != 0 {
 		return false
 	}
-	if !entity.Empty(o.Service) {
+	if !entity.Empty(o.Target) {
 		return false
 	}
 	return true
@@ -71,7 +71,7 @@ func (o *Endpoints) Empty() bool {
 func (o *Endpoints) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Component("endpoint", "dev.miren.network/endpoints.endpoint", schema.Doc("The endpoint configuration, per endpoint"), schema.Many)
 	(&Endpoint{}).InitSchema(sb.Builder("endpoints.endpoint"))
-	sb.Ref("service", "dev.miren.network/endpoints.service", schema.Doc("The service that uses these endpoints"), schema.Indexed)
+	sb.Ref("target", "dev.miren.network/endpoints.target", schema.Doc("The target that uses these endpoints"), schema.Indexed)
 }
 
 const (
@@ -119,31 +119,31 @@ func (o *Endpoint) InitSchema(sb *schema.SchemaBuilder) {
 }
 
 const (
-	ServiceIpId    = entity.Id("dev.miren.network/service.ip")
-	ServiceMatchId = entity.Id("dev.miren.network/service.match")
-	ServicePortId  = entity.Id("dev.miren.network/service.port")
+	TargetIpId    = entity.Id("dev.miren.network/target.ip")
+	TargetMatchId = entity.Id("dev.miren.network/target.match")
+	TargetPortId  = entity.Id("dev.miren.network/target.port")
 )
 
-type Service struct {
+type Target struct {
 	ID    entity.Id    `json:"id"`
 	Ip    []string     `cbor:"ip,omitempty" json:"ip,omitempty"`
 	Match types.Labels `cbor:"match,omitempty" json:"match,omitempty"`
 	Port  []Port       `cbor:"port,omitempty" json:"port,omitempty"`
 }
 
-func (o *Service) Decode(e entity.AttrGetter) {
+func (o *Target) Decode(e entity.AttrGetter) {
 	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
-	for _, a := range e.GetAll(ServiceIpId) {
+	for _, a := range e.GetAll(TargetIpId) {
 		if a.Value.Kind() == entity.KindString {
 			o.Ip = append(o.Ip, a.Value.String())
 		}
 	}
-	for _, a := range e.GetAll(ServiceMatchId) {
+	for _, a := range e.GetAll(TargetMatchId) {
 		if a.Value.Kind() == entity.KindLabel {
 			o.Match = append(o.Match, a.Value.Label())
 		}
 	}
-	for _, a := range e.GetAll(ServicePortId) {
+	for _, a := range e.GetAll(TargetPortId) {
 		if a.Value.Kind() == entity.KindComponent {
 			var v Port
 			v.Decode(a.Value.Component())
@@ -152,37 +152,37 @@ func (o *Service) Decode(e entity.AttrGetter) {
 	}
 }
 
-func (o *Service) Is(e entity.AttrGetter) bool {
-	return entity.Is(e, KindService)
+func (o *Target) Is(e entity.AttrGetter) bool {
+	return entity.Is(e, KindTarget)
 }
 
-func (o *Service) ShortKind() string {
-	return "service"
+func (o *Target) ShortKind() string {
+	return "target"
 }
 
-func (o *Service) Kind() entity.Id {
-	return KindService
+func (o *Target) Kind() entity.Id {
+	return KindTarget
 }
 
-func (o *Service) EntityId() entity.Id {
+func (o *Target) EntityId() entity.Id {
 	return o.ID
 }
 
-func (o *Service) Encode() (attrs []entity.Attr) {
+func (o *Target) Encode() (attrs []entity.Attr) {
 	for _, v := range o.Ip {
-		attrs = append(attrs, entity.String(ServiceIpId, v))
+		attrs = append(attrs, entity.String(TargetIpId, v))
 	}
 	for _, v := range o.Match {
-		attrs = append(attrs, entity.Label(ServiceMatchId, v.Key, v.Value))
+		attrs = append(attrs, entity.Label(TargetMatchId, v.Key, v.Value))
 	}
 	for _, v := range o.Port {
-		attrs = append(attrs, entity.Component(ServicePortId, v.Encode()))
+		attrs = append(attrs, entity.Component(TargetPortId, v.Encode()))
 	}
-	attrs = append(attrs, entity.Ref(entity.EntityKind, KindService))
+	attrs = append(attrs, entity.Ref(entity.EntityKind, KindTarget))
 	return
 }
 
-func (o *Service) Empty() bool {
+func (o *Target) Empty() bool {
 	if len(o.Ip) != 0 {
 		return false
 	}
@@ -195,11 +195,11 @@ func (o *Service) Empty() bool {
 	return true
 }
 
-func (o *Service) InitSchema(sb *schema.SchemaBuilder) {
-	sb.String("ip", "dev.miren.network/service.ip", schema.Doc("The IP allocated to the service"), schema.Many)
-	sb.Label("match", "dev.miren.network/service.match", schema.Doc("A label to match against a sandbox"), schema.Many)
-	sb.Component("port", "dev.miren.network/service.port", schema.Doc("A network port the service exposes"), schema.Many)
-	(&Port{}).InitSchema(sb.Builder("service.port"))
+func (o *Target) InitSchema(sb *schema.SchemaBuilder) {
+	sb.String("ip", "dev.miren.network/target.ip", schema.Doc("The IP allocated to the target"), schema.Many)
+	sb.Label("match", "dev.miren.network/target.match", schema.Doc("A label to match against a sandbox"), schema.Many)
+	sb.Component("port", "dev.miren.network/target.port", schema.Doc("A network port the target exposes"), schema.Many)
+	(&Port{}).InitSchema(sb.Builder("target.port"))
 }
 
 const (
@@ -308,14 +308,14 @@ func (o *Port) InitSchema(sb *schema.SchemaBuilder) {
 
 var (
 	KindEndpoints = entity.Id("dev.miren.network/kind.endpoints")
-	KindService   = entity.Id("dev.miren.network/kind.service")
+	KindTarget    = entity.Id("dev.miren.network/kind.target")
 	Schema        = entity.Id("dev.miren.network/schema.v1alpha")
 )
 
 func init() {
 	schema.Register("dev.miren.network", "v1alpha", func(sb *schema.SchemaBuilder) {
 		(&Endpoints{}).InitSchema(sb)
-		(&Service{}).InitSchema(sb)
+		(&Target{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.network", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\x8cT\xddҔ0\f}\x0e\xc7\xdfQ\xaf\xeb\xf8D;\xdd&@\x06\xfac[p\xf7Vg|\x90\xef[}C\xbdv\x1a\u0602BYn\x18\xda朤礹\x81\x91\x1a\xbf\x00\x0eB\x93G#\fƯַؒ\x81\xf0ty\xb3:\xf9\x94ND@?\x90\xc2_\f\xbf\xbcXGM\x01#ϟ\n\xac\x96d\xd6y\xaa\x8a\xb0\x83\xf0\xfdv&\xb8\xbc*\xd2\br\xa0\xa5\xb9\xfe\xe6|gr\x10\xaf\x0e\xab\x10=\x99\x9a\xb1o\xcbX-\xa3j\x16p\x1c7\x12\x03v\xf2\x8c\xdd\xcfD\xb0q\xd3;\x81\xb3>.\xf0\xc0\xeb\x04'e\xb5\xb3\x06M\x9c\xff&I\xd6tbIwP\x97\x1fϩ\xb4\x97\xeb\xd2\x12\x87\xe0b\xe6\xcfB\x12\x86\xbd+\xc1,\xe0\x89\xef\x90`4/\x13\x81\"\x13w\x93f \xfc\x83)\x990b\xbc\x8dVَqM^%,\xa0\xe9u\x9b>\xa7Av=\x86'\x15\x95\xdbr\xe3\x0e\x13Q9\xd5\xc3~L\x0f\x8eo\xf1\xbePQ\x94\xbe\xc68\xab\xd0.7\x0e\xe9\xc0\xc5gݗ\xe2\xd7\x03\xfa@\xd6\xd4\xc3gٹFvΓ\x96\xfezJ\x9e\xb3j\xbb\x11\xf5\xd4'[\xfe\xf1\xdbC\x03Β\x89aj\xb5\x8d\ns\xc8\xc1>\xfb\xc6O\xe0\xe3\x0eQκx\bM\xde{\xf0\x18\xd6\xc4bM|\xb4Tv\xe5u\xb9\xd44+6\xa6\xc4s\xa1A3\xac\xd0ػ^e\x05\x98\xfdÞ~\x93\xab\x9c\xe1n1'9\x13\xec\xe6\xa0\xcc\xf1\x7fX\x1b\x1a\xeb\xe3i\x1cչm\x1e\x8c\xec\x99\xeeq\x83\xfd\x05\x00\x00\xff\xff\x01\x00\x00\xff\xff\xa7\xb2\x19\xcc\x1e\x06\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.network", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\x8c\x94\xdb\xee\x940\x10\xc6_\xc3\xc4x\x88\xf1\xba\xc6'\"\xa53\xc0\x04z\xb0\x14ܽ\xd5\xc4\a\xf9\xef\xea\x1b\xea\xb5\xe9\xc0\x16\x14\xcarC\xe8\xe1\xf7\xcd\xf4\x9bi\xef`\xa4\xc6/\x80\xa3\xd0\xe4\xd1\b\x83\xe1\xab\xf5-\xb6d\xa0\x7f\xb9\xbc٬|\x8a+\"H_c\xf8\xc5\xf4\xe5\xd5vӴ>\xa9\xfc\xa9\xc0jIf\x1b\xa5\xaa\b;\xe8\xbf\xdfK\x82\xcb뜊 \aZ\x9a\xebo\x8eV\x92\x83puX\xf5\xc1\x93\xa9\x19}\x9bE\xb5\f\xaaY\xd18MD\x01\xecd\x89\xdd\xcf\xc8\xef\x9cr\xe6\x9d\xf5a\x85\x03\x8f#M\xcajg\r\x9a\xb0\xfc\xcdvl\xd5\xc4J\xed\xa4'?n\x19O\xa2\x86\xe0\\\x96\xcf\xca\x0f\xc6\xde\xe70\vX\xf0\x11\"F\xcb0\n(2\xe10h\x02\xe1\x1f\x86+\xf0.\xc7x\x1b\xac\xb2\x1dsM\x1aE\x16\xd0\f\xba\x8d\x9fb\x94݀\xfd\x8b\n\xca\xed\xd5\U00081260\x9c\x1a\xe0x\xcf\x00\x8eO\xf1!\x93\xd1T\x8aŅv=q\xca\aN>\xf9\xbe6\xbf\x1e\xd1\xf7dM=~\x96\x9dkd\xe7<i\xe9\xafE\xac9\xbbv\xb8\xa3\x9aR\xd9+\x1f_:4\xe0,\x99\xd0ύ\xb6\x93`\xdar\xb2;q\xff\x7f<\x10JQWנIsO\xae\xc2VXl\x85Ϧz\xcb\\ՇN|'v^\x88[\xa6?\x13\x96\xe9\xeb\xc3R%\ar\xbd\xb6\x1cs**\a\x98\v\xcc!J\x82\xc3\b\x94\x14\xfe\xdf\xd6\xf6\x8d\xf5\xa1\x98^\xe8G\xcf\x1c?ԋ\xd8\xf3\xe6\xfa\v\x00\x00\xff\xff\x01\x00\x00\xff\xff@\xd7\xc1\xe4\x13\x06\x00\x00"))
 }

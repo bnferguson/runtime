@@ -26,11 +26,11 @@ type ServerState struct {
 	Namespace        string
 
 	// Network
-	Bridge          string
-	Subnet          *netdb.Subnet
-	ServicePrefixes []netip.Prefix
-	NetServ         *network.ServiceManager
-	IPv4Routable    netip.Prefix
+	Bridge         string
+	Subnet         *netdb.Subnet
+	TargetPrefixes []netip.Prefix
+	NetServ        *network.ServiceManager
+	IPv4Routable   netip.Prefix
 
 	// Paths
 	DataPath string
