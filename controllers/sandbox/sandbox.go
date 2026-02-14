@@ -497,8 +497,10 @@ func (c *SandboxController) Close() error {
 }
 
 const (
-	sandboxVersionLabel    = "runtime.computer/sandbox-version"
-	sandboxEntityLabel     = "runtime.computer/entity-id"
+	sandboxVersionLabel = "runtime.computer/sandbox-version"
+	// SandboxEntityLabel is the container label key used to associate containers with sandbox entities.
+	SandboxEntityLabel     = "runtime.computer/entity-id"
+	sandboxEntityLabel     = SandboxEntityLabel
 	sandboxVerEntityLabel  = "runtime.computer/version-entity"
 	sandboxKindLabel       = "runtime.computer/container-kind"
 	shutdownTimeoutLabel   = "runtime.computer/shutdown-timeout"
@@ -519,6 +521,11 @@ func containerPrefix(id entity.Id) string {
 }
 
 func pauseContainerId(id entity.Id) string {
+	return PauseContainerID(id)
+}
+
+// PauseContainerID returns the containerd container ID for a sandbox's pause container.
+func PauseContainerID(id entity.Id) string {
 	return containerPrefix(id) + "_pause"
 }
 

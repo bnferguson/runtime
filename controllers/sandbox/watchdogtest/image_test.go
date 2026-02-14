@@ -1,4 +1,4 @@
-package sandbox
+package watchdogtest
 
 import (
 	"context"
@@ -14,6 +14,7 @@ import (
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/controllers/sandbox"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/imagerefs"
@@ -84,13 +85,13 @@ func TestImageWatchdog(t *testing.T) {
 		r.NoError(err, "archived image should exist before GC")
 
 		// Create the image watchdog
-		watchdog := &ImageWatchdog{
+		watchdog := &sandbox.ImageWatchdog{
 			Log:       slog.Default(),
 			CC:        cc,
 			EAC:       eac,
 			Namespace: ii.Namespace,
 			DataPath:  "/tmp",
-			Config:    DefaultImageGCConfig(),
+			Config:    sandbox.DefaultImageGCConfig(),
 		}
 
 		// Run GC
@@ -138,13 +139,13 @@ func TestImageWatchdog(t *testing.T) {
 		r.NoError(err)
 
 		// Create the image watchdog
-		watchdog := &ImageWatchdog{
+		watchdog := &sandbox.ImageWatchdog{
 			Log:       slog.Default(),
 			CC:        cc,
 			EAC:       eac,
 			Namespace: ii.Namespace,
 			DataPath:  "/tmp",
-			Config:    DefaultImageGCConfig(),
+			Config:    sandbox.DefaultImageGCConfig(),
 		}
 
 		// Run GC
@@ -163,13 +164,13 @@ func TestImageWatchdog(t *testing.T) {
 		r := require.New(t)
 
 		// Create the image watchdog
-		watchdog := &ImageWatchdog{
+		watchdog := &sandbox.ImageWatchdog{
 			Log:       slog.Default(),
 			CC:        cc,
 			EAC:       eac,
 			Namespace: ii.Namespace,
 			DataPath:  "/tmp",
-			Config:    DefaultImageGCConfig(),
+			Config:    sandbox.DefaultImageGCConfig(),
 		}
 
 		// Run GC
@@ -221,13 +222,13 @@ func TestImageWatchdog(t *testing.T) {
 		r.NoError(err)
 
 		// Create the image watchdog
-		watchdog := &ImageWatchdog{
+		watchdog := &sandbox.ImageWatchdog{
 			Log:       slog.Default(),
 			CC:        cc,
 			EAC:       eac,
 			Namespace: ii.Namespace,
 			DataPath:  "/tmp",
-			Config:    DefaultImageGCConfig(),
+			Config:    sandbox.DefaultImageGCConfig(),
 		}
 
 		// Run GC
@@ -299,13 +300,13 @@ func TestImageWatchdog(t *testing.T) {
 		r.NoError(err)
 
 		// Create the image watchdog
-		watchdog := &ImageWatchdog{
+		watchdog := &sandbox.ImageWatchdog{
 			Log:       slog.Default(),
 			CC:        cc,
 			EAC:       eac,
 			Namespace: ii.Namespace,
 			DataPath:  "/tmp",
-			Config:    DefaultImageGCConfig(),
+			Config:    sandbox.DefaultImageGCConfig(),
 		}
 
 		// Run GC
@@ -320,31 +321,31 @@ func TestImageWatchdog(t *testing.T) {
 		r.NoError(err, "in-use image should still exist after GC")
 	})
 
-	t.Run("parseArtifactID extracts artifact ID correctly", func(t *testing.T) {
+	t.Run("ParseArtifactID extracts artifact ID correctly", func(t *testing.T) {
 		r := require.New(t)
 
-		watchdog := &ImageWatchdog{}
+		watchdog := &sandbox.ImageWatchdog{}
 
 		// Valid image names
-		r.Equal("artifact/a-abc123", watchdog.parseArtifactID("cluster.local:5000/myapp:a-abc123"))
-		r.Equal("artifact/a-xyz789", watchdog.parseArtifactID("cluster.local:5000/another-app:a-xyz789"))
+		r.Equal("artifact/a-abc123", watchdog.ParseArtifactID("cluster.local:5000/myapp:a-abc123"))
+		r.Equal("artifact/a-xyz789", watchdog.ParseArtifactID("cluster.local:5000/another-app:a-xyz789"))
 
 		// Invalid image names
-		r.Equal("", watchdog.parseArtifactID("docker.io/library/alpine:latest"))
-		r.Equal("", watchdog.parseArtifactID("oci.miren.cloud/pause:v1"))
-		r.Equal("", watchdog.parseArtifactID("cluster.local:5000/myapp")) // No tag
-		r.Equal("", watchdog.parseArtifactID("invalid"))
+		r.Equal("", watchdog.ParseArtifactID("docker.io/library/alpine:latest"))
+		r.Equal("", watchdog.ParseArtifactID("oci.miren.cloud/pause:v1"))
+		r.Equal("", watchdog.ParseArtifactID("cluster.local:5000/myapp")) // No tag
+		r.Equal("", watchdog.ParseArtifactID("invalid"))
 	})
 
 	t.Run("starts and stops gracefully", func(t *testing.T) {
 		// Create the watchdog with very short intervals
-		watchdog := &ImageWatchdog{
+		watchdog := &sandbox.ImageWatchdog{
 			Log:       slog.Default(),
 			CC:        cc,
 			EAC:       eac,
 			Namespace: ii.Namespace,
 			DataPath:  "/tmp",
-			Config: ImageGCConfig{
+			Config: sandbox.ImageGCConfig{
 				ScheduledGCInterval:   100 * time.Millisecond,
 				PressureCheckInterval: 50 * time.Millisecond,
 				DiskPressureThreshold: 99.0, // High threshold so it won't trigger

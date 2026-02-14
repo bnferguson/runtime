@@ -71,7 +71,7 @@ func (w *ContainerWatchdog) monitor(ctx context.Context) {
 	defer ticker.Stop()
 
 	// Run an initial cleanup on startup
-	result, err := w.cleanupOrphanedContainers(ctx)
+	result, err := w.CleanupOrphanedContainers(ctx)
 	if err != nil {
 		w.Log.Error("initial watchdog cleanup failed", "error", err)
 	} else if len(result.DeletedContainers) > 0 || len(result.FailedContainers) > 0 {
@@ -83,7 +83,7 @@ func (w *ContainerWatchdog) monitor(ctx context.Context) {
 	for {
 		select {
 		case <-ticker.C:
-			result, err := w.cleanupOrphanedContainers(ctx)
+			result, err := w.CleanupOrphanedContainers(ctx)
 			if err != nil {
 				w.Log.Error("watchdog cleanup failed", "error", err)
 			} else if len(result.DeletedContainers) > 0 || len(result.FailedContainers) > 0 {
@@ -98,9 +98,9 @@ func (w *ContainerWatchdog) monitor(ctx context.Context) {
 	}
 }
 
-// cleanupOrphanedContainers removes containers not associated with Running sandboxes.
+// CleanupOrphanedContainers removes containers not associated with Running sandboxes.
 // Returns a CleanupResult containing lists of successfully deleted and failed containers.
-func (w *ContainerWatchdog) cleanupOrphanedContainers(ctx context.Context) (*CleanupResult, error) {
+func (w *ContainerWatchdog) CleanupOrphanedContainers(ctx context.Context) (*CleanupResult, error) {
 	w.Log.Debug("watchdog checking for orphaned containers")
 
 	result := &CleanupResult{

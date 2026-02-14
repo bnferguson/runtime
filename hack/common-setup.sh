@@ -72,14 +72,14 @@ start_containerd() {
 # Start buildkitd
 # Usage: start_buildkitd [log_destination]
 start_buildkitd() {
-    local log_dest="${1:-/dev/stdout}"
+    local log_dest="${1:-/dev/null}"
 
     # Since our buildkit dir is cached across runs, there might be a stale lockfile
     # sitting around that should be safe to kill
     rm -f /data/buildkit/buildkitd.lock
 
-    if [ "$log_dest" = "/dev/stdout" ]; then
-        buildkitd --root /data/buildkit 2>&1 &
+    if [ "$log_dest" = "/dev/null" ]; then
+        buildkitd --root /data/buildkit > /dev/null 2>&1 &
     else
         buildkitd --root /data/buildkit >"$log_dest" 2>&1 &
     fi
@@ -93,7 +93,7 @@ wait_for_service() {
     local timeout=30
     local count=0
 
-    echo "Waiting for $service_name..."
+    # echo "Waiting for $service_name..."
     while ! eval "$check_command" >/dev/null 2>&1; do
         sleep 1
         count=$((count + 1))
@@ -102,7 +102,7 @@ wait_for_service() {
             exit 1
         fi
     done
-    echo "$service_name is ready"
+    # echo "$service_name is ready"
 }
 
 # Setup host user for file ownership preservation

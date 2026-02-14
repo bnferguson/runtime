@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+
+iso run VERBOSE=1 -- bash hack/test.sh "$@" -failfast -json

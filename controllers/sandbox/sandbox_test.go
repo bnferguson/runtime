@@ -26,12 +26,10 @@ import (
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
-	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/idgen"
-	"miren.dev/runtime/pkg/tarx"
 	"miren.dev/runtime/pkg/testutils"
 )
 
@@ -62,6 +60,40 @@ func newSandboxController(d *testutils.TestDeps) (*SandboxController, error) {
 }
 
 func TestSandbox(t *testing.T) {
+	testDeps, cleanup := testutils.NewTestDeps()
+	defer cleanup()
+
+	cc := testDeps.CC
+	ii := testDeps.NewImageImporter()
+	ns := ii.Namespace
+
+	setupCtx, setupCancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer setupCancel()
+	setupCtx = namespaces.WithNamespace(setupCtx, ns)
+
+	// Build and import nginx replacement (Go HTTP file server)
+	{
+		o := buildGoOCIImage(t, "./testdata/testhttp", "/testhttp", []testImageFile{
+			{Path: "usr/share/nginx/html", IsDir: true},
+		})
+		defer o.Close()
+		err := ii.ImportImage(setupCtx, o, "mn-nginx:latest")
+		require.NoError(t, err)
+	}
+
+	// Build and import sort image (CPU burner)
+	{
+		o := buildGoOCIImage(t, "./testdata/sort", "/bin/tp", nil)
+		defer o.Close()
+		err := ii.ImportImage(setupCtx, o, "mn-sort:latest")
+		require.NoError(t, err)
+	}
+
+	// Pull busybox once
+	{
+		_, err := cc.Pull(setupCtx, "docker.io/library/busybox:latest", containerd.WithPullUnpack)
+		require.NoError(t, err)
+	}
 
 	sbName := func() string {
 		return idgen.GenNS("sb")
@@ -73,30 +105,7 @@ func TestSandbox(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 
-		testDeps, cleanup := testutils.NewTestDeps()
-		defer cleanup()
-
-		cc := testDeps.CC
-		bkl := testDeps.Buildkit
-
-		dfr, err := tarx.MakeTar("testdata/nginx", nil)
-		r.NoError(err)
-
-		datafs, err := tarx.TarFS(dfr, t.TempDir())
-		r.NoError(err)
-
-		o, _, err := bkl.Transform(ctx, datafs)
-		r.NoError(err)
-
-		ii := testDeps.NewImageImporter()
-
-		err = ii.ImportImage(ctx, o, "mn-nginx:latest")
-		r.NoError(err)
-
-		ctx = namespaces.WithNamespace(ctx, ii.Namespace)
-
-		_, err = cc.GetImage(ctx, "mn-nginx:latest")
-		r.NoError(err)
+		ctx = namespaces.WithNamespace(ctx, ns)
 
 		co, err := newSandboxController(testDeps)
 		r.NoError(err)
@@ -258,30 +267,7 @@ func TestSandbox(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 
-		testDeps, cleanup := testutils.NewTestDeps()
-		defer cleanup()
-
-		cc := testDeps.CC
-		bkl := testDeps.Buildkit
-
-		dfr, err := tarx.MakeTar("testdata/sort", nil)
-		r.NoError(err)
-
-		datafs, err := tarx.TarFS(dfr, t.TempDir())
-		r.NoError(err)
-
-		o, _, err := bkl.Transform(ctx, datafs)
-		r.NoError(err)
-
-		ii := testDeps.NewImageImporter()
-
-		err = ii.ImportImage(ctx, o, "mn-sort:latest")
-		r.NoError(err)
-
-		ctx = namespaces.WithNamespace(ctx, ii.Namespace)
-
-		_, err = cc.GetImage(ctx, "mn-sort:latest")
-		r.NoError(err)
+		ctx = namespaces.WithNamespace(ctx, ns)
 
 		co, err := newSandboxController(testDeps)
 		r.NoError(err)
@@ -347,61 +333,32 @@ func TestSandbox(t *testing.T) {
 
 		defer testutils.ClearContainer(ctx, c)
 
-		// Give container time to start and accumulate CPU time
-		time.Sleep(2 * time.Second)
+		// Poll: collect metrics and query until VictoriaMetrics has indexed data
+		var cpuSeconds float64
+		r.Eventually(func() bool {
+			_ = co.Metrics.writeStatsToStorage(ctx)
+			co.Metrics.CPUUsage.Writer.Flush()
 
-		// Explicitly trigger metric collection to establish baseline
-		err = co.Metrics.writeStatsToStorage(ctx)
-		r.NoError(err)
-
-		// Let sort container accumulate more CPU time and collect metrics
-		time.Sleep(1 * time.Second)
-		err = co.Metrics.writeStatsToStorage(ctx)
-		r.NoError(err)
-
-		// Collect one more time to ensure we have multiple data points
-		time.Sleep(1 * time.Second)
-		err = co.Metrics.writeStatsToStorage(ctx)
-		r.NoError(err)
-
-		// Manually flush metrics to VictoriaMetrics instead of waiting for 5s background timer
-		co.Metrics.CPUUsage.Writer.Flush()
-
-		// Wait for VictoriaMetrics to index the flushed data with retry
-		// VictoriaMetrics has a 2s latencyOffset, so we need to wait at least that long
-		time.Sleep(2500 * time.Millisecond)
-
-		var queryResult *metrics.QueryResult
-		maxRetries := 5
-		for i := 0; i < maxRetries; i++ {
-			if i > 0 {
-				time.Sleep(500 * time.Millisecond)
-			}
-
-			queryResult, err = co.Metrics.CPUUsage.Reader.InstantQuery(ctx,
+			queryResult, qerr := co.Metrics.CPUUsage.Reader.InstantQuery(ctx,
 				fmt.Sprintf(`cpu_usage_seconds_total{entity="%s"}`, id.String()),
 				time.Time{})
-			r.NoError(err)
-
-			if len(queryResult.Data.Result) > 0 {
-				break
+			if qerr != nil || len(queryResult.Data.Result) == 0 {
+				return false
 			}
 
-			if i == maxRetries-1 {
-				t.Fatalf("no CPU metrics found after %d retries", maxRetries)
+			cpuSecondsStr, ok := queryResult.Data.Result[0].Value[1].(string)
+			if !ok {
+				return false
 			}
-			t.Logf("retry %d: waiting for metrics to be indexed...", i+1)
-		}
-
-		cpuSecondsStr, ok := queryResult.Data.Result[0].Value[1].(string)
-		r.True(ok, "expected string value for CPU counter")
-		cpuSeconds, err := strconv.ParseFloat(cpuSecondsStr, 64)
-		r.NoError(err)
+			val, perr := strconv.ParseFloat(cpuSecondsStr, 64)
+			if perr != nil {
+				return false
+			}
+			cpuSeconds = val
+			return cpuSeconds > 0.5
+		}, 15*time.Second, 500*time.Millisecond, "should record at least 0.5 CPU seconds")
 
 		t.Logf("total CPU seconds recorded: %f", cpuSeconds)
-
-		// Verify we've recorded at least some CPU usage (the sort container should be CPU-intensive)
-		r.Greater(cpuSeconds, 0.5, "should have recorded at least 0.5 CPU seconds")
 	})
 
 	t.Run("configures networking", func(t *testing.T) {
@@ -410,30 +367,7 @@ func TestSandbox(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 
-		testDeps, cleanup := testutils.NewTestDeps()
-		defer cleanup()
-
-		cc := testDeps.CC
-		bkl := testDeps.Buildkit
-
-		dfr, err := tarx.MakeTar("testdata/nginx", nil)
-		r.NoError(err)
-
-		datafs, err := tarx.TarFS(dfr, t.TempDir())
-		r.NoError(err)
-
-		o, _, err := bkl.Transform(ctx, datafs)
-		r.NoError(err)
-
-		ii := testDeps.NewImageImporter()
-
-		err = ii.ImportImage(ctx, o, "mn-nginx:latest")
-		r.NoError(err)
-
-		ctx = namespaces.WithNamespace(ctx, ii.Namespace)
-
-		_, err = cc.GetImage(ctx, "mn-nginx:latest")
-		r.NoError(err)
+		ctx = namespaces.WithNamespace(ctx, ns)
 
 		co, err := newSandboxController(testDeps)
 		r.NoError(err)
@@ -509,18 +443,20 @@ func TestSandbox(t *testing.T) {
 
 		r.Equal("mn-nginx", lbls["runtime.computer/app"])
 
-		time.Sleep(5 * time.Second)
-
 		hc := http.Client{
 			Timeout: 1 * time.Second,
 		}
 
-		resp, err := hc.Get(fmt.Sprintf("http://%s:80", ca.Addr().String()))
-		r.NoError(err)
+		r.Eventually(func() bool {
+			resp, err := hc.Get(fmt.Sprintf("http://%s:80", ca.Addr().String()))
+			if err != nil {
+				return false
+			}
+			resp.Body.Close()
+			return resp.StatusCode == http.StatusOK
+		}, 10*time.Second, 200*time.Millisecond, "HTTP server should become reachable")
 
-		defer resp.Body.Close()
-
-		resp, err = hc.Get("http://127.0.0.1:31001")
+		resp, err := hc.Get("http://127.0.0.1:31001")
 		r.NoError(err)
 
 		defer resp.Body.Close()
@@ -534,30 +470,7 @@ func TestSandbox(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 
-		testDeps, cleanup := testutils.NewTestDeps()
-		defer cleanup()
-
-		cc := testDeps.CC
-		bkl := testDeps.Buildkit
-
-		dfr, err := tarx.MakeTar("testdata/nginx", nil)
-		r.NoError(err)
-
-		datafs, err := tarx.TarFS(dfr, t.TempDir())
-		r.NoError(err)
-
-		o, _, err := bkl.Transform(ctx, datafs)
-		r.NoError(err)
-
-		ii := testDeps.NewImageImporter()
-
-		err = ii.ImportImage(ctx, o, "mn-nginx:latest")
-		r.NoError(err)
-
-		ctx = namespaces.WithNamespace(ctx, ii.Namespace)
-
-		_, err = cc.GetImage(ctx, "mn-nginx:latest")
-		r.NoError(err)
+		ctx = namespaces.WithNamespace(ctx, ns)
 
 		co, err := newSandboxController(testDeps)
 		r.NoError(err)
@@ -642,23 +555,26 @@ func TestSandbox(t *testing.T) {
 
 		defer testutils.ClearContainer(ctx, c)
 
-		time.Sleep(5 * time.Second)
-
 		hc := http.Client{
 			Timeout: 1 * time.Second,
 		}
 
-		resp, err := hc.Get(fmt.Sprintf("http://%s:80", ca.Addr().String()))
-		r.NoError(err)
+		var body string
+		r.Eventually(func() bool {
+			resp, err := hc.Get(fmt.Sprintf("http://%s:80", ca.Addr().String()))
+			if err != nil {
+				return false
+			}
+			defer resp.Body.Close()
+			data, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return false
+			}
+			body = string(data)
+			return resp.StatusCode == http.StatusOK
+		}, 10*time.Second, 200*time.Millisecond, "HTTP server should become reachable")
 
-		defer resp.Body.Close()
-
-		data, err := io.ReadAll(resp.Body)
-		r.NoError(err)
-
-		r.Contains(string(data), "this is from testdata/static-site")
-
-		r.Equal(http.StatusOK, resp.StatusCode)
+		r.Contains(body, "this is from testdata/static-site")
 	})
 
 	t.Run("sets up named host volumes", func(t *testing.T) {
@@ -667,30 +583,7 @@ func TestSandbox(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 
-		testDeps, cleanup := testutils.NewTestDeps()
-		defer cleanup()
-
-		cc := testDeps.CC
-		bkl := testDeps.Buildkit
-
-		dfr, err := tarx.MakeTar("testdata/nginx", nil)
-		r.NoError(err)
-
-		datafs, err := tarx.TarFS(dfr, t.TempDir())
-		r.NoError(err)
-
-		o, _, err := bkl.Transform(ctx, datafs)
-		r.NoError(err)
-
-		ii := testDeps.NewImageImporter()
-
-		err = ii.ImportImage(ctx, o, "mn-nginx:latest")
-		r.NoError(err)
-
-		ctx = namespaces.WithNamespace(ctx, ii.Namespace)
-
-		_, err = cc.GetImage(ctx, "mn-nginx:latest")
-		r.NoError(err)
+		ctx = namespaces.WithNamespace(ctx, ns)
 
 		co, err := newSandboxController(testDeps)
 		r.NoError(err)
@@ -772,8 +665,6 @@ func TestSandbox(t *testing.T) {
 
 		defer testutils.ClearContainer(ctx, c)
 
-		time.Sleep(5 * time.Second)
-
 		rawPath := filepath.Join(co.DataPath, "host-volumes", "site-data", "index.html")
 
 		err = os.WriteFile(rawPath, []byte("this is from testdata/static-site"), 0644)
@@ -783,17 +674,22 @@ func TestSandbox(t *testing.T) {
 			Timeout: 1 * time.Second,
 		}
 
-		resp, err := hc.Get(fmt.Sprintf("http://%s:80", ca.Addr().String()))
-		r.NoError(err)
+		var body string
+		r.Eventually(func() bool {
+			resp, err := hc.Get(fmt.Sprintf("http://%s:80", ca.Addr().String()))
+			if err != nil {
+				return false
+			}
+			defer resp.Body.Close()
+			data, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return false
+			}
+			body = string(data)
+			return resp.StatusCode == http.StatusOK
+		}, 10*time.Second, 200*time.Millisecond, "HTTP server should become reachable")
 
-		defer resp.Body.Close()
-
-		data, err := io.ReadAll(resp.Body)
-		r.NoError(err)
-
-		r.Contains(string(data), "this is from testdata/static-site")
-
-		r.Equal(http.StatusOK, resp.StatusCode)
+		r.Contains(body, "this is from testdata/static-site")
 	})
 
 	checkClosed := func(t *testing.T, c io.Closer) {
@@ -809,9 +705,6 @@ func TestSandbox(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-
-		testDeps, cleanup := testutils.NewTestDeps()
-		defer cleanup()
 
 		sbc, err := newSandboxController(testDeps)
 		r.NoError(err)
@@ -877,9 +770,6 @@ func TestSandbox(t *testing.T) {
 		err = sbc.Create(ctx, sb2, meta2)
 		r.NoError(err)
 
-		// Wait a bit for containers to be created
-		time.Sleep(2 * time.Second)
-
 		// Stop the first sandbox (this should set status to DEAD)
 		err = sbc.Delete(ctx, sbID1)
 		r.NoError(err)
@@ -908,11 +798,20 @@ func TestSandbox(t *testing.T) {
 		resp, err := sbc.EAC.List(ctx, entity.Ref(entity.EntityKind, compute.KindSandbox))
 		r.NoError(err)
 
-		// Should only have one sandbox left (sbID2)
-		r.Equal(1, len(resp.Values()))
-
+		// Verify sbID1 was cleaned up and sbID2 remains
+		var found1 bool
 		var remainingSb compute.Sandbox
-		remainingSb.Decode(resp.Values()[0].Entity())
+		for _, v := range resp.Values() {
+			var sb compute.Sandbox
+			sb.Decode(v.Entity())
+			if sb.ID == sbID1 {
+				found1 = true
+			}
+			if sb.ID == sbID2 {
+				remainingSb = sb
+			}
+		}
+		r.False(found1, "dead sandbox sbID1 should have been cleaned up")
 		r.Equal(sbID2, remainingSb.ID)
 		r.Equal(compute.RUNNING, remainingSb.Status)
 
@@ -927,11 +826,6 @@ func TestSandbox(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 
-		testDeps, cleanup := testutils.NewTestDeps()
-		defer cleanup()
-
-		_ = testDeps.CC // referenced for namespace access via co.Namespace
-
 		co, err := newSandboxController(testDeps)
 		r.NoError(err)
 
@@ -939,7 +833,7 @@ func TestSandbox(t *testing.T) {
 
 		r.NoError(co.Init(ctx))
 
-		ctx = namespaces.WithNamespace(ctx, co.Namespace)
+		ctx = namespaces.WithNamespace(ctx, ns)
 
 		// Create a sandbox with a container that binds to port 8080
 		id := entity.Id(sbName())
@@ -1048,9 +942,6 @@ func TestSandbox(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 
-		testDeps, cleanup := testutils.NewTestDeps()
-		defer cleanup()
-
 		co, err := newSandboxController(testDeps)
 		r.NoError(err)
 
@@ -1058,7 +949,7 @@ func TestSandbox(t *testing.T) {
 
 		r.NoError(co.Init(ctx))
 
-		ctx = namespaces.WithNamespace(ctx, co.Namespace)
+		ctx = namespaces.WithNamespace(ctx, ns)
 
 		// Create a sandbox with a container that binds to multiple ports
 		id := entity.Id(sbName())
@@ -1230,10 +1121,6 @@ func TestSandbox(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cancel()
 
-		testDeps, cleanup := testutils.NewTestDeps()
-		defer cleanup()
-
-		cc := testDeps.CC
 		lr := testDeps.Logs
 
 		// Create first controller instance
@@ -1243,7 +1130,7 @@ func TestSandbox(t *testing.T) {
 		r.NoError(co1.Init(ctx))
 		defer co1.Close()
 
-		ctx = namespaces.WithNamespace(ctx, co1.Namespace)
+		ctx = namespaces.WithNamespace(ctx, ns)
 
 		id := entity.Id(sbName())
 
@@ -1293,58 +1180,50 @@ func TestSandbox(t *testing.T) {
 		err = co1.Create(ctx, &tco, meta)
 		r.NoError(err)
 
-		// Wait for logs to start being generated
-		time.Sleep(3 * time.Second)
-
-		// Get the container and task
+		// Wait for the container task to be running
 		containerID := fmt.Sprintf("%s-%s", containerPrefix(id), "logger")
-		subC, err := cc.LoadContainer(ctx, containerID)
-		r.NoError(err)
-		r.NotNil(subC)
-
-		// Verify the process is running and generating logs
-		task1, err := subC.Task(ctx, nil)
-		r.NoError(err)
-		r.NotNil(task1)
-
-		status, err := task1.Status(ctx)
-		r.NoError(err)
-		r.Equal(containerd.Running, status.Status, "task should be running initially")
+		var subC containerd.Container
+		r.Eventually(func() bool {
+			var lerr error
+			subC, lerr = cc.LoadContainer(ctx, containerID)
+			if lerr != nil {
+				return false
+			}
+			task, lerr := subC.Task(ctx, nil)
+			if lerr != nil {
+				return false
+			}
+			st, lerr := task.Status(ctx)
+			return lerr == nil && st.Status == containerd.Running
+		}, 10*time.Second, 200*time.Millisecond, "task should be running")
 
 		// Now test the reattach function directly by calling it
 		// This simulates what happens during controller restart
 		err = co1.reattachLogs(ctx, &tco, containerID, "logger")
 		r.NoError(err, "should be able to reattach logs to running container")
 
-		// Wait longer to ensure the container continues writing logs
-		// If reattachment didn't work, the stdout buffer would fill and process would block
-		time.Sleep(5 * time.Second)
-
-		// Verify task is still running (didn't block on stdout after reattach)
-		task2, err := subC.Task(ctx, nil)
-		r.NoError(err)
-		r.NotNil(task2)
-
-		status, err = task2.Status(ctx)
-		r.NoError(err)
-		r.Equal(containerd.Running, status.Status, "task should still be running after log reattachment")
-
-		// Verify logs are being collected in VictoriaLogs
-		time.Sleep(1 * time.Second)
-
-		logs, err := lr.Read(ctx, sb.ID.String(), observability.WithLimit(100))
-		r.NoError(err)
-		r.Greater(len(logs), 10, "should have collected log entries")
-
-		// Verify log content
-		foundLog := false
-		for _, logEntry := range logs {
-			if strings.Contains(logEntry.Body, "Log line") {
-				foundLog = true
-				break
+		// Verify task stays running after reattach and logs are collected.
+		// If reattachment didn't work, the stdout buffer would fill and process would block.
+		r.Eventually(func() bool {
+			task, terr := subC.Task(ctx, nil)
+			if terr != nil {
+				return false
 			}
-		}
-		r.True(foundLog, "should have collected log lines from the container")
+			st, terr := task.Status(ctx)
+			if terr != nil || st.Status != containerd.Running {
+				return false
+			}
+			logs, lerr := lr.Read(ctx, sb.ID.String(), observability.WithLimit(100))
+			if lerr != nil || len(logs) <= 10 {
+				return false
+			}
+			for _, logEntry := range logs {
+				if strings.Contains(logEntry.Body, "Log line") {
+					return true
+				}
+			}
+			return false
+		}, 15*time.Second, 500*time.Millisecond, "task should stay running and logs should be collected")
 
 		// Clean up
 		err = co1.Delete(ctx, id)
@@ -1466,30 +1345,7 @@ func TestSandbox(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 
-		testDeps, cleanup := testutils.NewTestDeps()
-		defer cleanup()
-
-		cc := testDeps.CC
-		bkl := testDeps.Buildkit
-
-		dfr, err := tarx.MakeTar("testdata/nginx", nil)
-		r.NoError(err)
-
-		datafs, err := tarx.TarFS(dfr, t.TempDir())
-		r.NoError(err)
-
-		o, _, err := bkl.Transform(ctx, datafs)
-		r.NoError(err)
-
-		ii := testDeps.NewImageImporter()
-
-		err = ii.ImportImage(ctx, o, "mn-nginx:latest")
-		r.NoError(err)
-
-		ctx = namespaces.WithNamespace(ctx, ii.Namespace)
-
-		_, err = cc.GetImage(ctx, "mn-nginx:latest")
-		r.NoError(err)
+		ctx = namespaces.WithNamespace(ctx, ns)
 
 		co, err := newSandboxController(testDeps)
 		r.NoError(err)
@@ -1694,16 +1550,16 @@ func TestMonitorTaskExitIgnoresErrorStatus(t *testing.T) {
 	// Call monitorTaskExit - it should ignore the error status and fail to re-establish
 	co.monitorTaskExit(&sb, "test-container", task, exitCh)
 
-	// Give a moment for any async operations
-	time.Sleep(100 * time.Millisecond)
-
 	// Verify the sandbox status was NOT changed to STOPPED
-	result, err := co.EAC.Get(ctx, id.String())
-	r.NoError(err)
-
-	var checkSb compute.Sandbox
-	checkSb.Decode(result.Entity().Entity())
-	r.Equal(compute.RUNNING, checkSb.Status, "sandbox should remain RUNNING when exit status has an error")
+	r.Eventually(func() bool {
+		result, err := co.EAC.Get(ctx, id.String())
+		if err != nil {
+			return false
+		}
+		var checkSb compute.Sandbox
+		checkSb.Decode(result.Entity().Entity())
+		return checkSb.Status == compute.RUNNING
+	}, 5*time.Second, 50*time.Millisecond, "sandbox should remain RUNNING when exit status has an error")
 }
 
 // TestMonitorTaskExitHandlesValidExit verifies that monitorTaskExit correctly
@@ -1748,14 +1604,14 @@ func TestMonitorTaskExitHandlesValidExit(t *testing.T) {
 	// Call monitorTaskExit - it should process the valid exit and mark as STOPPED
 	co.monitorTaskExit(&sb, "test-container", task, exitCh)
 
-	// Give a moment for the patch operation
-	time.Sleep(100 * time.Millisecond)
-
 	// Verify the sandbox status was changed to STOPPED
-	result, err := co.EAC.Get(ctx, id.String())
-	r.NoError(err)
-
-	var checkSb compute.Sandbox
-	checkSb.Decode(result.Entity().Entity())
-	r.Equal(compute.STOPPED, checkSb.Status, "sandbox should be STOPPED after valid exit event")
+	r.Eventually(func() bool {
+		result, err := co.EAC.Get(ctx, id.String())
+		if err != nil {
+			return false
+		}
+		var checkSb compute.Sandbox
+		checkSb.Decode(result.Entity().Entity())
+		return checkSb.Status == compute.STOPPED
+	}, 5*time.Second, 50*time.Millisecond, "sandbox should be STOPPED after valid exit event")
 }

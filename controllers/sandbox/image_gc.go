@@ -223,7 +223,7 @@ func (w *ImageWatchdog) RunGC(ctx context.Context) (*ImageGCResult, error) {
 		}
 
 		// Try to parse the image name to extract artifact ID
-		artifactID := w.parseArtifactID(imgName)
+		artifactID := w.ParseArtifactID(imgName)
 		if artifactID == "" {
 			// Not a miren-managed image (infrastructure, etc.) - keep it
 			result.RetainedImages++
@@ -257,11 +257,11 @@ func (w *ImageWatchdog) RunGC(ctx context.Context) (*ImageGCResult, error) {
 	return result, nil
 }
 
-// parseArtifactID extracts the artifact ID from an image name.
+// ParseArtifactID extracts the artifact ID from an image name.
 // Image format: cluster.local:5000/{app}:{artifact-name}
 // Artifact ID format: artifact/{artifact-name}
 // Returns empty string if the image doesn't match the expected format.
-func (w *ImageWatchdog) parseArtifactID(imageName string) string {
+func (w *ImageWatchdog) ParseArtifactID(imageName string) string {
 	// Expected format: cluster.local:5000/{app}:{artifact-name}
 	if !strings.HasPrefix(imageName, "cluster.local:5000/") {
 		return ""

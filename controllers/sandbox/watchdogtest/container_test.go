@@ -1,4 +1,4 @@
-package sandbox
+package watchdogtest
 
 import (
 	"context"
@@ -14,26 +14,37 @@ import (
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/controllers/sandbox"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/testutils"
 )
 
 func TestContainerWatchdog(t *testing.T) {
+	testDeps, cleanup := testutils.NewTestDeps()
+	defer cleanup()
+
+	cc := testDeps.CC
+	eac := testDeps.EAC
+	ii := testDeps.NewImageImporter()
+	ns := ii.Namespace
+
+	// Pull busybox once upfront
+	{
+		setupCtx, setupCancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer setupCancel()
+		setupCtx = namespaces.WithNamespace(setupCtx, ns)
+		_, err := cc.Pull(setupCtx, "docker.io/library/busybox:latest", containerd.WithPullUnpack)
+		require.NoError(t, err)
+	}
+
 	t.Run("removes orphaned containers", func(t *testing.T) {
 		r := require.New(t)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		testDeps, cleanup := testutils.NewTestDeps()
-		defer cleanup()
-
-		cc := testDeps.CC
-		eac := testDeps.EAC
-		ii := testDeps.NewImageImporter()
-
-		ctx = namespaces.WithNamespace(ctx, ii.Namespace)
+		ctx = namespaces.WithNamespace(ctx, ns)
 
 		// Create a sandbox entity in the store
 		sbID := entity.Id(idgen.GenNS("sb"))
@@ -51,18 +62,18 @@ func TestContainerWatchdog(t *testing.T) {
 		r.NoError(err)
 
 		// Create a valid container (one that should be kept)
-		pauseID := pauseContainerId(sbID)
+		pauseID := sandbox.PauseContainerID(sbID)
 		validContainer, err := createTestContainer(ctx, cc, pauseID, map[string]string{
-			sandboxEntityLabel: sbID.String(),
+			sandbox.SandboxEntityLabel: sbID.String(),
 		})
 		r.NoError(err)
 		defer testutils.ClearContainer(ctx, validContainer)
 
 		// Create an orphaned container (one that should be removed)
 		orphanedSbID := entity.Id(idgen.GenNS("sb"))
-		orphanedID := pauseContainerId(orphanedSbID)
+		orphanedID := sandbox.PauseContainerID(orphanedSbID)
 		_, err = createTestContainer(ctx, cc, orphanedID, map[string]string{
-			sandboxEntityLabel: orphanedSbID.String(),
+			sandbox.SandboxEntityLabel: orphanedSbID.String(),
 		})
 		r.NoError(err)
 
@@ -71,16 +82,16 @@ func TestContainerWatchdog(t *testing.T) {
 		r.NoError(err, "orphaned container should exist before watchdog runs")
 
 		// Create and start the watchdog with a short check interval
-		watchdog := &ContainerWatchdog{
+		watchdog := &sandbox.ContainerWatchdog{
 			Log:           slog.Default(),
 			CC:            cc,
 			EAC:           eac,
-			Namespace:     ii.Namespace,
+			Namespace:     ns,
 			CheckInterval: 100 * time.Millisecond,
 		}
 
 		// Run cleanup once
-		result, err := watchdog.cleanupOrphanedContainers(ctx)
+		result, err := watchdog.CleanupOrphanedContainers(ctx)
 		r.NoError(err)
 
 		// Verify the result contains the orphaned container
@@ -103,14 +114,7 @@ func TestContainerWatchdog(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		testDeps, cleanup := testutils.NewTestDeps()
-		defer cleanup()
-
-		cc := testDeps.CC
-		eac := testDeps.EAC
-		ii := testDeps.NewImageImporter()
-
-		ctx = namespaces.WithNamespace(ctx, ii.Namespace)
+		ctx = namespaces.WithNamespace(ctx, ns)
 
 		// Create a non-sandbox container (no sandbox labels)
 		nonSandboxID := "non-sandbox-container"
@@ -121,15 +125,15 @@ func TestContainerWatchdog(t *testing.T) {
 		defer testutils.ClearContainer(ctx, nonSandboxContainer)
 
 		// Create the watchdog
-		watchdog := &ContainerWatchdog{
+		watchdog := &sandbox.ContainerWatchdog{
 			Log:       slog.Default(),
 			CC:        cc,
 			EAC:       eac,
-			Namespace: ii.Namespace,
+			Namespace: ns,
 		}
 
 		// Run cleanup
-		result, err := watchdog.cleanupOrphanedContainers(ctx)
+		result, err := watchdog.CleanupOrphanedContainers(ctx)
 		r.NoError(err)
 
 		// Verify result shows no containers were deleted
@@ -147,14 +151,7 @@ func TestContainerWatchdog(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		testDeps, cleanup := testutils.NewTestDeps()
-		defer cleanup()
-
-		cc := testDeps.CC
-		eac := testDeps.EAC
-		ii := testDeps.NewImageImporter()
-
-		ctx = namespaces.WithNamespace(ctx, ii.Namespace)
+		ctx = namespaces.WithNamespace(ctx, ns)
 
 		// Create a sandbox entity marked as DEAD
 		oldDeadSbID := entity.Id(idgen.GenNS("sb"))
@@ -176,9 +173,9 @@ func TestContainerWatchdog(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 
 		// Create a container for this old DEAD sandbox
-		oldDeadContainerID := pauseContainerId(oldDeadSbID)
+		oldDeadContainerID := sandbox.PauseContainerID(oldDeadSbID)
 		oldDeadContainer, err := createTestContainer(ctx, cc, oldDeadContainerID, map[string]string{
-			sandboxEntityLabel: oldDeadSbID.String(),
+			sandbox.SandboxEntityLabel: oldDeadSbID.String(),
 		})
 		r.NoError(err)
 		defer testutils.ClearContainer(ctx, oldDeadContainer)
@@ -188,18 +185,18 @@ func TestContainerWatchdog(t *testing.T) {
 		r.NoError(err, "old DEAD sandbox container should exist before watchdog runs")
 
 		// Create the watchdog
-		watchdog := &ContainerWatchdog{
+		watchdog := &sandbox.ContainerWatchdog{
 			Log:       slog.Default(),
 			CC:        cc,
 			EAC:       eac,
-			Namespace: ii.Namespace,
+			Namespace: ns,
 		}
 
 		// Create the watchdog with a very short grace window
 		watchdog.GraceWindow = 10 * time.Millisecond
 
 		// Run cleanup
-		result, err := watchdog.cleanupOrphanedContainers(ctx)
+		result, err := watchdog.CleanupOrphanedContainers(ctx)
 		r.NoError(err)
 
 		// Verify the old DEAD container was removed
@@ -218,14 +215,7 @@ func TestContainerWatchdog(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		testDeps, cleanup := testutils.NewTestDeps()
-		defer cleanup()
-
-		cc := testDeps.CC
-		eac := testDeps.EAC
-		ii := testDeps.NewImageImporter()
-
-		ctx = namespaces.WithNamespace(ctx, ii.Namespace)
+		ctx = namespaces.WithNamespace(ctx, ns)
 
 		// Create a sandbox entity marked as DEAD (recently)
 		recentDeadSbID := entity.Id(idgen.GenNS("sb"))
@@ -245,9 +235,9 @@ func TestContainerWatchdog(t *testing.T) {
 		// DON'T wait - run cleanup immediately so it's within grace window
 
 		// Create a container for this recently DEAD sandbox
-		recentDeadContainerID := pauseContainerId(recentDeadSbID)
+		recentDeadContainerID := sandbox.PauseContainerID(recentDeadSbID)
 		recentDeadContainer, err := createTestContainer(ctx, cc, recentDeadContainerID, map[string]string{
-			sandboxEntityLabel: recentDeadSbID.String(),
+			sandbox.SandboxEntityLabel: recentDeadSbID.String(),
 		})
 		r.NoError(err)
 		defer testutils.ClearContainer(ctx, recentDeadContainer)
@@ -257,16 +247,16 @@ func TestContainerWatchdog(t *testing.T) {
 		r.NoError(err, "recently DEAD sandbox container should exist before watchdog runs")
 
 		// Create the watchdog with a longer grace window
-		watchdog := &ContainerWatchdog{
+		watchdog := &sandbox.ContainerWatchdog{
 			Log:         slog.Default(),
 			CC:          cc,
 			EAC:         eac,
-			Namespace:   ii.Namespace,
+			Namespace:   ns,
 			GraceWindow: 10 * time.Second,
 		}
 
 		// Run cleanup
-		result, err := watchdog.cleanupOrphanedContainers(ctx)
+		result, err := watchdog.CleanupOrphanedContainers(ctx)
 		r.NoError(err)
 
 		// Verify the recently DEAD container was NOT removed (grace period)
@@ -282,17 +272,12 @@ func TestContainerWatchdog(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		testDeps, cleanup := testutils.NewTestDeps()
-		defer cleanup()
-
-		ii := testDeps.NewImageImporter()
-
 		// Create the watchdog with a very short interval
-		watchdog := &ContainerWatchdog{
+		watchdog := &sandbox.ContainerWatchdog{
 			Log:           slog.Default(),
-			CC:            testDeps.CC,
-			EAC:           testDeps.EAC,
-			Namespace:     ii.Namespace,
+			CC:            cc,
+			EAC:           eac,
+			Namespace:     ns,
 			CheckInterval: 100 * time.Millisecond,
 		}
 

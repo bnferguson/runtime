@@ -149,7 +149,15 @@ coverage-pr: ## Display coverage for lines changed in current branch
 	fi
 	@go run ./hack/coverage-changed-lines -coverage=coverage.out $(ARGS)
 
-.PHONY: test test-shell test-e2e test-coverage test-coverage-ci coverage-report coverage-percent coverage-by-package coverage-pr
+test-groups: ## Rebuild hack/test-groups.json by measuring all test times
+	python3 hack/measure-test-times.py hack/test-times.json
+	python3 hack/calc-test-groups.py hack/test-times.json -n 4 -o hack/test-groups.json
+
+update-test-groups: ## Measure new packages and rebuild hack/test-groups.json
+	bash hack/update-test-times.sh hack/test-times.json
+	python3 hack/calc-test-groups.py hack/test-times.json -n 4 -o hack/test-groups.json
+
+.PHONY: test test-shell test-e2e test-coverage test-coverage-ci coverage-report coverage-percent coverage-by-package coverage-pr test-groups update-test-groups
 
 #
 # Building

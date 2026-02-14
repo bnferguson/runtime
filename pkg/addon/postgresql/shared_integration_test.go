@@ -36,7 +36,7 @@ func TestSharedPostgreSQL_Integration(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	if _, err := os.Stat("/dev/nbd0"); err != nil {
+	if os.Getenv("DISABLE_NBD_TEST") != "" {
 		t.Skip("skipping integration test: nbd not available")
 	}
 
