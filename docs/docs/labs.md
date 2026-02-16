@@ -42,7 +42,7 @@ We'd love to hear how labs features work for you:
 - **What's broken** — Bugs, crashes, unexpected behavior
 - **What's missing** — Features that would make it useful for your use case
 
-Reach out via [support](/support) or open an issue on GitHub.
+Reach out via [Discord](https://miren.dev/discord) or open an issue on [GitHub](https://github.com/mirendev/runtime/issues).
 
 ## Current Labs Features
 

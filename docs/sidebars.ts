@@ -36,11 +36,8 @@ const sidebars: SidebarsConfig = {
       type: 'category',
       label: 'CLI Reference',
       collapsed: false,
-      link: {
-        type: 'doc',
-        id: 'cli-reference',
-      },
       items: [
+        'cli-reference',
         'cli/app',
         'cli/logs',
         'cli/sandbox',
@@ -54,11 +51,11 @@ const sidebars: SidebarsConfig = {
       label: 'Resources',
       collapsed: false,
       items: [
+        'troubleshooting',
         'terminology',
         'labs',
         'changelog',
         'cloud-updates',
-        'support',
         'conduct',
         {
           type: 'link',

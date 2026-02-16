@@ -274,7 +274,7 @@ miren route
 
 - Check the [CLI Reference](/cli-reference) for command details
 - View the [FAQ](https://miren.dev/developer-preview#faq-1)
-- See [Support](/support) for bug reports, feature requests, and community help
+- See [Troubleshooting](/troubleshooting) for diagnostics, bug reports, and community help
 
 ## A Note on System Requirements
 
