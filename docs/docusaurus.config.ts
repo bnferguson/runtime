@@ -4,6 +4,47 @@ import type * as Preset from '@docusaurus/preset-classic';
 
 // This runs in Node.js - Don't use client-side code here (browser APIs, JSX...)
 
+// Webpack 5's module resolution walks up the entire directory tree looking for
+// node_modules/ directories. Ancestor directory paths that are visited during
+// this walk end up in the compilation's fileDependencies and
+// missingDependencies. Watchpack then creates a DirectoryWatcher on the parent
+// of each watched path, which causes it to scan directories like ~/ where it
+// hits Unix sockets and other special files, producing noisy ENXIO errors.
+//
+// This plugin intercepts the watch call to filter out any paths outside the
+// project directory so watchpack stays scoped to the project tree.
+// See: https://github.com/webpack/watchpack/issues/187
+function filterAncestorWatchesPlugin() {
+  return {
+    name: 'filter-ancestor-watches',
+    configureWebpack(config) {
+      config.plugins.push({
+        apply(compiler) {
+          const siteDir = compiler.context;
+          const origWatch = compiler.watchFileSystem.watch.bind(
+            compiler.watchFileSystem,
+          );
+          compiler.watchFileSystem.watch = (
+            files,
+            dirs,
+            missing,
+            ...rest
+          ) => {
+            const filteredFiles = [...files].filter((f) =>
+              f.startsWith(siteDir),
+            );
+            const filteredMissing = [...missing].filter((m) =>
+              m.startsWith(siteDir),
+            );
+            return origWatch(filteredFiles, dirs, filteredMissing, ...rest);
+          };
+        },
+      });
+      return {};
+    },
+  };
+}
+
 const config: Config = {
   title: 'Miren Docs',
   tagline: 'Enjoy the Deploy',
@@ -27,6 +68,8 @@ const config: Config = {
 
   // Prevent GitHub Pages from adding trailing slashes via redirects
   trailingSlash: false,
+
+  plugins: [filterAncestorWatchesPlugin],
 
   onBrokenLinks: 'throw',
 
