@@ -2251,3 +2251,228 @@ func TestRemovePoolFromTrackingCleansAllCaches(t *testing.T) {
 	assert.True(t, pools2Exists, "pool-2 should still be in pools")
 	assert.True(t, poolSandboxes2Exists, "pool-2 should still be in poolSandboxes")
 }
+
+// TestActivatorRefreshesStaleMaxPoolSizeCache verifies that when the in-memory cache
+// shows DesiredInstances >= MaxPoolSize but the entity store has been reset to a lower
+// value, the activator re-reads from the store and continues rather than permanently
+// refusing to increment.
+func TestActivatorRefreshesStaleMaxPoolSizeCache(t *testing.T) {
+	ctx := context.Background()
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create app and version
+	app := &core_v1alpha.App{}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	testVer := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", testVer)
+	require.NoError(t, err)
+	testVer.ID = verID
+
+	// Create pool in entity store with DesiredInstances = 0 (simulating pool manager reset)
+	pool := &compute_v1alpha.SandboxPool{
+		Service:              "web",
+		DesiredInstances:     0,
+		ReferencedByVersions: []entity.Id{testVer.ID},
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Version: testVer.ID,
+			Container: []compute_v1alpha.SandboxSpecContainer{
+				{
+					Name:  "app",
+					Image: "test:latest",
+					Port: []compute_v1alpha.SandboxSpecContainerPort{
+						{Port: 3000, Name: "http", Type: "http"},
+					},
+				},
+			},
+		},
+	}
+	poolID, err := server.Client.Create(ctx, "test-pool", pool)
+	require.NoError(t, err)
+	pool.ID = poolID
+
+	// Get the current revision from the store
+	poolResp, err := server.EAC.Get(ctx, poolID.String())
+	require.NoError(t, err)
+
+	log := testutils.TestLogger(t)
+	key := verKey{testVer.ID.String(), "web"}
+
+	// Set up activator with a STALE cache that thinks DesiredInstances = MaxPoolSize
+	stalePool := *pool
+	stalePool.DesiredInstances = MaxPoolSize
+
+	activator := &localActivator{
+		log: log,
+		eac: server.EAC,
+		versions: map[verKey]*versionPoolRef{
+			key: {
+				ver:      testVer,
+				poolID:   poolID,
+				service:  "web",
+				strategy: concurrency.NewStrategy(&testVer.Config.Services[0].ServiceConcurrency),
+			},
+		},
+		poolSandboxes: map[entity.Id]*poolSandboxes{
+			poolID: {
+				pool:    &stalePool,
+				service: "web",
+			},
+		},
+		pools: map[verKey]*poolState{
+			key: {
+				pool:     &stalePool,
+				revision: poolResp.Entity().Revision(),
+			},
+		},
+		newSandboxChans: make(map[verKey][]chan struct{}),
+	}
+
+	// Call requestPoolCapacity - with the old code this would return
+	// "pool has reached maximum size" without consulting the entity store.
+	// With the fix, it should re-read, find DesiredInstances=0, and succeed.
+	resultPool, err := activator.requestPoolCapacity(ctx, testVer, "web")
+	require.NoError(t, err)
+	require.NotNil(t, resultPool)
+
+	// Verify the cache was updated with the fresh value + 1
+	activator.mu.RLock()
+	cachedState := activator.pools[key]
+	activator.mu.RUnlock()
+
+	assert.Equal(t, int64(1), cachedState.pool.DesiredInstances,
+		"cache should reflect the incremented value from the fresh store read")
+}
+
+// TestWatchPoolsUpdatesDesiredInstances verifies that the watchPools goroutine
+// updates the in-memory cache when a pool's DesiredInstances changes externally.
+func TestWatchPoolsUpdatesDesiredInstances(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create app and version
+	app := &core_v1alpha.App{}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	testVer := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", testVer)
+	require.NoError(t, err)
+	testVer.ID = verID
+
+	// Create pool in entity store
+	pool := &compute_v1alpha.SandboxPool{
+		Service:              "web",
+		DesiredInstances:     5,
+		ReferencedByVersions: []entity.Id{testVer.ID},
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Version: testVer.ID,
+		},
+	}
+	poolID, err := server.Client.Create(ctx, "test-pool", pool)
+	require.NoError(t, err)
+	pool.ID = poolID
+
+	poolResp, err := server.EAC.Get(ctx, poolID.String())
+	require.NoError(t, err)
+
+	log := testutils.TestLogger(t)
+	key := verKey{testVer.ID.String(), "web"}
+
+	activator := &localActivator{
+		log: log,
+		eac: server.EAC,
+		versions: map[verKey]*versionPoolRef{
+			key: {
+				ver:      testVer,
+				poolID:   poolID,
+				service:  "web",
+				strategy: concurrency.NewStrategy(&testVer.Config.Services[0].ServiceConcurrency),
+			},
+		},
+		poolSandboxes: map[entity.Id]*poolSandboxes{
+			poolID: {
+				pool:    pool,
+				service: "web",
+			},
+		},
+		pools: map[verKey]*poolState{
+			key: {
+				pool:     pool,
+				revision: poolResp.Entity().Revision(),
+			},
+		},
+		newSandboxChans: make(map[verKey][]chan struct{}),
+	}
+
+	// Start the watch in a goroutine
+	go activator.watchPools(ctx)
+
+	// Give the watch a moment to establish
+	time.Sleep(100 * time.Millisecond)
+
+	// Update DesiredInstances in the entity store externally
+	err = server.Client.Update(ctx, pool)
+	require.NoError(t, err)
+
+	// Patch to set new desired instances
+	pool.DesiredInstances = 2
+	err = server.Client.Update(ctx, pool)
+	require.NoError(t, err)
+
+	// Verify the cache is updated via the watch
+	require.Eventually(t, func() bool {
+		activator.mu.RLock()
+		defer activator.mu.RUnlock()
+		state, ok := activator.pools[key]
+		return ok && state.pool != nil && state.pool.DesiredInstances == 2
+	}, 5*time.Second, 50*time.Millisecond,
+		"pool cache should be updated by watch to DesiredInstances=2")
+
+	// Also verify poolSandboxes pool pointer was updated
+	activator.mu.RLock()
+	ps := activator.poolSandboxes[poolID]
+	activator.mu.RUnlock()
+	assert.Equal(t, int64(2), ps.pool.DesiredInstances,
+		"poolSandboxes pool pointer should reflect the updated DesiredInstances")
+}

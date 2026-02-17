@@ -533,12 +533,55 @@ func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1al
 			for attempt := 0; attempt < maxRetries; attempt++ {
 				a.mu.Lock()
 				if state.pool.DesiredInstances >= MaxPoolSize {
+					poolIDForMaxCheck := state.pool.ID
 					a.mu.Unlock()
-					a.log.Warn("pool at maximum size, cannot increment further",
-						"pool", state.pool.ID,
-						"max_size", MaxPoolSize,
-						"current", state.pool.DesiredInstances)
-					return state.pool, fmt.Errorf("pool has reached maximum size of %d", MaxPoolSize)
+
+					// Cache says we're at max, but it may be stale. Re-read from entity store
+					// to break potential deadlock where pool manager reset DesiredInstances externally.
+					freshPoolEnt, getErr := a.eac.Get(ctx, poolIDForMaxCheck.String())
+					if getErr != nil {
+						if errors.Is(getErr, cond.ErrNotFound{}) {
+							a.log.Info("pool was deleted while at max size, clearing stale reference",
+								"pool", poolIDForMaxCheck,
+								"service", service)
+							a.mu.Lock()
+							delete(a.pools, key)
+							a.mu.Unlock()
+							poolDeleted = true
+							break
+						}
+						a.log.Warn("pool at maximum size, cannot increment further (re-read failed)",
+							"pool", poolIDForMaxCheck,
+							"max_size", MaxPoolSize,
+							"error", getErr)
+						return state.pool, fmt.Errorf("pool has reached maximum size of %d", MaxPoolSize)
+					}
+
+					var freshPool compute_v1alpha.SandboxPool
+					freshPool.Decode(freshPoolEnt.Entity().Entity())
+
+					a.mu.Lock()
+					if freshPool.DesiredInstances >= MaxPoolSize {
+						a.mu.Unlock()
+						a.log.Warn("pool at maximum size, cannot increment further (confirmed by re-read)",
+							"pool", poolIDForMaxCheck,
+							"max_size", MaxPoolSize,
+							"current", freshPool.DesiredInstances)
+						return &freshPool, fmt.Errorf("pool has reached maximum size of %d", MaxPoolSize)
+					}
+
+					// Fresh state is below max - update cache and recalculate target
+					a.log.Info("stale cache showed pool at max size, but fresh state is below max",
+						"pool", poolIDForMaxCheck,
+						"cached_desired", state.pool.DesiredInstances,
+						"fresh_desired", freshPool.DesiredInstances)
+					state.pool = &freshPool
+					state.revision = freshPoolEnt.Entity().Revision()
+					a.pools[key] = state
+					newDesired = freshPool.DesiredInstances + 1
+					a.mu.Unlock()
+
+					continue
 				}
 
 				// Check if we've already reached our target (another goroutine may have incremented)
@@ -1681,7 +1724,8 @@ func (a *localActivator) removePoolFromTracking(poolID entity.Id) {
 	}
 }
 
-// watchPools watches for pool entity deletions and cleans up stale cache entries.
+// watchPools watches for pool entity changes and keeps the in-memory cache in sync.
+// Handles deletions (cleanup stale entries) and updates (refresh DesiredInstances, etc.).
 func (a *localActivator) watchPools(ctx context.Context) {
 	for {
 		select {
@@ -1691,7 +1735,7 @@ func (a *localActivator) watchPools(ctx context.Context) {
 		default:
 		}
 
-		a.log.Info("starting pool deletion watch")
+		a.log.Info("starting pool watch")
 
 		_, err := a.eac.WatchIndex(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool), stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
 			if op.IsDelete() {
@@ -1701,7 +1745,40 @@ func (a *localActivator) watchPools(ctx context.Context) {
 					a.log.Info("pool deleted, cleaning up cache", "pool", poolID)
 					a.removePoolFromTracking(poolID)
 				}
+				return nil
 			}
+
+			if op.IsUpdate() && op.HasEntity() {
+				var freshPool compute_v1alpha.SandboxPool
+				freshPool.Decode(op.Entity().Entity())
+				freshRevision := op.Entity().Revision()
+
+				a.mu.Lock()
+
+				// Update pools cache entries that reference this pool
+				for key, state := range a.pools {
+					if state.pool != nil && state.pool.ID == freshPool.ID {
+						oldDesired := state.pool.DesiredInstances
+						state.pool = &freshPool
+						state.revision = freshRevision
+						a.pools[key] = state
+						if oldDesired != freshPool.DesiredInstances {
+							a.log.Info("pool watch updated DesiredInstances",
+								"pool", freshPool.ID,
+								"old_desired", oldDesired,
+								"new_desired", freshPool.DesiredInstances)
+						}
+					}
+				}
+
+				// Update poolSandboxes pool pointer
+				if ps, ok := a.poolSandboxes[freshPool.ID]; ok {
+					ps.pool = &freshPool
+				}
+
+				a.mu.Unlock()
+			}
+
 			return nil
 		}))
 
