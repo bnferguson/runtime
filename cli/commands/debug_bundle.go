@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -469,5 +470,58 @@ func gatherDockerInspect(containerName string) []byte {
 		return nil
 	}
 
-	return output
+	return redactDockerInspect(output)
+}
+
+// redactDockerInspect strips secret values from docker inspect JSON output.
+// Environment variable values are replaced with [REDACTED] since they commonly
+// contain credentials, API keys, and other secrets.
+func redactDockerInspect(data []byte) []byte {
+	var parsed []map[string]any
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		// If we can't parse the JSON, return nothing rather than leak secrets
+		return []byte("[error: could not parse docker inspect output for redaction]\n")
+	}
+
+	for i := range parsed {
+		redactEnvVars(parsed[i])
+	}
+
+	out, err := json.MarshalIndent(parsed, "", "  ")
+	if err != nil {
+		return []byte("[error: could not re-encode docker inspect output]\n")
+	}
+	return out
+}
+
+// redactEnvVars walks a JSON object tree and replaces environment variable
+// values with [REDACTED]. It targets the "Env" arrays that docker inspect
+// includes in both container Config and process Config sections.
+func redactEnvVars(obj map[string]any) {
+	for key, val := range obj {
+		if key == "Env" {
+			if envList, ok := val.([]any); ok {
+				for j, entry := range envList {
+					if s, ok := entry.(string); ok {
+						if eqIdx := strings.Index(s, "="); eqIdx >= 0 {
+							envList[j] = s[:eqIdx+1] + "[REDACTED]"
+						}
+					}
+				}
+			}
+			continue
+		}
+		// Recurse into nested objects
+		if nested, ok := val.(map[string]any); ok {
+			redactEnvVars(nested)
+		}
+		// Recurse into arrays of objects
+		if arr, ok := val.([]any); ok {
+			for _, item := range arr {
+				if nested, ok := item.(map[string]any); ok {
+					redactEnvVars(nested)
+				}
+			}
+		}
+	}
 }

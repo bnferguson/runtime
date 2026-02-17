@@ -43,7 +43,7 @@ body:
       description: |
         Please copy and paste any relevant log output. This will be automatically formatted into code.
 
-        Tip: Run `miren debug bundle` to collect system info, logs, and container state into a single archive for troubleshooting.
+        Tip: Run `sudo miren debug bundle` to collect system info, logs, and container state into a single archive for troubleshooting. Please review the bundle and redact any sensitive data (tokens, credentials, customer data) before attaching.
       render: shell
 
   - type: input

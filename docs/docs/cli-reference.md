@@ -1,5 +1,6 @@
 ---
-sidebar_position: 3
+sidebar_label: Overview
+sidebar_position: 1
 ---
 
 # CLI Reference
@@ -97,7 +98,7 @@ Cancel a stuck in-progress deployment. Get the deployment ID from `miren app his
 
 ### Diagnostics
 
-- `miren debug bundle` - Collect system info, logs, and container state into a tar.gz archive for troubleshooting
+- `miren debug bundle` - Collect system info, logs, and container state into a tar.gz archive for troubleshooting ([details](/troubleshooting#gathering-a-debug-bundle))
 - `miren doctor` - Run diagnostic checks on your Miren setup
 
 ### Utility Commands
