@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	storage "miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
@@ -472,5 +473,162 @@ func TestReleaseDiskLeases(t *testing.T) {
 		updatedLease2.Decode(leaseResp.Entity().Entity())
 		r.Equal(storage.BOUND, updatedLease2.Status,
 			"other sandbox's lease should not be affected")
+	})
+}
+
+func TestPeriodicReleasesDiskLeases(t *testing.T) {
+	t.Run("releases disk leases before deleting dead sandbox", func(t *testing.T) {
+		r := require.New(t)
+		ctx := context.Background()
+
+		es, cleanup := testutils.NewInMemEntityServer(t)
+		defer cleanup()
+
+		log := testutils.TestLogger(t)
+
+		controller := &SandboxController{
+			Log:    log,
+			EAC:    es.EAC,
+			NodeId: "test-node",
+		}
+
+		sandboxID := entity.Id("sandbox/dead-with-lease")
+		diskID := entity.Id("disk/test-disk")
+		leaseID := entity.Id("disk-lease/orphan-candidate")
+
+		// Create a DEAD sandbox entity
+		_, err := es.EAC.Create(ctx, entity.New(
+			entity.DBId, sandboxID,
+			(&compute.Sandbox{
+				ID:     sandboxID,
+				Status: compute.DEAD,
+			}).Encode,
+		).Attrs())
+		r.NoError(err)
+
+		// Create a BOUND disk lease pointing at the sandbox
+		_, err = es.EAC.Create(ctx, entity.New(
+			entity.DBId, leaseID,
+			(&storage.DiskLease{
+				ID:        leaseID,
+				DiskId:    diskID,
+				SandboxId: sandboxID,
+				NodeId:    entity.Id("node/test-node"),
+				Status:    storage.BOUND,
+			}).Encode,
+		).Attrs())
+		r.NoError(err)
+
+		// Run periodic cleanup with zero time horizon (everything eligible)
+		err = controller.Periodic(ctx, 0)
+		r.NoError(err)
+
+		// Verify the disk lease was released
+		leaseResp, err := es.EAC.Get(ctx, leaseID.String())
+		r.NoError(err)
+		var releasedLease storage.DiskLease
+		releasedLease.Decode(leaseResp.Entity().Entity())
+		r.Equal(storage.RELEASED, releasedLease.Status,
+			"disk lease should be released before sandbox deletion")
+
+		// Verify the sandbox entity was deleted
+		resp, err := es.EAC.List(ctx, entity.Ref(entity.EntityKind, compute.KindSandbox))
+		r.NoError(err)
+		r.Empty(resp.Values(), "dead sandbox should have been deleted")
+	})
+
+	t.Run("still deletes sandbox when no disk leases exist", func(t *testing.T) {
+		r := require.New(t)
+		ctx := context.Background()
+
+		es, cleanup := testutils.NewInMemEntityServer(t)
+		defer cleanup()
+
+		log := testutils.TestLogger(t)
+
+		controller := &SandboxController{
+			Log:    log,
+			EAC:    es.EAC,
+			NodeId: "test-node",
+		}
+
+		sandboxID := entity.Id("sandbox/dead-no-lease")
+
+		// Create a DEAD sandbox entity with no disk leases
+		_, err := es.EAC.Create(ctx, entity.New(
+			entity.DBId, sandboxID,
+			(&compute.Sandbox{
+				ID:     sandboxID,
+				Status: compute.DEAD,
+			}).Encode,
+		).Attrs())
+		r.NoError(err)
+
+		err = controller.Periodic(ctx, 0)
+		r.NoError(err)
+
+		resp, err := es.EAC.List(ctx, entity.Ref(entity.EntityKind, compute.KindSandbox))
+		r.NoError(err)
+		r.Empty(resp.Values(), "dead sandbox should have been deleted")
+	})
+
+	t.Run("does not release leases for non-dead sandboxes", func(t *testing.T) {
+		r := require.New(t)
+		ctx := context.Background()
+
+		es, cleanup := testutils.NewInMemEntityServer(t)
+		defer cleanup()
+
+		log := testutils.TestLogger(t)
+
+		controller := &SandboxController{
+			Log:    log,
+			EAC:    es.EAC,
+			NodeId: "test-node",
+		}
+
+		sandboxID := entity.Id("sandbox/running-with-lease")
+		diskID := entity.Id("disk/test-disk")
+		leaseID := entity.Id("disk-lease/should-stay-bound")
+
+		// Create a RUNNING sandbox
+		_, err := es.EAC.Create(ctx, entity.New(
+			entity.DBId, sandboxID,
+			(&compute.Sandbox{
+				ID:     sandboxID,
+				Status: compute.RUNNING,
+			}).Encode,
+		).Attrs())
+		r.NoError(err)
+
+		// Create a BOUND disk lease for the running sandbox
+		_, err = es.EAC.Create(ctx, entity.New(
+			entity.DBId, leaseID,
+			(&storage.DiskLease{
+				ID:        leaseID,
+				DiskId:    diskID,
+				SandboxId: sandboxID,
+				NodeId:    entity.Id("node/test-node"),
+				Status:    storage.BOUND,
+			}).Encode,
+		).Attrs())
+		r.NoError(err)
+
+		// Periodic should skip running sandboxes
+		err = controller.Periodic(ctx, 0)
+		r.NoError(err)
+
+		// Verify lease is still BOUND
+		leaseResp, err := es.EAC.Get(ctx, leaseID.String())
+		r.NoError(err)
+		var lease storage.DiskLease
+		lease.Decode(leaseResp.Entity().Entity())
+		r.Equal(storage.BOUND, lease.Status,
+			"lease for running sandbox should not be released")
+
+		// Verify sandbox still exists
+		resp, err := es.EAC.List(ctx, entity.Ref(entity.EntityKind, compute.KindSandbox))
+		r.NoError(err)
+		r.Len(resp.Values(), 1, "running sandbox should not be deleted")
 	})
 }

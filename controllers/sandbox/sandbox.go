@@ -2480,6 +2480,11 @@ func (c *SandboxController) Periodic(ctx context.Context, timeHorizon time.Durat
 					"updated_at", updatedAt.Format(time.RFC3339),
 					"age", now.Sub(updatedAt).String())
 
+				if err := c.releaseDiskLeases(ctx, sb.ID); err != nil {
+					c.Log.Error("failed to release disk leases during periodic cleanup", "id", sb.ID, "error", err)
+					continue
+				}
+
 				_, err := c.EAC.Delete(ctx, sb.ID.String())
 				if err != nil {
 					c.Log.Error("failed to delete dead sandbox", "id", sb.ID, "error", err)
