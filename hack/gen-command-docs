@@ -1,0 +1,453 @@
+#!/usr/bin/env bash
+#
+# Generate per-command documentation from MIREN_HELP_JSON output.
+#
+# Output: docs/docs/command/<name>.md for each command
+# URLs:   /command/deploy, /command/deploy-cancel, etc.
+#
+# Usage: ./hack/gen-command-docs [--skip-build]
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+OUT_DIR="$ROOT_DIR/docs/docs/command"
+BINARY="$ROOT_DIR/bin/miren"
+TMPDIR=$(mktemp -d)
+trap 'rm -rf "$TMPDIR"' EXIT
+
+SKIP_BUILD=false
+for arg in "$@"; do
+  case "$arg" in
+    --skip-build) SKIP_BUILD=true ;;
+    *) echo "Unknown argument: $arg"; exit 1 ;;
+  esac
+done
+
+# Build binary if needed
+if [ "$SKIP_BUILD" = false ] && [ ! -f "$BINARY" ]; then
+  echo "Building miren binary..."
+  make -C "$ROOT_DIR" bin/miren
+fi
+
+if [ ! -f "$BINARY" ]; then
+  echo "Error: $BINARY not found. Run 'make bin/miren' first." >&2
+  exit 1
+fi
+
+# Get help JSON
+echo "Extracting command metadata..."
+MIREN_HELP_JSON=1 "$BINARY" > "$TMPDIR/help.json" 2>/dev/null
+
+# Flatten all commands (recursive) and enrich with subcommand paths
+jq -c '
+  def flatten_with_subs:
+    . as $cmd |
+    ($cmd + {subcommand_paths: [(.subcommands // [])[] | .path]} | del(.subcommands)),
+    ((.subcommands // [])[] | flatten_with_subs);
+  [.commands[] | flatten_with_subs]
+' "$TMPDIR/help.json" > "$TMPDIR/all_commands.json"
+
+# Prepare output directory
+rm -rf "$OUT_DIR"
+mkdir -p "$OUT_DIR"
+
+# Hidden command prefixes (not included in public docs)
+HIDDEN_PREFIXES=("internal")
+
+is_hidden() {
+  local path="$1"
+  for prefix in "${HIDDEN_PREFIXES[@]}"; do
+    if [[ "$path" == "$prefix" || "$path" == "$prefix "* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+path_to_filename() {
+  echo "$1" | tr ' ' '-'
+}
+
+# Build the usage line including positional args
+build_usage_line() {
+  local cmd_json="$1"
+  local path
+  path=$(echo "$cmd_json" | jq -r '.path')
+
+  local line="miren $path"
+
+  # Add positional args
+  local pos_args
+  pos_args=$(echo "$cmd_json" | jq -c '.positionalArgs // []')
+  local pos_count
+  pos_count=$(echo "$pos_args" | jq 'length')
+
+  if [ "$pos_count" -gt 0 ]; then
+    local i=0
+    while [ $i -lt "$pos_count" ]; do
+      local arg_name
+      arg_name=$(echo "$pos_args" | jq -r ".[$i].name" | tr '[:upper:]' '[:lower:]')
+      line="$line <$arg_name>"
+      i=$((i + 1))
+    done
+  fi
+
+  # Add rest args indicator
+  local accepts_rest
+  accepts_rest=$(echo "$cmd_json" | jq -r '.acceptsRestArgs // false')
+  if [ "$accepts_rest" = "true" ]; then
+    line="$line [args...]"
+  fi
+
+  line="$line [flags]"
+  echo "$line"
+}
+
+# Render a list of flags as markdown bullet points
+render_flags() {
+  local flags_json="$1"
+  echo "$flags_json" | jq -r '
+    .[] |
+    (
+      if (.short // "") != "" then
+        "`--\(.name), -\(.short)`"
+      else
+        "`--\(.name)`"
+      end
+    ) + " — " + .usage +
+    (if (.default // "") != "" and (.default // "") != "false" then
+      " (default: `\(.default)`)"
+    else "" end) +
+    (if (.choices // []) | length > 0 then
+      " (choices: " + ([.choices[] | "`\(.)`"] | join(", ")) + ")"
+    else "" end) |
+    "- " + .
+  '
+}
+
+# Generate a single command doc file
+generate_command_doc() {
+  local cmd_json="$1"
+  local path
+  path=$(echo "$cmd_json" | jq -r '.path')
+  local usage
+  usage=$(echo "$cmd_json" | jq -r '.usage')
+  local filename
+  filename=$(path_to_filename "$path")
+  local outfile="$OUT_DIR/$filename.md"
+
+  # Determine parent path for "See also" link
+  local parent_path=""
+  if [[ "$path" == *" "* ]]; then
+    parent_path="${path% *}"
+  fi
+
+  {
+    # --- Frontmatter ---
+    echo "---"
+    echo "title: \"miren $path\""
+    echo "sidebar_label: \"$path\""
+    echo "description: \"$usage\""
+    echo "---"
+    echo ""
+
+    # --- Header ---
+    echo "# miren $path"
+    echo ""
+    echo "$usage"
+
+    # --- Required feature flag ---
+    local required_feature
+    required_feature=$(echo "$cmd_json" | jq -r '.requiredFeature // ""')
+    if [ -n "$required_feature" ]; then
+      echo ""
+      echo ":::note"
+      echo "This command requires the \`$required_feature\` [labs feature](/labs) to be enabled."
+      echo ":::"
+    fi
+
+    # --- Extended description ---
+    local description
+    description=$(echo "$cmd_json" | jq -r '.description // ""')
+    if [ -n "$description" ]; then
+      echo ""
+      echo "$description"
+    fi
+
+    # --- Usage ---
+    echo ""
+    echo "## Usage"
+    echo ""
+    echo '```bash'
+    build_usage_line "$cmd_json"
+    echo '```'
+
+    # --- Positional args description ---
+    local pos_args
+    pos_args=$(echo "$cmd_json" | jq -c '.positionalArgs // []')
+    local pos_count
+    pos_count=$(echo "$pos_args" | jq 'length')
+
+    if [ "$pos_count" -gt 0 ]; then
+      echo ""
+      echo "## Arguments"
+      echo ""
+      echo "$pos_args" | jq -r '.[] | "- `\(.name | ascii_downcase)` — \(.usage)"'
+    fi
+
+    # --- Flags ---
+    local flags
+    flags=$(echo "$cmd_json" | jq -c '.flags // []')
+    local flag_count
+    flag_count=$(echo "$flags" | jq 'length')
+
+    if [ "$flag_count" -gt 0 ]; then
+      local flag_groups
+      flag_groups=$(echo "$cmd_json" | jq -r '(.flagGroups // []) | .[]')
+
+      # Ungrouped flags (no group set)
+      local ungrouped
+      ungrouped=$(echo "$flags" | jq -c '[.[] | select((.group // "") == "")]')
+      local ungrouped_count
+      ungrouped_count=$(echo "$ungrouped" | jq 'length')
+
+      if [ "$ungrouped_count" -gt 0 ]; then
+        echo ""
+        echo "## Flags"
+        echo ""
+        render_flags "$ungrouped"
+      fi
+
+      # Grouped flags (skip Global Options for now, render them last)
+      while IFS= read -r group; do
+        [ -z "$group" ] && continue
+        [ "$group" = "Global Options" ] && continue
+
+        local group_flags
+        group_flags=$(echo "$flags" | jq -c --arg g "$group" '[.[] | select(.group == $g)]')
+        local gcount
+        gcount=$(echo "$group_flags" | jq 'length')
+
+        if [ "$gcount" -gt 0 ]; then
+          echo ""
+          echo "## $group"
+          echo ""
+          render_flags "$group_flags"
+        fi
+      done <<< "$flag_groups"
+
+      # Global Options last
+      local global_flags
+      global_flags=$(echo "$flags" | jq -c '[.[] | select(.group == "Global Options")]')
+      local global_count
+      global_count=$(echo "$global_flags" | jq 'length')
+
+      if [ "$global_count" -gt 0 ]; then
+        echo ""
+        echo "## Global Options"
+        echo ""
+        render_flags "$global_flags"
+      fi
+    fi
+
+    # --- Examples ---
+    local examples
+    examples=$(echo "$cmd_json" | jq -c '.examples // []')
+    local example_count
+    example_count=$(echo "$examples" | jq 'length')
+
+    if [ "$example_count" -gt 0 ]; then
+      echo ""
+      echo "## Examples"
+
+      local i=0
+      while [ $i -lt "$example_count" ]; do
+        local ename
+        ename=$(echo "$examples" | jq -r ".[$i].name")
+        local ebody
+        ebody=$(echo "$examples" | jq -r ".[$i].body")
+
+        echo ""
+        if [ -n "$ename" ]; then
+          echo "**$ename:**"
+          echo ""
+        fi
+        echo '```bash'
+        echo "$ebody"
+        echo '```'
+
+        i=$((i + 1))
+      done
+    fi
+
+    # --- Subcommands ---
+    local subcmd_paths
+    subcmd_paths=$(echo "$cmd_json" | jq -r '.subcommand_paths // [] | .[]')
+
+    if [ -n "$subcmd_paths" ]; then
+      echo ""
+      echo "## Subcommands"
+      echo ""
+      while IFS= read -r sub; do
+        [ -z "$sub" ] && continue
+        if is_hidden "$sub"; then
+          continue
+        fi
+        local sub_filename
+        sub_filename=$(path_to_filename "$sub")
+        local sub_usage
+        sub_usage=$(jq -r --arg p "$sub" '.[] | select(.path == $p) | .usage' "$TMPDIR/all_commands.json")
+        echo "- [\`miren $sub\`](/command/$sub_filename) — $sub_usage"
+      done <<< "$subcmd_paths"
+    fi
+
+    # --- See also ---
+    if [ -n "$parent_path" ] && ! is_hidden "$parent_path"; then
+      local parent_filename
+      parent_filename=$(path_to_filename "$parent_path")
+      echo ""
+      echo "## See also"
+      echo ""
+      echo "- [\`miren $parent_path\`](/command/$parent_filename)"
+    fi
+
+  } > "$outfile"
+
+  echo "  $filename.md"
+}
+
+# Generate the top-level commands.md index page
+generate_commands_index() {
+  local outfile="$ROOT_DIR/docs/docs/commands.md"
+
+  # Build main command sections (excluding internal and debug)
+  jq -r '
+    [.[] | select(
+      (.path | startswith("internal") | not) and
+      (.path | startswith("debug") | not)
+    )] |
+    group_by(.path | split(" ")[0]) |
+    sort_by(.[0].path | split(" ")[0]) |
+    .[] |
+    (.[0].path | split(" ")[0]) as $group |
+    "## \($group)\n\n" +
+    "| Command | Description |\n|---------|-------------|\n" +
+    ([.[] |
+      (.path | gsub(" "; "-")) as $filename |
+      (if (.requiredFeature // "") != "" then " _(`\(.requiredFeature)`)_" else "" end) as $badge |
+      "| [`miren \(.path)`](/command/\($filename)) | \(.usage)\($badge) |"
+    ] | join("\n")) +
+    "\n"
+  ' "$TMPDIR/all_commands.json" > "$TMPDIR/command_sections.md"
+
+  # Build debug command section
+  jq -r '
+    [.[] | select(.path | startswith("debug"))] |
+    if length > 0 then
+      "| Command | Description |\n|---------|-------------|\n" +
+      ([.[] |
+        (.path | gsub(" "; "-")) as $filename |
+        (if (.requiredFeature // "") != "" then " _(`\(.requiredFeature)`)_" else "" end) as $badge |
+        "| [`miren \(.path)`](/command/\($filename)) | \(.usage)\($badge) |"
+      ] | join("\n")) +
+      "\n"
+    else empty end
+  ' "$TMPDIR/all_commands.json" > "$TMPDIR/debug_sections.md"
+
+  {
+    echo "---"
+    echo "title: \"Commands\""
+    echo "description: \"Complete reference for all miren CLI commands\""
+    echo "---"
+    echo ""
+    echo "# Commands"
+    echo ""
+    echo "Complete reference for all \`miren\` CLI commands."
+    echo ""
+    cat "$TMPDIR/command_sections.md"
+
+    # Append debug section if non-empty
+    if [ -s "$TMPDIR/debug_sections.md" ]; then
+      echo "---"
+      echo ""
+      echo "## Advanced / Debug Commands"
+      echo ""
+      echo ":::caution"
+      echo "These commands are intended for advanced debugging and troubleshooting. They may change without notice."
+      echo ":::"
+      echo ""
+      cat "$TMPDIR/debug_sections.md"
+    fi
+  } > "$outfile"
+
+  echo "  commands.md (index)"
+}
+
+# --- Main ---
+echo "Generating command docs..."
+
+jq -c '.[]' "$TMPDIR/all_commands.json" | while IFS= read -r cmd; do
+  path=$(echo "$cmd" | jq -r '.path')
+
+  if is_hidden "$path"; then
+    continue
+  fi
+
+  generate_command_doc "$cmd"
+done
+
+generate_commands_index
+
+# Generate sidebar JSON for Docusaurus
+generate_sidebar() {
+  local outfile="$ROOT_DIR/docs/command-sidebar.json"
+
+  # Build a nested sidebar structure from the flat command list.
+  # Groups commands by their top-level word, creating categories for groups
+  # with subcommands and plain doc refs for leaf commands.
+  jq -r '
+    [.[] | select(.path | startswith("internal") | not)] |
+
+    # Group by top-level command word
+    group_by(.path | split(" ")[0]) |
+
+    [.[] |
+      (.[0].path | split(" ")[0]) as $group |
+      (.[0].path | gsub(" "; "-")) as $group_filename |
+
+      if length == 1 then
+        # Single command, no subcommands — plain doc ref
+        "command/\($group_filename)"
+      else
+        # Multiple commands — build a category
+        {
+          type: "category",
+          label: $group,
+          collapsed: true,
+          link: {
+            type: "doc",
+            id: "command/\($group_filename)"
+          },
+          items: [
+            .[] |
+            select(.path != $group) |
+            (.path | gsub(" "; "-")) as $filename |
+            "command/\($filename)"
+          ]
+        }
+      end
+    ]
+  ' "$TMPDIR/all_commands.json" > "$outfile"
+
+  echo "  command-sidebar.json"
+}
+
+generate_sidebar
+
+total=$(jq -c '[.[] | select(
+  (.path | startswith("internal") | not)
+)] | length' "$TMPDIR/all_commands.json")
+
+echo ""
+echo "Generated $total command docs + index in $OUT_DIR"

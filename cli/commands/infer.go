@@ -22,11 +22,37 @@ type Cmd struct {
 	opts   reflect.Value
 	global *GlobalFlags
 	fs     *mflags.FlagSet
+
+	examples    []mflags.Example
+	labsFeature string
+	description string
+}
+
+type CommandOption func(*Cmd)
+
+func WithExample(example mflags.Example) CommandOption {
+	return func(c *Cmd) {
+		c.examples = append(c.examples, example)
+	}
+}
+
+// WithDescription sets an extended markdown description for the command.
+func WithDescription(desc string) CommandOption {
+	return func(c *Cmd) {
+		c.description = desc
+	}
+}
+
+// WithLabsFeature marks this command as requiring the given labs feature flag.
+func WithLabsFeature(feature string) CommandOption {
+	return func(c *Cmd) {
+		c.labsFeature = feature
+	}
 }
 
 // Infer creates a command from a function with the signature:
 // func(ctx *Context, opts StructType) error
-func Infer(name, syn string, f interface{}) *Cmd {
+func Infer(name, syn string, f interface{}, opts ...CommandOption) *Cmd {
 	rv := reflect.ValueOf(f)
 
 	if rv.Kind() != reflect.Func {
@@ -71,7 +97,7 @@ func Infer(name, syn string, f interface{}) *Cmd {
 		panic(fmt.Sprintf("error parsing command options: %v", err))
 	}
 
-	return &Cmd{
+	cmd := &Cmd{
 		syn:    syn,
 		name:   name,
 		f:      rv,
@@ -79,6 +105,26 @@ func Infer(name, syn string, f interface{}) *Cmd {
 		opts:   sv,
 		fs:     fs,
 	}
+
+	for _, o := range opts {
+		o(cmd)
+	}
+
+	return cmd
+}
+
+func (w *Cmd) Examples() []mflags.Example {
+	return w.examples
+}
+
+// RequiredFeature implements mflags.RequiredFeatureProvider.
+func (w *Cmd) RequiredFeature() string {
+	return w.labsFeature
+}
+
+// Description implements mflags.DescriptionProvider.
+func (w *Cmd) Description() string {
+	return w.description
 }
 
 // FlagSet implements mflags.Command

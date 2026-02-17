@@ -288,5 +288,5 @@ We're still learning about system requirements as more users deploy Miren in dif
 
 - [Application Scaling](/scaling) - Configure how your app scales
 - [CLI Reference](/cli-reference) - Learn about all available commands
-- [App Commands](/cli/app) - Detailed application command reference
+- [App Commands](/command/app) - Detailed application command reference
 - [Disks](/disks) - Persistent storage for your applications

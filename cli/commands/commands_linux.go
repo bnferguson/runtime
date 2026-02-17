@@ -8,16 +8,57 @@ func addCommands(d *mflags.Dispatcher) {
 	// Server command is now defined in commands.go (renamed from dev)
 
 	// Cloud registration commands
-	d.Dispatch("server register", Infer("server register", "Register this cluster with miren.cloud", Register))
+	d.Dispatch("server register", Infer("server register", "Register this cluster with miren.cloud", Register,
+		WithExample(mflags.Example{
+			Name: "Register with cloud",
+			Body: "miren server register --name my-cluster",
+		}),
+		WithExample(mflags.Example{
+			Name: "Register with a specific cloud URL",
+			Body: "miren server register --name my-cluster --url https://cloud.example.com",
+		}),
+	))
 
-	d.Dispatch("server register status", Infer("server register status", "Show cluster registration status", RegisterStatus))
+	d.Dispatch("server register status", Infer("server register status", "Show cluster registration status", RegisterStatus,
+		WithExample(mflags.Example{
+			Name: "Check registration status",
+			Body: "miren server register status",
+		}),
+	))
 
 	// Server management commands
-	d.Dispatch("server install", Infer("server install", "Install systemd service for miren server", ServerInstall))
+	d.Dispatch("server install", Infer("server install", "Install systemd service for miren server", ServerInstall,
+		WithExample(mflags.Example{
+			Name: "Install with cloud registration",
+			Body: "miren server install",
+		}),
+		WithExample(mflags.Example{
+			Name: "Install without cloud (local only)",
+			Body: "miren server install --without-cloud",
+		}),
+	))
 
-	d.Dispatch("server uninstall", Infer("server uninstall", "Remove systemd service for miren server", ServerUninstall))
+	d.Dispatch("server uninstall", Infer("server uninstall", "Remove systemd service for miren server", ServerUninstall,
+		WithExample(mflags.Example{
+			Name: "Uninstall the server",
+			Body: "miren server uninstall",
+		}),
+		WithExample(mflags.Example{
+			Name: "Uninstall and remove all data",
+			Body: "miren server uninstall --remove-data",
+		}),
+	))
 
-	d.Dispatch("server status", Infer("server status", "Show miren service status", ServerStatus))
+	d.Dispatch("server status", Infer("server status", "Show miren service status", ServerStatus,
+		WithExample(mflags.Example{
+			Name: "Show server status",
+			Body: "miren server status",
+		}),
+		WithExample(mflags.Example{
+			Name: "Follow server logs",
+			Body: "miren server status --follow",
+		}),
+	))
 }
 
 // setupServerComponents is deprecated and will be removed.

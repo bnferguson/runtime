@@ -206,7 +206,7 @@ View active disk leases:
 miren debug disk lease-list
 ```
 
-See [CLI Reference - Disk Commands](/cli/disk) for complete command documentation.
+See [CLI Reference - Disk Commands](/command/debug-disk) for complete command documentation.
 
 ### Important Considerations
 
@@ -232,5 +232,5 @@ Disks use exclusive leasing - only one app instance can mount a disk at a time. 
 ### Next Steps
 
 - [Getting Started](/getting-started) - Deploy your first app
-- [CLI Reference - Disk Commands](/cli/disk) - Complete disk CLI reference
+- [CLI Reference - Disk Commands](/command/debug-disk) - Complete disk CLI reference
 - [Working with Miren Cloud](/working-with-miren-cloud) - Set up cloud features

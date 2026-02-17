@@ -42,16 +42,16 @@ Cancel a stuck in-progress deployment. Get the deployment ID from `miren app his
 
 ### Application Management
 
-- `miren app` - Get information and metrics about an application ([details](/cli/app))
+- `miren app` - Get information and metrics about an application ([details](/command/app))
 - `miren app list` (or `miren apps`) - List all applications
 - `miren app delete` - Delete an application and all its resources
 - `miren app history` - Show deployment history for an application
 - `miren app status` - Show current status of an application
-- `miren app run` - Open interactive shell in a new ephemeral sandbox ([details](/cli/app#miren-app-run))
+- `miren app run` - Open interactive shell in a new ephemeral sandbox ([details](/command/app-run))
 
 ### Logs & Monitoring
 
-- `miren logs` - Get logs for an application ([details](/cli/logs))
+- `miren logs` - Get logs for an application ([details](/command/logs))
 - `miren route` - List all HTTP routes
 - `miren route oidc enable` - Enable OIDC authentication on a route
 - `miren route oidc disable` - Disable OIDC authentication on a route
@@ -75,8 +75,8 @@ Cancel a stuck in-progress deployment. Get the deployment ID from `miren app his
 
 ### Advanced Commands
 
-- `miren sandbox list` - List all sandboxes ([details](/cli/sandbox))
-- `miren sandbox exec` - Execute a command in an existing sandbox ([details](/cli/sandbox#miren-sandbox-exec))
+- `miren sandbox list` - List all sandboxes ([details](/command/sandbox-list))
+- `miren sandbox exec` - Execute a command in an existing sandbox ([details](/command/sandbox-exec))
 - `miren sandbox stop` - Stop a sandbox
 - `miren sandbox delete` - Delete a dead sandbox
 - `miren sandbox metrics` - Get metrics from a sandbox
@@ -215,8 +215,8 @@ miren app list --format json
 ## Next Steps
 
 - [Getting Started](/getting-started) - Learn by deploying
-- [App Commands](/cli/app) - Manage your applications
-- [Sandbox Commands](/cli/sandbox) - Work with sandboxes directly
-- [Logs Command](/cli/logs) - View application logs
-- [Disk Commands](/cli/disk) - Manage persistent storage
+- [App Commands](/command/app) - Manage your applications
+- [Sandbox Commands](/command/sandbox) - Work with sandboxes directly
+- [Logs Command](/command/logs) - View application logs
+- [Disk Commands](/command/debug-disk) - Manage persistent storage
 - [Disks Overview](/disks) - Learn about persistent storage

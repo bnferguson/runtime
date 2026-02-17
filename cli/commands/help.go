@@ -7,15 +7,25 @@ import (
 )
 
 type section struct {
-	name string
-	help string
-	desc string
-	fs   *mflags.FlagSet
+	name        string
+	help        string
+	desc        string
+	description string
+	fs          *mflags.FlagSet
 }
 
 var _ mflags.Command = &section{}
 
-func Section(name, desc, help string) mflags.Command {
+type SectionOption func(*section)
+
+// WithSectionDescription sets an extended markdown description for the section.
+func WithSectionDescription(desc string) SectionOption {
+	return func(s *section) {
+		s.description = desc
+	}
+}
+
+func Section(name, desc, help string, opts ...SectionOption) mflags.Command {
 	help = strings.TrimSpace(help)
 
 	if help == "" {
@@ -26,12 +36,18 @@ func Section(name, desc, help string) mflags.Command {
 		desc = help
 	}
 
-	return &section{
+	s := &section{
 		name: name,
 		desc: desc,
 		help: help,
 		fs:   mflags.NewFlagSet(name),
 	}
+
+	for _, o := range opts {
+		o(s)
+	}
+
+	return s
 }
 
 func (s *section) FlagSet() *mflags.FlagSet {
@@ -55,4 +71,9 @@ func (s *section) Help() string {
 // Synopsis returns a short description
 func (s *section) Synopsis() string {
 	return s.desc
+}
+
+// Description implements mflags.DescriptionProvider.
+func (s *section) Description() string {
+	return s.description
 }

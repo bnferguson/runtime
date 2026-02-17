@@ -7,6 +7,9 @@
 # Generated files
 .docusaurus
 .cache-loader
+/docs/command/
+/docs/commands.md
+/command-sidebar.json
 
 # Misc
 .DS_Store

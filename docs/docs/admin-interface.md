@@ -396,10 +396,10 @@ miren admin update-config settings='{"debug": true}'
 miren admin get-stats --json | jq '.total'
 ```
 
-See [Admin Commands](/cli/admin) for full CLI documentation.
+See [Admin Commands](/command/admin) for full CLI documentation.
 
 ## Next Steps
 
-- [Admin Commands](/cli/admin) — CLI reference for `miren admin`
+- [Admin Commands](/command/admin) — CLI reference for `miren admin`
 - [Services](/services) — Configure your app's web service
 - [Getting Started](/getting-started) — Deploy your first app

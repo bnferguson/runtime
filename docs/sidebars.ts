@@ -1,4 +1,5 @@
 import type {SidebarsConfig} from '@docusaurus/plugin-content-docs';
+import commandSidebar from './command-sidebar.json';
 
 // This runs in Node.js - Don't use client-side code here (browser APIs, JSX...)
 
@@ -37,13 +38,16 @@ const sidebars: SidebarsConfig = {
       label: 'CLI Reference',
       collapsed: false,
       items: [
-        'cli-reference',
-        'cli/app',
-        'cli/logs',
-        'cli/sandbox',
-        'cli/disk',
-        'cli/entity',
-        'cli/admin',
+        {
+          type: 'category',
+          label: 'Commands',
+          collapsed: true,
+          link: {
+            type: 'doc',
+            id: 'commands',
+          },
+          items: commandSidebar as any[],
+        },
       ],
     },
     {
