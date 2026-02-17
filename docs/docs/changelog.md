@@ -5,6 +5,31 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *main*
 
+**Features**
+
+- **First-class rollbacks** - Redeploy a previous app version without rebuilding. Use `miren rollback` for an interactive picker that shows your recent versions, or `miren deploy --version <id>` to deploy a specific version directly. Each rollback creates a full deployment record with provenance tracking. ([#590](https://github.com/mirendev/runtime/pull/590))
+
+- **OpenTelemetry tracing** - Comprehensive distributed tracing across the Miren runtime. Traces cover HTTP ingress, deploy/build pipelines, containerd operations, and CLI commands. CLI spans are shipped through the server via a proxy exporter. Cluster identity is included in trace resource attributes. See [Observability](/observability) for configuration details. ([#595](https://github.com/mirendev/runtime/pull/595), [#601](https://github.com/mirendev/runtime/pull/601), [#602](https://github.com/mirendev/runtime/pull/602), [#609](https://github.com/mirendev/runtime/pull/609))
+
+**Improvements**
+
+- **Per-app cluster pinning** - The CLI now remembers which cluster to use for each app. The first time you use `-C <cluster>` with a command, that cluster is saved locally for the app. Resolution order: explicit `-C` flag > per-app pin > global active cluster. Use `miren cluster current` to see which cluster the CLI will target. ([#596](https://github.com/mirendev/runtime/pull/596))
+- **Better app.toml error messages** - Invalid `app.toml` files now surface the actual parse error instead of the confusing "app is required" message. ([#614](https://github.com/mirendev/runtime/pull/614))
+- **Exclude dead sandboxes from listing** - `miren sandbox list` now hides dead sandboxes by default, showing only active ones. Use `--all` to see everything. ([#585](https://github.com/mirendev/runtime/pull/585))
+- **Redact secrets from debug bundles** - `miren debug bundle` now redacts sensitive information and includes guidance on sharing bundles safely. ([#612](https://github.com/mirendev/runtime/pull/612))
+- **`-v` flag moved to `-V`** - The version flag is now `-V`/`--version`, freeing `-v` for `--verbose` across all commands. ([#593](https://github.com/mirendev/runtime/pull/593), [#594](https://github.com/mirendev/runtime/pull/594))
+- **Disk mount robustness** - Improved disk mount lifecycle handling with better error recovery and integration test coverage. ([#597](https://github.com/mirendev/runtime/pull/597))
+
+**Bug Fixes**
+
+- **Fixed Dockerfile WORKDIR ignored** - App containers now honor the `WORKDIR` directive from your Dockerfile instead of always defaulting to `/`. ([#617](https://github.com/mirendev/runtime/pull/617))
+- **Fixed nested .gitignore files ignored in deploy** - Deploy tarballs now respect `.gitignore` files in subdirectories, not just the root. This prevents things like `web/node_modules/` from inflating your deploy upload. ([#608](https://github.com/mirendev/runtime/pull/608))
+- **Fixed disk space GC** - Garbage collection for BuildKit cache and registry blobs now works correctly, preventing disk space from being consumed by stale build artifacts. ([#588](https://github.com/mirendev/runtime/pull/588))
+- **Fixed activator pool cache lockout** - The activator pool cache no longer permanently locks out at MaxPoolSize, which was preventing scale-to-zero apps from recovering after hitting the pool size limit. ([#616](https://github.com/mirendev/runtime/pull/616))
+- **Fixed disk lease leak in sandbox cleanup** - Periodic sandbox cleanup now properly releases disk leases before deleting sandboxes. ([#613](https://github.com/mirendev/runtime/pull/613))
+- **Fixed empty host in route commands** - `miren route set` and `miren route show` now validate that a host is provided instead of accepting empty strings. ([#591](https://github.com/mirendev/runtime/pull/591))
+- **Fixed deployment cluster filter** - Deployments are now correctly filtered by cluster, and `miren app history` defaults are improved. ([#589](https://github.com/mirendev/runtime/pull/589))
+
 ---
 
 ## v0.3.1
