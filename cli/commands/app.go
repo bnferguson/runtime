@@ -39,9 +39,11 @@ func (a *AppCentric) Validate(glbl *GlobalFlags) error {
 		ac, err = appconfig.LoadAppConfig()
 	}
 
-	if err == nil {
-		a.config = ac
+	if err != nil {
+		return fmt.Errorf("error loading %s: %w", appconfig.AppConfigPath, err)
 	}
+
+	a.config = ac
 
 	if a.App == "" {
 		if a.config != nil && a.config.Name != "" {
