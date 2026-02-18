@@ -538,13 +538,13 @@ func (s *State) Connect(remote string, name string) (*NetworkClient, error) {
 
 	err = client.resolveCapability(name)
 	if err != nil {
-		s.log.Error("error resolving capability", "error", err)
+		s.log.Debug("error resolving capability", "error", err)
 		return nil, err
 	}
 
 	err = client.sendIdentity(s.top)
 	if err != nil {
-		s.log.Error("error sending identity", "error", err)
+		s.log.Debug("error sending identity", "error", err)
 		return nil, err
 	}
 
