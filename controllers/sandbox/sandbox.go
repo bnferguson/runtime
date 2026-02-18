@@ -1970,9 +1970,11 @@ func (c *SandboxController) buildSubContainerSpec(
 		oci.WithEnv(envVars),
 	}
 
-	if co.Directory != "" {
-		specOpts = append(specOpts, oci.WithProcessCwd(co.Directory))
+	cwd := co.Directory
+	if cwd == "" {
+		cwd = "/app"
 	}
+	specOpts = append(specOpts, oci.WithProcessCwd(cwd))
 
 	if co.Command != "" {
 		specOpts = append(specOpts, oci.WithProcessArgs("/bin/sh", "-c", co.Command))
