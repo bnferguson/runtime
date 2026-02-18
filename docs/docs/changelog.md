@@ -5,6 +5,11 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *main*
 
+**Bug Fixes**
+
+- **Fixed app startup directory regression** - Apps deployed before the WORKDIR fix (v0.4.0) would boot with CWD `/` instead of `/app`, causing crashes. The `/app` default is now restored as a fallback for existing app versions without a stored `start_directory`. ([#621](https://github.com/mirendev/runtime/pull/621), [#623](https://github.com/mirendev/runtime/pull/623))
+- **Fixed noisy RPC error logs** - Deploying to a server without telemetry capabilities no longer produces a spurious `[ERROR] error resolving capability` message. Optional capability lookups now degrade quietly at Debug level. ([#622](https://github.com/mirendev/runtime/pull/622))
+
 ---
 
 ## v0.4.0
