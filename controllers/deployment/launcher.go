@@ -397,6 +397,9 @@ func (l *Launcher) buildSandboxSpec(
 	}
 
 	startDir := cfgSpec.StartDirectory
+	if startDir == "" {
+		startDir = "/app"
+	}
 
 	appCont := compute_v1alpha.SandboxSpecContainer{
 		Name:  "app",
