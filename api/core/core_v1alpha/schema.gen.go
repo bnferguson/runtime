@@ -79,7 +79,7 @@ func (o *ConfigSpec) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("entrypoint", "dev.miren.core/component.config_spec.entrypoint", schema.Doc("The container entrypoint command"))
 	sb.Component("services", "dev.miren.core/component.config_spec.services", schema.Doc("Per-service configuration"), schema.Many)
 	(&ConfigSpecServices{}).InitSchema(sb.Builder("component.config_spec.services"))
-	sb.String("start_directory", "dev.miren.core/component.config_spec.start_directory", schema.Doc("Directory to start the process in. If empty, uses the image's WORKDIR."))
+	sb.String("start_directory", "dev.miren.core/component.config_spec.start_directory", schema.Doc("Directory to start the process in; defaults to /app."))
 	sb.Component("variables", "dev.miren.core/component.config_spec.variables", schema.Doc("Environment variables and configuration values"), schema.Many)
 	(&ConfigSpecVariables{}).InitSchema(sb.Builder("component.config_spec.variables"))
 }
@@ -874,7 +874,7 @@ func (o *Config) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Int64("port", "dev.miren.core/config.port", schema.Doc("[DEPRECATED] Port used for the web service; defaults to 3000. Prefer per-service ports."))
 	sb.Component("services", "dev.miren.core/config.services", schema.Doc("Per-service configuration including concurrency controls"), schema.Many)
 	(&Services{}).InitSchema(sb.Builder("config.services"))
-	sb.String("start_directory", "dev.miren.core/config.start_directory", schema.Doc("Directory to start the process in. If empty, uses the image's WORKDIR."))
+	sb.String("start_directory", "dev.miren.core/config.start_directory", schema.Doc("Directory to start the process in; defaults to /app."))
 	sb.Component("variable", "dev.miren.core/config.variable", schema.Doc("A variable to be exposed to the app"), schema.Many)
 	(&Variable{}).InitSchema(sb.Builder("config.variable"))
 }

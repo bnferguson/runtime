@@ -324,9 +324,11 @@ func buildVersionConfig(inputs ConfigInputs) core_v1alpha.ConfigSpec {
 		spec.Entrypoint = res.Entrypoint
 	}
 
-	// Set start directory from build result
+	// Set start directory from build result, defaulting to /app
 	if res != nil && res.WorkingDir != "" {
 		spec.StartDirectory = res.WorkingDir
+	} else {
+		spec.StartDirectory = "/app"
 	}
 
 	// If no web service defined in app config or Procfile, but we have a command or entrypoint,

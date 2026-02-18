@@ -332,6 +332,9 @@ func (s *Server) buildSandboxSpec(
 	}
 
 	startDir := cfgSpec.StartDirectory
+	if startDir == "" {
+		startDir = "/app"
+	}
 
 	image := ver.ImageUrl
 
