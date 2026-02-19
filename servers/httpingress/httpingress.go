@@ -183,7 +183,6 @@ func (h *Server) expireLeases(ctx context.Context) {
 			}
 
 			ar.leases[i].Lease = lease
-			ar.leases[i].Uses = 0
 			newLeases = append(newLeases, ar.leases[i])
 		}
 

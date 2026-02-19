@@ -182,16 +182,18 @@ func TestFailedRenewalEvictsLease(t *testing.T) {
 	}
 }
 
-func TestUsageResetsAfterRenewal(t *testing.T) {
+func TestUsagePreservedAfterRenewal(t *testing.T) {
 	aa := &mockActivator{}
 	srv := newTestServer(aa)
 	ctx := context.Background()
 
-	// Retain a lease — Uses starts at 1
+	// Retain a lease — Uses starts at 1 (simulates in-flight request)
 	actLease := &activator.Lease{Size: 10, URL: "http://10.0.0.1:3000"}
 	srv.retainLease(ctx, "app/myapp", actLease)
 
-	// Run expireLeases — should renew and reset Uses to 0
+	// Run expireLeases — should renew but NOT reset Uses, since an
+	// in-flight request is still holding the lease. Resetting would
+	// cause releaseLease to decrement below zero.
 	srv.expireLeases(ctx)
 
 	srv.mu.Lock()
@@ -203,8 +205,8 @@ func TestUsageResetsAfterRenewal(t *testing.T) {
 	uses := ar.leases[0].Uses
 	srv.mu.Unlock()
 
-	if uses != 0 {
-		t.Errorf("expected Uses reset to 0 after renewal, got %d", uses)
+	if uses != 1 {
+		t.Errorf("expected Uses preserved at 1 after renewal, got %d", uses)
 	}
 }
 
