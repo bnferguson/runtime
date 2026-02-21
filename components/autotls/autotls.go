@@ -220,17 +220,60 @@ func ServeTLSWithController(ctx context.Context, log *slog.Logger, certProvider 
 		}
 	}()
 
+	// Start HTTP server on port 80 for HTTP to HTTPS redirect
+	httpServer := &http.Server{
+		Addr: ":80",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			host := r.Host
+			if hostWithoutPort, _, err := net.SplitHostPort(host); err == nil {
+				host = hostWithoutPort
+			}
+
+			isLocalhost := host == "localhost" || host == "127.0.0.1" || host == "::1"
+			isIPAddress := net.ParseIP(host) != nil
+
+			if isLocalhost || isIPAddress {
+				h.ServeHTTP(w, r)
+				return
+			}
+
+			if r.Method != "GET" && r.Method != "HEAD" {
+				http.Error(w, "Use HTTPS", http.StatusBadRequest)
+				return
+			}
+
+			target := "https://" + host + r.URL.RequestURI()
+			http.Redirect(w, r, target, http.StatusFound)
+		}),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
+
+	go func() {
+		log.Info("starting HTTP server for HTTPS redirect", "addr", ":80")
+		err := httpServer.ListenAndServe()
+		if err != nil && err != http.ErrServerClosed {
+			log.Error("error serving HTTP", "error", err)
+		}
+	}()
+
 	// Monitor for context cancellation
 	go func() {
 		<-ctx.Done()
-		log.Info("shutting down HTTPS server")
+		log.Info("shutting down HTTPS and HTTP servers")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
 		if err := server.Shutdown(shutdownCtx); err != nil {
 			log.Error("HTTPS server shutdown error", "error", err)
 		}
-		log.Info("HTTPS server shutdown complete")
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			log.Error("HTTP server shutdown error", "error", err)
+		}
+		log.Info("HTTPS and HTTP servers shutdown complete")
 	}()
 
 	return nil
