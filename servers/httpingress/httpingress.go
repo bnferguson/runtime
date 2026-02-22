@@ -45,6 +45,11 @@ const (
 	// leaseAcquisitionTimeout is the maximum time to wait for sandbox boot
 	// This is longer than request timeout to prevent dangling resources
 	leaseAcquisitionTimeout = 2 * time.Minute
+	// minLeaseTTL is the minimum time a lease is kept in cache after its last
+	// use before it becomes eligible for eviction. This prevents low-traffic
+	// apps from having their leases evicted on every 30s tick, which would
+	// force every request through the full entity store + activator pipeline.
+	minLeaseTTL = 5 * time.Minute
 )
 
 type IngressConfig struct {
@@ -160,20 +165,25 @@ func (h *Server) expireLeases(ctx context.Context) {
 		var newLeases []*lease
 
 		for i, l := range ar.leases {
-			if l.Uses == 0 {
+			if l.Uses == 0 && time.Since(l.LastUsed) > minLeaseTTL {
 				h.Log.Debug("expiring lease", "app", app, "url", l.Lease.URL)
 				h.aa.ReleaseLease(ctx, l.Lease)
-			} else {
-				h.Log.Debug("lease still in use", "app", app, "url", l.Lease.URL, "uses", l.Uses)
-				lease, err := h.aa.RenewLease(ctx, l.Lease)
-				if err != nil {
-					h.Log.Error("error renewing lease", "error", err, "app", app, "url", l.Lease.URL)
-					continue
-				}
-
-				ar.leases[i].Lease = lease
-				newLeases = append(newLeases, ar.leases[i])
+				continue
 			}
+
+			// Renew all retained leases — both active (Uses > 0) and idle
+			// but within TTL. This validates with the activator that the
+			// sandbox is still alive, so we never serve a stale route.
+			h.Log.Debug("renewing lease", "app", app, "url", l.Lease.URL, "uses", l.Uses)
+			lease, err := h.aa.RenewLease(ctx, l.Lease)
+			if err != nil {
+				h.Log.Error("error renewing lease", "error", err, "app", app, "url", l.Lease.URL)
+				h.aa.ReleaseLease(ctx, l.Lease)
+				continue
+			}
+
+			ar.leases[i].Lease = lease
+			newLeases = append(newLeases, ar.leases[i])
 		}
 
 		if len(newLeases) == 0 {
@@ -204,8 +214,9 @@ func (h *Server) DeriveApp(host string) (string, bool) {
 }
 
 type lease struct {
-	Uses  int
-	Lease *activator.Lease
+	Uses     int
+	LastUsed time.Time
+	Lease    *activator.Lease
 }
 
 func (h *Server) retainLease(ctx context.Context, app string, l *activator.Lease) *lease {
@@ -213,8 +224,9 @@ func (h *Server) retainLease(ctx context.Context, app string, l *activator.Lease
 	defer h.mu.Unlock()
 
 	ll := &lease{
-		Lease: l,
-		Uses:  1,
+		Lease:    l,
+		Uses:     1,
+		LastUsed: time.Now(),
 	}
 
 	ar, ok := h.apps[app]
@@ -245,6 +257,7 @@ func (h *Server) useLease(ctx context.Context, app string) (*lease, error) {
 	for _, l := range ar.leases {
 		if l.Uses <= l.Lease.Size {
 			l.Uses++
+			l.LastUsed = time.Now()
 			return l, nil
 		}
 	}
