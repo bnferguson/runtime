@@ -2,10 +2,11 @@
 set -euo pipefail
 
 # Push a release tag after the release PR has been merged
-# Usage: hack/release-tag.sh <version> [--force]
+# Usage: hack/release-tag.sh <version> [--force] [--yes]
 # Examples:
 #   hack/release-tag.sh v0.3.0
 #   hack/release-tag.sh v0.3.0 --force   # Skip safety checks
+#   hack/release-tag.sh v0.3.0 --yes     # Skip confirmation prompt
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -13,12 +14,16 @@ CHANGELOG="$REPO_ROOT/docs/docs/changelog.md"
 
 VERSION=""
 FORCE=false
+YES=false
 
 # Parse arguments
 for arg in "$@"; do
   case "$arg" in
     --force|-f)
       FORCE=true
+      ;;
+    --yes|-y)
+      YES=true
       ;;
     -*)
       echo "Error: Unknown flag: $arg"
@@ -37,11 +42,12 @@ done
 
 if [ -z "$VERSION" ]; then
   echo "Error: Version required"
-  echo "Usage: $0 <version> [--force]"
+  echo "Usage: $0 <version> [--force] [--yes]"
   echo ""
   echo "Examples:"
   echo "  $0 v0.3.0"
   echo "  $0 v0.3.0 --force   # Skip safety checks"
+  echo "  $0 v0.3.0 --yes     # Skip confirmation prompt"
   exit 1
 fi
 
@@ -115,11 +121,15 @@ echo "Commit: $(git rev-parse --short HEAD)"
 echo ""
 
 # Ask for confirmation
-read -p "Create and push tag $VERSION? (y/N) " -n 1 -r
-echo
-if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-  echo "Aborted"
-  exit 1
+if [ "$YES" = true ]; then
+  echo "Continuing (--yes)"
+else
+  read -p "Create and push tag $VERSION? (y/N) " -n 1 -r
+  echo
+  if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    echo "Aborted"
+    exit 1
+  fi
 fi
 
 # Create and push tag

@@ -2,21 +2,44 @@
 set -euo pipefail
 
 # Release script for stable releases following RFD-40 conventions
-# Usage: hack/release.sh <version>
+# Usage: hack/release.sh <version> [--yes]
 # Examples:
 #   hack/release.sh v0.1.0           # Preview release
 #   hack/release.sh v1.0.0           # GA release
+#   hack/release.sh v0.1.0 --yes     # Skip confirmation prompt
 # For prerelease tags, use hack/release-prerelease.sh instead
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CHANGELOG="$REPO_ROOT/docs/docs/changelog.md"
 
-VERSION="${1:-}"
+VERSION=""
+YES=false
+
+# Parse arguments
+for arg in "$@"; do
+  case "$arg" in
+    --yes|-y)
+      YES=true
+      ;;
+    -*)
+      echo "Error: Unknown flag: $arg"
+      exit 1
+      ;;
+    *)
+      if [ -z "$VERSION" ]; then
+        VERSION="$arg"
+      else
+        echo "Error: Unexpected argument: $arg"
+        exit 1
+      fi
+      ;;
+  esac
+done
 
 if [ -z "$VERSION" ]; then
   echo "Error: Version required"
-  echo "Usage: $0 <version>"
+  echo "Usage: $0 <version> [--yes]"
   echo ""
   echo "Examples:"
   echo "  $0 v0.1.0           # Preview release"
@@ -94,11 +117,15 @@ echo "Changelog: Will update Unreleased → $VERSION"
 echo ""
 
 # Ask for confirmation
-read -p "Continue? (y/N) " -n 1 -r
-echo
-if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-  echo "Aborted"
-  exit 1
+if [ "$YES" = true ]; then
+  echo "Continuing (--yes)"
+else
+  read -p "Continue? (y/N) " -n 1 -r
+  echo
+  if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    echo "Aborted"
+    exit 1
+  fi
 fi
 
 # Update changelog
