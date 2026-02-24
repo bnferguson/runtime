@@ -215,6 +215,7 @@ func TestNewClient(t *testing.T) {
 
 	if client == nil {
 		t.Fatal("client is nil")
+		return
 	}
 
 	if client.clientID != "client-id" {

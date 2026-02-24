@@ -154,6 +154,7 @@ func TestIdentityContext(t *testing.T) {
 
 		if retrieved == nil {
 			t.Fatal("expected non-nil identity from context")
+			return
 		}
 		if retrieved.Subject != identity.Subject {
 			t.Errorf("expected subject=%q, got %q", identity.Subject, retrieved.Subject)

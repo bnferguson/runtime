@@ -46,6 +46,7 @@ func TestSessionManager_SetAndGetSession(t *testing.T) {
 
 	if retrieved == nil {
 		t.Fatal("session is nil")
+		return
 	}
 
 	if retrieved.IDToken != session.IDToken {
