@@ -13,8 +13,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUT_DIR="$ROOT_DIR/docs/docs/command"
 BINARY="$ROOT_DIR/bin/miren"
-TMPDIR=$(mktemp -d)
-trap 'rm -rf "$TMPDIR"' EXIT
+WORK_DIR=$(mktemp -d)
+trap 'rm -rf "$WORK_DIR"' EXIT
 
 SKIP_BUILD=false
 for arg in "$@"; do
@@ -37,7 +37,7 @@ fi
 
 # Get help JSON
 echo "Extracting command metadata..."
-MIREN_HELP_JSON=1 "$BINARY" > "$TMPDIR/help.json" 2>/dev/null
+MIREN_HELP_JSON=1 "$BINARY" > "$WORK_DIR/help.json"
 
 # Flatten all commands (recursive) and enrich with subcommand paths
 jq -c '
@@ -46,7 +46,7 @@ jq -c '
     ($cmd + {subcommand_paths: [(.subcommands // [])[] | .path]} | del(.subcommands)),
     ((.subcommands // [])[] | flatten_with_subs);
   [.commands[] | flatten_with_subs]
-' "$TMPDIR/help.json" > "$TMPDIR/all_commands.json"
+' "$WORK_DIR/help.json" > "$WORK_DIR/all_commands.json"
 
 # Prepare output directory
 rm -rf "$OUT_DIR"
@@ -297,8 +297,12 @@ generate_command_doc() {
         local sub_filename
         sub_filename=$(path_to_filename "$sub")
         local sub_usage
-        sub_usage=$(jq -r --arg p "$sub" '.[] | select(.path == $p) | .usage' "$TMPDIR/all_commands.json")
-        echo "- [\`miren $sub\`](/command/$sub_filename) — $sub_usage"
+        sub_usage=$(jq -r --arg p "$sub" '.[] | select(.path == $p) | .usage' "$WORK_DIR/all_commands.json")
+        if [ -n "$sub_usage" ]; then
+          echo "- [\`miren $sub\`](/command/$sub_filename) — $sub_usage"
+        else
+          echo "- [\`miren $sub\`](/command/$sub_filename)"
+        fi
       done <<< "$subcmd_paths"
     fi
 
@@ -339,7 +343,7 @@ generate_commands_index() {
       "| [`miren \(.path)`](/command/\($filename)) | \(.usage)\($badge) |"
     ] | join("\n")) +
     "\n"
-  ' "$TMPDIR/all_commands.json" > "$TMPDIR/command_sections.md"
+  ' "$WORK_DIR/all_commands.json" > "$WORK_DIR/command_sections.md"
 
   # Build debug command section
   jq -r '
@@ -353,7 +357,7 @@ generate_commands_index() {
       ] | join("\n")) +
       "\n"
     else empty end
-  ' "$TMPDIR/all_commands.json" > "$TMPDIR/debug_sections.md"
+  ' "$WORK_DIR/all_commands.json" > "$WORK_DIR/debug_sections.md"
 
   {
     echo "---"
@@ -365,10 +369,10 @@ generate_commands_index() {
     echo ""
     echo "Complete reference for all \`miren\` CLI commands."
     echo ""
-    cat "$TMPDIR/command_sections.md"
+    cat "$WORK_DIR/command_sections.md"
 
     # Append debug section if non-empty
-    if [ -s "$TMPDIR/debug_sections.md" ]; then
+    if [ -s "$WORK_DIR/debug_sections.md" ]; then
       echo "---"
       echo ""
       echo "## Advanced / Debug Commands"
@@ -377,7 +381,7 @@ generate_commands_index() {
       echo "These commands are intended for advanced debugging and troubleshooting. They may change without notice."
       echo ":::"
       echo ""
-      cat "$TMPDIR/debug_sections.md"
+      cat "$WORK_DIR/debug_sections.md"
     fi
   } > "$outfile"
 
@@ -387,7 +391,7 @@ generate_commands_index() {
 # --- Main ---
 echo "Generating command docs..."
 
-jq -c '.[]' "$TMPDIR/all_commands.json" | while IFS= read -r cmd; do
+jq -c '.[]' "$WORK_DIR/all_commands.json" | while IFS= read -r cmd; do
   path=$(echo "$cmd" | jq -r '.path')
 
   if is_hidden "$path"; then
@@ -438,7 +442,7 @@ generate_sidebar() {
         }
       end
     ]
-  ' "$TMPDIR/all_commands.json" > "$outfile"
+  ' "$WORK_DIR/all_commands.json" > "$outfile"
 
   echo "  command-sidebar.json"
 }
@@ -447,7 +451,7 @@ generate_sidebar
 
 total=$(jq -c '[.[] | select(
   (.path | startswith("internal") | not)
-)] | length' "$TMPDIR/all_commands.json")
+)] | length' "$WORK_DIR/all_commands.json")
 
 echo ""
 echo "Generated $total command docs + index in $OUT_DIR"

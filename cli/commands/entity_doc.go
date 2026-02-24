@@ -2,7 +2,7 @@ package commands
 
 const entitySectionDescription = `Entities are the low-level objects stored in Miren's entity system. Most users won't need to use these commands directly. They're primarily useful for debugging and advanced use cases.
 
-### What are Entities?
+## What are Entities?
 
 Entities are flexible metadata objects stored in Miren's etcd-backed entity store. Everything in Miren is an entity:
 

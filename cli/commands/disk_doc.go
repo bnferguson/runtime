@@ -2,7 +2,7 @@ package commands
 
 const diskSectionDescription = `Commands for managing Miren disks. These commands are primarily used for troubleshooting and advanced operations.
 
-### Disk Status Values
+## Disk Status Values
 
 | Status | Description |
 |--------|-------------|
@@ -13,7 +13,7 @@ const diskSectionDescription = `Commands for managing Miren disks. These command
 | ` + "`" + `deleting` + "`" + ` | Disk is marked for deletion |
 | ` + "`" + `error` + "`" + ` | Disk encountered an error during provisioning |
 
-### Lease Status Values
+## Lease Status Values
 
 | Status | Description |
 |--------|-------------|
@@ -22,7 +22,7 @@ const diskSectionDescription = `Commands for managing Miren disks. These command
 | ` + "`" + `released` + "`" + ` | Lease has been released, cleanup pending |
 | ` + "`" + `failed` + "`" + ` | Lease failed to acquire or mount the disk |
 
-### Troubleshooting
+## Troubleshooting
 
 **Disk stuck in "provisioning":**
 Check server logs for storage backend errors:

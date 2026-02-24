@@ -273,6 +273,7 @@ miren deploy --analyze
 	))
 
 	// Sandbox pool commands
+	d.Dispatch("sandbox-pool", Section("sandbox-pool", "Sandbox pool management commands", ""))
 	d.Dispatch("sandbox-pool list", Infer("sandbox-pool list", "List all sandbox pools", SandboxPoolList,
 		WithExample(mflags.Example{
 			Name: "List all pools",
@@ -663,6 +664,7 @@ miren deploy --analyze
 	))
 
 	// CLI management commands
+	d.Dispatch("download", Section("download", "Download management commands", ""))
 	d.Dispatch("download release", Infer("download release", "Download and extract miren release", DownloadRelease,
 		WithExample(mflags.Example{
 			Name: "Download the latest release",
@@ -685,6 +687,7 @@ miren deploy --analyze
 	))
 
 	// Auth commands
+	d.Dispatch("auth", Section("auth", "Authentication commands", ""))
 	d.Dispatch("auth generate", Infer("auth generate", "Generate authentication config file", AuthGenerate,
 		WithExample(mflags.Example{
 			Name: "Generate auth config",
@@ -722,6 +725,7 @@ Warning: These commands are intended for advanced users and developers. They may
 `))
 	d.Dispatch("debug connection", Infer("debug connection", "Test connectivity and authentication with a server", DebugConnection))
 	d.Dispatch("debug reindex", Infer("debug reindex", "Rebuild all entity indexes from scratch", DebugReindex))
+	d.Dispatch("debug test", Section("debug test", "Debug test commands", ""))
 	d.Dispatch("debug test load", Infer("debug test load", "Loadtest a URL", TestLoad))
 	d.Dispatch("debug ctr", Infer("debug ctr", "Run ctr with miren defaults", DebugCtr))
 	d.Dispatch("debug ctr nuke", Infer("debug ctr nuke", "Nuke a containerd namespace", CtrNuke))
@@ -774,6 +778,7 @@ Warning: These commands are intended for advanced users and developers. They may
 	d.Dispatch("debug outboard health", Infer("debug outboard health", "Check health of an outboard process", DebugOutboardHealth))
 
 	// Debug netdb commands
+	d.Dispatch("debug netdb", Section("debug netdb", "Network database debug commands", ""))
 	d.Dispatch("debug netdb list", Infer("debug netdb list", "List all IP leases from netdb", DebugNetDBList))
 	d.Dispatch("debug netdb status", Infer("debug netdb status", "Show IP allocation status by subnet", DebugNetDBStatus))
 	d.Dispatch("debug netdb release", Infer("debug netdb release", "Manually release IP leases", DebugNetDBRelease))

@@ -4,7 +4,7 @@ const sandboxSectionDescription = `Sandboxes are the underlying execution enviro
 
 const sandboxExecDescription = `This command connects to an existing sandbox and runs a command inside it. Unlike ` + "`" + `miren app run` + "`" + ` which creates a new ephemeral sandbox, this connects to a sandbox that's already running (typically one serving production traffic).
 
-### Finding Sandbox IDs
+## Finding Sandbox IDs
 
 Use ` + "`" + `miren sandbox list` + "`" + ` to find the ID of a running sandbox:
 

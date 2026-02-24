@@ -51,7 +51,7 @@ func TestLoad(ctx *Context, opts struct {
 	UserAgent   string   `short:"U" long:"user-agent" description:"User-Agent header to use"`
 
 	CPUS   *int   `long:"cpus" description:"Number of CPUs to use"`
-	Output string `short:"o" long:"output" description:"Output type, the only support value is 'csv'"`
+	Output string `short:"o" long:"output" description:"Output type, the only supported value is 'csv'"`
 
 	DisableCompression bool `long:"disable-compression" description:"Disable compression"`
 	DisableKeepAlives  bool `long:"disable-keepalives" description:"Disable keep-alives"`
