@@ -244,6 +244,7 @@ func TestOIDCAuthenticator_MatchingBinding(t *testing.T) {
 	}
 	if identity == nil {
 		t.Fatal("expected identity, got nil")
+		return
 	}
 	if identity.Method != rpc.AuthMethodOIDC {
 		t.Errorf("method = %q, want %q", identity.Method, rpc.AuthMethodOIDC)
@@ -501,6 +502,7 @@ func TestOIDCAuthenticator_MultipleBindings_FirstMatch(t *testing.T) {
 	}
 	if identity == nil {
 		t.Fatal("expected identity, got nil")
+		return
 	}
 	if identity.Method != rpc.AuthMethodOIDC {
 		t.Errorf("method = %q, want %q", identity.Method, rpc.AuthMethodOIDC)

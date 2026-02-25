@@ -47,6 +47,7 @@ func TestCompositeAuthenticator_PrimarySucceeds(t *testing.T) {
 	}
 	if identity == nil {
 		t.Fatal("expected identity from primary")
+		return
 	}
 	if identity.Method != rpc.AuthMethodJWT {
 		t.Errorf("method = %q, want %q", identity.Method, rpc.AuthMethodJWT)
