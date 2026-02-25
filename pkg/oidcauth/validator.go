@@ -3,6 +3,7 @@ package oidcauth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -60,12 +61,12 @@ func (v *Validator) ValidateToken(ctx context.Context, tokenString, expectedIssu
 
 	// First attempt: use cached JWKS
 	claims, err := v.validateWithJWKS(ctx, tokenString, expectedIssuer, expectedAudience, false)
-	if err != nil {
-		// On key-not-found, refetch JWKS once and retry (handles key rotation)
+	if err != nil && (errors.Is(err, jwt.ErrTokenUnverifiable) || errors.Is(err, jwt.ErrTokenSignatureInvalid)) {
+		// Key not found or stale in cached JWKS — refetch once and retry (handles key rotation)
 		claims, err = v.validateWithJWKS(ctx, tokenString, expectedIssuer, expectedAudience, true)
-		if err != nil {
-			return nil, err
-		}
+	}
+	if err != nil {
+		return nil, err
 	}
 
 	return claims, nil
@@ -80,6 +81,11 @@ func (v *Validator) validateWithJWKS(ctx context.Context, tokenString, expectedI
 	parser := jwt.NewParser(
 		jwt.WithIssuer(expectedIssuer),
 		jwt.WithExpirationRequired(),
+		jwt.WithValidMethods([]string{
+			"RS256", "RS384", "RS512",
+			"ES256", "ES384", "ES512",
+			"PS256", "PS384", "PS512",
+		}),
 	)
 
 	token, err := parser.Parse(tokenString, keyFunc)
@@ -215,13 +221,16 @@ func (v *Validator) getDiscovery(ctx context.Context, issuer string) (*discovery
 
 func (v *Validator) getJWKSKeyFunc(ctx context.Context, issuer string, forceRefresh bool) (jwt.Keyfunc, error) {
 	v.mu.RLock()
-	c, ok := v.cache[issuer]
-	if ok && c.jwks != nil && !forceRefresh && time.Since(c.jwksTime) < jwksCacheTTL {
+	c := v.cache[issuer]
+	if c != nil && c.jwks != nil && !forceRefresh && time.Since(c.jwksTime) < jwksCacheTTL {
 		jwks := c.jwks
 		v.mu.RUnlock()
 		return makeKeyFunc(jwks), nil
 	}
-	discovery := c.discovery
+	var discovery *discoveryData
+	if c != nil {
+		discovery = c.discovery
+	}
 	v.mu.RUnlock()
 
 	if discovery == nil {
@@ -233,7 +242,7 @@ func (v *Validator) getJWKSKeyFunc(ctx context.Context, issuer string, forceRefr
 
 	// Double-check
 	c = v.cache[issuer]
-	if c.jwks != nil && !forceRefresh && time.Since(c.jwksTime) < jwksCacheTTL {
+	if c != nil && c.jwks != nil && !forceRefresh && time.Since(c.jwksTime) < jwksCacheTTL {
 		return makeKeyFunc(c.jwks), nil
 	}
 

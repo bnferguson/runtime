@@ -14,9 +14,9 @@ import (
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/pkg/cond"
-	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
+	"miren.dev/runtime/pkg/rpc"
 )
 
 // TODO: Removed broken go:generate directive - no rpc.yml file exists in servers/app/

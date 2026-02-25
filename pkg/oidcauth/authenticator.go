@@ -75,8 +75,11 @@ func (a *OIDCAuthenticator) Authenticate(ctx context.Context, r *http.Request) (
 	// Determine the audience to validate against.
 	// Use the hostname from the request.
 	audience := r.Host
-	if audience == "" {
+	if audience == "" && r.TLS != nil {
 		audience = r.TLS.ServerName
+	}
+	if audience == "" {
+		return nil, nil
 	}
 
 	// Validate the token

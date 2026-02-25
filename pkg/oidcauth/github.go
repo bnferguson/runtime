@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 )
@@ -26,9 +27,15 @@ func RequestGitHubToken(ctx context.Context, audience string) (string, error) {
 		return "", fmt.Errorf("GitHub Actions OIDC environment variables not set")
 	}
 
-	url := requestURL + "&audience=" + audience
+	u, err := url.Parse(requestURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse OIDC request URL: %w", err)
+	}
+	q := u.Query()
+	q.Set("audience", audience)
+	u.RawQuery = q.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}

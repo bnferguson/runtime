@@ -672,4 +672,3 @@ func TestOIDCAuthenticator_WrongAudience(t *testing.T) {
 		t.Error("expected nil identity for wrong audience")
 	}
 }
-

@@ -123,6 +123,8 @@ func (s *Server) StreamLogs(ctx context.Context, state *app_v1alpha.LogsStreamLo
 		if !rpc.AllowApp(ctx, target.App()) {
 			return rpc.AppAccessError(ctx, target.App())
 		}
+	} else if rpc.BoundApp(ctx) != "" {
+		return rpc.AppAccessError(ctx, "")
 	}
 
 	var opts []observability.LogReaderOption
@@ -197,6 +199,8 @@ func (s *Server) StreamLogChunks(ctx context.Context, state *app_v1alpha.LogsStr
 		if !rpc.AllowApp(ctx, target.App()) {
 			return rpc.AppAccessError(ctx, target.App())
 		}
+	} else if rpc.BoundApp(ctx) != "" {
+		return rpc.AppAccessError(ctx, "")
 	}
 
 	var opts []observability.LogReaderOption
@@ -331,4 +335,3 @@ done:
 		return nil
 	}
 }
-

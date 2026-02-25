@@ -13,6 +13,7 @@ import (
 	"miren.dev/runtime/api/oidcbinding/oidcbinding_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
+	"miren.dev/runtime/pkg/rpc"
 )
 
 const (
@@ -53,6 +54,10 @@ func (s *Server) Add(ctx context.Context, state *oidcbinding_v1alpha.OidcBinding
 	if err != nil || issuerURL.Scheme == "" || issuerURL.Host == "" {
 		results.SetError("issuer must be a valid URL (e.g. https://token.actions.githubusercontent.com)")
 		return nil
+	}
+
+	if !rpc.AllowApp(ctx, args.App()) {
+		return rpc.AppAccessError(ctx, args.App())
 	}
 
 	// Verify the app exists
@@ -124,6 +129,10 @@ func (s *Server) List(ctx context.Context, state *oidcbinding_v1alpha.OidcBindin
 		return nil
 	}
 
+	if !rpc.AllowApp(ctx, args.App()) {
+		return rpc.AppAccessError(ctx, args.App())
+	}
+
 	// Look up the app to get its entity ID
 	var appRec core_v1alpha.App
 	if err := s.EC.Get(ctx, args.App(), &appRec); err != nil {
@@ -173,6 +182,11 @@ func (s *Server) Remove(ctx context.Context, state *oidcbinding_v1alpha.OidcBind
 	if !binding.Is(resp.Entity().Entity()) {
 		results.SetError(fmt.Sprintf("%q is not an OIDC binding", id))
 		return nil
+	}
+
+	appName := ResolveAppName(string(binding.App))
+	if !rpc.AllowApp(ctx, appName) {
+		return rpc.AppAccessError(ctx, appName)
 	}
 
 	if err := s.EC.Delete(ctx, entity.Id(id)); err != nil {
