@@ -2,6 +2,8 @@ package rpc
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 )
 
@@ -34,6 +36,7 @@ const (
 	AuthMethodJWT       AuthMethod = "jwt"       // JWT token (e.g., from Miren Cloud)
 	AuthMethodAnonymous AuthMethod = "anonymous" // No authentication (public methods)
 	AuthMethodToken     AuthMethod = "token"     // Bearer token (e.g., outboard)
+	AuthMethodOIDC      AuthMethod = "oidc"      // External OIDC token (e.g., GitHub Actions)
 )
 
 // Identity represents an authenticated caller
@@ -68,6 +71,42 @@ type Authorizer interface {
 	// action is the method name (lowercase).
 	// Returns nil if allowed, or an error describing why access was denied.
 	Authorize(ctx context.Context, identity *Identity, resource, action string) error
+}
+
+// ErrUnauthorized is returned when an app-scoped caller attempts to operate
+// on an app they are not bound to.
+var ErrUnauthorized = errors.New("unauthorized")
+
+// AllowApp checks whether the current caller is permitted to operate on the
+// named app. Callers that are not app-scoped (cert, JWT, anonymous) are always
+// allowed. OIDC callers are restricted to the app their binding is for.
+func AllowApp(ctx context.Context, appName string) bool {
+	identity := IdentityFromContext(ctx)
+	if identity == nil || identity.Method != AuthMethodOIDC {
+		return true
+	}
+	boundApp, _ := identity.Metadata["bound_app"].(string)
+	return boundApp != "" && boundApp == appName
+}
+
+// BoundApp returns the app name that the current OIDC caller is bound to,
+// or empty string if the caller is not app-scoped.
+func BoundApp(ctx context.Context) string {
+	identity := IdentityFromContext(ctx)
+	if identity == nil || identity.Method != AuthMethodOIDC {
+		return ""
+	}
+	boundApp, _ := identity.Metadata["bound_app"].(string)
+	return boundApp
+}
+
+// AppAccessError returns a descriptive error for an app-scoping denial.
+func AppAccessError(ctx context.Context, appName string) error {
+	boundApp := BoundApp(ctx)
+	if boundApp == "" {
+		return fmt.Errorf("%w: OIDC identity missing bound app", ErrUnauthorized)
+	}
+	return fmt.Errorf("%w: bound to app %q, cannot operate on %q", ErrUnauthorized, boundApp, appName)
 }
 
 // NoOpAuthenticator allows all requests without checking credentials.

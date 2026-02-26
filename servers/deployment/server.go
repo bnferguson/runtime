@@ -17,6 +17,7 @@ import (
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
+	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/standard"
 )
 
@@ -62,6 +63,10 @@ func (d *DeploymentServer) CreateDeployment(ctx context.Context, req *deployment
 	appName := args.AppName()
 	clusterId := args.ClusterId()
 	appVersionId := args.AppVersionId()
+
+	if !rpc.AllowApp(ctx, appName) {
+		return rpc.AppAccessError(ctx, appName)
+	}
 
 	// Check for existing in_progress deployments for this app+cluster
 	existingDeployments, err := d.listDeploymentsInternal(ctx, appName, clusterId, "in_progress", 1)
@@ -260,6 +265,10 @@ func (d *DeploymentServer) UpdateDeploymentStatus(ctx context.Context, req *depl
 	var deployment core_v1alpha.Deployment
 	decodeEntity(deploymentResp.Entity(), &deployment)
 
+	if !rpc.AllowApp(ctx, deployment.AppName) {
+		return rpc.AppAccessError(ctx, deployment.AppName)
+	}
+
 	// Check if deployment is in a state that can be updated
 	if deployment.Status != "in_progress" {
 		return cond.ValidationFailure("invalid-state",
@@ -351,6 +360,10 @@ func (d *DeploymentServer) UpdateDeploymentPhase(ctx context.Context, req *deplo
 	var deployment core_v1alpha.Deployment
 	decodeEntity(deploymentResp.Entity(), &deployment)
 
+	if !rpc.AllowApp(ctx, deployment.AppName) {
+		return rpc.AppAccessError(ctx, deployment.AppName)
+	}
+
 	// Check if deployment is in a state that can be updated
 	if deployment.Status != "in_progress" {
 		return cond.ValidationFailure("invalid-state",
@@ -415,6 +428,10 @@ func (d *DeploymentServer) UpdateFailedDeployment(ctx context.Context, req *depl
 	var deployment core_v1alpha.Deployment
 	decodeEntity(deploymentResp.Entity(), &deployment)
 
+	if !rpc.AllowApp(ctx, deployment.AppName) {
+		return rpc.AppAccessError(ctx, deployment.AppName)
+	}
+
 	// Update deployment with failure information
 	// Don't overwrite cancelled status
 	if deployment.Status != "cancelled" {
@@ -474,6 +491,10 @@ func (d *DeploymentServer) ListDeployments(ctx context.Context, req *deployment_
 		limit = args.Limit()
 	}
 
+	if !rpc.AllowApp(ctx, appName) {
+		return rpc.AppAccessError(ctx, appName)
+	}
+
 	deployments, err := d.listDeploymentsInternal(ctx, appName, clusterId, status, int(limit))
 	if err != nil {
 		return err
@@ -511,6 +532,10 @@ func (d *DeploymentServer) GetDeploymentById(ctx context.Context, req *deploymen
 	var deployment core_v1alpha.Deployment
 	decodeEntity(deploymentResp.Entity(), &deployment)
 
+	if !rpc.AllowApp(ctx, deployment.AppName) {
+		return rpc.AppAccessError(ctx, deployment.AppName)
+	}
+
 	deploymentInfo := d.toDeploymentInfo(&deployment)
 	results.SetDeployment(deploymentInfo)
 
@@ -542,6 +567,10 @@ func (d *DeploymentServer) UpdateDeploymentAppVersion(ctx context.Context, req *
 	// Decode to Deployment struct
 	var deployment core_v1alpha.Deployment
 	decodeEntity(deploymentResp.Entity(), &deployment)
+
+	if !rpc.AllowApp(ctx, deployment.AppName) {
+		return rpc.AppAccessError(ctx, deployment.AppName)
+	}
 
 	// Update app version
 	deployment.AppVersion = appVersionId
@@ -584,6 +613,10 @@ func (d *DeploymentServer) GetActiveDeployment(ctx context.Context, req *deploym
 
 	appName := args.AppName()
 	clusterId := args.ClusterId()
+
+	if !rpc.AllowApp(ctx, appName) {
+		return rpc.AppAccessError(ctx, appName)
+	}
 
 	// Find active deployment
 	deployments, err := d.listDeploymentsInternal(ctx, appName, clusterId, "active", 1)
@@ -629,6 +662,11 @@ func (d *DeploymentServer) CancelDeployment(ctx context.Context, req *deployment
 	// Decode to Deployment struct
 	var deployment core_v1alpha.Deployment
 	decodeEntity(deploymentResp.Entity(), &deployment)
+
+	// Enforce app scoping: scoped callers (e.g. OIDC) can only cancel deployments for their bound app
+	if !rpc.AllowApp(ctx, deployment.AppName) {
+		return rpc.AppAccessError(ctx, deployment.AppName)
+	}
 
 	// Verify deployment is in_progress
 	if deployment.Status != "in_progress" {
@@ -684,6 +722,11 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 	appVersionId := args.AppVersionId()
 	sourceVersionId := appVersionId
 	isRollback := args.HasIsRollback() && args.IsRollback()
+
+	// Enforce app scoping: scoped callers (e.g. OIDC) can only deploy their bound app
+	if !rpc.AllowApp(ctx, appName) {
+		return rpc.AppAccessError(ctx, appName)
+	}
 
 	// Verify the AppVersion entity exists
 	var appVersion core_v1alpha.AppVersion

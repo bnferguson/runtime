@@ -34,6 +34,7 @@ import (
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/procfile"
+	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/stream"
 	"miren.dev/runtime/pkg/stackbuild"
 	"miren.dev/runtime/pkg/tarx"
@@ -607,6 +608,11 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	args := state.Args()
 
 	name := args.Application()
+
+	if !rpc.AllowApp(ctx, name) {
+		return rpc.AppAccessError(ctx, name)
+	}
+
 	td := args.Tardata()
 
 	path, err := os.MkdirTemp(b.TempDir, "buildkit-")

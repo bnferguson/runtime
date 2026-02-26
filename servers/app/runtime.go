@@ -11,6 +11,7 @@ import (
 	"miren.dev/runtime/pkg/addon"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/standard"
 )
 
@@ -18,6 +19,10 @@ var _ app_v1alpha.AppStatus = &AppInfo{}
 
 func (a *AppInfo) AppInfo(ctx context.Context, state *app_v1alpha.AppStatusAppInfo) error {
 	name := state.Args().Application()
+
+	if !rpc.AllowApp(ctx, name) {
+		return rpc.AppAccessError(ctx, name)
+	}
 
 	var appRec core_v1alpha.App
 

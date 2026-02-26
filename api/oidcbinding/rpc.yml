@@ -1,0 +1,108 @@
+types:
+  - type: ClaimCondition
+    doc: A claim matching condition
+    fields:
+      - name: key
+        type: string
+        index: 0
+        doc: The claim name to match
+      - name: pattern
+        type: string
+        index: 1
+        doc: Glob pattern for the claim value
+
+  - type: BindingInfo
+    doc: Information about an OIDC binding
+    fields:
+      - name: id
+        type: string
+        index: 0
+        doc: Entity ID of the binding
+      - name: app
+        type: string
+        index: 1
+        doc: Application name
+      - name: provider
+        type: string
+        index: 2
+        doc: Provider type (github, gitlab, generic)
+      - name: issuer
+        type: string
+        index: 3
+        doc: OIDC issuer URL
+      - name: subject_pattern
+        type: string
+        index: 4
+        doc: Glob pattern for the token subject
+      - name: claim_conditions
+        type: list
+        element: ClaimCondition
+        index: 5
+        doc: Additional claim conditions
+      - name: description
+        type: string
+        index: 6
+        doc: Human-readable description
+
+interfaces:
+  - name: OidcBindings
+    doc: OIDC binding management service
+    methods:
+      - name: Add
+        index: 0
+        doc: Add a new OIDC binding to an application
+        parameters:
+          - name: app
+            type: string
+            doc: Application name
+          - name: provider
+            type: string
+            doc: Provider type (github, gitlab, generic)
+          - name: issuer
+            type: string
+            doc: OIDC issuer URL
+          - name: subject_pattern
+            type: string
+            doc: Glob pattern for the token subject
+          - name: claim_conditions
+            type: list
+            element: ClaimCondition
+            doc: Additional claim conditions
+          - name: description
+            type: string
+            doc: Human-readable description
+        results:
+          - name: binding
+            type: BindingInfo
+            doc: The created binding
+          - name: error
+            type: string
+            doc: Error message if creation failed
+
+      - name: List
+        index: 1
+        doc: List OIDC bindings for an application
+        parameters:
+          - name: app
+            type: string
+            doc: Application name to list bindings for
+        results:
+          - name: bindings
+            type: list
+            element: BindingInfo
+            doc: List of OIDC bindings
+
+      - name: Remove
+        index: 2
+        doc: Remove an OIDC binding
+        parameters:
+          - name: id
+            type: string
+            doc: Entity ID of the binding to remove
+        results:
+          - name: success
+            type: bool
+            doc: Whether the binding was removed
+          - name: error
+            type: string
+            doc: Error message if removal failed

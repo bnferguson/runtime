@@ -11,6 +11,7 @@ import (
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/logfilter"
+	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/standard"
 )
 
@@ -43,6 +44,10 @@ func NewServer(log *slog.Logger, ec *entityserver.Client, lr *observability.LogR
 
 func (s *Server) AppLogs(ctx context.Context, state *app_v1alpha.LogsAppLogs) error {
 	args := state.Args()
+
+	if !rpc.AllowApp(ctx, args.Application()) {
+		return rpc.AppAccessError(ctx, args.Application())
+	}
 
 	var appRec core_v1alpha.App
 
@@ -114,6 +119,14 @@ func (s *Server) StreamLogs(ctx context.Context, state *app_v1alpha.LogsStreamLo
 	send := args.Logs()
 	target := args.Target()
 
+	if target.HasApp() && target.App() != "" {
+		if !rpc.AllowApp(ctx, target.App()) {
+			return rpc.AppAccessError(ctx, target.App())
+		}
+	} else if rpc.BoundApp(ctx) != "" {
+		return fmt.Errorf("%w: app-scoped caller must specify app target", rpc.ErrUnauthorized)
+	}
+
 	var opts []observability.LogReaderOption
 	if args.HasFrom() {
 		fromTime := standard.FromTimestamp(args.From())
@@ -181,6 +194,14 @@ func (s *Server) StreamLogChunks(ctx context.Context, state *app_v1alpha.LogsStr
 	args := state.Args()
 	send := args.Chunks()
 	target := args.Target()
+
+	if target.HasApp() && target.App() != "" {
+		if !rpc.AllowApp(ctx, target.App()) {
+			return rpc.AppAccessError(ctx, target.App())
+		}
+	} else if rpc.BoundApp(ctx) != "" {
+		return fmt.Errorf("%w: app-scoped caller must specify app target", rpc.ErrUnauthorized)
+	}
 
 	var opts []observability.LogReaderOption
 	if args.HasFrom() {

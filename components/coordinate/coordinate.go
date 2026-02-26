@@ -30,6 +30,7 @@ import (
 	esv1 "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
+	"miren.dev/runtime/api/oidcbinding/oidcbinding_v1alpha"
 	"miren.dev/runtime/api/runner/runner_v1alpha"
 	"miren.dev/runtime/api/telemetry/telemetry_v1alpha"
 	"miren.dev/runtime/clientconfig"
@@ -53,6 +54,7 @@ import (
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/schema"
 	"miren.dev/runtime/pkg/labs"
+	"miren.dev/runtime/pkg/oidcauth"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/saga"
 	"miren.dev/runtime/pkg/sysstats"
@@ -65,6 +67,7 @@ import (
 	execproxy "miren.dev/runtime/servers/exec_proxy"
 	"miren.dev/runtime/servers/httpingress"
 	"miren.dev/runtime/servers/logs"
+	oidcbindingsrv "miren.dev/runtime/servers/oidcbinding"
 	runnerserver "miren.dev/runtime/servers/runner"
 	telemetrysrv "miren.dev/runtime/servers/telemetry"
 	"miren.dev/runtime/version"
@@ -250,7 +253,8 @@ type Coordinator struct {
 	apiCert []byte
 	apiKey  []byte
 
-	authClient *cloudauth.AuthClient // For status reporting to cloud
+	authClient        *cloudauth.AuthClient // For status reporting to cloud
+	oidcAuthenticator *oidcauth.OIDCAuthenticator
 
 	debugServer *debugsrv.Server
 }
@@ -637,9 +641,14 @@ func (c *Coordinator) Start(ctx context.Context) error {
 			return err
 		}
 
-		// RPCAuthenticator implements both Authenticator and Authorizer
-		rpcOpts = append(rpcOpts, rpc.WithAuthenticator(authenticator), rpc.WithAuthorizer(authenticator))
-		c.Log.Info("cloud authentication enabled",
+		// Create OIDC authenticator and wrap with composite auth.
+		// EAC is set later after entity store initialization.
+		c.oidcAuthenticator = oidcauth.NewOIDCAuthenticator(c.Log)
+		compositeAuth := oidcauth.NewCompositeAuthenticator(authenticator, c.oidcAuthenticator)
+		compositeAuthz := oidcauth.NewCompositeAuthorizer(authenticator)
+
+		rpcOpts = append(rpcOpts, rpc.WithAuthenticator(compositeAuth), rpc.WithAuthorizer(compositeAuthz))
+		c.Log.Info("cloud authentication enabled with OIDC support",
 			"cloud_url", authCloudURL)
 	} else if c.NoAuth {
 		// Use NoOpAuthenticator when explicitly disabled (for testing)
@@ -728,6 +737,12 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	eac := esv1.NewEntityAccessClient(loopback)
 	c.eac = eac // Store for use in status reporting and other methods
+
+	// Set EAC on OIDC authenticator now that entity store is ready
+	if c.oidcAuthenticator != nil {
+		c.oidcAuthenticator.SetEAC(eac)
+	}
+
 	ec := aes.NewClient(c.Log, eac)
 
 	defaultProject := &core_v1alpha.Project{
@@ -930,6 +945,9 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		return err
 	}
 	server.ExposeValue("dev.miren.runtime/deployment", deployment_v1alpha.AdaptDeployment(ds))
+
+	oidcServer := oidcbindingsrv.NewServer(c.Log, ec, eac)
+	server.ExposeValue("dev.miren.runtime/oidc-bindings", oidcbinding_v1alpha.AdaptOidcBindings(oidcServer))
 
 	c.debugServer, err = debugsrv.NewServer(c.Log, filepath.Join(c.DataPath, "net.db"), eac)
 	if err != nil {

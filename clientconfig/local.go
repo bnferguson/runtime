@@ -20,6 +20,7 @@ import (
 	"github.com/quic-go/quic-go"
 	"miren.dev/runtime/pkg/caauth"
 	"miren.dev/runtime/pkg/cloudauth"
+	"miren.dev/runtime/pkg/oidcauth"
 	"miren.dev/runtime/pkg/rpc"
 )
 
@@ -161,6 +162,26 @@ foundAddress:
 
 		default:
 			return nil, fmt.Errorf("unknown identity type: %s", identity.Type)
+		}
+	}
+
+	// GitHub Actions OIDC auto-detection: when no identity is configured,
+	// check if we're running in GitHub Actions and use OIDC token auth.
+	if c.Identity == "" && !c.CloudAuth {
+		if oidcauth.IsGitHubActions() {
+			token, err := oidcauth.RequestGitHubToken(ctx, hostname)
+			if err == nil {
+				base := []rpc.StateOption{
+					rpc.WithEndpoint(hostname),
+					rpc.WithBindAddr("[::]:0"),
+					rpc.WithBearerToken(token),
+				}
+				if c.CACert != "" {
+					base = append(base, rpc.WithCertificateVerification([]byte(c.CACert)))
+				}
+				return base, nil
+			}
+			// If token request fails, fall through to other auth methods
 		}
 	}
 

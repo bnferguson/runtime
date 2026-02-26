@@ -316,6 +316,42 @@ kinds:
       type: config_spec
       doc: The configuration specification
 
+  oidc_binding:
+    app:
+      type: ref
+      doc: The application this OIDC binding is for
+      indexed: true
+      tags: [dev.miren.app_ref]
+
+    provider:
+      type: string
+      doc: The OIDC provider type (github, gitlab, generic)
+
+    issuer:
+      type: string
+      doc: The OIDC issuer URL (e.g. https://token.actions.githubusercontent.com)
+      indexed: true
+
+    subject_pattern:
+      type: string
+      doc: Glob pattern to match the token subject claim (e.g. repo:acme/web-app:*)
+
+    claim_conditions:
+      type: component
+      doc: Additional claim conditions that must all match
+      many: true
+      attrs:
+        key:
+          type: string
+          doc: The claim name to match (e.g. event_name)
+        pattern:
+          type: string
+          doc: Glob pattern for the claim value (e.g. push,workflow_dispatch)
+
+    description:
+      type: string
+      doc: Human-readable description of this binding
+
 components:
   config_spec:
     variables:
