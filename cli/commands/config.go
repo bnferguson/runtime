@@ -36,7 +36,7 @@ func (c *ConfigCentric) LoadConfig() (*clientconfig.Config, error) {
 	}
 
 	if err != nil {
-		if err == clientconfig.ErrNoConfig && os.Getenv("MIREN_CLUSTER") != "" {
+		if errors.Is(err, clientconfig.ErrNoConfig) && os.Getenv("MIREN_CLUSTER") != "" {
 			c.cfg = clientconfig.NewConfig()
 			return c.cfg, nil
 		}
