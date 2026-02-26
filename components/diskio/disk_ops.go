@@ -1,11 +1,11 @@
-package server
+package diskio
 
 import (
 	"context"
 	"os"
 )
 
-// DiskVolumeOps abstracts OS operations for disk volume management (universal mode).
+// DiskVolumeOps abstracts OS operations for disk volume management.
 // This interface enables testing without requiring actual filesystem operations.
 type DiskVolumeOps interface {
 	CreateVolumeDir(path string) error
@@ -15,7 +15,7 @@ type DiskVolumeOps interface {
 	RemoveDiskImage(path string) error
 }
 
-// DiskMountOps abstracts OS operations for disk mount management (universal mode).
+// DiskMountOps abstracts OS operations for disk mount management.
 // This interface enables testing without requiring actual loop device or mount operations.
 type DiskMountOps interface {
 	CreateDir(path string, perm os.FileMode) error

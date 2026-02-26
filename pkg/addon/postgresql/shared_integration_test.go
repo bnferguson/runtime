@@ -2,7 +2,7 @@ package postgresql_test
 
 import (
 	"fmt"
-	"os"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -13,6 +13,7 @@ import (
 	"miren.dev/runtime/api/addon/addon_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/components/diskio"
 	"miren.dev/runtime/pkg/addon"
 	"miren.dev/runtime/pkg/addon/postgresql"
 	"miren.dev/runtime/pkg/entity"
@@ -36,8 +37,8 @@ func TestSharedPostgreSQL_Integration(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	if os.Getenv("DISABLE_NBD_TEST") != "" {
-		t.Skip("skipping integration test: nbd not available")
+	if err := diskio.EnsureLoopDevices(slog.Default()); err != nil {
+		t.Skip("skipping integration test: loop devices not available:", err)
 	}
 
 	err := testserver.TestServer(t)

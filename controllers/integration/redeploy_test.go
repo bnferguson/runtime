@@ -78,8 +78,8 @@ func concurrentReconcileRound(ctx context.Context, h *TestHarness, workers int) 
 
 	controllers := []ctrlDef{
 		{entity.Ref(entity.EntityKind, storage.KindDisk), h.DiskRC},
-		{entity.Ref(storage.LsvdVolumeNodeIdId, nodeId), h.LsvdVolRC},
-		{entity.Ref(storage.LsvdMountNodeIdId, nodeId), h.LsvdMntRC},
+		{entity.Ref(storage.DiskVolumeNodeIdId, nodeId), h.DiskVolRC},
+		{entity.Ref(storage.DiskMountNodeIdId, nodeId), h.DiskMntRC},
 		{entity.Ref(entity.EntityKind, storage.KindDiskLease), h.DiskLeaseRC},
 	}
 
@@ -460,7 +460,7 @@ func TestRapidRedeployWithDisk(t *testing.T) {
 
 	// Phase 4: Invariant validation
 	finalLeases := listLeases(t, ctx, h)
-	finalMounts := listLsvdMounts(t, ctx, h)
+	finalMounts := listDiskMounts(t, ctx, h)
 	finalSandboxes := listAllSandboxes(t, ctx, h)
 	finalPools := listPools(t, ctx, h)
 
@@ -480,7 +480,7 @@ func TestRapidRedeployWithDisk(t *testing.T) {
 	if boundLease != nil {
 		latestMount := getMountForLease(t, ctx, h, boundLease.ID)
 		if assert.NotNil(t, latestMount, "BOUND lease should have a mount") {
-			assert.Equal(t, storage.MNT_MOUNTED, latestMount.ActualState,
+			assert.Equal(t, storage.DM_MOUNTED, latestMount.ActualState,
 				"BOUND lease mount should be MNT_MOUNTED, got %s", latestMount.ActualState)
 		}
 	}
@@ -498,7 +498,7 @@ func TestRapidRedeployWithDisk(t *testing.T) {
 	// 4d: Exactly 1 MNT_MOUNTED mount exists (no orphans)
 	mountedCount := 0
 	for _, m := range finalMounts {
-		if m.ActualState == storage.MNT_MOUNTED {
+		if m.ActualState == storage.DM_MOUNTED {
 			mountedCount++
 		}
 	}

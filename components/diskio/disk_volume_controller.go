@@ -1,21 +1,22 @@
-package server
+package diskio
 
 import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
+	"miren.dev/runtime/lsvd"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/units"
 )
 
-// DiskVolumeController watches disk_volume entities and manages sparse disk images.
-// This replaces VolumeController for universal-mode disks, using loop devices
-// instead of LSVD/NBD.
+// DiskVolumeController watches disk_volume entities and manages sparse disk images
+// using loop devices.
 type DiskVolumeController struct {
 	log      *slog.Logger
 	dataPath string
@@ -40,7 +41,39 @@ func (c *DiskVolumeController) SetEAC(eac *entityserver_v1alpha.EntityAccessClie
 }
 
 func (c *DiskVolumeController) Init(ctx context.Context) error {
+	c.cleanupMigratedLSVD()
 	return nil
+}
+
+func (c *DiskVolumeController) cleanupMigratedLSVD() {
+	volumesDir := filepath.Join(c.dataPath, "volumes")
+	entries, err := os.ReadDir(volumesDir)
+	if err != nil {
+		return
+	}
+
+	for _, ent := range entries {
+		infoPath := filepath.Join(volumesDir, ent.Name(), "info.json")
+		if _, err := os.Stat(infoPath); err == nil {
+			return // Unmigrated LSVD volume exists, don't clean up
+		}
+	}
+
+	segmentsDir := filepath.Join(c.dataPath, "segments")
+	if _, err := os.Stat(segmentsDir); err == nil {
+		c.log.Info("all LSVD volumes migrated, cleaning up segments directory")
+		os.RemoveAll(segmentsDir)
+	}
+
+	for _, ent := range entries {
+		migratedPath := filepath.Join(volumesDir, ent.Name(), "info.json.migrated")
+		if _, err := os.Stat(migratedPath); err == nil {
+			os.Remove(migratedPath)
+			segFile := filepath.Join(volumesDir, ent.Name(), "segments")
+			os.Remove(segFile)
+			os.Remove(filepath.Join(volumesDir, ent.Name()))
+		}
+	}
 }
 
 func (c *DiskVolumeController) Reconcile(ctx context.Context, volume *storage_v1alpha.DiskVolume, meta *entity.Meta) error {
@@ -166,9 +199,19 @@ func (c *DiskVolumeController) createVolume(ctx context.Context, volume *storage
 	// Create sparse disk image
 	imagePath := filepath.Join(volumePath, "disk.img")
 	sizeBytes := units.GigaBytes(volume.SizeGb).Bytes().Int64()
-	if err := c.ops.CreateDiskImage(imagePath, sizeBytes); err != nil {
-		c.setVolumeError(ctx, volume.ID, fmt.Sprintf("failed to create disk image: %v", err))
-		return fmt.Errorf("failed to create disk image: %w", err)
+
+	// Check for LSVD volume to migrate
+	migrated, err := c.migrateLSVDVolume(ctx, volume.Name, imagePath, sizeBytes)
+	if err != nil {
+		c.log.Warn("LSVD migration failed, creating fresh volume",
+			"volume_name", volume.Name, "error", err)
+	}
+
+	if !migrated {
+		if err := c.ops.CreateDiskImage(imagePath, sizeBytes); err != nil {
+			c.setVolumeError(ctx, volume.ID, fmt.Sprintf("failed to create disk image: %v", err))
+			return fmt.Errorf("failed to create disk image: %w", err)
+		}
 	}
 
 	// Use the entity ID suffix as the volume ID
@@ -308,6 +351,96 @@ func (c *DiskVolumeController) setVolumeError(ctx context.Context, id entity.Id,
 	}
 }
 
+// migrateLSVDVolume checks if an LSVD volume with the given name exists and migrates
+// its data to a universal mode disk image. Returns true if migration was performed.
+func (c *DiskVolumeController) migrateLSVDVolume(ctx context.Context, volumeName, destImagePath string, sizeBytes int64) (bool, error) {
+	infoPath := filepath.Join(c.dataPath, "volumes", volumeName, "info.json")
+	if _, err := os.Stat(infoPath); err != nil {
+		return false, nil
+	}
+
+	c.log.Info("found LSVD volume, migrating to universal mode",
+		"volume_name", volumeName,
+		"dest", destImagePath)
+
+	disk, err := lsvd.NewDisk(ctx, c.log, c.dataPath,
+		lsvd.WithVolumeName(volumeName),
+		lsvd.ReadOnly(),
+		lsvd.AutoCreate(false))
+	if err != nil {
+		return false, fmt.Errorf("opening LSVD volume %q: %w", volumeName, err)
+	}
+	defer disk.Close(ctx)
+
+	lsvdSize := disk.Size()
+	if lsvdSize > sizeBytes {
+		sizeBytes = lsvdSize
+	}
+
+	out, err := os.Create(destImagePath)
+	if err != nil {
+		return false, fmt.Errorf("creating image file: %w", err)
+	}
+	defer out.Close()
+
+	if err := out.Truncate(sizeBytes); err != nil {
+		return false, fmt.Errorf("truncating image to %d bytes: %w", sizeBytes, err)
+	}
+
+	totalBlocks := lsvdSize / int64(lsvd.BlockSize)
+	const chunkBlocks = 1024
+	zeros := make([]byte, chunkBlocks*lsvd.BlockSize)
+	lsvdCtx := lsvd.NewContext(ctx)
+	defer lsvdCtx.Close()
+
+	var written int64
+	for lba := int64(0); lba < totalBlocks; lba += chunkBlocks {
+		blocks := chunkBlocks
+		if lba+int64(blocks) > totalBlocks {
+			blocks = int(totalBlocks - lba)
+		}
+		lsvdCtx.Reset()
+
+		data, err := disk.ReadExtent(lsvdCtx, lsvd.Extent{
+			LBA:    lsvd.LBA(lba),
+			Blocks: uint32(blocks),
+		})
+		if err != nil {
+			return false, fmt.Errorf("reading LSVD extent at LBA %d: %w", lba, err)
+		}
+		raw := data.ReadData()
+
+		if isAllZeros(raw, zeros[:len(raw)]) {
+			continue
+		}
+
+		offset := lba * int64(lsvd.BlockSize)
+		if _, err := out.WriteAt(raw, offset); err != nil {
+			return false, fmt.Errorf("writing at offset %d: %w", offset, err)
+		}
+		written += int64(len(raw))
+	}
+
+	c.log.Info("LSVD migration complete",
+		"volume_name", volumeName,
+		"total_bytes", lsvdSize,
+		"written_bytes", written)
+
+	migratedPath := infoPath + ".migrated"
+	os.Rename(infoPath, migratedPath)
+
+	return true, nil
+}
+
+func isAllZeros(data, zeros []byte) bool {
+	for i := range data {
+		if data[i] != zeros[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // ReconcileWithEntities reconciles local state with entity server
 func (c *DiskVolumeController) ReconcileWithEntities(ctx context.Context) error {
 	fullNodeId := "node/" + c.nodeId
@@ -344,7 +477,6 @@ func (c *DiskVolumeController) ReconcileWithEntities(ctx context.Context) error 
 	// Clean up orphaned volumes
 	orphanCleaned := false
 	for _, volState := range c.state.ListVolumes() {
-		// Only clean up disk_volume entries (not lsvd_volume entries)
 		if !strings.HasPrefix(volState.EntityId, "disk_volume/") {
 			continue
 		}

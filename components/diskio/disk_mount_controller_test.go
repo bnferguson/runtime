@@ -1,4 +1,4 @@
-package server
+package diskio
 
 import (
 	"context"
@@ -524,38 +524,6 @@ func TestDiskMountControllerReconcileKeepsNonOrphanedMounts(t *testing.T) {
 	assert.Nil(t, state.GetMount("disk_mount/mnt-orphan2"))
 	assert.Contains(t, ops.unmounts, "/mnt/orphan2")
 	assert.NotContains(t, ops.unmounts, "/mnt/keep")
-}
-
-func TestDiskMountControllerOrphanCleanupSkipsLsvdMounts(t *testing.T) {
-	ctx := t.Context()
-	log := testutils.TestLogger(t)
-
-	es, cleanup := testutils.NewInMemEntityServer(t)
-	defer cleanup()
-
-	dataPath := t.TempDir()
-	nodeId := "test-node-1"
-	state := NewState()
-	ops := newMockDiskMountOps()
-
-	// Pre-populate state with an LSVD mount (should NOT be cleaned up by DiskMountController)
-	state.SetMount("lsvd_mount/mnt-lsvd", &MountState{
-		EntityId:   "lsvd_mount/mnt-lsvd",
-		VolumeId:   "lsvd_volume/vol-lsvd",
-		DevicePath: "/dev/nbd0",
-		MountPath:  "/mnt/lsvd",
-		Mounted:    true,
-	})
-	ops.mountedPaths["/mnt/lsvd"] = true
-
-	mc := newTestDiskMountController(log, dataPath, nodeId, es.EAC, state, ops)
-
-	err := mc.ReconcileWithEntities(ctx)
-	require.NoError(t, err)
-
-	// LSVD mount should still be in state
-	assert.NotNil(t, state.GetMount("lsvd_mount/mnt-lsvd"))
-	assert.NotContains(t, ops.unmounts, "/mnt/lsvd")
 }
 
 func TestDiskMountControllerShutdown(t *testing.T) {

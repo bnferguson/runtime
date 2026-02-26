@@ -1,4 +1,4 @@
-package server
+package diskio
 
 import (
 	"context"
@@ -74,6 +74,10 @@ func (s *stubDiskMountOps) IsFormatted(_, _ string) (bool, error) {
 
 func (s *stubDiskMountOps) FormatDevice(_ context.Context, _, _ string) error {
 	return fmt.Errorf("not supported on darwin")
+}
+
+func EnsureLoopDevices(_ *slog.Logger) error {
+	return fmt.Errorf("loop devices not supported on darwin")
 }
 
 func LoopDeviceAvailable() bool {

@@ -1,4 +1,4 @@
-package server
+package diskio
 
 import (
 	"context"
@@ -15,8 +15,6 @@ import (
 )
 
 // DiskMountController watches disk_mount entities and manages loop-device mounts.
-// This replaces MountController for universal-mode disks, using loop devices
-// instead of NBD. No goroutines, no socket pairs, no lease nonces.
 type DiskMountController struct {
 	log      *slog.Logger
 	dataPath string
@@ -510,7 +508,6 @@ func (c *DiskMountController) ReconcileWithEntities(ctx context.Context) error {
 	// Clean up orphaned mounts
 	orphanCleaned := false
 	for _, mountState := range c.state.ListMounts() {
-		// Only clean up disk_mount entries (not lsvd_mount entries)
 		if !strings.HasPrefix(mountState.EntityId, "disk_mount/") {
 			continue
 		}

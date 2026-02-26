@@ -1,4 +1,4 @@
-package server
+package diskio
 
 import (
 	"encoding/json"
@@ -10,7 +10,7 @@ import (
 
 const stateFileName = "lsvd-state.json"
 
-// State represents the persisted state of the LSVD server
+// State represents the persisted state of disk volumes and mounts
 type State struct {
 	mu      sync.RWMutex
 	Volumes map[string]*VolumeState `json:"volumes"`
@@ -20,12 +20,12 @@ type State struct {
 	path string
 }
 
-// VolumeState represents the state of an LSVD volume
+// VolumeState represents the state of a disk volume
 type VolumeState struct {
-	// EntityId is the ID of the lsvd_volume entity
+	// EntityId is the ID of the disk_volume entity
 	EntityId string `json:"entity_id"`
 
-	// VolumeId is the LSVD volume identifier
+	// VolumeId is the volume identifier
 	VolumeId string `json:"volume_id"`
 
 	// Name is the human-readable name (from parent disk)
@@ -44,18 +44,18 @@ type VolumeState struct {
 	RemoteOnly bool `json:"remote_only"`
 }
 
-// MountState represents the state of an LSVD mount
+// MountState represents the state of a disk mount
 type MountState struct {
-	// EntityId is the ID of the lsvd_mount entity
+	// EntityId is the ID of the disk_mount entity
 	EntityId string `json:"entity_id"`
 
-	// VolumeId is the ID of the lsvd_volume entity
+	// VolumeId is the ID of the disk_volume entity
 	VolumeId string `json:"volume_id"`
 
-	// NbdIndex is the NBD device index
+	// NbdIndex is the NBD device index (legacy, kept for state file compatibility)
 	NbdIndex uint32 `json:"nbd_index"`
 
-	// DevicePath is the path to the NBD device node
+	// DevicePath is the path to the loop/NBD device node
 	DevicePath string `json:"device_path"`
 
 	// MountPath is where the volume is mounted
@@ -125,7 +125,7 @@ func (s *State) Save() error {
 
 	// Write to temp file first
 	dir := filepath.Dir(s.path)
-	tempFile, err := os.CreateTemp(dir, "lsvd-state-*.tmp")
+	tempFile, err := os.CreateTemp(dir, "diskio-state-*.tmp")
 	if err != nil {
 		return fmt.Errorf("failed to create temp file: %w", err)
 	}
@@ -218,7 +218,7 @@ func (s *State) DeleteMount(entityId string) {
 	delete(s.Mounts, entityId)
 }
 
-// GetVolumeByVolumeId returns a copy of a volume state by LSVD volume ID
+// GetVolumeByVolumeId returns a copy of a volume state by volume ID
 func (s *State) GetVolumeByVolumeId(volumeId string) *VolumeState {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

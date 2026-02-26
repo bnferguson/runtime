@@ -72,7 +72,7 @@ func (r *chaosReport) collectEntityStats(t *testing.T, ctx context.Context, h *T
 
 	disks := listDisks(t, ctx, h)
 	leases := listLeases(t, ctx, h)
-	mounts := listLsvdMounts(t, ctx, h)
+	mounts := listDiskMounts(t, ctx, h)
 
 	r.totalDisks = len(disks)
 	r.totalLeases = len(leases)
@@ -104,9 +104,9 @@ func (r *chaosReport) collectEntityStats(t *testing.T, ctx context.Context, h *T
 
 	for _, m := range mounts {
 		switch m.ActualState {
-		case storage.MNT_MOUNTED:
+		case storage.DM_MOUNTED:
 			r.mountedMounts++
-		case storage.MNT_DETACHED:
+		case storage.DM_DETACHED:
 			r.detachedMounts++
 		default:
 			r.otherMounts++
@@ -245,10 +245,10 @@ func pickFault(rng *rand.Rand, catalog []chaosFault) *chaosFault {
 // faultDeleteMount deletes a random MNT_MOUNTED mount entity.
 func faultDeleteMount(t *testing.T, ctx context.Context, h *TestHarness, rng *rand.Rand, _ *chaosState) bool {
 	t.Helper()
-	mounts := listLsvdMounts(t, ctx, h)
-	var mounted []*storage.LsvdMount
+	mounts := listDiskMounts(t, ctx, h)
+	var mounted []*storage.DiskMount
 	for _, m := range mounts {
-		if m.ActualState == storage.MNT_MOUNTED {
+		if m.ActualState == storage.DM_MOUNTED {
 			mounted = append(mounted, m)
 		}
 	}
@@ -263,10 +263,10 @@ func faultDeleteMount(t *testing.T, ctx context.Context, h *TestHarness, rng *ra
 // faultMountError patches a random mount to MNT_ERROR.
 func faultMountError(t *testing.T, ctx context.Context, h *TestHarness, rng *rand.Rand, _ *chaosState) bool {
 	t.Helper()
-	mounts := listLsvdMounts(t, ctx, h)
-	var mounted []*storage.LsvdMount
+	mounts := listDiskMounts(t, ctx, h)
+	var mounted []*storage.DiskMount
 	for _, m := range mounts {
-		if m.ActualState == storage.MNT_MOUNTED {
+		if m.ActualState == storage.DM_MOUNTED {
 			mounted = append(mounted, m)
 		}
 	}
@@ -421,8 +421,8 @@ func chaosReconcileRound(ctx context.Context, h *TestHarness, rng *rand.Rand) {
 
 	controllers := []ctrlDef{
 		{entity.Ref(entity.EntityKind, storage.KindDisk), h.DiskRC},
-		{entity.Ref(storage.LsvdVolumeNodeIdId, nodeId), h.LsvdVolRC},
-		{entity.Ref(storage.LsvdMountNodeIdId, nodeId), h.LsvdMntRC},
+		{entity.Ref(storage.DiskVolumeNodeIdId, nodeId), h.DiskVolRC},
+		{entity.Ref(storage.DiskMountNodeIdId, nodeId), h.DiskMntRC},
 		{entity.Ref(entity.EntityKind, storage.KindDiskLease), h.DiskLeaseRC},
 	}
 
@@ -530,7 +530,7 @@ func validateChaosInvariants(t *testing.T, ctx context.Context, h *TestHarness, 
 	violations := 0
 
 	allLeases := listLeases(t, ctx, h)
-	allMounts := listLsvdMounts(t, ctx, h)
+	allMounts := listDiskMounts(t, ctx, h)
 	allDisks := listDisks(t, ctx, h)
 
 	// Build lookup maps
@@ -544,7 +544,7 @@ func validateChaosInvariants(t *testing.T, ctx context.Context, h *TestHarness, 
 		leaseByID[l.ID] = l
 	}
 
-	mountsByLeaseID := make(map[entity.Id][]*storage.LsvdMount)
+	mountsByLeaseID := make(map[entity.Id][]*storage.DiskMount)
 	for _, m := range allMounts {
 		if m.DiskLeaseId != "" {
 			mountsByLeaseID[m.DiskLeaseId] = append(mountsByLeaseID[m.DiskLeaseId], m)
@@ -594,7 +594,7 @@ func validateChaosInvariants(t *testing.T, ctx context.Context, h *TestHarness, 
 		} else if len(mounts) > 1 {
 			t.Errorf("INVARIANT 2 violated: BOUND lease %s has %d mounts (expected 1)", lease.ID, len(mounts))
 			violations++
-		} else if mounts[0].ActualState != storage.MNT_MOUNTED {
+		} else if mounts[0].ActualState != storage.DM_MOUNTED {
 			t.Errorf("INVARIANT 2 violated: BOUND lease %s mount %s is %s (expected MNT_MOUNTED)", lease.ID, mounts[0].ID, mounts[0].ActualState)
 			violations++
 		}
@@ -628,7 +628,7 @@ func validateChaosInvariants(t *testing.T, ctx context.Context, h *TestHarness, 
 	// a real controller bug — FAILED leases are terminal and never trigger mount cleanup,
 	// leaking the mount resource.
 	for _, mount := range allMounts {
-		if mount.ActualState != storage.MNT_MOUNTED {
+		if mount.ActualState != storage.DM_MOUNTED {
 			continue
 		}
 		lease := leaseByID[mount.DiskLeaseId]

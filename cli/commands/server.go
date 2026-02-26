@@ -799,7 +799,6 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		DisableLocalNet:  false,
 		Resolver:         res,
 		SandboxMetrics:   ctx.ServerState.SandboxMetrics,
-		EntityServerAddr: normalizeServerAddr(srvaddr),
 		IsCoordinator:    true,
 	}
 
@@ -938,8 +937,8 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 			case sig := <-sigChan:
 				switch sig {
 				case syscall.SIGUSR1:
-					// Restart mode - preserve outboard processes like lsvd-server
-					ctx.Log.Info("SIGUSR1 received - restart mode (preserving outboard processes)")
+					// Restart mode
+					ctx.Log.Info("SIGUSR1 received - restart mode")
 					r.SetRestartMode(true)
 					return fmt.Errorf("restart requested via SIGUSR1")
 
@@ -1156,15 +1155,3 @@ func stopAllSandboxContainers(ctx context.Context, log *slog.Logger, cc *contain
 	return nil
 }
 
-// normalizeServerAddr converts a server address to a form usable for local connections.
-// Addresses like ":8443", "0.0.0.0:8443", and "[::]:8443" become "localhost:8443".
-func normalizeServerAddr(addr string) string {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return addr
-	}
-	if host == "" || host == "0.0.0.0" || host == "::" {
-		return net.JoinHostPort("localhost", port)
-	}
-	return addr
-}

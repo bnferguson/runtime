@@ -44,11 +44,11 @@ func TestBoundLeaseRecoverFromDetachedMount(t *testing.T) {
 
 	mount := getMountForLease(t, ctx, h, leaseID)
 	require.NotNil(t, mount)
-	require.Equal(t, storage.MNT_MOUNTED, mount.ActualState)
+	require.Equal(t, storage.DM_MOUNTED, mount.ActualState)
 
-	// Simulate mount cleanup without lease update: patch mount to MNT_DETACHED.
-	// desired_state stays MNT_WANT_MOUNTED (as it was when the lease was BOUND).
-	patchMountActualState(t, ctx, h, mount.ID, storage.LsvdMountActualStateMntDetachedId)
+	// Simulate mount cleanup without lease update: patch mount to DM_DETACHED.
+	// desired_state stays DM_WANT_MOUNTED (as it was when the lease was BOUND).
+	patchMountActualState(t, ctx, h, mount.ID, storage.DiskMountActualStateDmDetachedId)
 
 	// Run full reconciliation — both controllers get a chance to react
 	h.ReconcileAll(ctx, 20)
@@ -58,9 +58,9 @@ func TestBoundLeaseRecoverFromDetachedMount(t *testing.T) {
 	if lease.Status == storage.BOUND {
 		currentMount := getMountForLease(t, ctx, h, leaseID)
 		if currentMount != nil {
-			assert.Equal(t, storage.MNT_MOUNTED, currentMount.ActualState,
-				"BOUND lease's mount should be MNT_MOUNTED, not %s — "+
-					"neither handleBoundLease nor reconcileMountMounted recovers from MNT_DETACHED",
+			assert.Equal(t, storage.DM_MOUNTED, currentMount.ActualState,
+				"BOUND lease's mount should be DM_MOUNTED, not %s — "+
+					"neither handleBoundLease nor reconcileMountMounted recovers from DM_DETACHED",
 				currentMount.ActualState)
 		} else {
 			t.Error("BOUND lease has no mount entity — stuck without self-healing")
@@ -98,7 +98,7 @@ func TestPendingLeaseNotStuckOnDetachedMount(t *testing.T) {
 	require.NotNil(t, mount)
 
 	// Simulate: mount cleanup completed, lease reverted to PENDING for retry.
-	patchMountActualState(t, ctx, h, mount.ID, storage.LsvdMountActualStateMntDetachedId)
+	patchMountActualState(t, ctx, h, mount.ID, storage.DiskMountActualStateDmDetachedId)
 	patchLeaseStatus(t, ctx, h, leaseID, storage.PENDING)
 
 	// Run full reconciliation
@@ -107,14 +107,14 @@ func TestPendingLeaseNotStuckOnDetachedMount(t *testing.T) {
 	// Invariant: lease should have progressed past PENDING.
 	lease = getLease(t, ctx, h, leaseID)
 	assert.NotEqual(t, storage.PENDING, lease.Status,
-		"PENDING lease with MNT_DETACHED mount should not stay PENDING — "+
-			"handlePendingLease treats MNT_DETACHED as 'in progress' but it's terminal")
+		"PENDING lease with DM_DETACHED mount should not stay PENDING — "+
+			"handlePendingLease treats DM_DETACHED as 'in progress' but it's terminal")
 
 	// Best case: lease is BOUND with a fresh mount
 	if lease.Status == storage.BOUND {
 		currentMount := getMountForLease(t, ctx, h, leaseID)
 		require.NotNil(t, currentMount)
-		assert.Equal(t, storage.MNT_MOUNTED, currentMount.ActualState)
+		assert.Equal(t, storage.DM_MOUNTED, currentMount.ActualState)
 	}
 }
 
@@ -123,12 +123,12 @@ func TestPendingLeaseNotStuckOnDetachedMount(t *testing.T) {
 // controller results in clean convergence with no leaked resources.
 //
 // Invariant: After stopping a sandbox and running reconciliation to
-// convergence, there must be no MNT_MOUNTED mounts and no stuck leases.
+// convergence, there must be no DM_MOUNTED mounts and no stuck leases.
 //
 // Scenario:
-//  1. Lease controller creates lsvd_mount entity (MNT_PENDING)
+//  1. Lease controller creates disk_mount entity (DM_PENDING)
 //  2. Before mount controller processes it, sandbox is stopped
-//  3. Lease goes RELEASED → mount desired becomes MNT_WANT_UNMOUNTED
+//  3. Lease goes RELEASED → mount desired becomes DM_WANT_UNMOUNTED
 //  4. Mount controller sees desired=UNMOUNTED, actual=PENDING → cleans up
 func TestStopDuringMountCreation(t *testing.T) {
 	ctx := context.Background()
@@ -147,7 +147,7 @@ func TestStopDuringMountCreation(t *testing.T) {
 	nodeId := entity.Id("node/" + testNodeId)
 	for i := 0; i < 5; i++ {
 		h.reconcileKind(ctx, storage.KindDisk, h.DiskRC)
-		h.reconcileByIndex(ctx, entity.Ref(storage.LsvdVolumeNodeIdId, nodeId), h.LsvdVolRC)
+		h.reconcileByIndex(ctx, entity.Ref(storage.DiskVolumeNodeIdId, nodeId), h.DiskVolRC)
 	}
 
 	// Reconcile ONLY the lease controller to create mount entity
@@ -159,7 +159,7 @@ func TestStopDuringMountCreation(t *testing.T) {
 	if mount == nil {
 		for i := 0; i < 3; i++ {
 			h.reconcileKind(ctx, storage.KindDisk, h.DiskRC)
-			h.reconcileByIndex(ctx, entity.Ref(storage.LsvdVolumeNodeIdId, nodeId), h.LsvdVolRC)
+			h.reconcileByIndex(ctx, entity.Ref(storage.DiskVolumeNodeIdId, nodeId), h.DiskVolRC)
 			h.reconcileKind(ctx, storage.KindDiskLease, h.DiskLeaseRC)
 		}
 		_ = getMountForLease(t, ctx, h, leaseID)
@@ -212,7 +212,7 @@ func TestReplacementMountPathCollision(t *testing.T) {
 
 	mountA := getMountForLease(t, ctx, h, leaseAID)
 	require.NotNil(t, mountA)
-	require.Equal(t, storage.MNT_MOUNTED, mountA.ActualState)
+	require.Equal(t, storage.DM_MOUNTED, mountA.ActualState)
 	mountAID := mountA.ID
 	sharedMountPath := mountA.MountPath
 	require.NotEmpty(t, sharedMountPath)
@@ -227,7 +227,7 @@ func TestReplacementMountPathCollision(t *testing.T) {
 	h.reconcileKind(ctx, storage.KindDiskLease, h.DiskLeaseRC)
 
 	mountAEntity := getMountByID(t, ctx, h, mountAID)
-	require.Equal(t, storage.MNT_WANT_UNMOUNTED, mountAEntity.DesiredState,
+	require.Equal(t, storage.DM_WANT_UNMOUNTED, mountAEntity.DesiredState,
 		"mount-A should be marked for unmount")
 
 	// Boot sandbox B with same disk
@@ -259,7 +259,7 @@ func TestReplacementMountPathCollision(t *testing.T) {
 		err = h.ReconcileEntity(ctx, mountBID)
 		require.NoError(t, err, "ReconcileEntity for mount-B should not fail")
 		bState := getMountByID(t, ctx, h, mountBID)
-		if bState.ActualState == storage.MNT_MOUNTED {
+		if bState.ActualState == storage.DM_MOUNTED {
 			break
 		}
 	}

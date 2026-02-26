@@ -370,7 +370,7 @@ func (c *SandboxController) waitForLeaseBound(ctx context.Context, leaseID entit
 
 			switch lease.Status {
 			case storage.BOUND:
-				// Lease is bound, get disk to find LSVD volume ID
+				// Lease is bound, get disk to find volume ID
 				diskResp, err := c.EAC.Get(ctx, lease.DiskId.String())
 				if err != nil {
 					return "", fmt.Errorf("failed to get disk entity: %w", err)
@@ -380,9 +380,6 @@ func (c *SandboxController) waitForLeaseBound(ctx context.Context, leaseID entit
 				disk.Decode(diskResp.Entity().Entity())
 
 				volumeId := disk.VolumeId
-				if volumeId == "" {
-					volumeId = disk.LsvdVolumeId
-				}
 				if volumeId == "" {
 					return "", fmt.Errorf("disk has no volume ID")
 				}
