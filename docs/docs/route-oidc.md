@@ -8,6 +8,10 @@ sidebar_position: 8
 Route OIDC authentication is a [labs feature](/labs) and is disabled by default. Enable it with `--labs routeoidc` or `MIREN_LABS=routeoidc` when starting the server.
 :::
 
+:::tip Looking for CI/CD OIDC?
+If you want to **deploy from GitHub Actions or other CI systems** using OIDC tokens (no stored secrets), see [CI/CD Deployment with OIDC](/ci-deploy). This page covers a different feature — protecting your app's HTTP routes with single sign-on.
+:::
+
 Route OIDC authentication lets you protect your applications with single sign-on at the routing layer. Unauthenticated requests are redirected to an OIDC provider for login, and after authentication, JWT claims are injected as HTTP headers before the request reaches your app.
 
 Your app receives identity information as plain HTTP headers (e.g., `X-User-Email`) — no in-app auth code required.

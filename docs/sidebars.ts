@@ -31,6 +31,7 @@ const sidebars: SidebarsConfig = {
         'tls',
         'firewall',
         'route-oidc',
+        'ci-deploy',
         'admin-interface',
         'working-with-miren-cloud',
         'observability',
