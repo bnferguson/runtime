@@ -1,8 +1,10 @@
 package commands
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"miren.dev/runtime/clientconfig"
@@ -34,10 +36,18 @@ func (c *ConfigCentric) LoadConfig() (*clientconfig.Config, error) {
 	}
 
 	if err != nil {
+		if err == clientconfig.ErrNoConfig && os.Getenv("MIREN_CLUSTER") != "" {
+			c.cfg = clientconfig.NewConfig()
+			return c.cfg, nil
+		}
 		return nil, err
 	}
 
 	if cfg == nil {
+		if os.Getenv("MIREN_CLUSTER") != "" {
+			c.cfg = clientconfig.NewConfig()
+			return c.cfg, nil
+		}
 		return nil, ErrNoConfig
 	}
 
@@ -64,13 +74,35 @@ func (c *ConfigCentric) LoadCluster() (*clientconfig.ClusterConfig, string, erro
 		name string
 	)
 
-	if c.Cluster == "" {
+	if c.Cluster != "" {
+		// -C flag takes priority
+		name = c.Cluster
+	} else if envCluster := os.Getenv("MIREN_CLUSTER"); envCluster != "" {
+		// Check if the full value matches a known cluster name first
+		cc, err := cfg.GetCluster(envCluster)
+		if err == nil && cc != nil {
+			return cc, envCluster, nil
+		}
+
+		// Parse optional fingerprint: "address;sha1:abcdef..."
+		address := envCluster
+		var fingerprint string
+		if idx := strings.Index(envCluster, ";"); idx >= 0 {
+			address = envCluster[:idx]
+			fingerprint = envCluster[idx+1:]
+		}
+
+		// Not a known cluster name — treat as an address and probe it
+		cc, name, err := setupClusterFromAddress(cfg, address, fingerprint)
+		if err != nil {
+			return nil, "", fmt.Errorf("MIREN_CLUSTER: failed to connect to %q: %w", address, err)
+		}
+		return cc, name, nil
+	} else {
 		name = cfg.ActiveCluster()
 		if name == "" {
 			return nil, "", nil
 		}
-	} else {
-		name = c.Cluster
 	}
 
 	cc, err := cfg.GetCluster(name)
@@ -83,6 +115,53 @@ func (c *ConfigCentric) LoadCluster() (*clientconfig.ClusterConfig, string, erro
 	}
 
 	return cc, name, nil
+}
+
+// checkFingerprint verifies that actual matches expected.
+// The expected value may carry a "sha1:" prefix, which is stripped before comparison.
+// An empty expected string means no verification (returns nil).
+// Comparison is case-insensitive.
+func checkFingerprint(expected, actual string) error {
+	if expected == "" {
+		return nil
+	}
+	expected = strings.TrimPrefix(expected, "sha1:")
+	if !strings.EqualFold(expected, actual) {
+		return fmt.Errorf("TLS certificate fingerprint mismatch: got %s, expected %s", actual, expected)
+	}
+	return nil
+}
+
+// setupClusterFromAddress probes an address via QUIC to extract its TLS certificate,
+// then creates an in-memory cluster config and adds it to the config.
+// If expectedFingerprint is non-empty, the probed certificate's SHA1 fingerprint
+// is verified against it (with optional "sha1:" prefix).
+func setupClusterFromAddress(cfg *clientconfig.Config, address, expectedFingerprint string) (*clientconfig.ClusterConfig, string, error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cert, fingerprint, err := extractTLSCertificate(ctx, address)
+	if err != nil {
+		return nil, "", err
+	}
+
+	if err := checkFingerprint(expectedFingerprint, fingerprint); err != nil {
+		return nil, "", err
+	}
+
+	cc := &clientconfig.ClusterConfig{
+		Hostname: address,
+		CACert:   cert,
+	}
+
+	leafData := &clientconfig.ConfigData{
+		Clusters: map[string]*clientconfig.ClusterConfig{
+			address: cc,
+		},
+	}
+	cfg.SetLeafConfig(address, leafData)
+
+	return cc, address, nil
 }
 
 func ConfigInfo(ctx *Context, opts struct {

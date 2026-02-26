@@ -537,6 +537,18 @@ miren deploy --analyze
 			Body: "miren cluster current",
 		}),
 	))
+	d.Dispatch("cluster export-address", Infer("cluster export-address",
+		"Export cluster address with TLS fingerprint for MIREN_CLUSTER",
+		ClusterExportAddress,
+		WithExample(mflags.Example{
+			Name: "Export active cluster",
+			Body: "miren cluster export-address",
+		}),
+		WithExample(mflags.Example{
+			Name: "Export specific cluster",
+			Body: "miren cluster export-address -C my-cluster",
+		}),
+	))
 
 	// Runner commands (distributed runners) - behind feature flag
 	if labs.DistributedRunners() {

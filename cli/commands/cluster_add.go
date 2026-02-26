@@ -49,34 +49,50 @@ func addCluster(ctx *Context, identityName, clusterName, address string, force b
 		return fmt.Errorf("failed to load configuration: %w", err)
 	}
 
-	// Check if the identity exists
-	if mainConfig == nil || !mainConfig.HasIdentities() {
-		return fmt.Errorf("no identities configured. Please run 'miren login' first")
-	}
+	// Detect manual mode: both --cluster and --address provided
+	manualMode := clusterName != "" && address != ""
 
-	// If no identity specified, check if we can auto-select
-	if identityName == "" {
-		availableIdentities := mainConfig.GetIdentityNames()
-		if len(availableIdentities) == 1 {
-			// Auto-select the only identity
-			identityName = availableIdentities[0]
-			ctx.Info("Using identity '%s' (only one available)", identityName)
-		} else if len(availableIdentities) > 1 {
-			// Multiple identities available, user must specify
-			return fmt.Errorf("multiple identities available, please specify one with --identity: %s", strings.Join(availableIdentities, ", "))
-		} else {
-			return fmt.Errorf("no identities configured. Please run 'miren login' first")
+	// In manual mode, identity is optional (OIDC/environment auth can be used).
+	// In discovery mode, identity is required to fetch available clusters.
+	if !manualMode {
+		// Discovery mode — identity is required
+		if mainConfig == nil || !mainConfig.HasIdentities() {
+			return fmt.Errorf("no identities configured. Please run 'miren login' first, or use --cluster and --address to add a cluster directly")
+		}
+
+		if identityName == "" {
+			availableIdentities := mainConfig.GetIdentityNames()
+			if len(availableIdentities) == 1 {
+				identityName = availableIdentities[0]
+				ctx.Info("Using identity '%s' (only one available)", identityName)
+			} else if len(availableIdentities) > 1 {
+				return fmt.Errorf("multiple identities available, please specify one with --identity: %s", strings.Join(availableIdentities, ", "))
+			} else {
+				return fmt.Errorf("no identities configured. Please run 'miren login' first, or use --cluster and --address to add a cluster directly")
+			}
+		}
+	} else if identityName != "" {
+		// Manual mode with explicit --identity: validate it exists
+		if mainConfig == nil || !mainConfig.HasIdentities() {
+			return fmt.Errorf("identity %q not found: no identities configured", identityName)
 		}
 	}
 
-	identity, err := mainConfig.GetIdentity(identityName)
-	if err != nil {
-		// List available identities to help the user
-		availableIdentities := mainConfig.GetIdentityNames()
-		if len(availableIdentities) > 0 {
-			return fmt.Errorf("identity %q not found. Available identities: %v", identityName, availableIdentities)
+	// Look up identity if one was specified (skip if manual mode with no identity)
+	var identity *clientconfig.IdentityConfig
+	if identityName != "" {
+		if mainConfig == nil {
+			return fmt.Errorf("identity %q not found in configuration", identityName)
 		}
-		return fmt.Errorf("identity %q not found in configuration", identityName)
+		var err error
+		identity, err = mainConfig.GetIdentity(identityName)
+		if err != nil {
+			availableIdentities := mainConfig.GetIdentityNames()
+			if len(availableIdentities) > 0 {
+				return fmt.Errorf("identity %q not found. Available identities: %v", identityName, availableIdentities)
+			}
+			return fmt.Errorf("identity %q not found in configuration", identityName)
+		}
 	}
 
 	// If no cluster name or address provided, query the identity server for available clusters
@@ -201,7 +217,11 @@ func addCluster(ctx *Context, identityName, clusterName, address string, force b
 		return fmt.Errorf("failed to save cluster configuration: %w", err)
 	}
 
-	ctx.Completed("Successfully added cluster %q with identity %q at %s", clusterName, identityName, address)
+	if identityName != "" {
+		ctx.Completed("Successfully added cluster %q with identity %q at %s", clusterName, identityName, address)
+	} else {
+		ctx.Completed("Successfully added cluster %q at %s (using environment auth)", clusterName, address)
+	}
 	ctx.Info("Configuration saved to clientconfig.d/%s.yaml", clusterName)
 
 	// If there's no active cluster set, suggest setting this one
@@ -267,7 +287,7 @@ func normalizeAddress(address string) (normalizedAddr, sniHost string, err error
 
 // extractTLSCertificate connects to the server via QUIC and extracts the TLS certificate
 // Returns the PEM-encoded certificate and its SHA1 fingerprint (hex-encoded)
-func extractTLSCertificate(ctx *Context, address string) (string, string, error) {
+func extractTLSCertificate(ctx context.Context, address string) (string, string, error) {
 	// Normalize the address with robust parsing
 	normalizedAddr, sniHost, err := normalizeAddress(address)
 	if err != nil {
