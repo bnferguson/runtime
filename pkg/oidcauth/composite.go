@@ -47,7 +47,7 @@ var oidcDeployRole = map[string]map[string]bool{
 // It tries the primary first and falls back to OIDC.
 type CompositeAuthenticator struct {
 	primary rpc.Authenticator
-	oidc    *OIDCAuthenticator
+	oidc    rpc.Authenticator
 }
 
 // NewCompositeAuthenticator creates a composite authenticator that chains primary and OIDC auth.
@@ -65,9 +65,13 @@ func (c *CompositeAuthenticator) Authenticate(ctx context.Context, r *http.Reque
 	// Fall back to OIDC authenticator. The primary may have returned an error
 	// because it couldn't validate a token that's actually meant for OIDC
 	// (e.g., cloud JWT validator failing on a GitHub Actions OIDC token).
-	oidcIdentity, oidcErr := c.oidc.Authenticate(ctx, r)
-	if oidcIdentity != nil {
-		return oidcIdentity, nil
+	var oidcIdentity *rpc.Identity
+	var oidcErr error
+	if c.oidc != nil {
+		oidcIdentity, oidcErr = c.oidc.Authenticate(ctx, r)
+		if oidcIdentity != nil {
+			return oidcIdentity, nil
+		}
 	}
 
 	// Neither succeeded. Return the primary error if there was one,

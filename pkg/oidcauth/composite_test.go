@@ -75,37 +75,29 @@ func TestCompositeAuthenticator_PrimaryErrorOIDCSucceeds(t *testing.T) {
 	primary := &mockAuthenticator{
 		err: fmt.Errorf("key with ID xyz not found"),
 	}
-	oidcMock := &mockAuthenticator{
+	oidcStub := &mockAuthenticator{
 		identity: &rpc.Identity{
 			Subject: "repo:acme/app:ref:refs/heads/main",
 			Method:  rpc.AuthMethodOIDC,
 		},
 	}
 
-	comp := &CompositeAuthenticator{primary: primary, oidc: nil}
-	// We can't use a mock directly as oidc field since it's *OIDCAuthenticator.
-	// Instead, test via the full Authenticate method logic by verifying the
-	// behavior: primary error should not block OIDC fallback.
-
-	// Test the actual composite with a real OIDCAuthenticator that has no EAC:
-	// the important thing is that it TRIES oidc and doesn't short-circuit.
-	oidcAuth := NewOIDCAuthenticator(testutils.TestLogger(t))
-	comp = NewCompositeAuthenticator(primary, oidcAuth)
+	comp := &CompositeAuthenticator{primary: primary, oidc: oidcStub}
 
 	req := httptest.NewRequest("GET", "/", nil)
-	// OIDC won't match (no EAC, no Bearer token that OIDC recognizes),
-	// so primary error should still propagate.
-	_, err := comp.Authenticate(context.Background(), req)
-	if err == nil {
-		t.Fatal("expected error when both fail")
+	identity, err := comp.Authenticate(context.Background(), req)
+	if err != nil {
+		t.Fatalf("expected no error when OIDC succeeds, got: %v", err)
 	}
-
-	// Verify we didn't get an OIDC error — we should get the primary error
-	if err.Error() != "key with ID xyz not found" {
-		t.Errorf("expected primary error, got: %v", err)
+	if identity == nil {
+		t.Fatal("expected OIDC identity, got nil")
 	}
-
-	_ = oidcMock // used to show intent; full integration test requires a running OIDC validator
+	if identity.Subject != "repo:acme/app:ref:refs/heads/main" {
+		t.Errorf("subject = %q, want %q", identity.Subject, "repo:acme/app:ref:refs/heads/main")
+	}
+	if identity.Method != rpc.AuthMethodOIDC {
+		t.Errorf("method = %q, want %q", identity.Method, rpc.AuthMethodOIDC)
+	}
 }
 
 func TestCompositeAuthenticator_FallbackToOIDC(t *testing.T) {
