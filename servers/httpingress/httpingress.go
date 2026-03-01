@@ -959,8 +959,8 @@ func (h *Server) DoRequest(ctx context.Context, req *httpingress_v1alpha.Interna
 	if curLease != nil {
 		httpResp, err := h.executeInternalRequest(ctx, curLease, req, method, path, appId)
 		if err != nil && isProxyConnectionError(err) {
-			// Stale cached lease — invalidate and fall through to acquire fresh
-			h.invalidateLease(context.Background(), appId, curLease)
+			// Stale cached lease — invalidate all app leases and fall through to acquire fresh
+			h.invalidateAppLeases(context.Background(), appId)
 			h.Log.Warn("stale lease on internal request, retrying with fresh lease",
 				"stale_url", curLease.Lease.URL, "app", appId)
 			curLease = nil
