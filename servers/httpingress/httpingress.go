@@ -518,82 +518,105 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 		))
 	defer leaseSpan.End()
 
-	// Common lease handling logic
-	curLease, err := h.useLease(ctx, targetAppId.String())
-	if err != nil {
-		h.Log.Error("error taking lease", "error", err, "app", targetAppId)
-		http.Error(w, fmt.Sprintf("error taking lease: %s", targetAppId), http.StatusInternalServerError)
-		return
-	}
-
-	if curLease != nil {
-		leaseSpan.SetAttributes(
-			attribute.Bool("miren.lease.cached", true),
-			attribute.String("miren.lease.url", curLease.Lease.URL),
-		)
-		req = req.WithContext(ctx)
-		h.forwardToLease(ctx, w, req, curLease, targetAppId.String(), *appName)
-		return
-	}
-
-	leaseSpan.SetAttributes(attribute.Bool("miren.lease.cached", false))
-
-	if app.ActiveVersion == "" {
-		h.Log.Debug("no active version for app", "app", targetAppId)
-		http.Error(w, fmt.Sprintf("no active version for app: %s", targetAppId), http.StatusNotFound)
-		return
-	}
-
-	vr, err := h.eac.Get(ctx, app.ActiveVersion.String())
-	if err != nil {
-		h.Log.Error("error looking up application version", "error", err, "version", app.ActiveVersion)
-		http.Error(w, fmt.Sprintf("error looking up application version: %s", app.ActiveVersion), http.StatusInternalServerError)
-		return
-	}
-
-	var av core_v1alpha.AppVersion
-	av.Decode(vr.Entity().Entity())
-
-	leaseSpan.SetAttributes(
-		attribute.String("miren.app.version", app.ActiveVersion.String()),
-	)
-
-	// Give lease acquisition a generous timeout to complete sandbox boot
-	// even if the client request times out. This prevents dangling resources.
-	actContext, actCancel := context.WithTimeout(context.Background(), leaseAcquisitionTimeout)
-	defer actCancel()
-
-	actLease, err := h.aa.AcquireLease(actContext, &av, "web")
-	if err != nil {
-		if errors.Is(err, activator.ErrSandboxDiedEarly) {
-			h.Log.Error("sandbox died early while acquiring lease", "error", err, "app", targetAppId)
-			http.Error(w, fmt.Sprintf("The application %s failed to boot. Please check the applications logs.\n", targetAppId), http.StatusRequestTimeout)
-		} else {
-			h.Log.Error("error acquiring lease", "error", err, "app", targetAppId)
-			http.Error(w, fmt.Sprintf("error acquiring lease: %s", targetAppId), http.StatusInternalServerError)
+	// Retry loop: if a cached lease fails with a connection error (stale sandbox),
+	// invalidate it and retry once — the next iteration acquires a fresh lease.
+	const maxRetries = 1
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		// Try to use a cached lease
+		curLease, err := h.useLease(ctx, targetAppId.String())
+		if err != nil {
+			h.Log.Error("error taking lease", "error", err, "app", targetAppId)
+			http.Error(w, fmt.Sprintf("error taking lease: %s", targetAppId), http.StatusInternalServerError)
+			return
 		}
 
+		if curLease != nil {
+			leaseSpan.SetAttributes(
+				attribute.Bool("miren.lease.cached", true),
+				attribute.String("miren.lease.url", curLease.Lease.URL),
+			)
+			req = req.WithContext(ctx)
+			// On non-final attempts, suppress error response so we can retry
+			writeErr := attempt == maxRetries
+			err = h.proxyToLease(w, req, curLease.Lease.URL, targetAppId.String(), *appName, writeErr)
+			if err != nil && isProxyConnectionError(err) {
+				// Cached lease pointed at a dead sandbox — invalidate and retry
+				h.invalidateLease(context.Background(), targetAppId.String(), curLease)
+				h.Log.Warn("stale lease, retrying with fresh lease",
+					"stale_url", curLease.Lease.URL,
+					"attempt", attempt,
+					"app", targetAppId)
+				continue
+			}
+			if err != nil {
+				h.invalidateLease(context.Background(), targetAppId.String(), curLease)
+			} else {
+				h.releaseLease(ctx, curLease)
+			}
+			return
+		}
+
+		// No cached lease — acquire a fresh one
+		leaseSpan.SetAttributes(attribute.Bool("miren.lease.cached", false))
+
+		if app.ActiveVersion == "" {
+			h.Log.Debug("no active version for app", "app", targetAppId)
+			http.Error(w, fmt.Sprintf("no active version for app: %s", targetAppId), http.StatusNotFound)
+			return
+		}
+
+		vr, err := h.eac.Get(ctx, app.ActiveVersion.String())
+		if err != nil {
+			h.Log.Error("error looking up application version", "error", err, "version", app.ActiveVersion)
+			http.Error(w, fmt.Sprintf("error looking up application version: %s", app.ActiveVersion), http.StatusInternalServerError)
+			return
+		}
+
+		var av core_v1alpha.AppVersion
+		av.Decode(vr.Entity().Entity())
+
+		leaseSpan.SetAttributes(
+			attribute.String("miren.app.version", app.ActiveVersion.String()),
+		)
+
+		// Give lease acquisition a generous timeout to complete sandbox boot
+		// even if the client request times out. This prevents dangling resources.
+		actContext, actCancel := context.WithTimeout(context.Background(), leaseAcquisitionTimeout)
+		defer actCancel()
+
+		actLease, err := h.aa.AcquireLease(actContext, &av, "web")
+		if err != nil {
+			if errors.Is(err, activator.ErrSandboxDiedEarly) {
+				h.Log.Error("sandbox died early while acquiring lease", "error", err, "app", targetAppId)
+				http.Error(w, fmt.Sprintf("The application %s failed to boot. Please check the applications logs.\n", targetAppId), http.StatusRequestTimeout)
+			} else {
+				h.Log.Error("error acquiring lease", "error", err, "app", targetAppId)
+				http.Error(w, fmt.Sprintf("error acquiring lease: %s", targetAppId), http.StatusInternalServerError)
+			}
+			return
+		}
+
+		if actLease == nil {
+			h.Log.Debug("no lease available for app", "app", targetAppId)
+			http.Error(w, fmt.Sprintf("no lease available for app: %s", targetAppId), http.StatusServiceUnavailable)
+			return
+		}
+
+		leaseSpan.SetAttributes(attribute.String("miren.lease.url", actLease.URL))
+
+		localLease := h.retainLease(ctx, targetAppId.String(), actLease)
+
+		req = req.WithContext(ctx)
+		// Fresh lease — always write error response (no retry on fresh lease failure)
+		err = h.proxyToLease(w, req, actLease.URL, targetAppId.String(), *appName, true)
+		if err != nil {
+			// Connection error on a fresh lease - the sandbox may have died
+			// between lease acquisition and proxy. Invalidate immediately.
+			h.invalidateLease(context.Background(), targetAppId.String(), localLease)
+		} else {
+			h.releaseLease(ctx, localLease)
+		}
 		return
-	}
-
-	if actLease == nil {
-		h.Log.Debug("no lease available for app", "app", targetAppId)
-		http.Error(w, fmt.Sprintf("no lease available for app: %s", targetAppId), http.StatusServiceUnavailable)
-		return
-	}
-
-	leaseSpan.SetAttributes(attribute.String("miren.lease.url", actLease.URL))
-
-	localLease := h.retainLease(ctx, targetAppId.String(), actLease)
-
-	req = req.WithContext(ctx)
-	err = h.proxyToLease(w, req, actLease.URL, targetAppId.String(), *appName)
-	if err != nil {
-		// Connection error on a fresh lease - the sandbox may have died
-		// between lease acquisition and proxy. Invalidate immediately.
-		h.invalidateLease(context.Background(), targetAppId.String(), localLease)
-	} else {
-		h.releaseLease(ctx, localLease)
 	}
 }
 
@@ -632,7 +655,12 @@ func (h *Server) logRequestFromStats(appEntityID, appName string, stats httputil
 // proxyToLease proxies the request to the target URL and returns any connection error.
 // If the proxy fails with a connection error (connection refused, no route to host, etc.),
 // it returns the error so the caller can invalidate the lease.
-func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetURL, appEntityID, appName string) error {
+//
+// When writeErrorResponse is false and a connection error occurs, the ErrorHandler
+// captures the error but does NOT write to the ResponseWriter, allowing the caller
+// to retry with a fresh lease. This is safe because connection errors happen during
+// TCP dial, before any response bytes are sent.
+func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetURL, appEntityID, appName string, writeErrorResponse bool) error {
 	targetParsed, err := url.Parse(targetURL)
 	if err != nil {
 		h.Log.Error("failed to parse target URL", "error", err, "url", targetURL)
@@ -666,6 +694,13 @@ func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetUR
 		},
 		ErrorHandler: func(rw http.ResponseWriter, r *http.Request, err error) {
 			proxyErr = err
+			// When writeErrorResponse is false and we have a connection error,
+			// suppress the response so the caller can retry with a fresh lease.
+			// Connection errors happen during TCP dial before any bytes are sent.
+			if !writeErrorResponse && isProxyConnectionError(err) {
+				h.Log.Warn("proxy connection error to sandbox (will retry)", "error", err, "url", targetURL, "app", appName)
+				return
+			}
 			var netErr net.Error
 			if errors.As(err, &netErr) && netErr.Timeout() {
 				h.Log.Warn("request timeout", "url", targetURL, "app", appName)
@@ -691,20 +726,6 @@ func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetUR
 		return proxyErr
 	}
 	return nil
-}
-
-func (h *Server) forwardToLease(ctx context.Context, w http.ResponseWriter, req *http.Request, lease *lease, appEntityID, appName string) {
-	err := h.proxyToLease(w, req, lease.Lease.URL, appEntityID, appName)
-	if err != nil {
-		// Connection error indicates the sandbox is dead - invalidate the lease
-		// so subsequent requests will acquire a fresh lease to a healthy sandbox.
-		// Use background context since request context may be cancelled.
-		h.invalidateLease(context.Background(), appEntityID, lease)
-	} else {
-		// Only release (decrement use count) if the proxy succeeded.
-		// If we invalidated, the lease is already removed from cache.
-		h.releaseLease(ctx, lease)
-	}
 }
 
 /*
@@ -909,42 +930,61 @@ func (h *Server) DoRequest(ctx context.Context, req *httpingress_v1alpha.Interna
 	var av core_v1alpha.AppVersion
 	av.Decode(vr.Entity().Entity())
 
-	// Try to use an existing lease
+	// Try to use an existing lease, with retry on stale cached lease
 	curLease, err := h.useLease(ctx, appId)
 	if err != nil {
 		resp.SetError(fmt.Sprintf("error taking lease: %v", err))
 		return resp, nil
 	}
 
-	if curLease == nil {
-		// Need to acquire a new lease
-		actContext, actCancel := context.WithTimeout(context.Background(), leaseAcquisitionTimeout)
-		defer actCancel()
-
-		actLease, err := h.aa.AcquireLease(actContext, &av, service)
-		if err != nil {
-			if errors.Is(err, activator.ErrSandboxDiedEarly) {
-				resp.SetError("sandbox died early while acquiring lease")
+	// If we got a cached lease, try it — but retry with a fresh one on connection error
+	if curLease != nil {
+		httpResp, err := h.executeInternalRequest(ctx, curLease, req, method, path, appId)
+		if err != nil && isProxyConnectionError(err) {
+			// Stale cached lease — invalidate and fall through to acquire fresh
+			h.invalidateLease(context.Background(), appId, curLease)
+			h.Log.Warn("stale lease on internal request, retrying with fresh lease",
+				"stale_url", curLease.Lease.URL, "app", appId)
+			curLease = nil
+		} else if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				h.releaseLease(ctx, curLease)
 			} else {
-				resp.SetError(fmt.Sprintf("error acquiring lease: %v", err))
+				h.releaseLease(ctx, curLease)
 			}
+			resp.SetError(fmt.Sprintf("request failed: %v", err))
 			return resp, nil
+		} else {
+			defer httpResp.Body.Close()
+			h.releaseLease(ctx, curLease)
+			return h.buildInternalResponse(resp, httpResp, appId, method, path, startTime)
 		}
-
-		if actLease == nil {
-			resp.SetError("no lease available for app")
-			return resp, nil
-		}
-
-		curLease = h.retainLease(ctx, appId, actLease)
 	}
 
-	// Execute the HTTP request
+	// No cached lease (or stale one was invalidated) — acquire fresh
+	actContext, actCancel := context.WithTimeout(context.Background(), leaseAcquisitionTimeout)
+	defer actCancel()
+
+	actLease, err := h.aa.AcquireLease(actContext, &av, service)
+	if err != nil {
+		if errors.Is(err, activator.ErrSandboxDiedEarly) {
+			resp.SetError("sandbox died early while acquiring lease")
+		} else {
+			resp.SetError(fmt.Sprintf("error acquiring lease: %v", err))
+		}
+		return resp, nil
+	}
+
+	if actLease == nil {
+		resp.SetError("no lease available for app")
+		return resp, nil
+	}
+
+	curLease = h.retainLease(ctx, appId, actLease)
+
+	// Execute the HTTP request with fresh lease (no retry)
 	httpResp, err := h.executeInternalRequest(ctx, curLease, req, method, path, appId)
 	if err != nil {
-		// Context errors (timeout, cancellation) are not connection failures —
-		// the sandbox is likely still healthy, so just release the lease.
-		// Only invalidate for actual connection errors (refused, no route, etc).
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			h.releaseLease(ctx, curLease)
 		} else if isProxyConnectionError(err) {
@@ -960,7 +1000,16 @@ func (h *Server) DoRequest(ctx context.Context, req *httpingress_v1alpha.Interna
 	// Release the lease on success
 	h.releaseLease(ctx, curLease)
 
-	// Build the response
+	return h.buildInternalResponse(resp, httpResp, appId, method, path, startTime)
+}
+
+// buildInternalResponse populates the InternalHttpResponse from the HTTP response.
+func (h *Server) buildInternalResponse(
+	resp *httpingress_v1alpha.InternalHttpResponse,
+	httpResp *http.Response,
+	appId, method, path string,
+	startTime time.Time,
+) (*httpingress_v1alpha.InternalHttpResponse, error) {
 	resp.SetStatusCode(int32(httpResp.StatusCode))
 
 	// Copy response headers
