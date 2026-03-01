@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -35,6 +36,10 @@ type Launcher struct {
 	Log *slog.Logger
 	EAC *entityserver_v1alpha.EntityAccessClient
 
+	// PoolReadyTimeout is how long to wait for new pools to have ready instances
+	// before proceeding with old pool cleanup. Defaults to 60s.
+	PoolReadyTimeout time.Duration
+
 	appMu sync.Map // per-app mutexes: app ID -> *sync.Mutex
 }
 
@@ -46,8 +51,9 @@ type PoolWithEntity struct {
 
 func NewLauncher(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient) *Launcher {
 	return &Launcher{
-		Log: log.With("module", "deployment"),
-		EAC: eac,
+		Log:              log.With("module", "deployment"),
+		EAC:              eac,
+		PoolReadyTimeout: 60 * time.Second,
 	}
 }
 
@@ -201,14 +207,31 @@ func (l *Launcher) reconcileAppVersion(ctx context.Context, app *core_v1alpha.Ap
 		"version", ver.Version,
 		"services", len(spec.Services))
 
-	// For each service, ensure a pool exists
+	// For each service, ensure a pool exists. Collect IDs of newly created pools.
+	var newPoolIDs []entity.Id
 	for _, svc := range spec.Services {
-		if err := l.ensurePoolForService(ctx, app, &ver, spec, svc.Name); err != nil {
+		poolID, err := l.ensurePoolForService(ctx, app, &ver, spec, svc.Name)
+		if err != nil {
 			l.Log.Error("failed to ensure pool for service",
 				"app", app.ID,
 				"service", svc.Name,
 				"error", err)
 			// Continue with other services even if one fails
+			continue
+		}
+		if poolID != "" {
+			newPoolIDs = append(newPoolIDs, poolID)
+		}
+	}
+
+	// Wait for new pools to have ready instances before killing old ones.
+	// This prevents a gap where the old sandbox is dead but the new one
+	// isn't serving yet, which would cause 502s.
+	for _, poolID := range newPoolIDs {
+		if err := l.waitForPoolReady(ctx, poolID, l.PoolReadyTimeout); err != nil {
+			l.Log.Warn("timed out waiting for new pool to become ready, proceeding with cleanup",
+				"pool", poolID,
+				"error", err)
 		}
 	}
 
@@ -224,12 +247,14 @@ func (l *Launcher) reconcileAppVersion(ctx context.Context, app *core_v1alpha.Ap
 	return nil
 }
 
-// ensurePoolForService creates or reuses a pool for the given service
-func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.App, ver *core_v1alpha.AppVersion, spec *core_v1alpha.ConfigSpec, serviceName string) error {
+// ensurePoolForService creates or reuses a pool for the given service.
+// Returns the pool ID if a new pool was created (caller should wait for it
+// to become ready), or an empty ID if an existing pool was reused.
+func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.App, ver *core_v1alpha.AppVersion, spec *core_v1alpha.ConfigSpec, serviceName string) (entity.Id, error) {
 	// Get service config
 	svcConcurrency, err := coreutil.GetServiceConcurrency(spec, serviceName)
 	if err != nil {
-		return fmt.Errorf("failed to get service concurrency: %w", err)
+		return "", fmt.Errorf("failed to get service concurrency: %w", err)
 	}
 
 	// Determine which image to use
@@ -248,7 +273,7 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 	// Get app metadata for label
 	appResp, err := l.EAC.Get(ctx, app.ID.String())
 	if err != nil {
-		return fmt.Errorf("failed to get app metadata: %w", err)
+		return "", fmt.Errorf("failed to get app metadata: %w", err)
 	}
 
 	var appMD core_v1alpha.Metadata
@@ -257,7 +282,7 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 	// Build the desired sandbox spec
 	sbSpec, err := l.buildSandboxSpec(ctx, app, ver, spec, serviceName, image)
 	if err != nil {
-		return fmt.Errorf("failed to build sandbox spec: %w", err)
+		return "", fmt.Errorf("failed to build sandbox spec: %w", err)
 	}
 
 	// Calculate desired instances based on concurrency mode
@@ -272,11 +297,11 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 	// Try to find existing pool with matching spec
 	poolWithEntity, err := l.findMatchingPool(ctx, app.ID, serviceName, sbSpec)
 	if err != nil {
-		return fmt.Errorf("failed to find matching pool: %w", err)
+		return "", fmt.Errorf("failed to find matching pool: %w", err)
 	}
 
 	if poolWithEntity != nil {
-		// Reuse existing pool
+		// Reuse existing pool — sandboxes already running, no wait needed
 		l.Log.Info("reusing existing pool",
 			"pool", poolWithEntity.Pool.ID,
 			"service", serviceName,
@@ -308,11 +333,12 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 
 		if needsUpdate {
 			if err := l.updatePool(ctx, poolWithEntity); err != nil {
-				return fmt.Errorf("failed to update pool: %w", err)
+				return "", fmt.Errorf("failed to update pool: %w", err)
 			}
 		}
 
-		return nil
+		// Return empty ID — existing pool already has running sandboxes
+		return "", nil
 	}
 
 	// No matching pool found, create a new one
@@ -356,7 +382,7 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 		pool.Encode,
 	).Attrs())
 	if err != nil {
-		return fmt.Errorf("failed to create pool entity: %w", err)
+		return "", fmt.Errorf("failed to create pool entity: %w", err)
 	}
 
 	pool.ID = id
@@ -366,7 +392,8 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 		"service", serviceName,
 		"desired_instances", desiredInstances)
 
-	return nil
+	// Return the new pool ID — caller should wait for it to become ready
+	return id, nil
 }
 
 // buildSandboxSpec creates a SandboxSpec for the given service
@@ -804,6 +831,50 @@ func (l *Launcher) updatePool(ctx context.Context, poolWithEntity *PoolWithEntit
 	l.Log.Info("pool update successful", "pool", pool.ID)
 
 	return nil
+}
+
+// waitForPoolReady polls the pool entity until ReadyInstances > 0 or the timeout expires.
+// On timeout it returns an error, but the caller should proceed with cleanup anyway —
+// Fix 1's retry in httpingress handles any remaining gap.
+func (l *Launcher) waitForPoolReady(ctx context.Context, poolID entity.Id, timeout time.Duration) error {
+	pollInterval := 2 * time.Second
+	if timeout < pollInterval {
+		pollInterval = timeout / 2
+	}
+	deadline := time.Now().Add(timeout)
+
+	for {
+		resp, err := l.EAC.Get(ctx, poolID.String())
+		if err != nil {
+			return fmt.Errorf("failed to get pool %s: %w", poolID, err)
+		}
+
+		var pool compute_v1alpha.SandboxPool
+		pool.Decode(resp.Entity().Entity())
+
+		if pool.ReadyInstances > 0 {
+			l.Log.Info("new pool has ready instances",
+				"pool", poolID,
+				"ready_instances", pool.ReadyInstances)
+			return nil
+		}
+
+		if time.Now().After(deadline) {
+			return fmt.Errorf("pool %s not ready after %s (ready_instances=%d, current_instances=%d)",
+				poolID, timeout, pool.ReadyInstances, pool.CurrentInstances)
+		}
+
+		l.Log.Debug("waiting for pool to become ready",
+			"pool", poolID,
+			"ready_instances", pool.ReadyInstances,
+			"current_instances", pool.CurrentInstances)
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(pollInterval):
+		}
+	}
 }
 
 // cleanupOldVersionPools removes old version references from pools and scales down unreferenced pools
