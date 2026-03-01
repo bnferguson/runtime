@@ -694,9 +694,6 @@ func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetUR
 		},
 		ErrorHandler: func(rw http.ResponseWriter, r *http.Request, err error) {
 			proxyErr = err
-			// When writeErrorResponse is false and we have a connection error,
-			// suppress the response so the caller can retry with a fresh lease.
-			// Connection errors happen during TCP dial before any bytes are sent.
 			if !writeErrorResponse && isProxyConnectionError(err) {
 				h.Log.Warn("proxy connection error to sandbox (will retry)", "error", err, "url", targetURL, "app", appName)
 				return
@@ -947,11 +944,7 @@ func (h *Server) DoRequest(ctx context.Context, req *httpingress_v1alpha.Interna
 				"stale_url", curLease.Lease.URL, "app", appId)
 			curLease = nil
 		} else if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				h.releaseLease(ctx, curLease)
-			} else {
-				h.releaseLease(ctx, curLease)
-			}
+			h.releaseLease(ctx, curLease)
 			resp.SetError(fmt.Sprintf("request failed: %v", err))
 			return resp, nil
 		} else {

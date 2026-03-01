@@ -282,14 +282,10 @@ func TestInvalidateLeaseRemovesFromCache(t *testing.T) {
 	srv := newTestServer(aa)
 	ctx := context.Background()
 
-	// Retain a lease
 	actLease := &activator.Lease{Size: 10, URL: "http://10.0.0.1:3000"}
 	ll := srv.retainLease(ctx, "app/myapp", actLease)
-
-	// Invalidate it (simulates connection error path)
 	srv.invalidateLease(ctx, "app/myapp", ll)
 
-	// Verify the lease was released to the activator
 	aa.mu.Lock()
 	releaseCount := aa.releaseCount
 	aa.mu.Unlock()
@@ -297,7 +293,6 @@ func TestInvalidateLeaseRemovesFromCache(t *testing.T) {
 		t.Errorf("expected 1 release on invalidation, got %d", releaseCount)
 	}
 
-	// Verify the app is removed from cache
 	srv.mu.Lock()
 	defer srv.mu.Unlock()
 	if _, ok := srv.apps["app/myapp"]; ok {
@@ -306,18 +301,15 @@ func TestInvalidateLeaseRemovesFromCache(t *testing.T) {
 }
 
 func TestInvalidateAndReacquire(t *testing.T) {
-	// This tests the retry scenario: after invalidating a stale lease,
-	// useLease returns nil, forcing the caller to acquire fresh.
 	aa := &mockActivator{}
 	srv := newTestServer(aa)
 	ctx := context.Background()
 
-	// Retain and then invalidate a lease
 	actLease := &activator.Lease{Size: 10, URL: "http://10.0.0.1:3000"}
 	ll := srv.retainLease(ctx, "app/myapp", actLease)
 	srv.invalidateLease(ctx, "app/myapp", ll)
 
-	// Now useLease should return nil (cache is empty)
+	// After invalidation, cache is empty
 	got, err := srv.useLease(ctx, "app/myapp")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -326,11 +318,10 @@ func TestInvalidateAndReacquire(t *testing.T) {
 		t.Error("expected nil lease after invalidation, got non-nil")
 	}
 
-	// Simulate acquiring a fresh lease (as the retry loop would)
+	// Retain a fresh lease (simulates the retry path acquiring a new one)
 	freshLease := &activator.Lease{Size: 10, URL: "http://10.0.0.2:3000"}
 	freshLL := srv.retainLease(ctx, "app/myapp", freshLease)
 
-	// The fresh lease should now be usable
 	got2, err := srv.useLease(ctx, "app/myapp")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -342,7 +333,6 @@ func TestInvalidateAndReacquire(t *testing.T) {
 		t.Errorf("expected fresh lease URL, got %s", got2.Lease.URL)
 	}
 
-	// Clean up
 	srv.releaseLease(ctx, freshLL)
 	srv.releaseLease(ctx, got2)
 }

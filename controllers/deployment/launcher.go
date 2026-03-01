@@ -835,7 +835,7 @@ func (l *Launcher) updatePool(ctx context.Context, poolWithEntity *PoolWithEntit
 
 // waitForPoolReady polls the pool entity until ReadyInstances > 0 or the timeout expires.
 // On timeout it returns an error, but the caller should proceed with cleanup anyway —
-// Fix 1's retry in httpingress handles any remaining gap.
+// the httpingress retry logic handles any remaining gap.
 func (l *Launcher) waitForPoolReady(ctx context.Context, poolID entity.Id, timeout time.Duration) error {
 	pollInterval := 2 * time.Second
 	if timeout < pollInterval {
