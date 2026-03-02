@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -282,7 +283,7 @@ func TestIsProxyConnectionError(t *testing.T) {
 			expected: true,
 		},
 		{
-			name: "connection reset",
+			name: "connection reset (not treated as connection error - request may have been processed)",
 			err: &net.OpError{
 				Op:  "read",
 				Net: "tcp",
@@ -291,10 +292,10 @@ func TestIsProxyConnectionError(t *testing.T) {
 					Err:     syscall.ECONNRESET,
 				},
 			},
-			expected: true,
+			expected: false,
 		},
 		{
-			name: "connection aborted",
+			name: "connection aborted (not treated as connection error - request may have been processed)",
 			err: &net.OpError{
 				Op:  "read",
 				Net: "tcp",
@@ -303,7 +304,7 @@ func TestIsProxyConnectionError(t *testing.T) {
 					Err:     syscall.ECONNABORTED,
 				},
 			},
-			expected: true,
+			expected: false,
 		},
 		{
 			name: "net.OpError without syscall error",
@@ -413,5 +414,86 @@ func TestWebSocketUpgrade(t *testing.T) {
 
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		t.Errorf("Expected 101 Switching Protocols, got %d", resp.StatusCode)
+	}
+}
+
+func TestProxyToLeaseRetrySuppress(t *testing.T) {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = 1 * time.Second
+
+	h := &Server{
+		Log:       slog.Default(),
+		transport: transport,
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/test", nil)
+
+	// Port 1 is not listening — triggers ECONNREFUSED
+	err := h.proxyToLease(rec, req, "http://127.0.0.1:1", "app/test", "test-app", false)
+
+	if err == nil {
+		t.Fatal("expected connection error, got nil")
+	}
+	if !isProxyConnectionError(err) {
+		t.Fatalf("expected proxy connection error, got: %v", err)
+	}
+
+	// writeErrorResponse=false should leave the ResponseWriter untouched
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected no status written (default 200), got %d", rec.Code)
+	}
+	if rec.Body.Len() > 0 {
+		t.Errorf("expected no body written, got %d bytes: %s", rec.Body.Len(), rec.Body.String())
+	}
+}
+
+func TestProxyToLeaseWriteErrorOnFinalAttempt(t *testing.T) {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = 1 * time.Second
+
+	h := &Server{
+		Log:       slog.Default(),
+		transport: transport,
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/test", nil)
+
+	err := h.proxyToLease(rec, req, "http://127.0.0.1:1", "app/test", "test-app", true)
+
+	if err == nil {
+		t.Fatal("expected connection error, got nil")
+	}
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("expected 502, got %d", rec.Code)
+	}
+}
+
+func TestProxyToLeaseNoRetryOnTimeout(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer backend.Close()
+
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = 50 * time.Millisecond
+
+	h := &Server{
+		Log:       slog.Default(),
+		transport: transport,
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/test", nil)
+
+	err := h.proxyToLease(rec, req, backend.URL, "app/test", "test-app", false)
+
+	// Timeouts are not connection errors — writeErrorResponse only suppresses connection errors
+	if err != nil {
+		t.Errorf("expected nil (timeout handled inline), got: %v", err)
+	}
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 for timeout, got %d", rec.Code)
 	}
 }

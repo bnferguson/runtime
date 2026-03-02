@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -362,6 +363,7 @@ func TestRapidRedeployWithDisk(t *testing.T) {
 
 	// Create Launcher and Manager (the real deployment machinery)
 	launcher := deployment.NewLauncher(h.Log, h.EAC)
+	launcher.PoolReadyTimeout = 100 * time.Millisecond
 	launcher.Init(ctx) //nolint:errcheck
 
 	mgr := sandboxpool.NewManager(h.Log, h.EAC)

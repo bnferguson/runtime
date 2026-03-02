@@ -6,14 +6,22 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 )
+
+func newTestLauncher(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient) *Launcher {
+	l := NewLauncher(log, eac)
+	l.PoolReadyTimeout = 100 * time.Millisecond
+	return l
+}
 
 // TestPoolCreationFixedMode tests that DeploymentLauncher creates pools with
 // correct desired_instances for fixed-mode services
@@ -59,8 +67,7 @@ func TestPoolCreationFixedMode(t *testing.T) {
 	err = server.Client.Update(ctx, app)
 	require.NoError(t, err)
 
-	// Create launcher and handle reconcile
-	launcher := NewLauncher(log, server.EAC)
+	launcher := newTestLauncher(log, server.EAC)
 
 	err = launcher.Reconcile(ctx, app, nil)
 	require.NoError(t, err)
@@ -123,8 +130,7 @@ func TestPoolCreationAutoMode(t *testing.T) {
 	err = server.Client.Update(ctx, app)
 	require.NoError(t, err)
 
-	// Create launcher and handle reconcile
-	launcher := NewLauncher(log, server.EAC)
+	launcher := newTestLauncher(log, server.EAC)
 
 	err = launcher.Reconcile(ctx, app, nil)
 	require.NoError(t, err)
@@ -186,7 +192,7 @@ func TestPoolReuseOnConfigChange(t *testing.T) {
 	err = server.Client.Update(ctx, app)
 	require.NoError(t, err)
 
-	launcher := NewLauncher(log, server.EAC)
+	launcher := newTestLauncher(log, server.EAC)
 	err = launcher.Reconcile(ctx, app, nil)
 	require.NoError(t, err)
 
@@ -287,7 +293,7 @@ func TestNewPoolOnImageChange(t *testing.T) {
 	err = server.Client.Update(ctx, app)
 	require.NoError(t, err)
 
-	launcher := NewLauncher(log, server.EAC)
+	launcher := newTestLauncher(log, server.EAC)
 	err = launcher.Reconcile(ctx, app, nil)
 	require.NoError(t, err)
 
@@ -401,7 +407,7 @@ func TestServiceRemoval(t *testing.T) {
 	err = server.Client.Update(ctx, app)
 	require.NoError(t, err)
 
-	launcher := NewLauncher(log, server.EAC)
+	launcher := newTestLauncher(log, server.EAC)
 	err = launcher.Reconcile(ctx, app, nil)
 	require.NoError(t, err)
 
@@ -505,8 +511,7 @@ func TestMultipleServices(t *testing.T) {
 	err = server.Client.Update(ctx, app)
 	require.NoError(t, err)
 
-	// Create launcher and handle reconcile
-	launcher := NewLauncher(log, server.EAC)
+	launcher := newTestLauncher(log, server.EAC)
 
 	err = launcher.Reconcile(ctx, app, nil)
 	require.NoError(t, err)
@@ -682,7 +687,7 @@ func TestUpdatePoolPreservesMetadata(t *testing.T) {
 	pool.ReadyInstances = 0
 	pool.ReferencedByVersions = []entity.Id{} // Empty refs
 
-	launcher := NewLauncher(log, server.EAC)
+	launcher := newTestLauncher(log, server.EAC)
 	poolWithEntity := &PoolWithEntity{
 		Pool:   pool,
 		Entity: *initialEntity,
@@ -758,7 +763,7 @@ func TestAutoModePoolReusePreservesDesiredInstances(t *testing.T) {
 	require.NoError(t, err)
 
 	// First reconciliation - creates pool with desired=1 (boots immediately after deploy)
-	launcher := NewLauncher(log, server.EAC)
+	launcher := newTestLauncher(log, server.EAC)
 	err = launcher.Reconcile(ctx, app, nil)
 	require.NoError(t, err)
 
@@ -862,8 +867,7 @@ func TestPerServiceEnvVarsDoNotRestartOtherServices(t *testing.T) {
 	err = server.Client.Update(ctx, app)
 	require.NoError(t, err)
 
-	// Create launcher and reconcile to create pools
-	launcher := NewLauncher(log, server.EAC)
+	launcher := newTestLauncher(log, server.EAC)
 	err = launcher.Reconcile(ctx, app, nil)
 	require.NoError(t, err)
 
@@ -1052,8 +1056,7 @@ func TestPerServicePortConfiguration(t *testing.T) {
 	err = server.Client.Update(ctx, app)
 	require.NoError(t, err)
 
-	// Create launcher and reconcile
-	launcher := NewLauncher(log, server.EAC)
+	launcher := newTestLauncher(log, server.EAC)
 	err = launcher.Reconcile(ctx, app, nil)
 	require.NoError(t, err)
 
@@ -1148,8 +1151,7 @@ func TestWebServiceDefaultPort(t *testing.T) {
 	err = server.Client.Update(ctx, app)
 	require.NoError(t, err)
 
-	// Create launcher and reconcile
-	launcher := NewLauncher(log, server.EAC)
+	launcher := newTestLauncher(log, server.EAC)
 	err = launcher.Reconcile(ctx, app, nil)
 	require.NoError(t, err)
 
@@ -1220,8 +1222,7 @@ func TestPortNameAndType(t *testing.T) {
 	err = server.Client.Update(ctx, app)
 	require.NoError(t, err)
 
-	// Create launcher and reconcile
-	launcher := NewLauncher(log, server.EAC)
+	launcher := newTestLauncher(log, server.EAC)
 	err = launcher.Reconcile(ctx, app, nil)
 	require.NoError(t, err)
 
@@ -1311,7 +1312,7 @@ func TestRapidVersionChangesCreateSinglePool(t *testing.T) {
 	// At this point ActiveVersion points to v3.
 	// Simulate the controller framework dispatching events for v1, v2, v3.
 	// Each event carries a stale App snapshot from when it was dispatched.
-	launcher := NewLauncher(log, server.EAC)
+	launcher := newTestLauncher(log, server.EAC)
 
 	// Simulate stale v1 event: app snapshot has ActiveVersion=v1
 	staleAppV1 := &core_v1alpha.App{
@@ -1371,8 +1372,7 @@ func TestNoActiveVersionSkipsReconcile(t *testing.T) {
 	require.NoError(t, err)
 	app.ID = appID
 
-	// Create launcher and reconcile
-	launcher := NewLauncher(log, server.EAC)
+	launcher := newTestLauncher(log, server.EAC)
 
 	err = launcher.Reconcile(ctx, app, nil)
 	require.NoError(t, err)
@@ -1380,4 +1380,170 @@ func TestNoActiveVersionSkipsReconcile(t *testing.T) {
 	// Verify no pools were created
 	pools := listAllPools(t, ctx, server)
 	assert.Empty(t, pools, "should not create any pools when ActiveVersion is empty")
+}
+
+func TestWaitForPoolReadySuccess(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	launcher := newTestLauncher(log, server.EAC)
+
+	pool := &compute_v1alpha.SandboxPool{
+		Service:          "web",
+		DesiredInstances: 1,
+		ReadyInstances:   1,
+	}
+	poolID, err := server.Client.Create(ctx, "test-pool", pool)
+	require.NoError(t, err)
+
+	err = launcher.waitForPoolReady(ctx, poolID, 5*time.Second)
+	assert.NoError(t, err)
+}
+
+func TestWaitForPoolReadyTimeout(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	launcher := newTestLauncher(log, server.EAC)
+
+	pool := &compute_v1alpha.SandboxPool{
+		Service:          "web",
+		DesiredInstances: 1,
+		ReadyInstances:   0,
+	}
+	poolID, err := server.Client.Create(ctx, "test-pool", pool)
+	require.NoError(t, err)
+
+	err = launcher.waitForPoolReady(ctx, poolID, 100*time.Millisecond)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not ready after")
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func TestWaitForPoolReadyContextCancelled(t *testing.T) {
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	launcher := newTestLauncher(log, server.EAC)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	pool := &compute_v1alpha.SandboxPool{
+		Service:          "web",
+		DesiredInstances: 1,
+		ReadyInstances:   0,
+	}
+	poolID, err := server.Client.Create(ctx, "test-pool", pool)
+	require.NoError(t, err)
+
+	cancel()
+
+	err = launcher.waitForPoolReady(ctx, poolID, 60*time.Second)
+	assert.Error(t, err)
+}
+
+func TestCleanupWaitsForNewPool(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{
+		Project: entity.Id("project-1"),
+	}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	v1 := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:v1",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+				},
+			},
+		},
+	}
+	v1ID, err := server.Client.Create(ctx, "test-v1", v1)
+	require.NoError(t, err)
+	v1.ID = v1ID
+
+	app.ActiveVersion = v1.ID
+	err = server.Client.Update(ctx, app)
+	require.NoError(t, err)
+
+	launcher := newTestLauncher(log, server.EAC)
+	err = launcher.Reconcile(ctx, app, nil)
+	require.NoError(t, err)
+
+	poolsV1 := listAllPools(t, ctx, server)
+	require.Len(t, poolsV1, 1)
+
+	// Different image forces a new pool, triggering the wait-then-cleanup flow
+	v2 := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v2",
+		ImageUrl: "test:v2",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+				},
+			},
+		},
+	}
+	v2ID, err := server.Client.Create(ctx, "test-v2", v2)
+	require.NoError(t, err)
+	v2.ID = v2ID
+
+	app.ActiveVersion = v2.ID
+	err = server.Client.Update(ctx, app)
+	require.NoError(t, err)
+
+	// waitForPoolReady will timeout (nothing sets ReadyInstances in unit tests)
+	// and proceed with cleanup — this is the expected path.
+	err = launcher.Reconcile(ctx, app, nil)
+	require.NoError(t, err)
+
+	pools := listAllPools(t, ctx, server)
+	require.Len(t, pools, 2, "should have both old and new pools")
+
+	var oldPool, newPool *compute_v1alpha.SandboxPool
+	for i := range pools {
+		if pools[i].SandboxSpec.Version == v1.ID {
+			oldPool = &pools[i]
+		}
+		if pools[i].SandboxSpec.Version == v2.ID {
+			newPool = &pools[i]
+		}
+	}
+
+	require.NotNil(t, newPool, "new pool should exist")
+	assert.Equal(t, int64(1), newPool.DesiredInstances)
+
+	if oldPool != nil {
+		assert.Equal(t, int64(0), oldPool.DesiredInstances, "old pool should be scaled down")
+	}
 }
