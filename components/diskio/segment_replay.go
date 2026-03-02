@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"miren.dev/lbd"
@@ -41,6 +42,9 @@ func (c *DiskMountController) replayMissingSegments(ctx context.Context, volStat
 			missing = append(missing, seg)
 		}
 	}
+
+	// Sort by label to ensure chronological replay order
+	sort.Slice(missing, func(i, j int) bool { return missing[i].Label < missing[j].Label })
 
 	if len(missing) == 0 {
 		c.log.Info("all segments already applied", "volume_id", volState.VolumeId, "horizon", horizon)

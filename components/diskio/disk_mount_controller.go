@@ -238,6 +238,9 @@ func (c *DiskMountController) attachAndMount(ctx context.Context, mount *storage
 		logDir := filepath.Join(volState.DiskPath, "logs")
 		devicePath, err = c.ops.LbdAttach(imagePath, logDir)
 		if err != nil {
+			if leaseNonce != "" {
+				c.cloudClient.ReleaseLease(ctx, volState.VolumeId, leaseNonce)
+			}
 			c.setMountError(ctx, mount.ID, fmt.Sprintf("failed to attach lbd device: %v", err))
 			return fmt.Errorf("failed to attach lbd device: %w", err)
 		}
