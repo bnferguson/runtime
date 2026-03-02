@@ -336,10 +336,12 @@ func (v *Configuration) UnmarshalJSON(data []byte) error {
 }
 
 type namedValueData struct {
-	Key       *string `cbor:"0,keyasint,omitempty" json:"key,omitempty"`
-	Value     *string `cbor:"1,keyasint,omitempty" json:"value,omitempty"`
-	Sensitive *bool   `cbor:"2,keyasint,omitempty" json:"sensitive,omitempty"`
-	Source    *string `cbor:"3,keyasint,omitempty" json:"source,omitempty"`
+	Key         *string `cbor:"0,keyasint,omitempty" json:"key,omitempty"`
+	Value       *string `cbor:"1,keyasint,omitempty" json:"value,omitempty"`
+	Sensitive   *bool   `cbor:"2,keyasint,omitempty" json:"sensitive,omitempty"`
+	Source      *string `cbor:"3,keyasint,omitempty" json:"source,omitempty"`
+	Required    *bool   `cbor:"4,keyasint,omitempty" json:"required,omitempty"`
+	Description *string `cbor:"5,keyasint,omitempty" json:"description,omitempty"`
 }
 
 type NamedValue struct {
@@ -404,6 +406,36 @@ func (v *NamedValue) Source() string {
 
 func (v *NamedValue) SetSource(source string) {
 	v.data.Source = &source
+}
+
+func (v *NamedValue) HasRequired() bool {
+	return v.data.Required != nil
+}
+
+func (v *NamedValue) Required() bool {
+	if v.data.Required == nil {
+		return false
+	}
+	return *v.data.Required
+}
+
+func (v *NamedValue) SetRequired(required bool) {
+	v.data.Required = &required
+}
+
+func (v *NamedValue) HasDescription() bool {
+	return v.data.Description != nil
+}
+
+func (v *NamedValue) Description() string {
+	if v.data.Description == nil {
+		return ""
+	}
+	return *v.data.Description
+}
+
+func (v *NamedValue) SetDescription(description string) {
+	v.data.Description = &description
 }
 
 func (v *NamedValue) MarshalCBOR() ([]byte, error) {

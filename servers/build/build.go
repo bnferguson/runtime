@@ -136,10 +136,16 @@ func mergeServiceEnvVars(existingEnvs []core_v1alpha.ConfigSpecServicesEnv, newE
 		// config vars only kept if still in app.toml (checked below)
 	}
 
-	// Add app.toml vars, but never override manual vars
-	for key, e := range newEnvMap {
-		if _, hasManual := envMap[key]; !hasManual {
-			envMap[key] = e
+	// Add app.toml vars, but never override manual vars.
+	// When a manual var shadows a config var, carry metadata (Required, Description)
+	// from the config var so app.toml declarations are always visible.
+	for key, configVar := range newEnvMap {
+		if existing, hasManual := envMap[key]; hasManual {
+			existing.Required = configVar.Required
+			existing.Description = configVar.Description
+			envMap[key] = existing
+		} else {
+			envMap[key] = configVar
 		}
 	}
 
@@ -162,6 +168,50 @@ func validateServicesExist(spec core_v1alpha.ConfigSpec) error {
 		return errNoServices
 	}
 	return nil
+}
+
+// validateRequiredVars checks that all required environment variables have non-empty values.
+// Returns an error listing all missing required vars with actionable guidance.
+func validateRequiredVars(spec core_v1alpha.ConfigSpec) error {
+	type missingVar struct {
+		key         string
+		description string
+		service     string
+	}
+	var missing []missingVar
+
+	for _, v := range spec.Variables {
+		if v.Required && v.Value == "" {
+			missing = append(missing, missingVar{key: v.Key, description: v.Description})
+		}
+	}
+	for _, svc := range spec.Services {
+		for _, e := range svc.Env {
+			if e.Required && e.Value == "" {
+				missing = append(missing, missingVar{key: e.Key, description: e.Description, service: svc.Name})
+			}
+		}
+	}
+
+	if len(missing) == 0 {
+		return nil
+	}
+
+	var b strings.Builder
+	b.WriteString("missing required environment variables:\n")
+	for _, m := range missing {
+		if m.service != "" {
+			b.WriteString(fmt.Sprintf("  - %s (service: %s)", m.key, m.service))
+		} else {
+			b.WriteString(fmt.Sprintf("  - %s", m.key))
+		}
+		if m.description != "" {
+			b.WriteString(fmt.Sprintf(": %s", m.description))
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("\nSet them with: miren env set -e KEY=VALUE (or -s KEY=VALUE for sensitive vars)")
+	return fmt.Errorf("%s", b.String())
 }
 
 // buildServicesConfig collects services from app config and procfile,
@@ -275,9 +325,12 @@ func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[st
 				svc.Env = make([]core_v1alpha.ConfigSpecServicesEnv, 0, len(serviceConfig.EnvVars))
 				for _, envVar := range serviceConfig.EnvVars {
 					svc.Env = append(svc.Env, core_v1alpha.ConfigSpecServicesEnv{
-						Key:    envVar.Key,
-						Value:  envVar.Value,
-						Source: "config",
+						Key:         envVar.Key,
+						Value:       envVar.Value,
+						Sensitive:   envVar.Sensitive,
+						Required:    envVar.Required,
+						Description: envVar.Description,
+						Source:      "config",
 					})
 				}
 			}
@@ -386,9 +439,12 @@ func buildVariablesFromAppConfig(appConfig *appconfig.AppConfig) []core_v1alpha.
 	variables := make([]core_v1alpha.ConfigSpecVariables, 0, len(appConfig.EnvVars))
 	for _, envVar := range appConfig.EnvVars {
 		variables = append(variables, core_v1alpha.ConfigSpecVariables{
-			Key:    envVar.Key,
-			Value:  envVar.Value,
-			Source: "config",
+			Key:         envVar.Key,
+			Value:       envVar.Value,
+			Sensitive:   envVar.Sensitive,
+			Required:    envVar.Required,
+			Description: envVar.Description,
+			Source:      "config",
 		})
 	}
 	return variables
@@ -432,10 +488,16 @@ func mergeVariablesFromAppConfig(existingVars []core_v1alpha.ConfigSpecVariables
 		// config vars are only kept if still in app.toml (checked below)
 	}
 
-	// Now add app.toml variables, but never override manual vars
-	for key, v := range appConfigMap {
-		if _, hasManual := varMap[key]; !hasManual {
-			varMap[key] = v
+	// Now add app.toml variables, but never override manual vars.
+	// When a manual var shadows a config var, carry metadata (Required, Description)
+	// from the config var so app.toml declarations are always visible.
+	for key, configVar := range appConfigMap {
+		if existing, hasManual := varMap[key]; hasManual {
+			existing.Required = configVar.Required
+			existing.Description = configVar.Description
+			varMap[key] = existing
+		} else {
+			varMap[key] = configVar
 		}
 	}
 
@@ -461,14 +523,20 @@ func mergeCliEnvVars(existingVars []core_v1alpha.ConfigSpecVariables, cliVars []
 		varMap[v.Key] = v
 	}
 
-	// CLI vars always override (marked as user-provided)
+	// CLI vars always override (marked as user-provided).
+	// Preserve Required/Description metadata from existing vars (e.g. from app.toml).
 	for _, cv := range cliVars {
-		varMap[cv.Key()] = core_v1alpha.ConfigSpecVariables{
+		newVar := core_v1alpha.ConfigSpecVariables{
 			Key:       cv.Key(),
 			Value:     cv.Value(),
 			Sensitive: cv.Sensitive(),
 			Source:    "manual",
 		}
+		if existing, ok := varMap[cv.Key()]; ok {
+			newVar.Required = existing.Required
+			newVar.Description = existing.Description
+		}
+		varMap[cv.Key()] = newVar
 	}
 
 	// Convert map back to slice
@@ -935,6 +1003,12 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	// that can't serve any traffic
 	if err := validateServicesExist(configSpec); err != nil {
 		b.sendErrorStatus(ctx, status, "%s. See https://miren.md/services", err)
+		return err
+	}
+
+	// Fail the deploy if required env vars are missing values
+	if err := validateRequiredVars(configSpec); err != nil {
+		b.sendErrorStatus(ctx, status, "%s", err)
 		return err
 	}
 

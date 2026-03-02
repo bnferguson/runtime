@@ -10,8 +10,11 @@ import (
 )
 
 type AppEnvVar struct {
-	Key   string `json:"key" toml:"key"`
-	Value string `json:"value" toml:"value"`
+	Key         string `json:"key" toml:"key"`
+	Value       string `json:"value" toml:"value"`
+	Required    bool   `json:"required,omitempty" toml:"required"`
+	Sensitive   bool   `json:"sensitive,omitempty" toml:"sensitive"`
+	Description string `json:"description,omitempty" toml:"description"`
 }
 
 type BuildConfig struct {

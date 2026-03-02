@@ -672,6 +672,127 @@ size_gb = 100
 	})
 }
 
+func TestParseAppConfigWithEnvVarMetadata(t *testing.T) {
+	tests := []struct {
+		name     string
+		config   string
+		wantVars []AppEnvVar
+	}{
+		{
+			name: "env var with required and description",
+			config: `
+name = "test-app"
+
+[[env]]
+key = "DATABASE_URL"
+value = ""
+required = true
+description = "PostgreSQL connection string"
+`,
+			wantVars: []AppEnvVar{
+				{Key: "DATABASE_URL", Value: "", Required: true, Description: "PostgreSQL connection string"},
+			},
+		},
+		{
+			name: "env var with sensitive flag",
+			config: `
+name = "test-app"
+
+[[env]]
+key = "API_KEY"
+value = "secret123"
+sensitive = true
+description = "Third-party API key"
+`,
+			wantVars: []AppEnvVar{
+				{Key: "API_KEY", Value: "secret123", Sensitive: true, Description: "Third-party API key"},
+			},
+		},
+		{
+			name: "mix of env vars with and without metadata",
+			config: `
+name = "test-app"
+
+[[env]]
+key = "DATABASE_URL"
+required = true
+sensitive = true
+description = "Database connection URL"
+
+[[env]]
+key = "LOG_LEVEL"
+value = "info"
+
+[[env]]
+key = "SECRET_KEY"
+value = ""
+required = true
+sensitive = true
+`,
+			wantVars: []AppEnvVar{
+				{Key: "DATABASE_URL", Required: true, Sensitive: true, Description: "Database connection URL"},
+				{Key: "LOG_LEVEL", Value: "info"},
+				{Key: "SECRET_KEY", Required: true, Sensitive: true},
+			},
+		},
+		{
+			name: "service-level env vars with metadata",
+			config: `
+name = "test-app"
+
+[services.web]
+command = "server"
+
+[[services.web.env]]
+key = "PORT"
+value = "3000"
+description = "HTTP port"
+
+[[services.web.env]]
+key = "TLS_CERT"
+value = ""
+required = true
+sensitive = true
+description = "TLS certificate contents"
+`,
+			wantVars: nil, // global vars are nil
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ac, err := Parse([]byte(tt.config))
+			require.NoError(t, err)
+			require.NotNil(t, ac)
+
+			if tt.wantVars == nil {
+				assert.Nil(t, ac.EnvVars)
+			} else {
+				require.Len(t, ac.EnvVars, len(tt.wantVars))
+				for i, want := range tt.wantVars {
+					assert.Equal(t, want.Key, ac.EnvVars[i].Key, "env var %d key", i)
+					assert.Equal(t, want.Value, ac.EnvVars[i].Value, "env var %d value", i)
+					assert.Equal(t, want.Required, ac.EnvVars[i].Required, "env var %d required", i)
+					assert.Equal(t, want.Sensitive, ac.EnvVars[i].Sensitive, "env var %d sensitive", i)
+					assert.Equal(t, want.Description, ac.EnvVars[i].Description, "env var %d description", i)
+				}
+			}
+
+			// For the service-level test, verify the service env vars
+			if tt.name == "service-level env vars with metadata" {
+				require.NotNil(t, ac.Services["web"])
+				require.Len(t, ac.Services["web"].EnvVars, 2)
+				assert.Equal(t, "PORT", ac.Services["web"].EnvVars[0].Key)
+				assert.Equal(t, "HTTP port", ac.Services["web"].EnvVars[0].Description)
+				assert.Equal(t, "TLS_CERT", ac.Services["web"].EnvVars[1].Key)
+				assert.True(t, ac.Services["web"].EnvVars[1].Required)
+				assert.True(t, ac.Services["web"].EnvVars[1].Sensitive)
+				assert.Equal(t, "TLS certificate contents", ac.Services["web"].EnvVars[1].Description)
+			}
+		})
+	}
+}
+
 func TestParseAppConfigWithAddons(t *testing.T) {
 	t.Run("parse addon with variant", func(t *testing.T) {
 		config := `

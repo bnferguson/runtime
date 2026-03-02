@@ -128,6 +128,12 @@ kinds:
                 origin:
                   type: string
                   doc: The provenance of the variable (user, file, generated, detected).
+                required:
+                  type: bool
+                  doc: Whether this variable must have a non-empty value for deploy to succeed
+                description:
+                  type: string
+                  doc: Human-readable description of this variable's purpose
             service_concurrency:
               type: component
               doc: Concurrency configuration for this service
@@ -207,6 +213,12 @@ kinds:
             origin:
               type: string
               doc: The provenance of the variable (user, file, generated, detected).
+            required:
+              type: bool
+              doc: Whether this variable must have a non-empty value for deploy to succeed
+            description:
+              type: string
+              doc: Human-readable description of this variable's purpose
 
     config_version:
       type: ref
@@ -374,6 +386,12 @@ components:
         origin:
           type: string
           doc: The provenance of the variable (user, file, generated, detected).
+        required:
+          type: bool
+          doc: Whether this variable must have a non-empty value for deploy to succeed
+        description:
+          type: string
+          doc: Human-readable description of this variable's purpose
     services:
       type: component
       doc: Per-service configuration
@@ -417,6 +435,12 @@ components:
             origin:
               type: string
               doc: The provenance of the variable (user, file, generated, detected)
+            required:
+              type: bool
+              doc: Whether this variable must have a non-empty value for deploy to succeed
+            description:
+              type: string
+              doc: Human-readable description of this variable's purpose
         concurrency:
           type: component
           doc: Concurrency configuration for this service

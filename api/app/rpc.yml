@@ -84,6 +84,12 @@ types:
       - name: source
         type: string
         index: 3
+      - name: required
+        type: bool
+        index: 4
+      - name: description
+        type: string
+        index: 5
 
   - type: VersionInfo
     fields:

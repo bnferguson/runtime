@@ -308,20 +308,24 @@ func EnvList(ctx *Context, opts struct {
 	// For JSON output
 	if opts.IsJSON() {
 		type EnvVar struct {
-			Name      string `json:"name"`
-			Value     string `json:"value,omitempty"`
-			Sensitive bool   `json:"sensitive"`
-			Service   string `json:"service,omitempty"`
-			Source    string `json:"source,omitempty"`
+			Name        string `json:"name"`
+			Value       string `json:"value,omitempty"`
+			Sensitive   bool   `json:"sensitive"`
+			Service     string `json:"service,omitempty"`
+			Source      string `json:"source,omitempty"`
+			Required    bool   `json:"required,omitempty"`
+			Description string `json:"description,omitempty"`
 		}
 
 		var vars []EnvVar
 		for _, entry := range entries {
 			ev := EnvVar{
-				Name:      entry.nv.Key(),
-				Sensitive: entry.nv.Sensitive(),
-				Service:   entry.service,
-				Source:    entry.nv.Source(),
+				Name:        entry.nv.Key(),
+				Sensitive:   entry.nv.Sensitive(),
+				Service:     entry.service,
+				Source:      entry.nv.Source(),
+				Required:    entry.nv.Required(),
+				Description: entry.nv.Description(),
 			}
 			// Only include value for non-sensitive variables in JSON
 			if !entry.nv.Sensitive() {
@@ -459,18 +463,21 @@ func printEnvTable(ctx *Context, entries []envVarEntry) {
 			service = entry.service
 		}
 
-		rows = append(rows, ui.Row{entry.nv.Key(), value, service, source})
+		description := entry.nv.Description()
+
+		rows = append(rows, ui.Row{entry.nv.Key(), value, service, source, description})
 	}
 
 	// Auto-size columns with reasonable maximums
 	columns := ui.AutoSizeColumns(
-		[]string{"NAME", "VALUE", "SERVICE", "SOURCE"},
+		[]string{"NAME", "VALUE", "SERVICE", "SOURCE", "DESCRIPTION"},
 		rows,
 		ui.Columns().
 			MaxWidth(0, 30). // NAME
 			MaxWidth(1, 40). // VALUE
 			MaxWidth(2, 15). // SERVICE
-			MaxWidth(3, 12), // SOURCE
+			MaxWidth(3, 12). // SOURCE
+			MaxWidth(4, 40), // DESCRIPTION
 	)
 
 	// Create and render the table

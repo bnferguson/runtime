@@ -394,27 +394,37 @@ func (o *ConfigSpecServicesDisks) InitSchema(sb *schema.SchemaBuilder) {
 }
 
 const (
-	ConfigSpecServicesEnvKeyId       = entity.Id("dev.miren.core/component.config_spec.services.env.key")
-	ConfigSpecServicesEnvOriginId    = entity.Id("dev.miren.core/component.config_spec.services.env.origin")
-	ConfigSpecServicesEnvSensitiveId = entity.Id("dev.miren.core/component.config_spec.services.env.sensitive")
-	ConfigSpecServicesEnvSourceId    = entity.Id("dev.miren.core/component.config_spec.services.env.source")
-	ConfigSpecServicesEnvValueId     = entity.Id("dev.miren.core/component.config_spec.services.env.value")
+	ConfigSpecServicesEnvDescriptionId = entity.Id("dev.miren.core/component.config_spec.services.env.description")
+	ConfigSpecServicesEnvKeyId         = entity.Id("dev.miren.core/component.config_spec.services.env.key")
+	ConfigSpecServicesEnvOriginId      = entity.Id("dev.miren.core/component.config_spec.services.env.origin")
+	ConfigSpecServicesEnvRequiredId    = entity.Id("dev.miren.core/component.config_spec.services.env.required")
+	ConfigSpecServicesEnvSensitiveId   = entity.Id("dev.miren.core/component.config_spec.services.env.sensitive")
+	ConfigSpecServicesEnvSourceId      = entity.Id("dev.miren.core/component.config_spec.services.env.source")
+	ConfigSpecServicesEnvValueId       = entity.Id("dev.miren.core/component.config_spec.services.env.value")
 )
 
 type ConfigSpecServicesEnv struct {
-	Key       string `cbor:"key,omitempty" json:"key,omitempty"`
-	Origin    string `cbor:"origin,omitempty" json:"origin,omitempty"`
-	Sensitive bool   `cbor:"sensitive,omitempty" json:"sensitive,omitempty"`
-	Source    string `cbor:"source,omitempty" json:"source,omitempty"`
-	Value     string `cbor:"value,omitempty" json:"value,omitempty"`
+	Description string `cbor:"description,omitempty" json:"description,omitempty"`
+	Key         string `cbor:"key,omitempty" json:"key,omitempty"`
+	Origin      string `cbor:"origin,omitempty" json:"origin,omitempty"`
+	Required    bool   `cbor:"required,omitempty" json:"required,omitempty"`
+	Sensitive   bool   `cbor:"sensitive,omitempty" json:"sensitive,omitempty"`
+	Source      string `cbor:"source,omitempty" json:"source,omitempty"`
+	Value       string `cbor:"value,omitempty" json:"value,omitempty"`
 }
 
 func (o *ConfigSpecServicesEnv) Decode(e entity.AttrGetter) {
+	if a, ok := e.Get(ConfigSpecServicesEnvDescriptionId); ok && a.Value.Kind() == entity.KindString {
+		o.Description = a.Value.String()
+	}
 	if a, ok := e.Get(ConfigSpecServicesEnvKeyId); ok && a.Value.Kind() == entity.KindString {
 		o.Key = a.Value.String()
 	}
 	if a, ok := e.Get(ConfigSpecServicesEnvOriginId); ok && a.Value.Kind() == entity.KindString {
 		o.Origin = a.Value.String()
+	}
+	if a, ok := e.Get(ConfigSpecServicesEnvRequiredId); ok && a.Value.Kind() == entity.KindBool {
+		o.Required = a.Value.Bool()
 	}
 	if a, ok := e.Get(ConfigSpecServicesEnvSensitiveId); ok && a.Value.Kind() == entity.KindBool {
 		o.Sensitive = a.Value.Bool()
@@ -428,12 +438,16 @@ func (o *ConfigSpecServicesEnv) Decode(e entity.AttrGetter) {
 }
 
 func (o *ConfigSpecServicesEnv) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.Description) {
+		attrs = append(attrs, entity.String(ConfigSpecServicesEnvDescriptionId, o.Description))
+	}
 	if !entity.Empty(o.Key) {
 		attrs = append(attrs, entity.String(ConfigSpecServicesEnvKeyId, o.Key))
 	}
 	if !entity.Empty(o.Origin) {
 		attrs = append(attrs, entity.String(ConfigSpecServicesEnvOriginId, o.Origin))
 	}
+	attrs = append(attrs, entity.Bool(ConfigSpecServicesEnvRequiredId, o.Required))
 	attrs = append(attrs, entity.Bool(ConfigSpecServicesEnvSensitiveId, o.Sensitive))
 	if !entity.Empty(o.Source) {
 		attrs = append(attrs, entity.String(ConfigSpecServicesEnvSourceId, o.Source))
@@ -445,10 +459,16 @@ func (o *ConfigSpecServicesEnv) Encode() (attrs []entity.Attr) {
 }
 
 func (o *ConfigSpecServicesEnv) Empty() bool {
+	if !entity.Empty(o.Description) {
+		return false
+	}
 	if !entity.Empty(o.Key) {
 		return false
 	}
 	if !entity.Empty(o.Origin) {
+		return false
+	}
+	if !entity.Empty(o.Required) {
 		return false
 	}
 	if !entity.Empty(o.Sensitive) {
@@ -464,35 +484,47 @@ func (o *ConfigSpecServicesEnv) Empty() bool {
 }
 
 func (o *ConfigSpecServicesEnv) InitSchema(sb *schema.SchemaBuilder) {
+	sb.String("description", "dev.miren.core/component.config_spec.services.env.description", schema.Doc("Human-readable description of this variable's purpose"))
 	sb.String("key", "dev.miren.core/component.config_spec.services.env.key", schema.Doc("The name of the variable"))
 	sb.String("origin", "dev.miren.core/component.config_spec.services.env.origin", schema.Doc("The provenance of the variable (user, file, generated, detected)"))
+	sb.Bool("required", "dev.miren.core/component.config_spec.services.env.required", schema.Doc("Whether this variable must have a non-empty value for deploy to succeed"))
 	sb.Bool("sensitive", "dev.miren.core/component.config_spec.services.env.sensitive", schema.Doc("Whether or not the value is sensitive"))
 	sb.String("source", "dev.miren.core/component.config_spec.services.env.source", schema.Doc("The source of the variable (config or manual). Defaults to config for backward compatibility."))
 	sb.String("value", "dev.miren.core/component.config_spec.services.env.value", schema.Doc("The value of the variable"))
 }
 
 const (
-	ConfigSpecVariablesKeyId       = entity.Id("dev.miren.core/component.config_spec.variables.key")
-	ConfigSpecVariablesOriginId    = entity.Id("dev.miren.core/component.config_spec.variables.origin")
-	ConfigSpecVariablesSensitiveId = entity.Id("dev.miren.core/component.config_spec.variables.sensitive")
-	ConfigSpecVariablesSourceId    = entity.Id("dev.miren.core/component.config_spec.variables.source")
-	ConfigSpecVariablesValueId     = entity.Id("dev.miren.core/component.config_spec.variables.value")
+	ConfigSpecVariablesDescriptionId = entity.Id("dev.miren.core/component.config_spec.variables.description")
+	ConfigSpecVariablesKeyId         = entity.Id("dev.miren.core/component.config_spec.variables.key")
+	ConfigSpecVariablesOriginId      = entity.Id("dev.miren.core/component.config_spec.variables.origin")
+	ConfigSpecVariablesRequiredId    = entity.Id("dev.miren.core/component.config_spec.variables.required")
+	ConfigSpecVariablesSensitiveId   = entity.Id("dev.miren.core/component.config_spec.variables.sensitive")
+	ConfigSpecVariablesSourceId      = entity.Id("dev.miren.core/component.config_spec.variables.source")
+	ConfigSpecVariablesValueId       = entity.Id("dev.miren.core/component.config_spec.variables.value")
 )
 
 type ConfigSpecVariables struct {
-	Key       string `cbor:"key,omitempty" json:"key,omitempty"`
-	Origin    string `cbor:"origin,omitempty" json:"origin,omitempty"`
-	Sensitive bool   `cbor:"sensitive,omitempty" json:"sensitive,omitempty"`
-	Source    string `cbor:"source,omitempty" json:"source,omitempty"`
-	Value     string `cbor:"value,omitempty" json:"value,omitempty"`
+	Description string `cbor:"description,omitempty" json:"description,omitempty"`
+	Key         string `cbor:"key,omitempty" json:"key,omitempty"`
+	Origin      string `cbor:"origin,omitempty" json:"origin,omitempty"`
+	Required    bool   `cbor:"required,omitempty" json:"required,omitempty"`
+	Sensitive   bool   `cbor:"sensitive,omitempty" json:"sensitive,omitempty"`
+	Source      string `cbor:"source,omitempty" json:"source,omitempty"`
+	Value       string `cbor:"value,omitempty" json:"value,omitempty"`
 }
 
 func (o *ConfigSpecVariables) Decode(e entity.AttrGetter) {
+	if a, ok := e.Get(ConfigSpecVariablesDescriptionId); ok && a.Value.Kind() == entity.KindString {
+		o.Description = a.Value.String()
+	}
 	if a, ok := e.Get(ConfigSpecVariablesKeyId); ok && a.Value.Kind() == entity.KindString {
 		o.Key = a.Value.String()
 	}
 	if a, ok := e.Get(ConfigSpecVariablesOriginId); ok && a.Value.Kind() == entity.KindString {
 		o.Origin = a.Value.String()
+	}
+	if a, ok := e.Get(ConfigSpecVariablesRequiredId); ok && a.Value.Kind() == entity.KindBool {
+		o.Required = a.Value.Bool()
 	}
 	if a, ok := e.Get(ConfigSpecVariablesSensitiveId); ok && a.Value.Kind() == entity.KindBool {
 		o.Sensitive = a.Value.Bool()
@@ -506,12 +538,16 @@ func (o *ConfigSpecVariables) Decode(e entity.AttrGetter) {
 }
 
 func (o *ConfigSpecVariables) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.Description) {
+		attrs = append(attrs, entity.String(ConfigSpecVariablesDescriptionId, o.Description))
+	}
 	if !entity.Empty(o.Key) {
 		attrs = append(attrs, entity.String(ConfigSpecVariablesKeyId, o.Key))
 	}
 	if !entity.Empty(o.Origin) {
 		attrs = append(attrs, entity.String(ConfigSpecVariablesOriginId, o.Origin))
 	}
+	attrs = append(attrs, entity.Bool(ConfigSpecVariablesRequiredId, o.Required))
 	attrs = append(attrs, entity.Bool(ConfigSpecVariablesSensitiveId, o.Sensitive))
 	if !entity.Empty(o.Source) {
 		attrs = append(attrs, entity.String(ConfigSpecVariablesSourceId, o.Source))
@@ -523,10 +559,16 @@ func (o *ConfigSpecVariables) Encode() (attrs []entity.Attr) {
 }
 
 func (o *ConfigSpecVariables) Empty() bool {
+	if !entity.Empty(o.Description) {
+		return false
+	}
 	if !entity.Empty(o.Key) {
 		return false
 	}
 	if !entity.Empty(o.Origin) {
+		return false
+	}
+	if !entity.Empty(o.Required) {
 		return false
 	}
 	if !entity.Empty(o.Sensitive) {
@@ -542,8 +584,10 @@ func (o *ConfigSpecVariables) Empty() bool {
 }
 
 func (o *ConfigSpecVariables) InitSchema(sb *schema.SchemaBuilder) {
+	sb.String("description", "dev.miren.core/component.config_spec.variables.description", schema.Doc("Human-readable description of this variable's purpose"))
 	sb.String("key", "dev.miren.core/component.config_spec.variables.key", schema.Doc("The name of the variable"))
 	sb.String("origin", "dev.miren.core/component.config_spec.variables.origin", schema.Doc("The provenance of the variable (user, file, generated, detected)."))
+	sb.Bool("required", "dev.miren.core/component.config_spec.variables.required", schema.Doc("Whether this variable must have a non-empty value for deploy to succeed"))
 	sb.Bool("sensitive", "dev.miren.core/component.config_spec.variables.sensitive", schema.Doc("Whether or not the value is sensitive"))
 	sb.String("source", "dev.miren.core/component.config_spec.variables.source", schema.Doc("The source of the variable (config or manual). Defaults to config for backward compatibility."))
 	sb.String("value", "dev.miren.core/component.config_spec.variables.value", schema.Doc("The value of the variable"))
@@ -1141,27 +1185,37 @@ func (o *Disks) InitSchema(sb *schema.SchemaBuilder) {
 }
 
 const (
-	EnvKeyId       = entity.Id("dev.miren.core/env.key")
-	EnvOriginId    = entity.Id("dev.miren.core/env.origin")
-	EnvSensitiveId = entity.Id("dev.miren.core/env.sensitive")
-	EnvSourceId    = entity.Id("dev.miren.core/env.source")
-	EnvValueId     = entity.Id("dev.miren.core/env.value")
+	EnvDescriptionId = entity.Id("dev.miren.core/env.description")
+	EnvKeyId         = entity.Id("dev.miren.core/env.key")
+	EnvOriginId      = entity.Id("dev.miren.core/env.origin")
+	EnvRequiredId    = entity.Id("dev.miren.core/env.required")
+	EnvSensitiveId   = entity.Id("dev.miren.core/env.sensitive")
+	EnvSourceId      = entity.Id("dev.miren.core/env.source")
+	EnvValueId       = entity.Id("dev.miren.core/env.value")
 )
 
 type Env struct {
-	Key       string `cbor:"key,omitempty" json:"key,omitempty"`
-	Origin    string `cbor:"origin,omitempty" json:"origin,omitempty"`
-	Sensitive bool   `cbor:"sensitive,omitempty" json:"sensitive,omitempty"`
-	Source    string `cbor:"source,omitempty" json:"source,omitempty"`
-	Value     string `cbor:"value,omitempty" json:"value,omitempty"`
+	Description string `cbor:"description,omitempty" json:"description,omitempty"`
+	Key         string `cbor:"key,omitempty" json:"key,omitempty"`
+	Origin      string `cbor:"origin,omitempty" json:"origin,omitempty"`
+	Required    bool   `cbor:"required,omitempty" json:"required,omitempty"`
+	Sensitive   bool   `cbor:"sensitive,omitempty" json:"sensitive,omitempty"`
+	Source      string `cbor:"source,omitempty" json:"source,omitempty"`
+	Value       string `cbor:"value,omitempty" json:"value,omitempty"`
 }
 
 func (o *Env) Decode(e entity.AttrGetter) {
+	if a, ok := e.Get(EnvDescriptionId); ok && a.Value.Kind() == entity.KindString {
+		o.Description = a.Value.String()
+	}
 	if a, ok := e.Get(EnvKeyId); ok && a.Value.Kind() == entity.KindString {
 		o.Key = a.Value.String()
 	}
 	if a, ok := e.Get(EnvOriginId); ok && a.Value.Kind() == entity.KindString {
 		o.Origin = a.Value.String()
+	}
+	if a, ok := e.Get(EnvRequiredId); ok && a.Value.Kind() == entity.KindBool {
+		o.Required = a.Value.Bool()
 	}
 	if a, ok := e.Get(EnvSensitiveId); ok && a.Value.Kind() == entity.KindBool {
 		o.Sensitive = a.Value.Bool()
@@ -1175,12 +1229,16 @@ func (o *Env) Decode(e entity.AttrGetter) {
 }
 
 func (o *Env) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.Description) {
+		attrs = append(attrs, entity.String(EnvDescriptionId, o.Description))
+	}
 	if !entity.Empty(o.Key) {
 		attrs = append(attrs, entity.String(EnvKeyId, o.Key))
 	}
 	if !entity.Empty(o.Origin) {
 		attrs = append(attrs, entity.String(EnvOriginId, o.Origin))
 	}
+	attrs = append(attrs, entity.Bool(EnvRequiredId, o.Required))
 	attrs = append(attrs, entity.Bool(EnvSensitiveId, o.Sensitive))
 	if !entity.Empty(o.Source) {
 		attrs = append(attrs, entity.String(EnvSourceId, o.Source))
@@ -1192,10 +1250,16 @@ func (o *Env) Encode() (attrs []entity.Attr) {
 }
 
 func (o *Env) Empty() bool {
+	if !entity.Empty(o.Description) {
+		return false
+	}
 	if !entity.Empty(o.Key) {
 		return false
 	}
 	if !entity.Empty(o.Origin) {
+		return false
+	}
+	if !entity.Empty(o.Required) {
 		return false
 	}
 	if !entity.Empty(o.Sensitive) {
@@ -1211,8 +1275,10 @@ func (o *Env) Empty() bool {
 }
 
 func (o *Env) InitSchema(sb *schema.SchemaBuilder) {
+	sb.String("description", "dev.miren.core/env.description", schema.Doc("Human-readable description of this variable's purpose"))
 	sb.String("key", "dev.miren.core/env.key", schema.Doc("The name of the variable"))
 	sb.String("origin", "dev.miren.core/env.origin", schema.Doc("The provenance of the variable (user, file, generated, detected)."))
+	sb.Bool("required", "dev.miren.core/env.required", schema.Doc("Whether this variable must have a non-empty value for deploy to succeed"))
 	sb.Bool("sensitive", "dev.miren.core/env.sensitive", schema.Doc("Whether or not the value is sensitive"))
 	sb.String("source", "dev.miren.core/env.source", schema.Doc("The source of the variable (config or manual). Defaults to config for backward compatibility."))
 	sb.String("value", "dev.miren.core/env.value", schema.Doc("The value of the variable"))
@@ -1299,27 +1365,37 @@ func (o *ServiceConcurrency) InitSchema(sb *schema.SchemaBuilder) {
 }
 
 const (
-	VariableKeyId       = entity.Id("dev.miren.core/variable.key")
-	VariableOriginId    = entity.Id("dev.miren.core/variable.origin")
-	VariableSensitiveId = entity.Id("dev.miren.core/variable.sensitive")
-	VariableSourceId    = entity.Id("dev.miren.core/variable.source")
-	VariableValueId     = entity.Id("dev.miren.core/variable.value")
+	VariableDescriptionId = entity.Id("dev.miren.core/variable.description")
+	VariableKeyId         = entity.Id("dev.miren.core/variable.key")
+	VariableOriginId      = entity.Id("dev.miren.core/variable.origin")
+	VariableRequiredId    = entity.Id("dev.miren.core/variable.required")
+	VariableSensitiveId   = entity.Id("dev.miren.core/variable.sensitive")
+	VariableSourceId      = entity.Id("dev.miren.core/variable.source")
+	VariableValueId       = entity.Id("dev.miren.core/variable.value")
 )
 
 type Variable struct {
-	Key       string `cbor:"key,omitempty" json:"key,omitempty"`
-	Origin    string `cbor:"origin,omitempty" json:"origin,omitempty"`
-	Sensitive bool   `cbor:"sensitive,omitempty" json:"sensitive,omitempty"`
-	Source    string `cbor:"source,omitempty" json:"source,omitempty"`
-	Value     string `cbor:"value,omitempty" json:"value,omitempty"`
+	Description string `cbor:"description,omitempty" json:"description,omitempty"`
+	Key         string `cbor:"key,omitempty" json:"key,omitempty"`
+	Origin      string `cbor:"origin,omitempty" json:"origin,omitempty"`
+	Required    bool   `cbor:"required,omitempty" json:"required,omitempty"`
+	Sensitive   bool   `cbor:"sensitive,omitempty" json:"sensitive,omitempty"`
+	Source      string `cbor:"source,omitempty" json:"source,omitempty"`
+	Value       string `cbor:"value,omitempty" json:"value,omitempty"`
 }
 
 func (o *Variable) Decode(e entity.AttrGetter) {
+	if a, ok := e.Get(VariableDescriptionId); ok && a.Value.Kind() == entity.KindString {
+		o.Description = a.Value.String()
+	}
 	if a, ok := e.Get(VariableKeyId); ok && a.Value.Kind() == entity.KindString {
 		o.Key = a.Value.String()
 	}
 	if a, ok := e.Get(VariableOriginId); ok && a.Value.Kind() == entity.KindString {
 		o.Origin = a.Value.String()
+	}
+	if a, ok := e.Get(VariableRequiredId); ok && a.Value.Kind() == entity.KindBool {
+		o.Required = a.Value.Bool()
 	}
 	if a, ok := e.Get(VariableSensitiveId); ok && a.Value.Kind() == entity.KindBool {
 		o.Sensitive = a.Value.Bool()
@@ -1333,12 +1409,16 @@ func (o *Variable) Decode(e entity.AttrGetter) {
 }
 
 func (o *Variable) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.Description) {
+		attrs = append(attrs, entity.String(VariableDescriptionId, o.Description))
+	}
 	if !entity.Empty(o.Key) {
 		attrs = append(attrs, entity.String(VariableKeyId, o.Key))
 	}
 	if !entity.Empty(o.Origin) {
 		attrs = append(attrs, entity.String(VariableOriginId, o.Origin))
 	}
+	attrs = append(attrs, entity.Bool(VariableRequiredId, o.Required))
 	attrs = append(attrs, entity.Bool(VariableSensitiveId, o.Sensitive))
 	if !entity.Empty(o.Source) {
 		attrs = append(attrs, entity.String(VariableSourceId, o.Source))
@@ -1350,10 +1430,16 @@ func (o *Variable) Encode() (attrs []entity.Attr) {
 }
 
 func (o *Variable) Empty() bool {
+	if !entity.Empty(o.Description) {
+		return false
+	}
 	if !entity.Empty(o.Key) {
 		return false
 	}
 	if !entity.Empty(o.Origin) {
+		return false
+	}
+	if !entity.Empty(o.Required) {
 		return false
 	}
 	if !entity.Empty(o.Sensitive) {
@@ -1369,8 +1455,10 @@ func (o *Variable) Empty() bool {
 }
 
 func (o *Variable) InitSchema(sb *schema.SchemaBuilder) {
+	sb.String("description", "dev.miren.core/variable.description", schema.Doc("Human-readable description of this variable's purpose"))
 	sb.String("key", "dev.miren.core/variable.key", schema.Doc("The name of the variable"))
 	sb.String("origin", "dev.miren.core/variable.origin", schema.Doc("The provenance of the variable (user, file, generated, detected)."))
+	sb.Bool("required", "dev.miren.core/variable.required", schema.Doc("Whether this variable must have a non-empty value for deploy to succeed"))
 	sb.Bool("sensitive", "dev.miren.core/variable.sensitive", schema.Doc("Whether or not the value is sensitive"))
 	sb.String("source", "dev.miren.core/variable.source", schema.Doc("The source of the variable (config or manual). Defaults to config for backward compatibility."))
 	sb.String("value", "dev.miren.core/variable.value", schema.Doc("The value of the value"))
@@ -2216,5 +2304,5 @@ func init() {
 		(&OidcBinding{}).InitSchema(sb)
 		(&Project{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.core", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xac[ۮ\xdd4\x13~\x8d\xff\aʡ\x9c\v\xa4-\x05A\x85\xa8\xc4\x15\x127<B\xe4\x95x%\xde+\xb1S\xdbY{/\xee8\n\xc4[\xd0\x16\xf1\x82p\x8d\xe2S\x9c\x89\x13;\xd9\xdcl\xd9N\xe6\x9b\xf1\x9c왕\xfd\xbc\xa4\xa8Ŵ\xc4\xe7\xac%\x1cӬ`\x1c\xe3\x13\xa1\xa5\xf8\xebz\xbaz\x7fX\xcdP\xd7\xfd\xa9h8x\x8a\xbaN\xd3\xfds,Y\x8b\b\x05\xa0\xc7#\xc1M)~|v \xe5\xcd\x1bs\xe2\f\x15\x92\x9cq~\xc6\\\x10F\xb5\\`M^:| \xe5\"\x04\xa1D\x12\xd4\xe4\x05\xa3GRi\b\xb0\xe6C\xbc\x14\x80\xe88\xbb\u0085T\xb4\x95\x9d\x18\xa2\xca\xc8Q\x9d\x1f\xa2\xa6\xabQ\xd3q\xd2\"~ɇ}\x17\xa8\xebn^\x0e\xa9̠h\xb5\x9d\xc1\x1b\xe6a\x8a\xea\xbeWB\xbf\x12\x06\xc8\xd85\xc5\\\xb1\xc0z8\b}\x14\x92\x13Z\xad\nnw9C\xd6\xf6\xe6\x92\x1c\x91\x95\x1e\xba\x84}\x9a\"\xfeOJ|\xa8!\x8b08\x96b1\xe8qb\xa5ח(ZD\xc9\x11\vm\xab\xdaͼ}+\xfawc\xf4yI*\v\xc3ࢇ\xf6|@{u\tMH${\xa1@\x8ef<Ж\x98\xf6\xedi\xf8\x93\x9fQ\xd3c\xf1\xc7Q;\xf5LݚȄA\x8dxQ\x933\x9e3\xb4\xaf\x99竦\xad\xadta۶X\xa2\x12I\x14\xb6\xad}\x9a\x14\xd5A\xddX\x84\xacA\a܈\xb2E\xf4\xf2\xb7\u0590Y\x194\x84\xd58\xe8\xdb\x0e`\xa0)\xc7?\xd0į-\xd1\xed\x8e\xe6\xdaB\xcc6\xa54W\xe2\xaea\x97\x16S\x13\x177\xff\ao\x8d/\xa4\xa8\xefw\xb5\x8b\xbb\x8b\x18Cp\xe4n\xfb\xb5\x9bA=\xbc\xbd\x8e\xe0\xa7֓\xbf\x00q\xdeZ\xc69\xf4\xa4)\xf3\x86U\xdaկ\xbc\xf9\x06\x94\xa2\xe9\x85\xc4<'\xa5F\xf1\xe6\x10\xe5\x9d\x15\x14\xd6v\r\x96\xb8̑6q3Y\x81\xa1\xbb\xa2\x1d=\xc4e~\xb8h\xed\xf8\v\x03\x0e\x19\x90\x19\xc5T\x8e#cz\x00\x9b\x85a\xd33dXm\n$\x93\xa4\xc5B\xa2V\xa7J2N\xd3<A\x83\xf4\x02\xf3\x1c\xb7\x884Z\xf9\xde\x1c\u0084]҃1\x06\xac\xec$\xcd\a<\x00\xe7\xd5d\x9c\xa6\x9e\\W\x16\xedp\tfz\xcf\x12\x98s\xc6\xf3\x16\v\x81*ͯ\x9d.AgY\tƊȜ\xd0#\xd3\xc1\xe8f\x117\xb9\xbb\xec&\x16\"\xc5G~{\x16ʴ\x16!C\xbd\xac\x99\xbe\x06\x1c\xcd\x18\x9ad\x91\xf6\xc0\x11-jMkƐ\xf6\x83%ڂ\xb5-\x91\xb9f\xe99\x97\b=\x80\xa8\xefEP\xa7^\xdf\xcdV!\x1e\xbc18<\"\xf2\x92p\xa9c\xbcv3uN\x1f\x18k\x82\x87\x89\xa3\xf6\xbd\xa7\n\xf8M0b\x1c5\xc7\x1d\x13D2\xae\xb9_ys\x88\x01\xefH\x0eC\xd4Hߑ\x86\x01\xa4z\x7f\x89\xea\x9a\xf1\x13\xa1U.9\xc6y\x8d\x846\xf1\xd3\xf9r\xf2\x8d\xb1\"r@\x0e\xaa\xcb\xf3\xeb\xaeFB\xab\v\xeb!\x149[\xa6\x15\xac\xe7\x05\xce\xc7\x15\x9bjd\xf0I\xcc\x05|\xe4\xf0EmC\xc2\x19`f\xfb\xb6Ց=TM\xd8\aj\f\xfbFz\xb8\xc33\xd0\x03\xc9P\xd9\x12\x9aKv\xc2\xf6`\xf7\x16b\xb1?\x01Z\xba\x80\xbf\xb9Fd.\x98\xe6bbg\x86\xfc\xf9B\xa1\xe6ȽB\xed\xe8\x15h+i\x14\xa0es\xb4\x14\xb5\xfe\xf2\"\xa4\rM\xaf\xb2\x0e\xa2\xa5\x7f_\xad\xddZD\xbc{Q\xf1\x1c|\x8a\x9c?\x04C\xcc\"X(\x9d\x91\xec$v9v\xd4\x02\xf33)L>\xb3\x93\xd4Pp\x1a\t\x86\x9b\xd9*\xa6\x92_:F\xa8\xf6\x8f+o\x0e\xa5\x84qb\x10:\xc65m\xa9F\x03UA\xa8\\3\x9f\xd9\xc9\xc4|n\xed\xf6\xe6\xb3P)\xe6\xfbU\xc9y\aVp\x06!+\x898\xf9bb\xbd\x10\x91\xf1A\xba\x8c\x9aCR@\x84s\xf9@\x9e\x1dI\x83\xc5EH\xdcj+z\xf3\xe8}Q\x014\x18\t\xac\xcek\xd6kk\xb6ӥ\x98\xcbj\x98\x96\xf5T\xe6\x1d\x92\xfa\x00\xbb\xf2\xe6\x10`V\x8e)\x80H\x15\t\xfdI\x13q\x8cʜ\xd1F\x1f\xdbd\x9cNo\r\xb0t\xd5Ă|\x87\xf3\xea`B\xccL\xac\x13\xafƗ\xf6\x85\x17\xa1뀳.\xa6g\xcf{\x8aa\x1a\xf1\x9dl\x83\xef`zN\U0005c7c7\xedî\x16\xa6\xe7섵ʊa\x103\xd0@\xc08\xa9\x88>Ďf\fɠ\x96\a2\x81\xa9 \x92\x9cM\x191N\xa7\x06\nq\xd4W\ts\x15\xd0c\xc8\xf1\x7f\x012\xd5\xc8\xd1\x11\xab\x87\xa9Is0ѳՔ@Z{\xc3\xc4z\x18Ӏ\xa3\x8c8\xf7\"\xddB\x86\r\xf6X'D^\xe96N!\xdbu\x04e\xa1\x11AMa!\x06K\x0e\x87`\x06y\xc1h\xd1s\x8ei\xa1\xfdM\x84\x1eD\xe2\xe2Ɇ\xb8\b\xc0'\xc7ɬD\r\x80e-+\x8d\x11\xd5\b\xaa\xf4A\x02\x04\xedۜP!\x11\x1d\x0e=\x95q\xa7K\x133\x7f\x9e\x80\xc8\xf1\xd3\x1e\v)\xf2n(\xf4\r\x8eB\xeeÏ&\x1c\x1e%p\x10\x05jp^\xb2k\x9a\x97\xb8Aژ\xddl\x15\xaa#\t\xba\ue942\xf0Ϡn\xb6\x9a\x1a\xc6\xdc\xf0\xf0X\xacߕ\xac\xef\x04[3ֿ$\xe2r(Hq\xe1\x8aD\x06\x17=\t\u05ee@g\xc4\t:4ؿ\x02\xb9\xb5\xdb_\x81,T\xba\xdb\xc3#\xcc\"\xac\x1f\x12pw\x8e*ᤀ\x89\xc7\xd1&\x1e\x17\x8b\xbc\x13\xce\f\x98\xdd\x1d\xed\xee\x83\xc3Yo\xf5-SB\x05\xbb\x01s3N\x7fi\x03k~\xfd\a{x>\x94:\xa4\xf2\x9e\xebn\x0f\x19\xa7P'kEd\xe2\x0f9\xf7\x12 R\x7f\xcb\t\xdeV}@_9U\xa0O\xbej\b\xbf\xb9>\xab\x8dT\xa3\x80\x91\xb2\xc8\x0f\x84\x96\x84V&\xf0`\x8c\xf8\xaf\xec\xbf\xc2\xfb(\xc1\x12_\xe5\x91\x0fר\x8a\x06\x91vȧ%\x91\x84Q\xbfb\xe9f\xcf\"\xd9\x050\xcaV\x19\xa5W\xc8л \xd2z\x9e\x81\x87\xf2\x8c\xbaCRbn\x9c\xc1NR\x9d\x81)\xb8\x11-\xc8r\xa2\x87\x12\x8b\x82\x93N\xba\xdfj\xfc\x85\x98\x13O\x90\x88\x10\xbd\xf9U\xf8hƱ\x0e\xfd\x84\xbe\xe3\xecLJ\x83P\xbbY\xac-<\xc1\x10\xfd\xe1\n\x17\xaaPsJdp1U\x99\x8d\x0f=ۻ\n\xadi&3~\aS\xf2\xf4\xa5tG\x83\xc7\xca\x14'\x18`\xc1\x9f\x13\x00\x9d\xe8p\xa1\xaf|j\x14\t\"h2\xf7\xdc\xee}\x00I\xff\xc1\xe9~\n\\b/Ge\x93\x8f\x92\x00oӧ\x01\x1c\xb2u\x0e\xe9\x8d\xd6O7I\x1e\xed\xbf)\xd3?ފ9-gN\x1bʘǛԒ\xed\xaa`\x9e\xec\xdeN\xac\xb0\xf9z?\xf2\xb6z\xe7\xdb\xfd\x8cnW\x06}\xb3\x9f\xf1\xce\xea\xe86\x1c\xffۢ\xe9\xe6\x8e\xe680\xb4\xfc<v/B\xb5\\D\xda}\xfd\xd3Gۂdc\vucxl\xee\xb0~\xb5\a\x7fs\x03v\xd7.6\xf4ga\xc7!\t?\xd2\xe1\xfar\x0ffbw\xf7\x8b=\xd8\xfb\x9b\xbf\xd7\xf3P\x19\xdb\xc1\x0f\xb7ɲ\xbdI\xfcp[\x80l\xe9\x13o=`\xa3}䍎\x94\xd8f\xdeh\xee\r]\xe8\x1d\xf2&4\x1c>ێ\xba\xbb\x15\xd1\xcf}\xd3v\xb57\xa6\xefh\xaf\xfb\xe3mx\x91\xfc\xb0\x11m\xad/\xbeQ\xdf\xc9\xdd\xf2=\xb8\x91\x1e\xfaz#snK%\xc7'ir\xec\xe9X\xc2O>\xc2ж\xdd\xe5\x9f\xeed\\\xdc\xf8+W\x84Gz\xf6Js!\a\xbc\x9e\xba\xd2R\xe1\b\x96\x90\xb7Ҳ\xcb\b\x99\x98\xb4\xb6J\x9a\x90\xb1\xd2<l\x84ܝ\xae\xc4\xe8\xe2\x0em\xbdw\xe7\t\xb0\xfa\"h\x99\xc2wO\xa2\x1e\xe2Q\xff+E\x81\xban\xe9\xdf)\xdc\xf7\xf7k\xff<\x10\xf9\x92\xdb>\x1d?[^\xfd\xe0\xdb\xff\x8e)\xf2}\xf3\xa4\x95\x19\xfb\xe6iڝ\x896>\x81\x06S\xda9\xff\x02\x00\x00\xff\xff\x01\x00\x00\xff\xff\xe6\xd1~\xbf\xb02\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.core", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xac[Y\xaf\xec8\x11\xfe\x1bl\xc32\xec\x03d\xe62 \x18\x10#\xf1\x84\xc4\v?!r'\xeeħ\x13;c;}n\xf3\xc6\x0e\xe2_p\xefE\xfcAxF^\xe3T\x9c\xd8Ι\x97#\x97\x93\xfa\\\xa9ͮ\xf2\xe9\xb7-E#\xa6-\xbeW#\xe1\x98V\r\xe3\x18\xdf\bm\xc5\x7f\x9e׳\x1f\xaa\xd9\nMӿ5\x0f\aO\xd14\x19\xbe\xff][6\"B\x01\xe8\xf5J\xf0Њ?\xbd\xb9\x90\xf6\xf57\xb6\xcc\x15j$\xb9\xe3\xfa\x8e\xb9 \x8c\x1a\xb9\xc0\x9c|L\xf8B\xda]\bB\x89$h\xa8\x1bF\xaf\xa43\x10`.\x84\xf8R\x04b\xe2\xec\t7R\xf3v\x8e\xb0L\x9d\x95\xa3\xbb\xbfB\xc3ԣa\xe2dD\xfcQ\xab\xefn\xd04\xbd\xferLe\x16Ũ\xed\x0eް\x0fsT\xf7\a-\xf4W\xe2\x00\x15{\xa6\x98\xeb%\xb0\x19*\xa1\xafBrB\xbbC\xc1\xddWn\x90\x8d\xbd\xb9$W䤇.\xe1\x9e\xe6\x88\xffg->ԐCP\x8e\xa5\x97Pz\\Y\xe9\xeb{\x1c#\xa2䊅\xb1U\xef\xa9\xe0\xbb5\xffwS\xfcuK:\a\xc3\xe0d\x80\xf6V\xa1}u\x0fMH$g\xa1A\xaev\xacx[L\xe7\xf1\xa6\xfe\xd4w4\xccX\xfc\xebj\x9cz\xa3n\xc3dàG\xbc\xe9\xc9\x1do\x17t\xaf\xd9燦\xed\x9dtqێX\xa2\x16I\x14\xb7\xad{\x9a\x15\xd5Q\xdd8\x84j@\x17<\x88vD\xf4\xf1_\xa3!;\xa34\x84\xf58\xea\xdb\x1e@\xf1\xb4\xcb\x1fh\xe2\xaf\xed\xf1\x9d\x8e\xe6\xdeAl>Jk\xae\xc5\xd3\xc0\x1e#\xa66.^\x7f\x11\xbc\xb5\xbc\x90\xa3\xbe\x7f\xea\xafx\x7f\x17C\x05G\xed?\xbf\xf7\x14\xd4÷\x8f\x11\xc2\xd4z\v' η\xf6q.3\x19\xdaz`\x9dq\xf5\xa7\x80.@i\x86YH\xcck\xd2\x1a\x94\x80\x86(\xdf9@a\xe34`\x89\xdb\x1a\x19\x13\x0f\xab\x19\x18\xba\a\xda1C\xdc֗\x87\xd1N8\xa1p\x88Bf\x14S\xb9\x8c\xac\xe9\x01l\x15\x87\xcdϐq\xb5i\x90J\x92\x11\v\x89F\x93*\xc9B\xe6y\x82\x01\x99\x05\xe65\x1e\x11\x19\x8c\xf2\x03\x1a\xc2\xc4]2\x80\xb1\x06\xec\x1c\x91\xe7\x03\x01\x80\xf7j\xb2\x90\xb9;דC\xbb<\xa2\x99>\xb0\x04\xe6\x9c\xf1z\xc4B\xa0ά7\xae\xa7\xa0\xb3\x1c\x04cGdM蕙`\xf4T\xc2M\xde\xdfw\x13\a\x91\xe3#\xffx\x13˴\x0e\xa1B\xb3\xec\x999\x06\\\xed\x18\x9ad\x97\xf7\xc2\x11mz\xc3kǐ\xf7\a{\xbc\r\x1bG\"k\xb3d\xe0\\\"\xf6\x00\xa2~/\x81\xba\xf6\xfai3\v\xf1\xe0\x89\xc1\xe3\x11Q\xb7\x84K\x13㽧\xf4>}al\x88n&\x9e;\xf4\x9e.\xe27ш\xf1\xdc\x1cOL\x10ɸY\xfd)\xa0!\x06<#y\f\xd1#sFR\x03\xc8\xf5\xfd=\xaeg\xc6o\x84v\xb5\xe4\x18\xd7=\x12\xc6ğm\xa7\xb3O\x8c\x1d\x91\n9\xaa\xae\xc0\xaf\xa7\x1e\t\xa3.l\x86P\xe4j\x9fW\xb0\x997\xb8^f\\\xaa\x91\xd1')\x17\b\x91\xe3\a\xb5\x82\x84\xa3`6\xdf\xed\xaa#\xb7\xa9ڰ\x8f\xd4\x18\xee\x8d\xfcp\x87{`\x00R\xa1v$\xb4\x96\xec\x86\xdd\xc6\x1eL\xa4b\x7f\x05\xb4w\x00\xff\xe6\x11\x93=`ڃ\x89\xa3,\xfb\u06ddBͳ\a\x85\xda5(\xd0\x0e\xd2(@\xab\xb6h9j\xfd뻘6\f\xbf\xce:\x88\xb6\xe1y\xb5\xf7s\t\xf1>H\x8a\xe7\xe1s\xe4\xfcc4\xc4\x1c\x82\x832\x19\xc9\x11\xa9ñ\xe7\x16\x98\xdfIc\xf3\x99#rC\xc1k$\x1an\xf6S1\x95\xfc11B\x8d\x7f<\x054\x94\x12ƉE\x98\x187\xbc\xad\x1e)\xae\x86Pyd>\xfb%+\xf3\xf9\xb9\x97\x9b\xcfA\xe5\x98\xef\xefZ\xce\xf7`\x05g\x11\xaa\x96\x88[(&6\x13\t\x19?ʗѬ\x90\x15\x10\xf1\\\xaeث+\x19\xb0x\b\x89GcŀN\x9e\x175\xc0\x80\x91\xc0z\xbff\xb3\xb1渞J\xb9\xac\x81\x19\xd9Le=!i6\xb0\xa7\x80\x86\x00\x9brL\x03$\xaaH\xe8O\x86\x89c\xd4\u058c\x0ef\xdb&\v\xb9>5\xc0\xd2\xd50\v\xf2{\\w\x17\x1bb\x96pN|\x18_\xc6\x17\xdeŎ\x03\u07ba\x98\xde\x03\xefi\x14\x99\xf0\x9d\xaa\xc0w0\xbd\xe7x\xceߢ\xba\xc3\xf4^\xb5X4\x9cLҗ\x9c\xe1\x04P>l\x8b)\xfe\x1b6:o\xd4 ea\xc5\xc08\xe9\x88Y\xebjǩ\xa3\x95b\xe3\xf8\xb3\x99pl\xd2h\xef\xa9c\xfb*F\x81\xa9 \x92\xdcm\x01\xb3\x90k֘\xa8\xe6\x10c\x0f!f\fE\xfdB\x84M\xb7\x90L\xae0\xc3\xdct\xad\x9c\xe3\xcda2\"\xa3;\xdbb3\x84\xf2l\xfaU\x8e3\x11V\xbb|;\xb9=\xda\xdd]1\x05E\xe3B\xc2e\x8f\x11\xb4\x85\x16\x04M\xc2\x12\x10\x16;\x1e\xc1\x0e\xea\x86\xd1f\xe6\x1c\xd3\xc68\xaa\x88=HD\xe4\xa7\x05\x11\x19\x81ωпD\x8b\xe3\bX5\xb2\xd6\x1aQ\x8f\xa0J?ʀ\xa0\xf3X\x13*$\xa2j\xbbչ~=\xb52\xf3\xcf3\x10U@b!E=a\xeeq4\xf2\x1c\x7f\xb4Z\xe1\xe3\x8c\x15D\x83\x06\\\xb7\xec\x99\xd6-\x1e\x901洙\x85\xeaȂ\xeeg\xa9!\xc2\xddo\xda\xcc\xe6\x861\xb7k\x04K\x1c\x9fҜ\xefD\x9bBο$\xe2R\x95¸\xf1\xe5)\x83\x93\x81\x84G\x87\xaf;\xe2\x04]\x06\x1c\x1e\xbe\xfc\xdc\xcb\x0f_\x0e*\x7fc\x82ŋC(ڝ6ۆG9ܣ\xa0\x8e<W\xc6F\x05OԞ7k\xb7\x82\xc9\xcfsgnY\xbb\x92g\xec[p\x87\xf1\xbc\xa77/\xefA\x87o\xd9\x022\xda\vٺ\xd2\xfa\x9e\x11̅\xd5/\xec`\x86Pz\xa3\xacgnz]d!\xa1N\x8eJ\xe8\xcck\xac\x0f2 ro\xb2\xa2g\xf5\x100TN\x17\xb9%84Dx\xb5\xb0\xf1c\xdd&a\xa4m\xea\v\xa1-\xa1\x9d\r~\x18a\xe1+\xe7\v\x98\x10%\xda\xe0й\xec\x87G\\̀ȨrzKTj\b\xeb\xb5i\xf3,\x91\xe1\xc0B\xd5\xe1B\xf9\xfd\x01\xe8]\x10\xe98K\xc1\x83\xc1\x86{BRbn\x9d\xc1\x11\xb9\xce\xc04܂\x16]r\xa5\x87\xa2\xc4\f\x9dx\x85D\x84\x98\xed\x9d\xf8ՎS\xf7\x13+\xfe\x89\xb3;i-B\xef\xa9TS|\x85!\xe6\xcb\x13nt\x99\xea\x95\xc8\xe0d\xae2\x87\x10z\xf3\xed:\xb4֙\xcc\xfa\x1dL\xc9\xeb\x97\xf2\x1d\rn+k\x9ch\x80E/S\x00\x9f\x98pc\x8e\x9dz\x94\b\"h2\xff\xdc}\xbb\x02ɿn\xfb0\a.\xb3\x93\xa5\xb3ɏ\xb2\x00_ҥ\x02+T\xc7+䷙\x7fZ$y\xb2\xfb\xa8M\xffI)溤\xba\x15\x94R\x9f\x14\xa9\xa5:UE}z\xfasR\xc5\xd5o\xce#\x97\xd5\\\xbf;\xbf\xd0\xcbJ\xb1ߞ_\xf8d\x85\xf6\x92\x15?\xdf\xc2\xed\xf5{fE\xb5\xa0[/X\xee]\xac\x9eLH{\xae{\xfcqY\x90\x146\x90\vã\xb8\xbf\xfc\xeb3\xf8\xc5\xed\xe7S_QН\x86]\x8f,\xfcD\x97\xedWg03{ۿ<\x83}\xbe\xf5\xfd\xbc\r\x95\xa5\x19\xfe\xaaL\x96\xf2\x16\xf9\xab\xb2\x00)\xea\x92\x17\x1a\xa9\xb4\x89^\xba\x81'\x9b셎\x9aك\xffE9jVӣ\xd0M\v:\xf8'\xf4\x90\xd1(\xf9Y9\xea\xe9\x16ʼ\x8d)w#P\xb8\xed$\xef\t~\\\x86\x97\xc8k\x85hGw\n\x85\xfaξi8\x83\x9b\xb8\x7f8n\x02om\xa9\xe5\xf8I\x9e\x1cg\xba\xbd\xf0\x1fu\xe2ЮM\x17\x9eJ\xc82Yx7\x99X#?\xeb\xe6\xe5\x1b\x0f\\\x96r\xf3\xfcs\x01?̷y\xf9{\x01\xcbH\xb6yι@feڼ|\xb8\x80f\xa6\xd9\xd2\xcf\xcfȱy1\xb1@\x9eN\xb0b\tJ\x8fv\xdc%\r\x048|\x114\xa7\xe1\xbb7ѫ\fb~\xb2Ӡi\xda\xfbَ\xff\x9d\xc7яT\x12\xbf\x18pO\x97\x7f\x8f?\xfcaA\xf8\xffr\x89\xff\xa3_5\x8dS\xff[\xb7\xee\x83%[\xcc@\x839\x8d\xb3\xff\x03\x00\x00\xff\xff\x01\x00\x00\xff\xffX/c\x0e\x185\x00\x00"))
 }

@@ -1695,3 +1695,258 @@ func TestValidateServicesExist(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildVariablesFromAppConfig_NewFields(t *testing.T) {
+	appConfig := &appconfig.AppConfig{
+		EnvVars: []appconfig.AppEnvVar{
+			{Key: "DATABASE_URL", Value: "", Required: true, Sensitive: true, Description: "PostgreSQL connection string"},
+			{Key: "LOG_LEVEL", Value: "info", Description: "Application log level"},
+			{Key: "PLAIN_VAR", Value: "hello"},
+		},
+	}
+
+	result := buildVariablesFromAppConfig(appConfig)
+	require.Len(t, result, 3)
+
+	// DATABASE_URL: required, sensitive, with description
+	assert.Equal(t, "DATABASE_URL", result[0].Key)
+	assert.True(t, result[0].Required)
+	assert.True(t, result[0].Sensitive)
+	assert.Equal(t, "PostgreSQL connection string", result[0].Description)
+	assert.Equal(t, "config", result[0].Source)
+
+	// LOG_LEVEL: not required, not sensitive, with description
+	assert.Equal(t, "LOG_LEVEL", result[1].Key)
+	assert.False(t, result[1].Required)
+	assert.False(t, result[1].Sensitive)
+	assert.Equal(t, "Application log level", result[1].Description)
+
+	// PLAIN_VAR: no metadata
+	assert.Equal(t, "PLAIN_VAR", result[2].Key)
+	assert.False(t, result[2].Required)
+	assert.False(t, result[2].Sensitive)
+	assert.Equal(t, "", result[2].Description)
+}
+
+func TestMergeVariablesFromAppConfig_MetadataCarried(t *testing.T) {
+	t.Run("manual var inherits metadata from config var", func(t *testing.T) {
+		existingVars := []core_v1alpha.ConfigSpecVariables{
+			{Key: "DATABASE_URL", Value: "manual://db", Source: "manual"},
+		}
+		appConfig := &appconfig.AppConfig{
+			EnvVars: []appconfig.AppEnvVar{
+				{Key: "DATABASE_URL", Value: "", Required: true, Description: "PostgreSQL connection string"},
+			},
+		}
+
+		result := mergeVariablesFromAppConfig(existingVars, appConfig)
+		require.Len(t, result, 1)
+		assert.Equal(t, "DATABASE_URL", result[0].Key)
+		assert.Equal(t, "manual://db", result[0].Value)
+		assert.Equal(t, "manual", result[0].Source)
+		assert.True(t, result[0].Required, "should carry Required from config var")
+		assert.Equal(t, "PostgreSQL connection string", result[0].Description, "should carry Description from config var")
+	})
+
+	t.Run("addon var inherits metadata from config var", func(t *testing.T) {
+		existingVars := []core_v1alpha.ConfigSpecVariables{
+			{Key: "DATABASE_URL", Value: "postgres://addon/db", Source: "addon"},
+		}
+		appConfig := &appconfig.AppConfig{
+			EnvVars: []appconfig.AppEnvVar{
+				{Key: "DATABASE_URL", Value: "", Required: true, Description: "Database URL"},
+			},
+		}
+
+		result := mergeVariablesFromAppConfig(existingVars, appConfig)
+		require.Len(t, result, 1)
+		assert.Equal(t, "addon", result[0].Source)
+		assert.True(t, result[0].Required)
+		assert.Equal(t, "Database URL", result[0].Description)
+	})
+
+	t.Run("config var without metadata does not clear existing metadata", func(t *testing.T) {
+		existingVars := []core_v1alpha.ConfigSpecVariables{
+			{Key: "VAR", Value: "val", Source: "manual", Required: true, Description: "old desc"},
+		}
+		appConfig := &appconfig.AppConfig{
+			EnvVars: []appconfig.AppEnvVar{
+				{Key: "VAR", Value: "new_val"},
+			},
+		}
+
+		result := mergeVariablesFromAppConfig(existingVars, appConfig)
+		require.Len(t, result, 1)
+		// Manual var keeps its value, gets metadata from config (which has no metadata)
+		assert.Equal(t, "val", result[0].Value)
+		assert.False(t, result[0].Required, "metadata replaced by config var's values")
+		assert.Equal(t, "", result[0].Description)
+	})
+}
+
+func TestMergeServiceEnvVars_MetadataCarried(t *testing.T) {
+	t.Run("manual var inherits metadata from config var", func(t *testing.T) {
+		existing := []core_v1alpha.ConfigSpecServicesEnv{
+			{Key: "DB_HOST", Value: "manual-host", Source: "manual"},
+		}
+		newEnvs := []core_v1alpha.ConfigSpecServicesEnv{
+			{Key: "DB_HOST", Value: "", Source: "config", Required: true, Description: "Database hostname"},
+		}
+
+		result := mergeServiceEnvVars(existing, newEnvs)
+		require.Len(t, result, 1)
+		assert.Equal(t, "manual-host", result[0].Value)
+		assert.Equal(t, "manual", result[0].Source)
+		assert.True(t, result[0].Required)
+		assert.Equal(t, "Database hostname", result[0].Description)
+	})
+}
+
+func TestMergeCliEnvVars_MetadataPreserved(t *testing.T) {
+	t.Run("CLI override preserves Required and Description from existing var", func(t *testing.T) {
+		existing := []core_v1alpha.ConfigSpecVariables{
+			{Key: "DATABASE_URL", Value: "old", Source: "config", Required: true, Description: "DB connection"},
+		}
+		cliVars := []*build_v1alpha.EnvironmentVariable{
+			makeEnvVar("DATABASE_URL", "new-value", true),
+		}
+
+		result := mergeCliEnvVars(existing, cliVars)
+		require.Len(t, result, 1)
+		assert.Equal(t, "new-value", result[0].Value)
+		assert.Equal(t, "manual", result[0].Source)
+		assert.True(t, result[0].Sensitive)
+		assert.True(t, result[0].Required, "should preserve Required from existing")
+		assert.Equal(t, "DB connection", result[0].Description, "should preserve Description from existing")
+	})
+
+	t.Run("new CLI var without existing has no metadata", func(t *testing.T) {
+		existing := []core_v1alpha.ConfigSpecVariables{}
+		cliVars := []*build_v1alpha.EnvironmentVariable{
+			makeEnvVar("NEW_VAR", "val", false),
+		}
+
+		result := mergeCliEnvVars(existing, cliVars)
+		require.Len(t, result, 1)
+		assert.False(t, result[0].Required)
+		assert.Equal(t, "", result[0].Description)
+	})
+}
+
+func TestValidateRequiredVars(t *testing.T) {
+	tests := []struct {
+		name    string
+		spec    core_v1alpha.ConfigSpec
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name: "no required vars - passes",
+			spec: core_v1alpha.ConfigSpec{
+				Variables: []core_v1alpha.ConfigSpecVariables{
+					{Key: "FOO", Value: "bar"},
+					{Key: "BAZ", Value: ""},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "required var with value - passes",
+			spec: core_v1alpha.ConfigSpec{
+				Variables: []core_v1alpha.ConfigSpecVariables{
+					{Key: "DATABASE_URL", Value: "postgres://localhost/db", Required: true},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "required var without value - fails",
+			spec: core_v1alpha.ConfigSpec{
+				Variables: []core_v1alpha.ConfigSpecVariables{
+					{Key: "DATABASE_URL", Value: "", Required: true, Description: "PostgreSQL connection string"},
+				},
+			},
+			wantErr: true,
+			errMsg:  "DATABASE_URL",
+		},
+		{
+			name: "required var description included in error",
+			spec: core_v1alpha.ConfigSpec{
+				Variables: []core_v1alpha.ConfigSpecVariables{
+					{Key: "API_KEY", Value: "", Required: true, Description: "Third-party API key"},
+				},
+			},
+			wantErr: true,
+			errMsg:  "Third-party API key",
+		},
+		{
+			name: "multiple missing required vars",
+			spec: core_v1alpha.ConfigSpec{
+				Variables: []core_v1alpha.ConfigSpecVariables{
+					{Key: "DB_URL", Value: "", Required: true},
+					{Key: "HAS_VALUE", Value: "ok", Required: true},
+					{Key: "API_KEY", Value: "", Required: true},
+				},
+			},
+			wantErr: true,
+			errMsg:  "DB_URL",
+		},
+		{
+			name: "required service env var without value - fails",
+			spec: core_v1alpha.ConfigSpec{
+				Services: []core_v1alpha.ConfigSpecServices{
+					{
+						Name: "web",
+						Env: []core_v1alpha.ConfigSpecServicesEnv{
+							{Key: "TLS_CERT", Value: "", Required: true, Description: "TLS certificate"},
+						},
+					},
+				},
+			},
+			wantErr: true,
+			errMsg:  "TLS_CERT",
+		},
+		{
+			name: "service name included in error",
+			spec: core_v1alpha.ConfigSpec{
+				Services: []core_v1alpha.ConfigSpecServices{
+					{
+						Name: "worker",
+						Env: []core_v1alpha.ConfigSpecServicesEnv{
+							{Key: "QUEUE_URL", Value: "", Required: true},
+						},
+					},
+				},
+			},
+			wantErr: true,
+			errMsg:  "service: worker",
+		},
+		{
+			name: "error includes actionable hint",
+			spec: core_v1alpha.ConfigSpec{
+				Variables: []core_v1alpha.ConfigSpecVariables{
+					{Key: "SECRET", Value: "", Required: true},
+				},
+			},
+			wantErr: true,
+			errMsg:  "miren env set",
+		},
+		{
+			name:    "empty spec - passes",
+			spec:    core_v1alpha.ConfigSpec{},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateRequiredVars(tt.spec)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errMsg)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}

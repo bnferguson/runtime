@@ -196,10 +196,12 @@ func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudS
 		for _, ev := range cfg.EnvVars() {
 			source := ev.Source()
 			nv := core_v1alpha.ConfigSpecVariables{
-				Key:       ev.Key(),
-				Value:     ev.Value(),
-				Sensitive: ev.Sensitive(),
-				Source:    source,
+				Key:         ev.Key(),
+				Value:       ev.Value(),
+				Sensitive:   ev.Sensitive(),
+				Source:      source,
+				Required:    ev.Required(),
+				Description: ev.Description(),
 			}
 			spec.Variables = append(spec.Variables, nv)
 		}
@@ -226,10 +228,12 @@ func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudS
 						for _, ev := range svcCfg.ServiceEnv() {
 							source := ev.Source()
 							nv := core_v1alpha.ConfigSpecServicesEnv{
-								Key:       ev.Key(),
-								Value:     ev.Value(),
-								Sensitive: ev.Sensitive(),
-								Source:    source,
+								Key:         ev.Key(),
+								Value:       ev.Value(),
+								Sensitive:   ev.Sensitive(),
+								Source:      source,
+								Required:    ev.Required(),
+								Description: ev.Description(),
 							}
 							spec.Services[i].Env = append(spec.Services[i].Env, nv)
 						}
@@ -246,10 +250,12 @@ func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudS
 				for _, ev := range svcCfg.ServiceEnv() {
 					source := ev.Source()
 					nv := core_v1alpha.ConfigSpecServicesEnv{
-						Key:       ev.Key(),
-						Value:     ev.Value(),
-						Sensitive: ev.Sensitive(),
-						Source:    source,
+						Key:         ev.Key(),
+						Value:       ev.Value(),
+						Sensitive:   ev.Sensitive(),
+						Source:      source,
+						Required:    ev.Required(),
+						Description: ev.Description(),
 					}
 					svc.Env = append(svc.Env, nv)
 				}
@@ -338,6 +344,8 @@ func (r *AppInfo) GetConfiguration(ctx context.Context, state *app_v1alpha.CrudG
 		env.SetValue(ev.Value)
 		env.SetSensitive(ev.Sensitive)
 		env.SetSource(ev.Source)
+		env.SetRequired(ev.Required)
+		env.SetDescription(ev.Description)
 		envVars = append(envVars, &env)
 	}
 
@@ -358,6 +366,8 @@ func (r *AppInfo) GetConfiguration(ctx context.Context, state *app_v1alpha.CrudG
 				env.SetValue(ev.Value)
 				env.SetSensitive(ev.Sensitive)
 				env.SetSource(ev.Source)
+				env.SetRequired(ev.Required)
+				env.SetDescription(ev.Description)
 				svcEnvVars = append(svcEnvVars, &env)
 			}
 			sc.SetServiceEnv(svcEnvVars)
