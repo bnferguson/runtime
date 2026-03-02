@@ -229,12 +229,13 @@ func (l *Launcher) reconcileAppVersion(ctx context.Context, app *core_v1alpha.Ap
 	// isn't serving yet, which would cause 502s.
 	for _, poolID := range newPoolIDs {
 		if err := l.waitForPoolReady(ctx, poolID, l.PoolReadyTimeout); err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
+			if errors.Is(err, context.DeadlineExceeded) {
+				l.Log.Warn("timed out waiting for new pool to become ready, proceeding with cleanup",
+					"pool", poolID,
+					"error", err)
+				continue
 			}
-			l.Log.Warn("new pool not confirmed ready, proceeding with cleanup",
-				"pool", poolID,
-				"error", err)
+			return fmt.Errorf("failed waiting for new pool readiness %s: %w", poolID, err)
 		}
 	}
 
@@ -863,8 +864,8 @@ func (l *Launcher) waitForPoolReady(ctx context.Context, poolID entity.Id, timeo
 		}
 
 		if time.Now().After(deadline) {
-			return fmt.Errorf("pool %s not ready after %s (ready_instances=%d, current_instances=%d)",
-				poolID, timeout, pool.ReadyInstances, pool.CurrentInstances)
+			return fmt.Errorf("pool %s not ready after %s (ready_instances=%d, current_instances=%d): %w",
+				poolID, timeout, pool.ReadyInstances, pool.CurrentInstances, context.DeadlineExceeded)
 		}
 
 		l.Log.Debug("waiting for pool to become ready",

@@ -1423,6 +1423,7 @@ func TestWaitForPoolReadyTimeout(t *testing.T) {
 	err = launcher.waitForPoolReady(ctx, poolID, 100*time.Millisecond)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not ready after")
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 func TestWaitForPoolReadyContextCancelled(t *testing.T) {
