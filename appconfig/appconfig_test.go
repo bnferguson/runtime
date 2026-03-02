@@ -848,3 +848,256 @@ name = "my-app"
 		assert.Nil(t, ac.Addons)
 	})
 }
+
+func TestParseAppConfigWithPorts(t *testing.T) {
+	t.Run("multi-port parsing", func(t *testing.T) {
+		config := `
+name = "irc-app"
+
+[services.irc]
+command = "./ircd"
+
+[[services.irc.ports]]
+port = 6667
+name = "irc"
+type = "tcp"
+
+[[services.irc.ports]]
+port = 6697
+name = "irc-tls"
+type = "tcp"
+node_port = 6697
+
+[services.irc.concurrency]
+mode = "fixed"
+num_instances = 1
+`
+		ac, err := Parse([]byte(config))
+		require.NoError(t, err)
+		require.NotNil(t, ac)
+
+		ircSvc := ac.Services["irc"]
+		require.NotNil(t, ircSvc)
+		require.Len(t, ircSvc.Ports, 2)
+
+		assert.Equal(t, 6667, ircSvc.Ports[0].Port)
+		assert.Equal(t, "irc", ircSvc.Ports[0].Name)
+		assert.Equal(t, "tcp", ircSvc.Ports[0].Type)
+		assert.Equal(t, 0, ircSvc.Ports[0].NodePort)
+
+		assert.Equal(t, 6697, ircSvc.Ports[1].Port)
+		assert.Equal(t, "irc-tls", ircSvc.Ports[1].Name)
+		assert.Equal(t, "tcp", ircSvc.Ports[1].Type)
+		assert.Equal(t, 6697, ircSvc.Ports[1].NodePort)
+	})
+
+	t.Run("port with protocol", func(t *testing.T) {
+		config := `
+name = "test-app"
+
+[services.dns]
+command = "./dns-server"
+
+[[services.dns.ports]]
+port = 53
+name = "dns-udp"
+protocol = "udp"
+
+[[services.dns.ports]]
+port = 53
+name = "dns-tcp"
+protocol = "tcp"
+
+[services.dns.concurrency]
+mode = "fixed"
+num_instances = 1
+`
+		ac, err := Parse([]byte(config))
+		require.NoError(t, err)
+		require.NotNil(t, ac)
+
+		dnsSvc := ac.Services["dns"]
+		require.Len(t, dnsSvc.Ports, 2)
+		assert.Equal(t, "udp", dnsSvc.Ports[0].Protocol)
+		assert.Equal(t, "tcp", dnsSvc.Ports[1].Protocol)
+	})
+}
+
+func TestValidatePortsConfig(t *testing.T) {
+	t.Run("mutual exclusion with scalar port", func(t *testing.T) {
+		config := `
+name = "test-app"
+
+[services.web]
+port = 8080
+
+[[services.web.ports]]
+port = 8080
+name = "http"
+`
+		_, err := Parse([]byte(config))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "cannot use both 'ports' array and scalar port/port_name/port_type fields")
+	})
+
+	t.Run("mutual exclusion with scalar port_name", func(t *testing.T) {
+		config := `
+name = "test-app"
+
+[services.web]
+port_name = "http"
+
+[[services.web.ports]]
+port = 8080
+name = "http"
+`
+		_, err := Parse([]byte(config))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "cannot use both 'ports' array and scalar port/port_name/port_type fields")
+	})
+
+	t.Run("mutual exclusion with scalar port_type", func(t *testing.T) {
+		config := `
+name = "test-app"
+
+[services.web]
+port_type = "http"
+
+[[services.web.ports]]
+port = 8080
+name = "http"
+`
+		_, err := Parse([]byte(config))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "cannot use both 'ports' array and scalar port/port_name/port_type fields")
+	})
+
+	t.Run("port out of range", func(t *testing.T) {
+		config := `
+name = "test-app"
+
+[[services.web.ports]]
+port = 70000
+name = "http"
+`
+		_, err := Parse([]byte(config))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "port must be between 1 and 65535")
+	})
+
+	t.Run("port zero", func(t *testing.T) {
+		config := `
+name = "test-app"
+
+[[services.web.ports]]
+port = 0
+name = "http"
+`
+		_, err := Parse([]byte(config))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "port must be between 1 and 65535")
+	})
+
+	t.Run("missing name", func(t *testing.T) {
+		config := `
+name = "test-app"
+
+[[services.web.ports]]
+port = 8080
+`
+		_, err := Parse([]byte(config))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "name is required")
+	})
+
+	t.Run("invalid protocol", func(t *testing.T) {
+		config := `
+name = "test-app"
+
+[[services.web.ports]]
+port = 8080
+name = "http"
+protocol = "sctp"
+`
+		_, err := Parse([]byte(config))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `protocol must be "tcp" or "udp"`)
+	})
+
+	t.Run("duplicate port name", func(t *testing.T) {
+		config := `
+name = "test-app"
+
+[[services.web.ports]]
+port = 8080
+name = "http"
+
+[[services.web.ports]]
+port = 8443
+name = "http"
+`
+		_, err := Parse([]byte(config))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `duplicate port name "http"`)
+	})
+
+	t.Run("duplicate port number same protocol", func(t *testing.T) {
+		config := `
+name = "test-app"
+
+[[services.web.ports]]
+port = 8080
+name = "http"
+protocol = "tcp"
+
+[[services.web.ports]]
+port = 8080
+name = "https"
+protocol = "tcp"
+`
+		_, err := Parse([]byte(config))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "duplicate port number 8080")
+	})
+
+	t.Run("same port different protocol is valid", func(t *testing.T) {
+		config := `
+name = "test-app"
+
+[[services.dns.ports]]
+port = 53
+name = "dns-udp"
+protocol = "udp"
+
+[[services.dns.ports]]
+port = 53
+name = "dns-tcp"
+protocol = "tcp"
+`
+		ac, err := Parse([]byte(config))
+		require.NoError(t, err)
+		require.NotNil(t, ac)
+		require.Len(t, ac.Services["dns"].Ports, 2)
+	})
+
+	t.Run("valid multi-port config", func(t *testing.T) {
+		config := `
+name = "test-app"
+
+[[services.web.ports]]
+port = 8080
+name = "http"
+type = "http"
+
+[[services.web.ports]]
+port = 8443
+name = "https"
+type = "http"
+node_port = 443
+`
+		ac, err := Parse([]byte(config))
+		require.NoError(t, err)
+		require.NotNil(t, ac)
+		require.Len(t, ac.Services["web"].Ports, 2)
+	})
+}

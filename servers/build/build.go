@@ -21,6 +21,7 @@ import (
 	"miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/build/build_v1alpha"
+	"miren.dev/runtime/api/compute/compute_v1alpha"
 	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
@@ -214,6 +215,85 @@ func validateRequiredVars(spec core_v1alpha.ConfigSpec) error {
 	return fmt.Errorf("%s", b.String())
 }
 
+// nodePortKey uniquely identifies a node port allocation by port number and protocol.
+type nodePortKey struct {
+	port     int64
+	protocol string
+}
+
+// validateNodePorts checks for node port conflicts both within the config being
+// deployed and against existing sandbox pools in the cluster. This catches
+// collisions at deploy time rather than letting them fail at runtime in nftables.
+func validateNodePorts(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient, appID entity.Id, spec core_v1alpha.ConfigSpec) error {
+	// Collect all (node_port, protocol) pairs from the new config
+	newPorts := map[nodePortKey]string{} // key → service name
+	for _, svc := range spec.Services {
+		for _, p := range svc.Ports {
+			if p.NodePort <= 0 {
+				continue
+			}
+			proto := "tcp"
+			if p.Protocol == core_v1alpha.ConfigSpecServicesPortsUDP {
+				proto = "udp"
+			}
+			key := nodePortKey{port: p.NodePort, protocol: proto}
+			if existing, ok := newPorts[key]; ok {
+				return fmt.Errorf("services %q and %q both claim node_port %d/%s", existing, svc.Name, p.NodePort, proto)
+			}
+			newPorts[key] = svc.Name
+		}
+	}
+
+	if len(newPorts) == 0 {
+		return nil
+	}
+
+	// List all SandboxPool entities to check for cross-app conflicts
+	resp, err := eac.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool))
+	if err != nil {
+		return fmt.Errorf("failed to list sandbox pools: %w", err)
+	}
+
+	for _, ent := range resp.Values() {
+		var pool compute_v1alpha.SandboxPool
+		pool.Decode(ent.Entity())
+
+		// Skip pools belonging to the app being deployed
+		if pool.App == appID {
+			continue
+		}
+
+		// Skip scaled-down pools
+		if pool.DesiredInstances <= 0 {
+			continue
+		}
+
+		// Get the app name from sandbox labels for error messages
+		appName, _ := pool.SandboxLabels.Get("app")
+		if appName == "" {
+			appName = pool.App.String()
+		}
+
+		for _, container := range pool.SandboxSpec.Container {
+			for _, p := range container.Port {
+				if p.NodePort <= 0 {
+					continue
+				}
+				proto := "tcp"
+				if p.Protocol == compute_v1alpha.SandboxSpecContainerPortUDP {
+					proto = "udp"
+				}
+				key := nodePortKey{port: p.NodePort, protocol: proto}
+				if svcName, ok := newPorts[key]; ok {
+					return fmt.Errorf("node_port %d/%s (service %q) is already in use by app %q service %q", p.NodePort, proto, svcName, appName, pool.Service)
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
 // buildServicesConfig collects services from app config and procfile,
 // resolves defaults, and returns the final service configurations.
 // This is the core logic for determining which services exist in an app_version
@@ -280,19 +360,34 @@ func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[st
 				svc.Image = serviceConfig.Image
 			}
 
-			// Copy port if specified
-			if serviceConfig.Port > 0 {
-				svc.Port = int64(serviceConfig.Port)
-			}
-
-			// Copy port name if specified
-			if serviceConfig.PortName != "" {
-				svc.PortName = serviceConfig.PortName
-			}
-
-			// Copy port type if specified
-			if serviceConfig.PortType != "" {
-				svc.PortType = serviceConfig.PortType
+			// Copy port configuration: prefer ports[] array over scalar fields
+			if len(serviceConfig.Ports) > 0 {
+				svc.Ports = make([]core_v1alpha.ConfigSpecServicesPorts, 0, len(serviceConfig.Ports))
+				for _, p := range serviceConfig.Ports {
+					sp := core_v1alpha.ConfigSpecServicesPorts{
+						Port:     int64(p.Port),
+						Name:     p.Name,
+						Type:     p.Type,
+						NodePort: int64(p.NodePort),
+					}
+					switch p.Protocol {
+					case "tcp":
+						sp.Protocol = core_v1alpha.ConfigSpecServicesPortsTCP
+					case "udp":
+						sp.Protocol = core_v1alpha.ConfigSpecServicesPortsUDP
+					}
+					svc.Ports = append(svc.Ports, sp)
+				}
+			} else {
+				if serviceConfig.Port > 0 {
+					svc.Port = int64(serviceConfig.Port)
+				}
+				if serviceConfig.PortName != "" {
+					svc.PortName = serviceConfig.PortName
+				}
+				if serviceConfig.PortType != "" {
+					svc.PortType = serviceConfig.PortType
+				}
 			}
 
 			if serviceConfig.Concurrency != nil {
@@ -1022,6 +1117,11 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	// picture, matching how validateServicesExist works just above.
 	if err := validateRequiredVars(configSpec); err != nil {
 		b.sendErrorStatus(ctx, status, "%s", err)
+		return err
+	}
+
+	if err := validateNodePorts(ctx, b.ec.EAC(), appRec.ID, configSpec); err != nil {
+		b.sendErrorStatus(ctx, status, "Deploy failed: %v", err)
 		return err
 	}
 

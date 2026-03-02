@@ -105,6 +105,24 @@ kinds:
             port_type:
               type: string
               doc: The type of the port (e.g. http, tcp). Defaults to "http" if not specified.
+            ports:
+              type: component
+              doc: Network ports this service listens on. Overrides scalar port/port_name/port_type.
+              many: true
+              attrs:
+                port:
+                  type: int
+                  required: true
+                name:
+                  type: string
+                  required: true
+                protocol:
+                  type: enum
+                  choices: [tcp, udp]
+                type:
+                  type: string
+                node_port:
+                  type: int
             image:
               type: string
               doc: Optional container image for this service (e.g. postgres:16). If not specified, uses the app-level built image.
@@ -412,6 +430,24 @@ components:
         port_type:
           type: string
           doc: The type of the port (e.g. http, tcp)
+        ports:
+          type: component
+          doc: Network ports this service listens on. Overrides scalar port/port_name/port_type.
+          many: true
+          attrs:
+            port:
+              type: int
+              required: true
+            name:
+              type: string
+              required: true
+            protocol:
+              type: enum
+              choices: [tcp, udp]
+            type:
+              type: string
+            node_port:
+              type: int
         image:
           type: string
           doc: Optional container image for this service

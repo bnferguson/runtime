@@ -1547,3 +1547,191 @@ func TestCleanupWaitsForNewPool(t *testing.T) {
 		assert.Equal(t, int64(0), oldPool.DesiredInstances, "old pool should be scaled down")
 	}
 }
+
+// TestMultiPortServiceConfiguration tests that the launcher correctly maps multiple ports
+// from the config spec to the sandbox spec.
+func TestMultiPortServiceConfiguration(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{
+		Project: entity.Id("project-1"),
+	}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	version := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Services: []core_v1alpha.Services{
+				{
+					Name: "irc",
+					Ports: []core_v1alpha.Ports{
+						{Port: 6667, Name: "irc", Type: "tcp"},
+						{Port: 6697, Name: "irc-tls", Type: "tcp", NodePort: 6697},
+					},
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", version)
+	require.NoError(t, err)
+	version.ID = verID
+
+	app.ActiveVersion = version.ID
+	err = server.Client.Update(ctx, app)
+	require.NoError(t, err)
+
+	launcher := newTestLauncher(log, server.EAC)
+	err = launcher.Reconcile(ctx, app, nil)
+	require.NoError(t, err)
+
+	pools := listAllPools(t, ctx, server)
+	require.Len(t, pools, 1)
+
+	pool := pools[0]
+	require.Len(t, pool.SandboxSpec.Container, 1)
+
+	container := pool.SandboxSpec.Container[0]
+	require.Len(t, container.Port, 2, "should have two ports")
+
+	assert.Equal(t, int64(6667), container.Port[0].Port)
+	assert.Equal(t, "irc", container.Port[0].Name)
+	assert.Equal(t, "tcp", container.Port[0].Type)
+	assert.Equal(t, int64(0), container.Port[0].NodePort)
+
+	assert.Equal(t, int64(6697), container.Port[1].Port)
+	assert.Equal(t, "irc-tls", container.Port[1].Name)
+	assert.Equal(t, "tcp", container.Port[1].Type)
+	assert.Equal(t, int64(6697), container.Port[1].NodePort)
+
+	// PORT env var should be set to first port (no HTTP type, so first port wins)
+	assert.Contains(t, container.Env, "PORT=6667")
+}
+
+// TestMultiPortHTTPPortEnvVar tests that PORT env var is set to the first HTTP-typed port
+// when multiple ports are configured.
+func TestMultiPortHTTPPortEnvVar(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{
+		Project: entity.Id("project-1"),
+	}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	version := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					Ports: []core_v1alpha.Ports{
+						{Port: 9090, Name: "metrics", Type: "tcp"},
+						{Port: 8080, Name: "http", Type: "http"},
+						{Port: 9443, Name: "https", Type: "http"},
+					},
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", version)
+	require.NoError(t, err)
+	version.ID = verID
+
+	app.ActiveVersion = version.ID
+	err = server.Client.Update(ctx, app)
+	require.NoError(t, err)
+
+	launcher := newTestLauncher(log, server.EAC)
+	err = launcher.Reconcile(ctx, app, nil)
+	require.NoError(t, err)
+
+	pools := listAllPools(t, ctx, server)
+	require.Len(t, pools, 1)
+
+	container := pools[0].SandboxSpec.Container[0]
+	require.Len(t, container.Port, 3, "should have three ports")
+
+	// PORT env var should be set to the first HTTP-typed port (8080), not the first port overall
+	assert.Contains(t, container.Env, "PORT=8080")
+}
+
+// TestScalarPortBackwardCompatWithMultiPort tests that scalar port fields still work
+// alongside services that use the new ports array.
+func TestScalarPortBackwardCompatWithMultiPort(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{
+		Project: entity.Id("project-1"),
+	}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	version := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Services: []core_v1alpha.Services{
+				{
+					Name:     "web",
+					Port:     8080,
+					PortName: "http",
+					PortType: "http",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", version)
+	require.NoError(t, err)
+	version.ID = verID
+
+	app.ActiveVersion = version.ID
+	err = server.Client.Update(ctx, app)
+	require.NoError(t, err)
+
+	launcher := newTestLauncher(log, server.EAC)
+	err = launcher.Reconcile(ctx, app, nil)
+	require.NoError(t, err)
+
+	pools := listAllPools(t, ctx, server)
+	require.Len(t, pools, 1)
+
+	container := pools[0].SandboxSpec.Container[0]
+	require.Len(t, container.Port, 1, "should have one port from scalar fields")
+	assert.Equal(t, int64(8080), container.Port[0].Port)
+	assert.Equal(t, "http", container.Port[0].Name)
+	assert.Equal(t, "http", container.Port[0].Type)
+	assert.Contains(t, container.Env, "PORT=8080")
+}

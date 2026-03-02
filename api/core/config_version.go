@@ -46,6 +46,23 @@ func ConfigSpecFromConfig(cfg *core_v1alpha.Config) core_v1alpha.ConfigSpec {
 			},
 		}
 
+		// Convert ports array
+		for _, p := range svc.Ports {
+			sp := core_v1alpha.ConfigSpecServicesPorts{
+				Port:     p.Port,
+				Name:     p.Name,
+				Type:     p.Type,
+				NodePort: p.NodePort,
+			}
+			switch p.Protocol {
+			case core_v1alpha.TCP:
+				sp.Protocol = core_v1alpha.ConfigSpecServicesPortsTCP
+			case core_v1alpha.UDP:
+				sp.Protocol = core_v1alpha.ConfigSpecServicesPortsUDP
+			}
+			s.Ports = append(s.Ports, sp)
+		}
+
 		// Convert service-level env vars
 		for _, e := range svc.Env {
 			s.Env = append(s.Env, core_v1alpha.ConfigSpecServicesEnv(e))

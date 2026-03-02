@@ -94,6 +94,7 @@ const (
 	ConfigSpecServicesPortId        = entity.Id("dev.miren.core/component.config_spec.services.port")
 	ConfigSpecServicesPortNameId    = entity.Id("dev.miren.core/component.config_spec.services.port_name")
 	ConfigSpecServicesPortTypeId    = entity.Id("dev.miren.core/component.config_spec.services.port_type")
+	ConfigSpecServicesPortsId       = entity.Id("dev.miren.core/component.config_spec.services.ports")
 )
 
 type ConfigSpecServices struct {
@@ -106,6 +107,7 @@ type ConfigSpecServices struct {
 	Port        int64                         `cbor:"port,omitempty" json:"port,omitempty"`
 	PortName    string                        `cbor:"port_name,omitempty" json:"port_name,omitempty"`
 	PortType    string                        `cbor:"port_type,omitempty" json:"port_type,omitempty"`
+	Ports       []ConfigSpecServicesPorts     `cbor:"ports,omitempty" json:"ports,omitempty"`
 }
 
 func (o *ConfigSpecServices) Decode(e entity.AttrGetter) {
@@ -144,6 +146,13 @@ func (o *ConfigSpecServices) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(ConfigSpecServicesPortTypeId); ok && a.Value.Kind() == entity.KindString {
 		o.PortType = a.Value.String()
 	}
+	for _, a := range e.GetAll(ConfigSpecServicesPortsId) {
+		if a.Value.Kind() == entity.KindComponent {
+			var v ConfigSpecServicesPorts
+			v.Decode(a.Value.Component())
+			o.Ports = append(o.Ports, v)
+		}
+	}
 }
 
 func (o *ConfigSpecServices) Encode() (attrs []entity.Attr) {
@@ -173,6 +182,9 @@ func (o *ConfigSpecServices) Encode() (attrs []entity.Attr) {
 	}
 	if !entity.Empty(o.PortType) {
 		attrs = append(attrs, entity.String(ConfigSpecServicesPortTypeId, o.PortType))
+	}
+	for _, v := range o.Ports {
+		attrs = append(attrs, entity.Component(ConfigSpecServicesPortsId, v.Encode()))
 	}
 	return
 }
@@ -205,6 +217,9 @@ func (o *ConfigSpecServices) Empty() bool {
 	if !entity.Empty(o.PortType) {
 		return false
 	}
+	if len(o.Ports) != 0 {
+		return false
+	}
 	return true
 }
 
@@ -221,6 +236,8 @@ func (o *ConfigSpecServices) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Int64("port", "dev.miren.core/component.config_spec.services.port", schema.Doc("The TCP port the service listens on"))
 	sb.String("port_name", "dev.miren.core/component.config_spec.services.port_name", schema.Doc("The name of the port (e.g. http, grpc)"))
 	sb.String("port_type", "dev.miren.core/component.config_spec.services.port_type", schema.Doc("The type of the port (e.g. http, tcp)"))
+	sb.Component("ports", "dev.miren.core/component.config_spec.services.ports", schema.Doc("Network ports this service listens on. Overrides scalar port/port_name/port_type."), schema.Many)
+	(&ConfigSpecServicesPorts{}).InitSchema(sb.Builder("component.config_spec.services.ports"))
 }
 
 const (
@@ -491,6 +508,98 @@ func (o *ConfigSpecServicesEnv) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Bool("sensitive", "dev.miren.core/component.config_spec.services.env.sensitive", schema.Doc("Whether or not the value is sensitive"))
 	sb.String("source", "dev.miren.core/component.config_spec.services.env.source", schema.Doc("The source of the variable (config or manual). Defaults to config for backward compatibility."))
 	sb.String("value", "dev.miren.core/component.config_spec.services.env.value", schema.Doc("The value of the variable"))
+}
+
+const (
+	ConfigSpecServicesPortsNameId        = entity.Id("dev.miren.core/component.config_spec.services.ports.name")
+	ConfigSpecServicesPortsNodePortId    = entity.Id("dev.miren.core/component.config_spec.services.ports.node_port")
+	ConfigSpecServicesPortsPortId        = entity.Id("dev.miren.core/component.config_spec.services.ports.port")
+	ConfigSpecServicesPortsProtocolId    = entity.Id("dev.miren.core/component.config_spec.services.ports.protocol")
+	ConfigSpecServicesPortsProtocolTcpId = entity.Id("dev.miren.core/component.config_spec.services.ports.protocol.tcp")
+	ConfigSpecServicesPortsProtocolUdpId = entity.Id("dev.miren.core/component.config_spec.services.ports.protocol.udp")
+	ConfigSpecServicesPortsTypeId        = entity.Id("dev.miren.core/component.config_spec.services.ports.type")
+)
+
+type ConfigSpecServicesPorts struct {
+	Name     string                          `cbor:"name" json:"name"`
+	NodePort int64                           `cbor:"node_port,omitempty" json:"node_port,omitempty"`
+	Port     int64                           `cbor:"port" json:"port"`
+	Protocol ConfigSpecServicesPortsProtocol `cbor:"protocol,omitempty" json:"protocol,omitempty"`
+	Type     string                          `cbor:"type,omitempty" json:"type,omitempty"`
+}
+
+type ConfigSpecServicesPortsProtocol string
+
+const (
+	ConfigSpecServicesPortsTCP ConfigSpecServicesPortsProtocol = "component.config_spec.services.ports.protocol.tcp"
+	ConfigSpecServicesPortsUDP ConfigSpecServicesPortsProtocol = "component.config_spec.services.ports.protocol.udp"
+)
+
+var ConfigSpecServicesPortsprotocolFromId = map[entity.Id]ConfigSpecServicesPortsProtocol{ConfigSpecServicesPortsProtocolTcpId: ConfigSpecServicesPortsTCP, ConfigSpecServicesPortsProtocolUdpId: ConfigSpecServicesPortsUDP}
+var ConfigSpecServicesPortsprotocolToId = map[ConfigSpecServicesPortsProtocol]entity.Id{ConfigSpecServicesPortsTCP: ConfigSpecServicesPortsProtocolTcpId, ConfigSpecServicesPortsUDP: ConfigSpecServicesPortsProtocolUdpId}
+
+func (o *ConfigSpecServicesPorts) Decode(e entity.AttrGetter) {
+	if a, ok := e.Get(ConfigSpecServicesPortsNameId); ok && a.Value.Kind() == entity.KindString {
+		o.Name = a.Value.String()
+	}
+	if a, ok := e.Get(ConfigSpecServicesPortsNodePortId); ok && a.Value.Kind() == entity.KindInt64 {
+		o.NodePort = a.Value.Int64()
+	}
+	if a, ok := e.Get(ConfigSpecServicesPortsPortId); ok && a.Value.Kind() == entity.KindInt64 {
+		o.Port = a.Value.Int64()
+	}
+	if a, ok := e.Get(ConfigSpecServicesPortsProtocolId); ok && a.Value.Kind() == entity.KindId {
+		o.Protocol = ConfigSpecServicesPortsprotocolFromId[a.Value.Id()]
+	}
+	if a, ok := e.Get(ConfigSpecServicesPortsTypeId); ok && a.Value.Kind() == entity.KindString {
+		o.Type = a.Value.String()
+	}
+}
+
+func (o *ConfigSpecServicesPorts) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.Name) {
+		attrs = append(attrs, entity.String(ConfigSpecServicesPortsNameId, o.Name))
+	}
+	if !entity.Empty(o.NodePort) {
+		attrs = append(attrs, entity.Int64(ConfigSpecServicesPortsNodePortId, o.NodePort))
+	}
+	attrs = append(attrs, entity.Int64(ConfigSpecServicesPortsPortId, o.Port))
+	if a, ok := ConfigSpecServicesPortsprotocolToId[o.Protocol]; ok {
+		attrs = append(attrs, entity.Ref(ConfigSpecServicesPortsProtocolId, a))
+	}
+	if !entity.Empty(o.Type) {
+		attrs = append(attrs, entity.String(ConfigSpecServicesPortsTypeId, o.Type))
+	}
+	return
+}
+
+func (o *ConfigSpecServicesPorts) Empty() bool {
+	if !entity.Empty(o.Name) {
+		return false
+	}
+	if !entity.Empty(o.NodePort) {
+		return false
+	}
+	if !entity.Empty(o.Port) {
+		return false
+	}
+	if o.Protocol != "" {
+		return false
+	}
+	if !entity.Empty(o.Type) {
+		return false
+	}
+	return true
+}
+
+func (o *ConfigSpecServicesPorts) InitSchema(sb *schema.SchemaBuilder) {
+	sb.String("name", "dev.miren.core/component.config_spec.services.ports.name", schema.Required)
+	sb.Int64("node_port", "dev.miren.core/component.config_spec.services.ports.node_port")
+	sb.Int64("port", "dev.miren.core/component.config_spec.services.ports.port", schema.Required)
+	sb.Singleton("dev.miren.core/component.config_spec.services.ports.protocol.tcp")
+	sb.Singleton("dev.miren.core/component.config_spec.services.ports.protocol.udp")
+	sb.Ref("protocol", "dev.miren.core/component.config_spec.services.ports.protocol", schema.Choices(ConfigSpecServicesPortsProtocolTcpId, ConfigSpecServicesPortsProtocolUdpId))
+	sb.String("type", "dev.miren.core/component.config_spec.services.ports.type")
 }
 
 const (
@@ -975,6 +1084,7 @@ const (
 	ServicesPortId               = entity.Id("dev.miren.core/services.port")
 	ServicesPortNameId           = entity.Id("dev.miren.core/services.port_name")
 	ServicesPortTypeId           = entity.Id("dev.miren.core/services.port_type")
+	ServicesPortsId              = entity.Id("dev.miren.core/services.ports")
 	ServicesServiceConcurrencyId = entity.Id("dev.miren.core/services.service_concurrency")
 )
 
@@ -986,6 +1096,7 @@ type Services struct {
 	Port               int64              `cbor:"port,omitempty" json:"port,omitempty"`
 	PortName           string             `cbor:"port_name,omitempty" json:"port_name,omitempty"`
 	PortType           string             `cbor:"port_type,omitempty" json:"port_type,omitempty"`
+	Ports              []Ports            `cbor:"ports,omitempty" json:"ports,omitempty"`
 	ServiceConcurrency ServiceConcurrency `cbor:"service_concurrency,omitempty" json:"service_concurrency,omitempty"`
 }
 
@@ -1019,6 +1130,13 @@ func (o *Services) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(ServicesPortTypeId); ok && a.Value.Kind() == entity.KindString {
 		o.PortType = a.Value.String()
 	}
+	for _, a := range e.GetAll(ServicesPortsId) {
+		if a.Value.Kind() == entity.KindComponent {
+			var v Ports
+			v.Decode(a.Value.Component())
+			o.Ports = append(o.Ports, v)
+		}
+	}
 	if a, ok := e.Get(ServicesServiceConcurrencyId); ok && a.Value.Kind() == entity.KindComponent {
 		o.ServiceConcurrency.Decode(a.Value.Component())
 	}
@@ -1045,6 +1163,9 @@ func (o *Services) Encode() (attrs []entity.Attr) {
 	}
 	if !entity.Empty(o.PortType) {
 		attrs = append(attrs, entity.String(ServicesPortTypeId, o.PortType))
+	}
+	for _, v := range o.Ports {
+		attrs = append(attrs, entity.Component(ServicesPortsId, v.Encode()))
 	}
 	if !o.ServiceConcurrency.Empty() {
 		attrs = append(attrs, entity.Component(ServicesServiceConcurrencyId, o.ServiceConcurrency.Encode()))
@@ -1074,6 +1195,9 @@ func (o *Services) Empty() bool {
 	if !entity.Empty(o.PortType) {
 		return false
 	}
+	if len(o.Ports) != 0 {
+		return false
+	}
 	if !o.ServiceConcurrency.Empty() {
 		return false
 	}
@@ -1090,6 +1214,8 @@ func (o *Services) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Int64("port", "dev.miren.core/services.port", schema.Doc("The TCP port the service listens on. For the web service, if not specified it falls back to the deprecated top-level port (if set) or 3000. Other services must specify services.port explicitly and do not inherit the top-level port."))
 	sb.String("port_name", "dev.miren.core/services.port_name", schema.Doc("The name of the port (e.g. http, grpc). Defaults to \"http\" if not specified."))
 	sb.String("port_type", "dev.miren.core/services.port_type", schema.Doc("The type of the port (e.g. http, tcp). Defaults to \"http\" if not specified."))
+	sb.Component("ports", "dev.miren.core/services.ports", schema.Doc("Network ports this service listens on. Overrides scalar port/port_name/port_type."), schema.Many)
+	(&Ports{}).InitSchema(sb.Builder("services.ports"))
 	sb.Component("service_concurrency", "dev.miren.core/services.service_concurrency", schema.Doc("Concurrency configuration for this service"))
 	(&ServiceConcurrency{}).InitSchema(sb.Builder("services.service_concurrency"))
 }
@@ -1282,6 +1408,98 @@ func (o *Env) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Bool("sensitive", "dev.miren.core/env.sensitive", schema.Doc("Whether or not the value is sensitive"))
 	sb.String("source", "dev.miren.core/env.source", schema.Doc("The source of the variable (config or manual). Defaults to config for backward compatibility."))
 	sb.String("value", "dev.miren.core/env.value", schema.Doc("The value of the variable"))
+}
+
+const (
+	PortsNameId        = entity.Id("dev.miren.core/ports.name")
+	PortsNodePortId    = entity.Id("dev.miren.core/ports.node_port")
+	PortsPortId        = entity.Id("dev.miren.core/ports.port")
+	PortsProtocolId    = entity.Id("dev.miren.core/ports.protocol")
+	PortsProtocolTcpId = entity.Id("dev.miren.core/protocol.tcp")
+	PortsProtocolUdpId = entity.Id("dev.miren.core/protocol.udp")
+	PortsTypeId        = entity.Id("dev.miren.core/ports.type")
+)
+
+type Ports struct {
+	Name     string        `cbor:"name" json:"name"`
+	NodePort int64         `cbor:"node_port,omitempty" json:"node_port,omitempty"`
+	Port     int64         `cbor:"port" json:"port"`
+	Protocol PortsProtocol `cbor:"protocol,omitempty" json:"protocol,omitempty"`
+	Type     string        `cbor:"type,omitempty" json:"type,omitempty"`
+}
+
+type PortsProtocol string
+
+const (
+	TCP PortsProtocol = "protocol.tcp"
+	UDP PortsProtocol = "protocol.udp"
+)
+
+var PortsprotocolFromId = map[entity.Id]PortsProtocol{PortsProtocolTcpId: TCP, PortsProtocolUdpId: UDP}
+var PortsprotocolToId = map[PortsProtocol]entity.Id{TCP: PortsProtocolTcpId, UDP: PortsProtocolUdpId}
+
+func (o *Ports) Decode(e entity.AttrGetter) {
+	if a, ok := e.Get(PortsNameId); ok && a.Value.Kind() == entity.KindString {
+		o.Name = a.Value.String()
+	}
+	if a, ok := e.Get(PortsNodePortId); ok && a.Value.Kind() == entity.KindInt64 {
+		o.NodePort = a.Value.Int64()
+	}
+	if a, ok := e.Get(PortsPortId); ok && a.Value.Kind() == entity.KindInt64 {
+		o.Port = a.Value.Int64()
+	}
+	if a, ok := e.Get(PortsProtocolId); ok && a.Value.Kind() == entity.KindId {
+		o.Protocol = PortsprotocolFromId[a.Value.Id()]
+	}
+	if a, ok := e.Get(PortsTypeId); ok && a.Value.Kind() == entity.KindString {
+		o.Type = a.Value.String()
+	}
+}
+
+func (o *Ports) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.Name) {
+		attrs = append(attrs, entity.String(PortsNameId, o.Name))
+	}
+	if !entity.Empty(o.NodePort) {
+		attrs = append(attrs, entity.Int64(PortsNodePortId, o.NodePort))
+	}
+	attrs = append(attrs, entity.Int64(PortsPortId, o.Port))
+	if a, ok := PortsprotocolToId[o.Protocol]; ok {
+		attrs = append(attrs, entity.Ref(PortsProtocolId, a))
+	}
+	if !entity.Empty(o.Type) {
+		attrs = append(attrs, entity.String(PortsTypeId, o.Type))
+	}
+	return
+}
+
+func (o *Ports) Empty() bool {
+	if !entity.Empty(o.Name) {
+		return false
+	}
+	if !entity.Empty(o.NodePort) {
+		return false
+	}
+	if !entity.Empty(o.Port) {
+		return false
+	}
+	if o.Protocol != "" {
+		return false
+	}
+	if !entity.Empty(o.Type) {
+		return false
+	}
+	return true
+}
+
+func (o *Ports) InitSchema(sb *schema.SchemaBuilder) {
+	sb.String("name", "dev.miren.core/ports.name", schema.Required)
+	sb.Int64("node_port", "dev.miren.core/ports.node_port")
+	sb.Int64("port", "dev.miren.core/ports.port", schema.Required)
+	sb.Singleton("dev.miren.core/protocol.tcp")
+	sb.Singleton("dev.miren.core/protocol.udp")
+	sb.Ref("protocol", "dev.miren.core/ports.protocol", schema.Choices(PortsProtocolTcpId, PortsProtocolUdpId))
+	sb.String("type", "dev.miren.core/ports.type")
 }
 
 const (
@@ -2304,5 +2522,5 @@ func init() {
 		(&OidcBinding{}).InitSchema(sb)
 		(&Project{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.core", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xac[Y\xaf\xec8\x11\xfe\x1bl\xc32\xec\x03d\xe62 \x18\x10#\xf1\x84\xc4\v?!r'\xeeħ\x13;c;}n\xf3\xc6\x0e\xe2_p\xefE\xfcAxF^\xe3T\x9c\xd8Ι\x97#\x97\x93\xfa\\\xa9ͮ\xf2\xe9\xb7-E#\xa6-\xbeW#\xe1\x98V\r\xe3\x18\xdf\bm\xc5\x7f\x9e׳\x1f\xaa\xd9\nMӿ5\x0f\aO\xd14\x19\xbe\xff][6\"B\x01\xe8\xf5J\xf0Њ?\xbd\xb9\x90\xf6\xf57\xb6\xcc\x15j$\xb9\xe3\xfa\x8e\xb9 \x8c\x1a\xb9\xc0\x9c|L\xf8B\xda]\bB\x89$h\xa8\x1bF\xaf\xa43\x10`.\x84\xf8R\x04b\xe2\xec\t7R\xf3v\x8e\xb0L\x9d\x95\xa3\xbb\xbfB\xc3ԣa\xe2dD\xfcQ\xab\xefn\xd04\xbd\xferLe\x16Ũ\xed\x0eް\x0fsT\xf7\a-\xf4W\xe2\x00\x15{\xa6\x98\xeb%\xb0\x19*\xa1\xafBrB\xbbC\xc1\xddWn\x90\x8d\xbd\xb9$W䤇.\xe1\x9e\xe6\x88\xffg->ԐCP\x8e\xa5\x97Pz\\Y\xe9\xeb{\x1c#\xa2䊅\xb1U\xef\xa9\xe0\xbb5\xffwS\xfcuK:\a\xc3\xe0d\x80\xf6V\xa1}u\x0fMH$g\xa1A\xaev\xacx[L\xe7\xf1\xa6\xfe\xd4w4\xccX\xfc\xebj\x9cz\xa3n\xc3dàG\xbc\xe9\xc9\x1do\x17t\xaf\xd9燦\xed\x9dtqێX\xa2\x16I\x14\xb7\xad{\x9a\x15\xd5Q\xdd8\x84j@\x17<\x88vD\xf4\xf1_\xa3!;\xa34\x84\xf58\xea\xdb\x1e@\xf1\xb4\xcb\x1fh\xe2\xaf\xed\xf1\x9d\x8e\xe6\xdeAl>Jk\xae\xc5\xd3\xc0\x1e#\xa66.^\x7f\x11\xbc\xb5\xbc\x90\xa3\xbe\x7f\xea\xafx\x7f\x17C\x05G\xed?\xbf\xf7\x14\xd4÷\x8f\x11\xc2\xd4z\v' η\xf6q.3\x19\xdaz`\x9dq\xf5\xa7\x80.@i\x86YH\xcck\xd2\x1a\x94\x80\x86(\xdf9@a\xe34`\x89\xdb\x1a\x19\x13\x0f\xab\x19\x18\xba\a\xda1C\xdc֗\x87\xd1N8\xa1p\x88Bf\x14S\xb9\x8c\xac\xe9\x01l\x15\x87\xcdϐq\xb5i\x90J\x92\x11\v\x89F\x93*\xc9B\xe6y\x82\x01\x99\x05\xe65\x1e\x11\x19\x8c\xf2\x03\x1a\xc2\xc4]2\x80\xb1\x06\xec\x1c\x91\xe7\x03\x01\x80\xf7j\xb2\x90\xb9;דC\xbb<\xa2\x99>\xb0\x04\xe6\x9c\xf1z\xc4B\xa0ά7\xae\xa7\xa0\xb3\x1c\x04cGdM蕙`\xf4T\xc2M\xde\xdfw\x13\a\x91\xe3#\xffx\x13˴\x0e\xa1B\xb3\xec\x999\x06\\\xed\x18\x9ad\x97\xf7\xc2\x11mz\xc3kǐ\xf7\a{\xbc\r\x1bG\"k\xb3d\xe0\\\"\xf6\x00\xa2~/\x81\xba\xf6\xfai3\v\xf1\xe0\x89\xc1\xe3\x11Q\xb7\x84K\x13㽧\xf4>}al\x88n&\x9e;\xf4\x9e.\xe27ш\xf1\xdc\x1cOL\x10ɸY\xfd)\xa0!\x06<#y\f\xd1#sFR\x03\xc8\xf5\xfd=\xaeg\xc6o\x84v\xb5\xe4\x18\xd7=\x12\xc6ğm\xa7\xb3O\x8c\x1d\x91\n9\xaa\xae\xc0\xaf\xa7\x1e\t\xa3.l\x86P\xe4j\x9fW\xb0\x997\xb8^f\\\xaa\x91\xd1')\x17\b\x91\xe3\a\xb5\x82\x84\xa3`6\xdf\xed\xaa#\xb7\xa9ڰ\x8f\xd4\x18\xee\x8d\xfcp\x87{`\x00R\xa1v$\xb4\x96\xec\x86\xdd\xc6\x1eL\xa4b\x7f\x05\xb4w\x00\xff\xe6\x11\x93=`ڃ\x89\xa3,\xfb\u06ddBͳ\a\x85\xda5(\xd0\x0e\xd2(@\xab\xb6h9j\xfd뻘6\f\xbf\xce:\x88\xb6\xe1y\xb5\xf7s\t\xf1>H\x8a\xe7\xe1s\xe4\xfcc4\xc4\x1c\x82\x832\x19\xc9\x11\xa9ñ\xe7\x16\x98\xdfIc\xf3\x99#rC\xc1k$\x1an\xf6S1\x95\xfc11B\x8d\x7f<\x054\x94\x12ƉE\x98\x187\xbc\xad\x1e)\xae\x86Pyd>\xfb%+\xf3\xf9\xb9\x97\x9b\xcfA\xe5\x98\xef\xefZ\xce\xf7`\x05g\x11\xaa\x96\x88[(&6\x13\t\x19?ʗѬ\x90\x15\x10\xf1\\\xaeث+\x19\xb0x\b\x89GcŀN\x9e\x175\xc0\x80\x91\xc0z\xbff\xb3\xb1渞J\xb9\xac\x81\x19\xd9Le=!i6\xb0\xa7\x80\x86\x00\x9brL\x03$\xaaH\xe8O\x86\x89c\xd4\u058c\x0ef\xdb&\v\xb9>5\xc0\xd2\xd50\v\xf2{\\w\x17\x1bb\x96pN|\x18_\xc6\x17\xdeŎ\x03\u07ba\x98\xde\x03\xefi\x14\x99\xf0\x9d\xaa\xc0w0\xbd\xe7x\xceߢ\xba\xc3\xf4^\xb5X4\x9cLҗ\x9c\xe1\x04P>l\x8b)\xfe\x1b6:o\xd4 ea\xc5\xc08\xe9\x88Y\xebjǩ\xa3\x95b\xe3\xf8\xb3\x99pl\xd2h\xef\xa9c\xfb*F\x81\xa9 \x92\xdcm\x01\xb3\x90k֘\xa8\xe6\x10c\x0f!f\fE\xfdB\x84M\xb7\x90L\xae0\xc3\xdct\xad\x9c\xe3\xcda2\"\xa3;\xdbb3\x84\xf2l\xfaU\x8e3\x11V\xbb|;\xb9=\xda\xdd]1\x05E\xe3B\xc2e\x8f\x11\xb4\x85\x16\x04M\xc2\x12\x10\x16;\x1e\xc1\x0e\xea\x86\xd1f\xe6\x1c\xd3\xc68\xaa\x88=HD\xe4\xa7\x05\x11\x19\x81ωпD\x8b\xe3\bX5\xb2\xd6\x1aQ\x8f\xa0J?ʀ\xa0\xf3X\x13*$\xa2j\xbbչ~=\xb52\xf3\xcf3\x10U@b!E=a\xeeq4\xf2\x1c\x7f\xb4Z\xe1\xe3\x8c\x15D\x83\x06\\\xb7\xec\x99\xd6-\x1e\x901洙\x85\xeaȂ\xeeg\xa9!\xc2\xddo\xda\xcc\xe6\x861\xb7k\x04K\x1c\x9fҜ\xefD\x9bBο$\xe2R\x95¸\xf1\xe5)\x83\x93\x81\x84G\x87\xaf;\xe2\x04]\x06\x1c\x1e\xbe\xfc\xdc\xcb\x0f_\x0e*\x7fc\x82ŋC(ڝ6ۆG9ܣ\xa0\x8e<W\xc6F\x05OԞ7k\xb7\x82\xc9\xcfsgnY\xbb\x92g\xec[p\x87\xf1\xbc\xa77/\xefA\x87o\xd9\x022\xda\vٺ\xd2\xfa\x9e\x11̅\xd5/\xec`\x86Pz\xa3\xacgnz]d!\xa1N\x8eJ\xe8\xcck\xac\x0f2 ro\xb2\xa2g\xf5\x100TN\x17\xb9%84Dx\xb5\xb0\xf1c\xdd&a\xa4m\xea\v\xa1-\xa1\x9d\r~\x18a\xe1+\xe7\v\x98\x10%\xda\xe0й\xec\x87G\\̀ȨrzKTj\b\xeb\xb5i\xf3,\x91\xe1\xc0B\xd5\xe1B\xf9\xfd\x01\xe8]\x10\xe98K\xc1\x83\xc1\x86{BRbn\x9d\xc1\x11\xb9\xce\xc04܂\x16]r\xa5\x87\xa2\xc4\f\x9dx\x85D\x84\x98\xed\x9d\xf8ՎS\xf7\x13+\xfe\x89\xb3;i-B\xef\xa9TS|\x85!\xe6\xcb\x13nt\x99\xea\x95\xc8\xe0d\xae2\x87\x10z\xf3\xed:\xb4֙\xcc\xfa\x1dL\xc9\xeb\x97\xf2\x1d\rn+k\x9ch\x80E/S\x00\x9f\x98pc\x8e\x9dz\x94\b\"h2\xff\xdc}\xbb\x02ɿn\xfb0\a.\xb3\x93\xa5\xb3ɏ\xb2\x00_ҥ\x02+T\xc7+䷙\x7fZ$y\xb2\xfb\xa8M\xffI)溤\xba\x15\x94R\x9f\x14\xa9\xa5:UE}z\xfasR\xc5\xd5o\xce#\x97\xd5\\\xbf;\xbf\xd0\xcbJ\xb1ߞ_\xf8d\x85\xf6\x92\x15?\xdf\xc2\xed\xf5{fE\xb5\xa0[/X\xee]\xac\x9eLH{\xae{\xfcqY\x90\x146\x90\vã\xb8\xbf\xfc\xeb3\xf8\xc5\xed\xe7S_QН\x86]\x8f,\xfcD\x97\xedWg03{ۿ<\x83}\xbe\xf5\xfd\xbc\r\x95\xa5\x19\xfe\xaaL\x96\xf2\x16\xf9\xab\xb2\x00)\xea\x92\x17\x1a\xa9\xb4\x89^\xba\x81'\x9b셎\x9aك\xffE9jVӣ\xd0M\v:\xf8'\xf4\x90\xd1(\xf9Y9\xea\xe9\x16ʼ\x8d)w#P\xb8\xed$\xef\t~\\\x86\x97\xc8k\x85hGw\n\x85\xfaξi8\x83\x9b\xb8\x7f8n\x02om\xa9\xe5\xf8I\x9e\x1cg\xba\xbd\xf0\x1fu\xe2ЮM\x17\x9eJ\xc82Yx7\x99X#?\xeb\xe6\xe5\x1b\x0f\\\x96r\xf3\xfcs\x01?̷y\xf9{\x01\xcbH\xb6yι@feڼ|\xb8\x80f\xa6\xd9\xd2\xcf\xcfȱy1\xb1@\x9eN\xb0b\tJ\x8fv\xdc%\r\x048|\x114\xa7\xe1\xbb7ѫ\fb~\xb2Ӡi\xda\xfbَ\xff\x9d\xc7яT\x12\xbf\x18pO\x97\x7f\x8f?\xfcaA\xf8\xffr\x89\xff\xa3_5\x8dS\xff[\xb7\xee\x83%[\xcc@\x839\x8d\xb3\xff\x03\x00\x00\xff\xff\x01\x00\x00\xff\xffX/c\x0e\x185\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.core", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xac[I\x93\xe58\x11\xfe\x1bl\xc32\xec\x03x\xa6\x19\b\x18\x96\t8\x11\xc1\x85\x9f\xe0г\xf4lճ%\x8f$\xbf\xea\xe2\xc6\x1e\xc0\xbf\xa0\xab\t\xfe \x9c\tk\xb3\x9c\x96e\xc9\u0557\n\xa5\xec\xfc\x94\xceM)e\xbdg\xcc\xd0@\x18&\xf7j\xa0\x82\xb0\xaa႐\x1beX\xfe\xe7q=\xfb\xe1<[\xa1q\xfc\xb7\xe6\x11\xe0)\x1aG\xc3\xf7\xbf+\xe6\x03\xa2\f\x80^\xaf\x94\xf4X\xfe\xe9ͅ\xe2\xd7_\xdb2W\xa8Q\xf4N\xea;\x11\x92rf\xe4\x02s\xeai$\x17\x8aw!(\xa3\x8a\xa2\xben8\xbb\xd2\xd6@\x80\xb9\x10\xe2\v\x11\x88Q\xf0\a\xd2(\xcd\xdb:\xc22\xb5V\x8e\xf6\xfe\n\xf5c\x87\xfaQ\xd0\x01\x89\xa7z\xfe\xee\x06\x8d\xe3\xeb/\xc6TfQ\x8c\xda\xee\xe0\r\xfb0Gu\x7f\xd0B\x7f)\x0eP\xf1GF\x84^\x82\x98\xe1,\xf4U*AY\x9b\x14\xdc}\xe5\x06\xd9\xd8[(zENz\xe8\x12\xeei\x8e\xf8\x7f\xd6\xe2C\r9\x84ٱ\xf4\x12\xb3\x1eWV\xfa\xea\x1eǀ\x18\xbd\x12il\xd5y*\xf8n\xcd\xff\xed#\xfe\x1a\xd3\xd6\xc1p8\x19\xa0=\xcfh_\xdeC\x93\n\xa9Ij\x90\xab\x1dϼ\x98\xb0i\xb8\xcd\x7f\xea;\xea'\"\xffu5N\xbdQ\xb7a\xb2a\xd0!\xd1t\xf4N\xb6\v\xba\xd7\xec\xf3\xa4i;']ܶ\x03Q\b#\x85\xe2\xb6uO\xb3\xa2:\xaa\x1b\x87P\xf5\xe8Bz\x89\aĞ\xfek4dgf\r\x11=\x8e\xfa\xb6\a\x98y\xf0\xf2\a\x9a\xf8+{|\xa7\xa3\xb9s\x10\x9b\x8fҚ\xc3d\xec\xf9\xd3@\x98\x8d\x8bן\ao-/\xe4\xa8\xef\x9f\xfa+\xde\xdfŘ\x83\xa3\xf6\x9f\xdfy\n\xea\xe1\x9bi\x840\xb5\xde\xc2\t\x88\xf3\x8d}\x9c\xcbD{\\\xf7\xbc5\xae\xfe\x10\xd0\x05(M?IEDM\xb1A\th\x88\xf2\xad\x04\n\x1fƞ(\x82kdLܯf`\xe8&\xb4c\x86\x04ח'\xa3\x9dpbơ32g\x84\xa9edM\x0f`\xab8l~\x86\x8c\xabM\x83T\x8a\x0eD*4\x98TI\x172\xcf\x13\f\xc8$\x89\xa8ɀho\x94\x1f\xd0\x10&\xee\x92\x01\x8c5`\xeb\x88<\x1f\b\x00\xbcWӅ\xccݹ\x1e\x1c\xda\xe5)\x9a\xe9\x03K\x10!\xb8\xa8\a\"%j\xcdz\xc3z\n:K\"\x18[\xaajʮ\xdc\x04\xa3\xa7\x0e\xdc\xe4\xfd}7q\x109>\xf2\xf77\xb1L\xeb\x10*4\xa9\x8e\x9b2\xe0j\xc7\xd0$\xbb\xbc\x17\x81X\xd3\x19^;\x86\xbc\xdf\xdb\xe3m\xf80PU\x9b%\x03璱\a\x10\xf5;\a\xa8k\xaf\x1f7\xb3\x10\x0fV\f\x1e\x8f\xca\x1aS\xa1L\x8cw\x9e\xd2\xfb\xf4\x85\xf3>\xba\x99x\xee\xd0{ڈ\xdfD#\xc6s\v2rI\x15\x17f\xf5\x87\x80\x86\x18\xb0F\xf2\x18\xb2C\xa6F\x9a\a\x90\xeb\xbb{\\\x8f\\\xdc(kk%\b\xa9;$\x8d\x89?\xdbNgW\x8c-U3rT]\x81_\x8f\x1d\x92F]\xc4\f\xa1\xc8\xd5>\xaf\xe4\x93hH\xbd̸T\xa3\xa2O\x8e\\ D\x8e\x17j\x05\tg\x86\xd9|\xb7;\x1d\xb9MՆ}\xe4\x8c\xe1\xde\xc8\x0fw\xb8\a\x06 \x15\xc2\x03e\xb5\xe27\xe26\xf6`\xe2(\xf6W@{\x05\xf8\xd7SL\xb6\xc0\xb4\x85\x89\xa3,\xfb\xf3\xceAͳ\a\a\xb5kp@K\xa4Q\x80Vm\xd1r\xd4\xfa\u05f71m\x18~\x9du\x10\xc3a\xbd\xda\xf9\xb9\x03\xf1>8\x14\xcf\xc3\xe7\xc8\xf9\xc7h\x889\x04\ae2\x92#\x8e\x8ac\xcf-\x89\xb8\xd3\xc6\xe63G䆂\xd7H4\xdc\xec\xa7\x12\xa6\xc4\xd3\xc8)3\xfe\xf1\x10\xd0PJ\x18'\x16a\xe4\xc2\xf0b=\x9a\xb9\x1a\xcaT\xca|\xf6KV\xe6\xf3s/7\x9f\x83ʊ^-\xe7{\xf0\x04g\x11*L\xe5-\x14\x93\x98\x89\x03\x19?ʗѬ\x90\x15\x10\xf1\\>\xb3WW\xda\x13\xf9$\x15\x19\x8c\x15\x03\xfa\xb0^\xd4\x00=A\x92\xe8\xfd\x9aOƚ\xc3z\xea\xc8e\r\xcc\xc0'\xa6\xea\x11)\xb3\x81=\x044\x04\xd8\x1c\xc74\xc0\xc1)\x12\xfa\x93a\x12\x04ᚳ\xdel\xdbt!\xd7U\x03<\xba\x1afI\x7fO\xea\xf6bC\xcc\x12Ή\x93\xf1e|\xe1m\xac\x1c\xf0\xd6%\xec\x1exO3\x93\a\xbeS\x15\xf8\x0ea\xf7\x1c\xcf\xf9[Tw\x84\xdd+Ld#\xe8\xa8\xfc\x913\x9c\x00ʇ\xd7b3\xff\x8d\x18\x9d7\xf3\xe0\xc8\xc23\x03\x17\xb4\xa5f\xad\xab\x1d\x1f\x95V3\x9b \x9fMT\x10\x93F;O\xa5\xed;3J\xc2$U\xf4n\x0f0\v\xb9f\x8d\x89j\x8a\x18[\x84\x981\x14\xf5s\x116}\x85dr\x85\x19\xe6\xa6\xeb\xd99\xde$\x93\x11\x1d\\mK\xcc\x10ʳ\xb9\xafr\x9c\aa\xb5˷\x93ۣ\xb7\xbb+\xa6\xe0и\x90p\xd94\x82\xb6Ђ\xa0\xc9\x00!\x9d\xb7g\x96U\xde6\x13\xef0ok\xc0\x9c\xe8\xfbK\xd4\xc34{i\xba\xb3L\x1c\x93\xda[\x86.\xe4\xca<\xf1\x05w\f\xfa\x1cS\xa6\xe5\x10\\\U000466f3b\xe7\xa9\xf8\xc5i\xa3\x9a\xed\r\xbb\xe3\xa9T36\x13N\xbc0\xe11!\xbbw\b\f}!\x9d\xa65\xf7s\xecl\xec\x8di\au\xc3Y3\tAXc\xf2\x9a\x8c=8p\xa2O\v\x9c(\x02\x9f\xefR\xf0.%\x02V\r\x1c[\x9d\xe9\x11t\xb0\x8f2 f\xf3R&\x15bsu\xa6K\x83\xf5\xd4\xca\xed~\x9a\x818\xe7o\"\x95\xacG\"<\x8eF\x9e\xe2\x8fV+|\x9c\xb1\x82lPOj\xcc\x1fY\x8dI\x8f\x8c1\xc7\xcd,TG\x16t7)\r\x11\x16K\xe3f6\xd7;\x85]#X\"]\xd4;߉\xde!:\xffRH\xa8\x1aSA\x1a\x7f\x9b\xc1\xe1$̥;\xb5\xfa\x1d\t\x8a.=\tku?\xf7\xf2Z\xddA\xe5\xd71\xf0\xac\xeb\x10\x8a\x8a\x99M\x0e\xf2(ɒ\x06\xea\xc8se\xd45\xf0\x00\xe6y\xb3\x8a\x1b\xb8Wz\xee\xcc\ngW\xf2\x8c2\an\f\x9e\xf7t\xad\xe3=(\xf9\x96\xbdo\x88^\x9dm]iݖ\x06s\xe1e\t\xbc\xf0\x0e\xa1t]UO\xc2lwt!\xa1NR7.\x99]\xcf\x0f2 r\x1b\x9fѣ]\b\x18*\xa7\x8d4\x95\x92\x86\b;Q\x1b?ַj\x9c⦾P\x86)km\xf0\xc3\b\v_9\x7f\xde\rQ\xa2\xf7a:\x97}?\xc5\xd5\xf4\x88\x0esN\xc7tN\ra\x998n\x9e\x1dd8\xb0P\x95\\(\xff:\tz\x17DJg)X\x18l\xb8G\xa4\x14\x11\xd6\x19\x1c\x91\xeb\f\\\xc3-h\xd1%Wz(J\xccЉWHT\xca\xc9\xfe\v\xc5Վ\x8f\xdaY+\xfeQ\xf0;\xc5\x16\xa1\xf3\xd4Q\x0fe\x85!\xa7\xcb\x03i\xf4\xad\x86W\"\x87\x93\xb9\xca\xecC\xe8ͷ\xeb\xd0Zg2\xebw0%\xaf_\xcaw4\xb8\xad\xacq\xa2\x01\x16\xed\xbd\x01>9\x92Ɣ\x9dzt\x10D\xd0d\xfe\xb9\xfb\xf6\x19$\xbf;\xfba\x0e\\\xe6ŧ\xce&?\xc8\x02|ɥ&X\xa1J\xaf\x90\xa3\x8a\x7fhU\xfc\xb8H\xf2\xc3\xcbjm\xfaOJ1\xd7G\xaa[\xc1Q\xea\x93\"\xb5T\xa7NQ\x9f\x9e\xfe\x9c\xa3\xc3\xd5o\xce#\x97\x9d\xb9~w~\xa1\x97\x1d\xc5~{~\xe1\x93'\xb4\x97\xac\xf8n\x0fn\xaf\xdf3+\xce\v\xba\xf5\x82\xe5\xde\xc6Γ\aҞk6|\\\x16$\x85\xfd\x86\xc2\xf0(nG\xfc\xfa\f~q\xb7\xe2\xd4W\x1443\xe0\xadG\x16\xfe\xc1\xe5\xdf/\xcf`f\xb6B~~\x06\xfb|\xa7\xe4q\x1b*K\xef\xe4U\x99,\xe5\x1d\x95We\x01R\xd4T)4Riϥt\x03?\xec\xc9\x14:jf\xcb\xe6g\xe5\xa8Y\x97\x1e\x85nZ\xd0\xf09\xa1\x87\x8c\x8b\x92\x9f\x94\xa3\x9e\xbeB\x99\xb61\xe5\x1aH\x85\xdb\xcea[\xe9\x87ex\ay\xad\x10-Ղ*\xd4wvc\xea\fnN\xbb\xaa\xd00\xe7\x9aX\x85\xf5@a\x1f\xab0p\xb2\xda\\\x85I\xb4\xa4\vvJ\xdcT\x93\xec\x17\xa7\x00\x8b{h\xbfz\xc92\xbe\xd1\xf62\x14\u05cd;\xa5ÓͺH\xa5\xa0\xf1\xd2=\x94-\x93\x16\xfcGy\x82\x9fi\x96\xc0\x7f\x8b\x8cC\xbb[\xee0\x88\xe92Y\xf8\x9f \ak\xe4\x17-y۵\a.\xabX\xf2\xd2\xfb\x02\x9e,W\xf2ʟ\x05,\xa3V\xc9\xcb\xed\vdV\xa1\x92\x17\"\vhf\x95R\xfa\xf9\x19%J^L,\x90\xa7\xeb\x13\xb9\x04\xa5GK7\x19\x02\x01\x92/\x82\xde\x0e|\xf7&\xbby\x036?\x90l\xd08\xee\xfdH\xd2\xff\xaa.\xf5\x93\xc0\x83\xdfg\xb9\xa7ˏ\x91\x92?\xe3\n\xff;\xf9\xe0WK\xab\x9e\xcb\xd1\x7f2\xaf\xaf\x91\x0f;4@\x839\xf7\xce\xff\a\x00\x00\xff\xff\x01\x00\x00\xff\xff\xc0\x06\x7f%\x86:\x00\x00"))
 }

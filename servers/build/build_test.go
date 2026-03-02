@@ -1,6 +1,7 @@
 package build
 
 import (
+	"context"
 	"encoding/json"
 	"sort"
 	"testing"
@@ -8,8 +9,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/build/build_v1alpha"
+	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/appconfig"
+	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/entity/testutils"
+	"miren.dev/runtime/pkg/entity/types"
 )
 
 func TestBuildVariablesFromAppConfig(t *testing.T) {
@@ -523,6 +528,98 @@ func TestBuildServicesConfig(t *testing.T) {
 				require.Contains(t, serviceMap, "scheduler")
 				schedulerSvc := serviceMap["scheduler"]
 				assert.Len(t, schedulerSvc.Env, 0, "scheduler should have no env vars")
+			},
+		},
+		{
+			name: "service with ports array",
+			appConfig: &appconfig.AppConfig{
+				Services: map[string]*appconfig.ServiceConfig{
+					"irc": {
+						Command: "./ircd",
+						Concurrency: &appconfig.ServiceConcurrencyConfig{
+							Mode:         "fixed",
+							NumInstances: 1,
+						},
+						Ports: []appconfig.PortConfig{
+							{Port: 6667, Name: "irc", Type: "tcp"},
+							{Port: 6697, Name: "irc-tls", Type: "tcp", NodePort: 6697},
+						},
+					},
+				},
+			},
+			procfileServices: nil,
+			validateServices: func(t *testing.T, services []core_v1alpha.ConfigSpecServices) {
+				require.Len(t, services, 1)
+				svc := services[0]
+				assert.Equal(t, "irc", svc.Name)
+
+				// Should use ports array, not scalar fields
+				require.Len(t, svc.Ports, 2, "should have two ports")
+				assert.Equal(t, int64(6667), svc.Ports[0].Port)
+				assert.Equal(t, "irc", svc.Ports[0].Name)
+				assert.Equal(t, "tcp", svc.Ports[0].Type)
+				assert.Equal(t, int64(0), svc.Ports[0].NodePort)
+
+				assert.Equal(t, int64(6697), svc.Ports[1].Port)
+				assert.Equal(t, "irc-tls", svc.Ports[1].Name)
+				assert.Equal(t, "tcp", svc.Ports[1].Type)
+				assert.Equal(t, int64(6697), svc.Ports[1].NodePort)
+
+				// Scalar fields should be zero
+				assert.Equal(t, int64(0), svc.Port)
+				assert.Equal(t, "", svc.PortName)
+				assert.Equal(t, "", svc.PortType)
+			},
+		},
+		{
+			name: "service with ports array and protocol",
+			appConfig: &appconfig.AppConfig{
+				Services: map[string]*appconfig.ServiceConfig{
+					"dns": {
+						Command: "./dns-server",
+						Concurrency: &appconfig.ServiceConcurrencyConfig{
+							Mode:         "fixed",
+							NumInstances: 1,
+						},
+						Ports: []appconfig.PortConfig{
+							{Port: 53, Name: "dns-udp", Protocol: "udp"},
+							{Port: 53, Name: "dns-tcp", Protocol: "tcp"},
+						},
+					},
+				},
+			},
+			procfileServices: nil,
+			validateServices: func(t *testing.T, services []core_v1alpha.ConfigSpecServices) {
+				require.Len(t, services, 1)
+				svc := services[0]
+				require.Len(t, svc.Ports, 2)
+				assert.Equal(t, core_v1alpha.ConfigSpecServicesPortsUDP, svc.Ports[0].Protocol)
+				assert.Equal(t, core_v1alpha.ConfigSpecServicesPortsTCP, svc.Ports[1].Protocol)
+			},
+		},
+		{
+			name: "service with scalar port (backward compat)",
+			appConfig: &appconfig.AppConfig{
+				Services: map[string]*appconfig.ServiceConfig{
+					"web": {
+						Port:     8080,
+						PortName: "http",
+						PortType: "http",
+						Concurrency: &appconfig.ServiceConcurrencyConfig{
+							Mode:                "auto",
+							RequestsPerInstance: 10,
+						},
+					},
+				},
+			},
+			procfileServices: nil,
+			validateServices: func(t *testing.T, services []core_v1alpha.ConfigSpecServices) {
+				require.Len(t, services, 1)
+				svc := services[0]
+				assert.Equal(t, int64(8080), svc.Port)
+				assert.Equal(t, "http", svc.PortName)
+				assert.Equal(t, "http", svc.PortType)
+				assert.Len(t, svc.Ports, 0, "ports array should be empty when using scalar fields")
 			},
 		},
 		{
@@ -1959,4 +2056,236 @@ func TestValidateRequiredVars(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestValidateNodePortsConflictBetweenApps(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create app A with a pool claiming node_port 6697
+	appA := &core_v1alpha.App{}
+	appAID, err := server.Client.Create(ctx, "app-a", appA)
+	require.NoError(t, err)
+
+	pool := &compute_v1alpha.SandboxPool{
+		App:              appAID,
+		Service:          "irc",
+		DesiredInstances: 1,
+		SandboxLabels:    types.LabelSet("app", "app-a"),
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Container: []compute_v1alpha.SandboxSpecContainer{{
+				Image: "test:latest",
+				Port: []compute_v1alpha.SandboxSpecContainerPort{{
+					Name:     "irc",
+					Port:     6697,
+					NodePort: 6697,
+				}},
+			}},
+		},
+	}
+	_, err = server.Client.Create(ctx, "app-a-irc-pool", pool)
+	require.NoError(t, err)
+
+	// Deploy app B claiming the same node_port 6697
+	appB := &core_v1alpha.App{}
+	appBID, err := server.Client.Create(ctx, "app-b", appB)
+	require.NoError(t, err)
+
+	spec := core_v1alpha.ConfigSpec{
+		Services: []core_v1alpha.ConfigSpecServices{{
+			Name: "chat",
+			Ports: []core_v1alpha.ConfigSpecServicesPorts{{
+				Name:     "chat",
+				Port:     6697,
+				NodePort: 6697,
+			}},
+		}},
+	}
+
+	err = validateNodePorts(ctx, server.EAC, appBID, spec)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "6697")
+	assert.Contains(t, err.Error(), "app-a")
+	assert.Contains(t, err.Error(), "irc")
+	assert.Contains(t, err.Error(), "chat")
+}
+
+func TestValidateNodePortsNoConflictSameApp(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create an app with a pool claiming node_port 6697
+	app := &core_v1alpha.App{}
+	appID, err := server.Client.Create(ctx, "my-app", app)
+	require.NoError(t, err)
+
+	pool := &compute_v1alpha.SandboxPool{
+		App:              appID,
+		Service:          "irc",
+		DesiredInstances: 1,
+		SandboxLabels:    types.LabelSet("app", "my-app"),
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Container: []compute_v1alpha.SandboxSpecContainer{{
+				Image: "test:latest",
+				Port: []compute_v1alpha.SandboxSpecContainerPort{{
+					Name:     "irc",
+					Port:     6697,
+					NodePort: 6697,
+				}},
+			}},
+		},
+	}
+	_, err = server.Client.Create(ctx, "my-app-irc-pool", pool)
+	require.NoError(t, err)
+
+	// Redeploy the same app with the same node_port — should succeed
+	spec := core_v1alpha.ConfigSpec{
+		Services: []core_v1alpha.ConfigSpecServices{{
+			Name: "irc",
+			Ports: []core_v1alpha.ConfigSpecServicesPorts{{
+				Name:     "irc",
+				Port:     6697,
+				NodePort: 6697,
+			}},
+		}},
+	}
+
+	err = validateNodePorts(ctx, server.EAC, appID, spec)
+	assert.NoError(t, err)
+}
+
+func TestValidateNodePortsIntraAppDuplicate(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	appID := entity.Id("app/test-app")
+
+	// Two services in the same config both claim node_port 6697
+	spec := core_v1alpha.ConfigSpec{
+		Services: []core_v1alpha.ConfigSpecServices{
+			{
+				Name: "irc",
+				Ports: []core_v1alpha.ConfigSpecServicesPorts{{
+					Name:     "irc",
+					Port:     6697,
+					NodePort: 6697,
+				}},
+			},
+			{
+				Name: "chat",
+				Ports: []core_v1alpha.ConfigSpecServicesPorts{{
+					Name:     "chat",
+					Port:     6697,
+					NodePort: 6697,
+				}},
+			},
+		},
+	}
+
+	err := validateNodePorts(ctx, server.EAC, appID, spec)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "irc")
+	assert.Contains(t, err.Error(), "chat")
+	assert.Contains(t, err.Error(), "6697")
+}
+
+func TestValidateNodePortsNoConflictDifferentPorts(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// App A claims node_port 6697
+	appA := &core_v1alpha.App{}
+	appAID, err := server.Client.Create(ctx, "app-a", appA)
+	require.NoError(t, err)
+
+	pool := &compute_v1alpha.SandboxPool{
+		App:              appAID,
+		Service:          "irc",
+		DesiredInstances: 1,
+		SandboxLabels:    types.LabelSet("app", "app-a"),
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Container: []compute_v1alpha.SandboxSpecContainer{{
+				Image: "test:latest",
+				Port: []compute_v1alpha.SandboxSpecContainerPort{{
+					Name:     "irc",
+					Port:     6697,
+					NodePort: 6697,
+				}},
+			}},
+		},
+	}
+	_, err = server.Client.Create(ctx, "app-a-irc-pool", pool)
+	require.NoError(t, err)
+
+	// App B claims node_port 8080 — different port, no conflict
+	appB := &core_v1alpha.App{}
+	appBID, err := server.Client.Create(ctx, "app-b", appB)
+	require.NoError(t, err)
+
+	spec := core_v1alpha.ConfigSpec{
+		Services: []core_v1alpha.ConfigSpecServices{{
+			Name: "web",
+			Ports: []core_v1alpha.ConfigSpecServicesPorts{{
+				Name:     "http",
+				Port:     8080,
+				NodePort: 8080,
+			}},
+		}},
+	}
+
+	err = validateNodePorts(ctx, server.EAC, appBID, spec)
+	assert.NoError(t, err)
+}
+
+func TestValidateNodePortsScaledDownPoolIgnored(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// App A has a pool with node_port 6697 but scaled to zero
+	appA := &core_v1alpha.App{}
+	appAID, err := server.Client.Create(ctx, "app-a", appA)
+	require.NoError(t, err)
+
+	pool := &compute_v1alpha.SandboxPool{
+		App:              appAID,
+		Service:          "irc",
+		DesiredInstances: 0,
+		SandboxLabels:    types.LabelSet("app", "app-a"),
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Container: []compute_v1alpha.SandboxSpecContainer{{
+				Image: "test:latest",
+				Port: []compute_v1alpha.SandboxSpecContainerPort{{
+					Name:     "irc",
+					Port:     6697,
+					NodePort: 6697,
+				}},
+			}},
+		},
+	}
+	_, err = server.Client.Create(ctx, "app-a-irc-pool", pool)
+	require.NoError(t, err)
+
+	// App B claims node_port 6697 — should succeed since app A's pool is scaled down
+	appB := &core_v1alpha.App{}
+	appBID, err := server.Client.Create(ctx, "app-b", appB)
+	require.NoError(t, err)
+
+	spec := core_v1alpha.ConfigSpec{
+		Services: []core_v1alpha.ConfigSpecServices{{
+			Name: "chat",
+			Ports: []core_v1alpha.ConfigSpecServicesPorts{{
+				Name:     "chat",
+				Port:     6697,
+				NodePort: 6697,
+			}},
+		}},
+	}
+
+	err = validateNodePorts(ctx, server.EAC, appBID, spec)
+	assert.NoError(t, err)
 }

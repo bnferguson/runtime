@@ -443,50 +443,81 @@ func (l *Launcher) buildSandboxSpec(
 	}
 
 	// Determine port configuration from service config
-	port := int64(0)
-	portName := ""
-	portType := ""
+	var containerPorts []compute_v1alpha.SandboxSpecContainerPort
+	portEnvValue := int64(0)
 	shutdownTimeout := ""
 
 	for _, svc := range cfgSpec.Services {
 		if svc.Name == serviceName {
-			if svc.Port > 0 {
-				port = svc.Port
-			}
-			if svc.PortName != "" {
-				portName = svc.PortName
-			}
-			if svc.PortType != "" {
-				portType = svc.PortType
-			}
 			if svc.Concurrency.ShutdownTimeout != "" {
 				shutdownTimeout = svc.Concurrency.ShutdownTimeout
+			}
+
+			if len(svc.Ports) > 0 {
+				// Multi-port path: map each port entry
+				for _, p := range svc.Ports {
+					cp := compute_v1alpha.SandboxSpecContainerPort{
+						Port:     p.Port,
+						Name:     p.Name,
+						Type:     p.Type,
+						NodePort: p.NodePort,
+					}
+					switch p.Protocol {
+					case core_v1alpha.ConfigSpecServicesPortsTCP:
+						cp.Protocol = compute_v1alpha.SandboxSpecContainerPortTCP
+					case core_v1alpha.ConfigSpecServicesPortsUDP:
+						cp.Protocol = compute_v1alpha.SandboxSpecContainerPortUDP
+					}
+					containerPorts = append(containerPorts, cp)
+				}
+
+				// PORT env var: first HTTP-typed port, or first port if none is HTTP
+				for _, p := range svc.Ports {
+					if p.Type == "http" {
+						portEnvValue = p.Port
+						break
+					}
+				}
+				if portEnvValue == 0 {
+					portEnvValue = svc.Ports[0].Port
+				}
+			} else {
+				// Scalar port path (backward compat)
+				port := svc.Port
+				portName := svc.PortName
+				portType := svc.PortType
+
+				if port == 0 && serviceName == "web" {
+					port = 3000
+				}
+
+				if port > 0 {
+					if portName == "" {
+						portName = "http"
+					}
+					if portType == "" {
+						portType = "http"
+					}
+					containerPorts = []compute_v1alpha.SandboxSpecContainerPort{
+						{Port: port, Name: portName, Type: portType},
+					}
+					portEnvValue = port
+				}
 			}
 			break
 		}
 	}
 
-	// Default to 3000 for web service if still no port configured
-	if port == 0 && serviceName == "web" {
-		port = 3000
+	// Default to 3000 for web service if no service config matched at all
+	if len(containerPorts) == 0 && serviceName == "web" {
+		containerPorts = []compute_v1alpha.SandboxSpecContainerPort{
+			{Port: 3000, Name: "http", Type: "http"},
+		}
+		portEnvValue = 3000
 	}
 
-	// Add port configuration if a port was determined
-	if port > 0 {
-		if portName == "" {
-			portName = "http"
-		}
-		if portType == "" {
-			portType = "http"
-		}
-
-		appCont.Port = []compute_v1alpha.SandboxSpecContainerPort{
-			{
-				Port: port,
-				Name: portName,
-				Type: portType,
-			},
-		}
+	if len(containerPorts) > 0 {
+		appCont.Port = containerPorts
 	}
 
 	// Add user-supplied config env vars, stripping any system-managed keys
@@ -515,8 +546,8 @@ func (l *Launcher) buildSandboxSpec(
 	}
 
 	// Append system-managed env vars last so they cannot be overridden
-	if port > 0 {
-		appCont.Env = append(appCont.Env, fmt.Sprintf("PORT=%d", port))
+	if portEnvValue > 0 {
+		appCont.Env = append(appCont.Env, fmt.Sprintf("PORT=%d", portEnvValue))
 	}
 	if labs.AdminAPI() && ver.AdminToken != "" {
 		appCont.Env = append(appCont.Env, "ADMIN_TOKEN="+ver.AdminToken)
@@ -737,7 +768,9 @@ func portsEqual(ports1, ports2 []compute_v1alpha.SandboxSpecContainerPort) bool 
 
 		if p1.Port != p2.Port ||
 			p1.Name != p2.Name ||
-			p1.Type != p2.Type {
+			p1.Type != p2.Type ||
+			p1.NodePort != p2.NodePort ||
+			p1.Protocol != p2.Protocol {
 			return false
 		}
 	}

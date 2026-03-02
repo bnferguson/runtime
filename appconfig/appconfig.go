@@ -44,12 +44,22 @@ type DiskConfig struct {
 	LeaseTimeout string `toml:"lease_timeout"`
 }
 
+// PortConfig represents a network port for a service
+type PortConfig struct {
+	Port     int    `toml:"port"`
+	Name     string `toml:"name"`
+	Protocol string `toml:"protocol"`
+	Type     string `toml:"type"`
+	NodePort int    `toml:"node_port"`
+}
+
 // ServiceConfig represents configuration for a specific service
 type ServiceConfig struct {
 	Command     string                    `toml:"command"`
 	Port        int                       `toml:"port"`
 	PortName    string                    `toml:"port_name"`
 	PortType    string                    `toml:"port_type"`
+	Ports       []PortConfig              `toml:"ports"`
 	Image       string                    `toml:"image"`
 	EnvVars     []AppEnvVar               `toml:"env"`
 	Concurrency *ServiceConcurrencyConfig `toml:"concurrency"`
@@ -210,6 +220,44 @@ func (ac *AppConfig) Validate() error {
 		for i, ev := range svcConfig.EnvVars {
 			if ev.Key == "" {
 				return fmt.Errorf("service %s: env[%d] key is required", serviceName, i)
+			}
+		}
+
+		// Validate ports configuration
+		if len(svcConfig.Ports) > 0 {
+			// Mutual exclusion: cannot use both ports[] and scalar port fields
+			if svcConfig.Port > 0 || svcConfig.PortName != "" || svcConfig.PortType != "" {
+				return fmt.Errorf("service %s: cannot use both 'ports' array and scalar port/port_name/port_type fields", serviceName)
+			}
+
+			seenNames := make(map[string]bool)
+			type portProto struct {
+				port     int
+				protocol string
+			}
+			seenPortProto := make(map[portProto]bool)
+			for i, p := range svcConfig.Ports {
+				if p.Port <= 0 || p.Port > 65535 {
+					return fmt.Errorf("service %s: ports[%d] port must be between 1 and 65535", serviceName, i)
+				}
+				if p.Name == "" {
+					return fmt.Errorf("service %s: ports[%d] name is required", serviceName, i)
+				}
+				if p.Protocol != "" && p.Protocol != "tcp" && p.Protocol != "udp" {
+					return fmt.Errorf("service %s: ports[%d] protocol must be \"tcp\" or \"udp\"", serviceName, i)
+				}
+				if p.NodePort < 0 || p.NodePort > 65535 {
+					return fmt.Errorf("service %s: ports[%d] node_port must be between 0 and 65535", serviceName, i)
+				}
+				if seenNames[p.Name] {
+					return fmt.Errorf("service %s: ports[%d] duplicate port name %q", serviceName, i, p.Name)
+				}
+				seenNames[p.Name] = true
+				pp := portProto{p.Port, p.Protocol}
+				if seenPortProto[pp] {
+					return fmt.Errorf("service %s: ports[%d] duplicate port number %d (protocol %q)", serviceName, i, p.Port, p.Protocol)
+				}
+				seenPortProto[pp] = true
 			}
 		}
 
