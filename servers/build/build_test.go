@@ -1936,6 +1936,16 @@ func TestValidateRequiredVars(t *testing.T) {
 			spec:    core_v1alpha.ConfigSpec{},
 			wantErr: false,
 		},
+		{
+			name: "required var with whitespace-only value - fails",
+			spec: core_v1alpha.ConfigSpec{
+				Variables: []core_v1alpha.ConfigSpecVariables{
+					{Key: "DATABASE_URL", Value: "   ", Required: true},
+				},
+			},
+			wantErr: true,
+			errMsg:  "DATABASE_URL",
+		},
 	}
 
 	for _, tt := range tests {

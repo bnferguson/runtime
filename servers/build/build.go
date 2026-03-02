@@ -181,13 +181,13 @@ func validateRequiredVars(spec core_v1alpha.ConfigSpec) error {
 	var missing []missingVar
 
 	for _, v := range spec.Variables {
-		if v.Required && v.Value == "" {
+		if v.Required && strings.TrimSpace(v.Value) == "" {
 			missing = append(missing, missingVar{key: v.Key, description: v.Description})
 		}
 	}
 	for _, svc := range spec.Services {
 		for _, e := range svc.Env {
-			if e.Required && e.Value == "" {
+			if e.Required && strings.TrimSpace(e.Value) == "" {
 				missing = append(missing, missingVar{key: e.Key, description: e.Description, service: svc.Name})
 			}
 		}
@@ -1006,7 +1006,20 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		return err
 	}
 
-	// Fail the deploy if required env vars are missing values
+	// Fail the deploy if required env vars are missing values.
+	//
+	// This runs after the image build rather than before it because the
+	// final merged config depends on build outputs: the Procfile (which
+	// determines per-service env vars) is read from the built image, and
+	// the BuildResult provides entrypoint/command used to synthesize a
+	// web service when none is defined in app.toml or Procfile. We can't
+	// assemble the complete config — and therefore can't know which
+	// required vars exist — until the build finishes.
+	//
+	// A future optimization could do a partial pre-flight check on global
+	// vars from app.toml + existing config before building, but for now
+	// we keep it simple with a single validation point that has the full
+	// picture, matching how validateServicesExist works just above.
 	if err := validateRequiredVars(configSpec); err != nil {
 		b.sendErrorStatus(ctx, status, "%s", err)
 		return err
