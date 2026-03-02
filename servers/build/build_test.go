@@ -1765,7 +1765,7 @@ func TestMergeVariablesFromAppConfig_MetadataCarried(t *testing.T) {
 		assert.Equal(t, "Database URL", result[0].Description)
 	})
 
-	t.Run("config var without metadata does not clear existing metadata", func(t *testing.T) {
+	t.Run("config var without metadata clears existing metadata", func(t *testing.T) {
 		existingVars := []core_v1alpha.ConfigSpecVariables{
 			{Key: "VAR", Value: "val", Source: "manual", Required: true, Description: "old desc"},
 		}
