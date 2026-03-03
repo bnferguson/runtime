@@ -13,7 +13,7 @@ import (
 func DiskBackup(ctx *Context, opts struct {
 	ConfigCentric
 	Name     string `short:"n" long:"name" description:"Disk name to backup" required:"true"`
-	Output   string `short:"o" long:"output" description:"Output snapshot path (default: <name>-<timestamp>.miren.zst)"`
+	Output   string `short:"o" long:"output" description:"Output snapshot path (default: DISK-YYYYMMDD-HHMMSS.miren.zst)"`
 	DataPath string `long:"data-path" description:"Path to miren data directory" default:"/var/lib/miren"`
 }) (retErr error) {
 	client, err := ctx.RPCClient("entities")
