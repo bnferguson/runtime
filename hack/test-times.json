@@ -1,9 +1,9 @@
 {
   "summary": {
     "harness_overhead_s": 1.93,
-    "total_test_time_s": 583.28,
-    "package_count": 93,
-    "passed": 93,
+    "total_test_time_s": 589.02,
+    "package_count": 95,
+    "passed": 95,
     "failed": 0
   },
   "packages": [
@@ -166,6 +166,12 @@
     {
       "package": "miren.dev/runtime/pkg/cloudauth",
       "elapsed_s": 3.47,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/components/diskio",
+      "elapsed_s": 3.42,
       "status": "pass",
       "returncode": 0
     },
@@ -406,6 +412,12 @@
     {
       "package": "miren.dev/runtime/pkg/entity/schema",
       "elapsed_s": 2.4,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/snapshot",
+      "elapsed_s": 2.32,
       "status": "pass",
       "returncode": 0
     },
