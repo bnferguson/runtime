@@ -134,6 +134,23 @@ description = "Third-party API key for payment processing"
 
 The `required` flag is useful for variables whose values differ per environment—declare them in `app.toml` with an empty value and `required = true`, then set the actual value with `miren env set` before deploying. The `sensitive` flag ensures secrets aren't accidentally exposed in terminal output.
 
+### Traffic Routing
+
+For HTTP services, Miren handles routing automatically. For non-HTTP services (TCP/UDP), you can expose ports directly using the `ports` array:
+
+```toml
+[services.irc]
+command = "./ircd"
+
+[[services.irc.ports]]
+port = 6667
+name = "irc"
+type = "tcp"
+node_port = 6667
+```
+
+See [Traffic Routing](/traffic-routing) for the full picture — HTTP ingress, TCP/UDP routing, multi-port services, and the `PORT` environment variable.
+
 ## Complete Example
 
 ```toml

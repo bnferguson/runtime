@@ -269,6 +269,7 @@ num_instances = 1
 
 ## Next Steps
 
+- [app.toml Reference](/app-toml#ports) — Complete field reference for port configuration
 - [Services](/services) — Defining services, commands, images, and scaling
 - [TLS Certificates](/tls) — How HTTPS works for HTTP services
 - [Firewall Configuration](/firewall) — Host-level firewall rules and cloud provider setup

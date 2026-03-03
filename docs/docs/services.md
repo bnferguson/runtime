@@ -179,7 +179,7 @@ Each service can configure:
 |--------|-------------|---------|
 | `command` | Command to run | Image's default entrypoint |
 | `image` | Container image to use | App's built image |
-| `port` | Port the service listens on (scalar, single-port) | 3000 (web only) |
+| `port` | Port the service listens on (single-port shorthand) | 3000 (web only) |
 | `ports` | Port configuration array (multi-port, see [Traffic Routing](/traffic-routing)) | (none) |
 | `env` | Service-specific environment variables | (none) |
 | `concurrency` | Scaling configuration | See [Scaling](/scaling) |

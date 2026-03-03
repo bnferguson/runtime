@@ -133,13 +133,18 @@ image = "postgres:16"
 | Field | Type | Description | Default |
 |-------|------|-------------|---------|
 | `command` | string | Command to run | Image's default entrypoint |
-| `port` | int | Port the service listens on (web service only) | `3000` |
-| `port_name` | string | Named port identifier | — |
-| `port_type` | string | Port protocol type | — |
+| `port` | int | Port the service listens on (single-port shorthand) | `3000` (web only) |
+| `port_name` | string | Named port identifier (single-port shorthand) | Service name |
+| `port_type` | string | `"http"` or `"tcp"` (single-port shorthand) | `"http"` |
+| `ports` | [[port]](#ports) | Multi-port configuration array | — |
 | `image` | string | Container image to use instead of the app's built image | App's built image |
 | `env` | [[env]](#env) | Service-specific environment variables (same schema as global `[[env]]`) | — |
 | `concurrency` | [concurrency](#concurrency) | Scaling configuration | See defaults below |
 | `disks` | [[disk]](#disks) | Persistent disk attachments | — |
+
+:::note
+You cannot mix the single-port fields (`port`, `port_name`, `port_type`) with the `ports` array on the same service.
+:::
 
 ### `[services.<name>.concurrency]` — Scaling {#concurrency}
 
@@ -177,6 +182,38 @@ shutdown_timeout = "10s"
 - In **auto** mode: `requests_per_instance` must be non-negative, `scale_down_delay` must be a valid Go duration, and `num_instances` must not be set.
 - In **fixed** mode: `num_instances` must be at least 1, and `requests_per_instance` / `scale_down_delay` must not be set.
 - `shutdown_timeout` must be a valid Go duration (e.g. `"10s"`, `"30s"`).
+:::
+
+### `[[services.<name>.ports]]` — Ports {#ports}
+
+Configures network ports for a service. Use this when a service needs multiple ports or non-HTTP protocols. See [Traffic Routing](/traffic-routing) for usage patterns and examples.
+
+```toml
+[[services.app.ports]]
+port = 3000
+name = "http"
+type = "http"
+
+[[services.app.ports]]
+port = 7000
+name = "data"
+type = "tcp"
+node_port = 7000
+```
+
+| Field | Type | Description | Default |
+|-------|------|-------------|---------|
+| `port` | int | Port your process listens on (1–65535). **Required.** | — |
+| `name` | string | Unique name for this port. **Required.** | — |
+| `type` | string | `"http"` for web traffic, `"tcp"` for raw TCP, `"udp"` for UDP | `"http"` |
+| `node_port` | int | Port to expose on the host machine (1–65535) | (none) |
+
+:::note Validation
+- `port` must be between 1 and 65535.
+- `name` is required and must be unique within the service.
+- `type` must be `"http"`, `"tcp"`, or `"udp"`.
+- Each `(port, type)` pair must be unique within the service (`"tcp"` and `"http"` share the TCP transport, so port 8080 with type `"http"` and port 8080 with type `"tcp"` conflict, but port 53 with `"tcp"` and port 53 with `"udp"` are allowed).
+- `node_port` must be between 1 and 65535 and unique across the cluster.
 :::
 
 ### `[[services.<name>.disks]]` — Persistent Disks {#disks}
