@@ -48,7 +48,6 @@ type DiskConfig struct {
 type PortConfig struct {
 	Port     int    `toml:"port"`
 	Name     string `toml:"name"`
-	Protocol string `toml:"protocol"`
 	Type     string `toml:"type"`
 	NodePort int    `toml:"node_port"`
 }
@@ -243,12 +242,12 @@ func (ac *AppConfig) Validate() error {
 				if p.Name == "" {
 					return fmt.Errorf("service %s: ports[%d] name is required", serviceName, i)
 				}
-				if p.Protocol != "" && p.Protocol != "tcp" && p.Protocol != "udp" {
-					return fmt.Errorf("service %s: ports[%d] protocol must be \"tcp\" or \"udp\"", serviceName, i)
+				if p.Type != "" && p.Type != "http" && p.Type != "tcp" && p.Type != "udp" {
+					return fmt.Errorf("service %s: ports[%d] type must be \"http\", \"tcp\", or \"udp\"", serviceName, i)
 				}
-				proto := p.Protocol
-				if proto == "" {
-					proto = "tcp"
+				proto := "tcp"
+				if p.Type == "udp" {
+					proto = "udp"
 				}
 				if p.NodePort < 0 || p.NodePort > 65535 {
 					return fmt.Errorf("service %s: ports[%d] node_port must be between 0 and 65535", serviceName, i)

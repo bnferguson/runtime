@@ -572,7 +572,7 @@ func TestBuildServicesConfig(t *testing.T) {
 			},
 		},
 		{
-			name: "service with ports array and protocol",
+			name: "service with ports array and udp type",
 			appConfig: &appconfig.AppConfig{
 				Services: map[string]*appconfig.ServiceConfig{
 					"dns": {
@@ -582,8 +582,8 @@ func TestBuildServicesConfig(t *testing.T) {
 							NumInstances: 1,
 						},
 						Ports: []appconfig.PortConfig{
-							{Port: 53, Name: "dns-udp", Protocol: "udp"},
-							{Port: 53, Name: "dns-tcp", Protocol: "tcp"},
+							{Port: 53, Name: "dns-udp", Type: "udp"},
+							{Port: 53, Name: "dns-tcp", Type: "tcp"},
 						},
 					},
 				},

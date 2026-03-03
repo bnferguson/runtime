@@ -370,11 +370,10 @@ func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[st
 						Type:     p.Type,
 						NodePort: int64(p.NodePort),
 					}
-					switch p.Protocol {
-					case "tcp":
-						sp.Protocol = core_v1alpha.ConfigSpecServicesPortsTCP
-					case "udp":
+					if p.Type == "udp" {
 						sp.Protocol = core_v1alpha.ConfigSpecServicesPortsUDP
+					} else {
+						sp.Protocol = core_v1alpha.ConfigSpecServicesPortsTCP
 					}
 					svc.Ports = append(svc.Ports, sp)
 				}

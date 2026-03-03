@@ -891,7 +891,7 @@ num_instances = 1
 		assert.Equal(t, 6697, ircSvc.Ports[1].NodePort)
 	})
 
-	t.Run("port with protocol", func(t *testing.T) {
+	t.Run("port with udp type", func(t *testing.T) {
 		config := `
 name = "test-app"
 
@@ -901,12 +901,12 @@ command = "./dns-server"
 [[services.dns.ports]]
 port = 53
 name = "dns-udp"
-protocol = "udp"
+type = "udp"
 
 [[services.dns.ports]]
 port = 53
 name = "dns-tcp"
-protocol = "tcp"
+type = "tcp"
 
 [services.dns.concurrency]
 mode = "fixed"
@@ -918,8 +918,8 @@ num_instances = 1
 
 		dnsSvc := ac.Services["dns"]
 		require.Len(t, dnsSvc.Ports, 2)
-		assert.Equal(t, "udp", dnsSvc.Ports[0].Protocol)
-		assert.Equal(t, "tcp", dnsSvc.Ports[1].Protocol)
+		assert.Equal(t, "udp", dnsSvc.Ports[0].Type)
+		assert.Equal(t, "tcp", dnsSvc.Ports[1].Type)
 	})
 }
 
@@ -1026,18 +1026,18 @@ port = 8080
 		assert.Contains(t, err.Error(), "name is required")
 	})
 
-	t.Run("invalid protocol", func(t *testing.T) {
+	t.Run("invalid type", func(t *testing.T) {
 		config := `
 name = "test-app"
 
 [[services.web.ports]]
 port = 8080
 name = "http"
-protocol = "sctp"
+type = "sctp"
 `
 		_, err := Parse([]byte(config))
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), `protocol must be "tcp" or "udp"`)
+		assert.Contains(t, err.Error(), `type must be "http", "tcp", or "udp"`)
 	})
 
 	t.Run("duplicate port name", func(t *testing.T) {
@@ -1057,56 +1057,57 @@ name = "http"
 		assert.Contains(t, err.Error(), `duplicate port name "http"`)
 	})
 
-	t.Run("duplicate port number same protocol", func(t *testing.T) {
+	t.Run("duplicate port number same type", func(t *testing.T) {
 		config := `
 name = "test-app"
 
 [[services.web.ports]]
 port = 8080
 name = "http"
-protocol = "tcp"
+type = "tcp"
 
 [[services.web.ports]]
 port = 8080
 name = "https"
-protocol = "tcp"
+type = "tcp"
 `
 		_, err := Parse([]byte(config))
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "duplicate port number 8080")
 	})
 
-	t.Run("duplicate port empty protocol treated as tcp", func(t *testing.T) {
+	t.Run("duplicate port http type treated as tcp protocol", func(t *testing.T) {
 		config := `
 name = "test-app"
 
 [[services.web.ports]]
 port = 8080
 name = "http"
+type = "http"
 
 [[services.web.ports]]
 port = 8080
 name = "also-http"
-protocol = "tcp"
+type = "tcp"
 `
 		_, err := Parse([]byte(config))
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "duplicate port number 8080")
 	})
 
-	t.Run("same port different protocol is valid", func(t *testing.T) {
+	t.Run("same port different type is valid", func(t *testing.T) {
 		config := `
 name = "test-app"
 
 [[services.dns.ports]]
 port = 53
 name = "dns-udp"
-protocol = "udp"
+type = "udp"
 
 [[services.dns.ports]]
 port = 53
 name = "dns-tcp"
-protocol = "tcp"
+type = "tcp"
 `
 		ac, err := Parse([]byte(config))
 		require.NoError(t, err)
