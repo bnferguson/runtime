@@ -226,7 +226,7 @@ func (ac *AppConfig) Validate() error {
 		// Validate ports configuration
 		if len(svcConfig.Ports) > 0 {
 			// Mutual exclusion: cannot use both ports[] and scalar port fields
-			if svcConfig.Port > 0 || svcConfig.PortName != "" || svcConfig.PortType != "" {
+			if svcConfig.Port != 0 || svcConfig.PortName != "" || svcConfig.PortType != "" {
 				return fmt.Errorf("service %s: cannot use both 'ports' array and scalar port/port_name/port_type fields", serviceName)
 			}
 

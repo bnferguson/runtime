@@ -235,6 +235,7 @@ func (l *Launcher) reconcileAppVersion(ctx context.Context, app *core_v1alpha.Ap
 	appMD.Decode(appResp.Entity().Entity())
 
 	var desiredServices []string
+	serviceSyncFailed := false
 	for _, svc := range spec.Services {
 		svcID, err := l.ensureServiceForPorts(ctx, app, &appMD, spec, svc.Name)
 		if err != nil {
@@ -242,6 +243,7 @@ func (l *Launcher) reconcileAppVersion(ctx context.Context, app *core_v1alpha.Ap
 				"app", app.ID,
 				"service", svc.Name,
 				"error", err)
+			serviceSyncFailed = true
 			continue
 		}
 		if svcID != "" {
@@ -249,7 +251,11 @@ func (l *Launcher) reconcileAppVersion(ctx context.Context, app *core_v1alpha.Ap
 		}
 	}
 
-	l.cleanupStaleServices(ctx, app, desiredServices)
+	if serviceSyncFailed {
+		l.Log.Warn("skipping stale service cleanup due to ensure failures", "app", app.ID)
+	} else {
+		l.cleanupStaleServices(ctx, app, desiredServices)
+	}
 
 	// Wait for new pools to have ready instances before killing old ones.
 	// This prevents a gap where the old sandbox is dead but the new one
@@ -1037,11 +1043,27 @@ func (l *Launcher) cleanupOldVersionPools(ctx context.Context, app *core_v1alpha
 // that has non-HTTP ports. Returns the service entity ID if one was created/updated,
 // or empty string if the service doesn't need a Service entity (all ports are HTTP).
 func (l *Launcher) ensureServiceForPorts(ctx context.Context, app *core_v1alpha.App, appMD *core_v1alpha.Metadata, spec *core_v1alpha.ConfigSpec, serviceName string) (string, error) {
-	// Find the service's ports from ConfigSpec
+	// Find the service's ports from ConfigSpec.
+	// Handles both the ports[] array and legacy scalar Port/PortName/PortType fields.
 	var ports []core_v1alpha.ConfigSpecServicesPorts
 	for _, svc := range spec.Services {
 		if svc.Name == serviceName {
 			ports = svc.Ports
+			// Backfill from scalar fields when ports[] is empty
+			if len(ports) == 0 && svc.Port > 0 {
+				p := core_v1alpha.ConfigSpecServicesPorts{
+					Port: svc.Port,
+					Name: svc.PortName,
+					Type: svc.PortType,
+				}
+				if p.Name == "" {
+					p.Name = serviceName
+				}
+				if p.Type == "" {
+					p.Type = "http"
+				}
+				ports = []core_v1alpha.ConfigSpecServicesPorts{p}
+			}
 			break
 		}
 	}

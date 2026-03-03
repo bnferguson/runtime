@@ -972,6 +972,22 @@ name = "http"
 		assert.Contains(t, err.Error(), "cannot use both 'ports' array and scalar port/port_name/port_type fields")
 	})
 
+	t.Run("mutual exclusion with negative scalar port", func(t *testing.T) {
+		config := `
+name = "test-app"
+
+[services.web]
+port = -1
+
+[[services.web.ports]]
+port = 8080
+name = "http"
+`
+		_, err := Parse([]byte(config))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "cannot use both 'ports' array and scalar port/port_name/port_type fields")
+	})
+
 	t.Run("port out of range", func(t *testing.T) {
 		config := `
 name = "test-app"

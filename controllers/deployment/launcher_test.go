@@ -2075,6 +2075,66 @@ func TestServiceEntityDeletedWhenServiceRemoved(t *testing.T) {
 
 // TestNoServiceEntityForHTTPOnlyService verifies that services with only HTTP
 // ports do not get a Service entity created (they use httpingress instead).
+// TestServiceEntityCreatedForScalarNonHTTPPort tests that the launcher creates a
+// Service entity when scalar port fields (Port/PortType) specify a non-HTTP port.
+func TestServiceEntityCreatedForScalarNonHTTPPort(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{
+		Project: entity.Id("project-1"),
+	}
+	appID, err := server.Client.Create(ctx, "legacy-tcp", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	// Use scalar Port/PortType fields instead of Ports[] array
+	version := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "legacy:latest",
+		Config: core_v1alpha.Config{
+			Services: []core_v1alpha.Services{
+				{
+					Name:     "worker",
+					Port:     9000,
+					PortName: "data",
+					PortType: "tcp",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", version)
+	require.NoError(t, err)
+	version.ID = verID
+
+	app.ActiveVersion = version.ID
+	err = server.Client.Update(ctx, app)
+	require.NoError(t, err)
+
+	launcher := newTestLauncher(log, server.EAC)
+	err = launcher.Reconcile(ctx, app, nil)
+	require.NoError(t, err)
+
+	// Verify Service entity was created from scalar port fields
+	services := listAllServices(t, ctx, server)
+	require.Len(t, services, 1, "should create service entity for scalar non-HTTP port")
+
+	svc := services[0]
+	assert.Equal(t, entity.Id("svc/legacy-tcp-worker"), svc.ID)
+	require.Len(t, svc.Port, 1, "service should have 1 port backfilled from scalar fields")
+	assert.Equal(t, int64(9000), svc.Port[0].Port)
+	assert.Equal(t, "data", svc.Port[0].Name)
+	assert.Equal(t, "tcp", svc.Port[0].Type)
+}
+
 func TestNoServiceEntityForHTTPOnlyService(t *testing.T) {
 	ctx := context.Background()
 	log := testutils.TestLogger(t)

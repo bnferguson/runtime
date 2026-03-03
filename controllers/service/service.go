@@ -139,23 +139,32 @@ func (n *nftCommands) append(cmd string, args ...any) {
 	n.commands = append(n.commands, fmt.Sprintf(cmd, args...))
 }
 
-func (s *ServiceController) serviceChain(ip netip.Addr, port uint16) string {
-	x := blake2b.Sum256([]byte(fmt.Sprintf("%s:%d", ip.String(), port)))
+// nftProto converts a network_v1alpha.PortProtocol to the nftables protocol string.
+// Defaults to "tcp" for empty or unrecognized values.
+func nftProto(p network_v1alpha.PortProtocol) string {
+	if p == network_v1alpha.UDP {
+		return "udp"
+	}
+	return "tcp"
+}
+
+func (s *ServiceController) serviceChain(ip netip.Addr, port uint16, proto string) string {
+	x := blake2b.Sum256([]byte(fmt.Sprintf("%s:%s:%d", ip.String(), proto, port)))
 	return fmt.Sprintf("service_%s", base58.Encode(x[:]))
 }
 
-func (s *ServiceController) endpointChain(ip netip.Addr, port uint16) string {
-	x := blake2b.Sum256([]byte(fmt.Sprintf("%s:%d", ip.String(), port)))
+func (s *ServiceController) endpointChain(ip netip.Addr, port uint16, proto string) string {
+	x := blake2b.Sum256([]byte(fmt.Sprintf("%s:%s:%d", ip.String(), proto, port)))
 	return fmt.Sprintf("endpoint_%s", base58.Encode(x[:]))
 }
 
-func (s *ServiceController) nodeportChain(ip netip.Addr, port uint16) string {
-	x := blake2b.Sum256([]byte(fmt.Sprintf("%s:%d", ip.String(), port)))
+func (s *ServiceController) nodeportChain(ip netip.Addr, port uint16, proto string) string {
+	x := blake2b.Sum256([]byte(fmt.Sprintf("%s:%s:%d", ip.String(), proto, port)))
 	return fmt.Sprintf("nodeport_%s", base58.Encode(x[:]))
 }
 
-func (s *ServiceController) createServiceChain(cmd *nftCommands, ip netip.Addr, port int) error {
-	srv := s.serviceChain(ip, uint16(port))
+func (s *ServiceController) createServiceChain(cmd *nftCommands, ip netip.Addr, port int, proto string) error {
+	srv := s.serviceChain(ip, uint16(port), proto)
 	if cmd.knownChains.Contains(srv) {
 		return nil
 	}
@@ -164,19 +173,19 @@ func (s *ServiceController) createServiceChain(cmd *nftCommands, ip netip.Addr, 
 
 	cmd.append("add chain inet %s %s", s.table, srv)
 	if ip.Is4() {
-		cmd.append("add element inet %s service_ip4s { %s . tcp . %d : goto %s }", s.table, ip.String(), port, srv)
+		cmd.append("add element inet %s service_ip4s { %s . %s . %d : goto %s }", s.table, ip.String(), proto, port, srv)
 	} else {
-		cmd.append("add element inet %s service_ip6s { %s . tcp . %d : goto %s }", s.table, ip.String(), port, srv)
+		cmd.append("add element inet %s service_ip6s { %s . %s . %d : goto %s }", s.table, ip.String(), proto, port, srv)
 	}
 	return nil
 }
 
-func (s *ServiceController) updateServiceEndpoints(cmd *nftCommands, sip netip.Addr, sport int, endpoints []string) error {
+func (s *ServiceController) updateServiceEndpoints(cmd *nftCommands, sip netip.Addr, sport int, proto string, endpoints []string) error {
 	if len(endpoints) == 0 {
 		return nil
 	}
 
-	srv := s.serviceChain(sip, uint16(sport))
+	srv := s.serviceChain(sip, uint16(sport), proto)
 
 	slices.Sort(endpoints)
 
@@ -208,8 +217,8 @@ func (s *ServiceController) updateServiceEndpoints(cmd *nftCommands, sip netip.A
 	return nil
 }
 
-func (s *ServiceController) setupNodePort(cmd *nftCommands, nport int, sip netip.Addr, sport int) error {
-	chain := s.nodeportChain(sip, uint16(sport))
+func (s *ServiceController) setupNodePort(cmd *nftCommands, nport int, sip netip.Addr, sport int, proto string) error {
+	chain := s.nodeportChain(sip, uint16(sport), proto)
 
 	if cmd.knownChains.Contains(chain) {
 		return nil
@@ -219,24 +228,24 @@ func (s *ServiceController) setupNodePort(cmd *nftCommands, nport int, sip netip
 
 	cmd.append("add chain inet %s %s", s.table, chain)
 
-	cmd.append("add element inet %s service_nodeports { tcp . %d : goto %s }", s.table, nport, chain)
+	cmd.append("add element inet %s service_nodeports { %s . %d : goto %s }", s.table, proto, nport, chain)
 
 	cmd.append("add rule inet %s %s counter name \"nodeports\"", s.table, chain)
 	for _, rp := range s.routablePrefixes {
 		if rp.Addr().Is4() {
-			cmd.append("add rule inet %s %s ip saddr == %s goto %s", s.table, chain, rp.String(), s.serviceChain(sip, uint16(sport)))
+			cmd.append("add rule inet %s %s ip saddr == %s goto %s", s.table, chain, rp.String(), s.serviceChain(sip, uint16(sport), proto))
 		} else {
-			cmd.append("add rule inet %s %s ip6 saddr == %s goto %s", s.table, chain, rp.String(), s.serviceChain(sip, uint16(sport)))
+			cmd.append("add rule inet %s %s ip6 saddr == %s goto %s", s.table, chain, rp.String(), s.serviceChain(sip, uint16(sport), proto))
 		}
 	}
 
 	cmd.append("add rule inet %s %s fib saddr type local counter jump mark-for-masq", s.table, chain)
-	cmd.append("add rule inet %s %s fib saddr type local counter goto %s", s.table, chain, s.serviceChain(sip, uint16(sport)))
+	cmd.append("add rule inet %s %s fib saddr type local counter goto %s", s.table, chain, s.serviceChain(sip, uint16(sport), proto))
 	return nil
 }
 
-func (s *ServiceController) setupEndpointChain(cmd *nftCommands, ip netip.Addr, port uint16) (string, error) {
-	endpoint := s.endpointChain(ip, port)
+func (s *ServiceController) setupEndpointChain(cmd *nftCommands, ip netip.Addr, port uint16, proto string) (string, error) {
+	endpoint := s.endpointChain(ip, port, proto)
 	if cmd.knownChains.Contains(endpoint) {
 		return endpoint, nil
 	}
@@ -246,10 +255,10 @@ func (s *ServiceController) setupEndpointChain(cmd *nftCommands, ip netip.Addr, 
 	cmd.append("add chain inet %s %s", s.table, endpoint)
 	if ip.Is4() {
 		cmd.append("add rule inet %s %s ip saddr %s jump mark-for-masq", s.table, endpoint, ip.String())
-		cmd.append("add rule inet %s %s meta l4proto tcp counter dnat ip to %s:%d", s.table, endpoint, ip.String(), port)
+		cmd.append("add rule inet %s %s meta l4proto %s counter dnat ip to %s:%d", s.table, endpoint, proto, ip.String(), port)
 	} else {
 		cmd.append("add rule inet %s %s ip6 saddr %s jump mark-for-masq", s.table, endpoint, ip.String())
-		cmd.append("add rule inet %s %s meta l4proto tcp counter dnat ip6 to %s:%d", s.table, endpoint, ip.String(), port)
+		cmd.append("add rule inet %s %s meta l4proto %s counter dnat ip6 to %s:%d", s.table, endpoint, proto, ip.String(), port)
 	}
 	return endpoint, nil
 }
@@ -474,6 +483,7 @@ func (s *ServiceController) Create(ctx context.Context, srv *network_v1alpha.Ser
 			if target == 0 {
 				target = tp.Port
 			}
+			proto := nftProto(tp.Protocol)
 
 			var epChains []string
 			for _, ent := range lr.Values() {
@@ -486,7 +496,7 @@ func (s *ServiceController) Create(ctx context.Context, srv *network_v1alpha.Ser
 						return fmt.Errorf("failed to parse endpoint IP address: %v", err)
 					}
 
-					chain, err := s.setupEndpointChain(cmd, destIP, uint16(target))
+					chain, err := s.setupEndpointChain(cmd, destIP, uint16(target), proto)
 					if err != nil {
 						return fmt.Errorf("failed to setup endpoint chain: %w", err)
 					}
@@ -495,11 +505,11 @@ func (s *ServiceController) Create(ctx context.Context, srv *network_v1alpha.Ser
 				}
 			}
 
-			if err := s.createServiceChain(cmd, ip, int(tp.Port)); err != nil {
+			if err := s.createServiceChain(cmd, ip, int(tp.Port), proto); err != nil {
 				return fmt.Errorf("failed to create service chain: %w", err)
 			}
 
-			if err := s.updateServiceEndpoints(cmd, ip, int(tp.Port), epChains); err != nil {
+			if err := s.updateServiceEndpoints(cmd, ip, int(tp.Port), proto, epChains); err != nil {
 				return fmt.Errorf("failed to update service endpoints: %w", err)
 			}
 		}
@@ -507,7 +517,8 @@ func (s *ServiceController) Create(ctx context.Context, srv *network_v1alpha.Ser
 
 	for _, tp := range srv.Port {
 		if tp.NodePort != 0 {
-			if err := s.setupNodePort(cmd, int(tp.NodePort), firstIp, int(tp.Port)); err != nil {
+			proto := nftProto(tp.Protocol)
+			if err := s.setupNodePort(cmd, int(tp.NodePort), firstIp, int(tp.Port), proto); err != nil {
 				return fmt.Errorf("failed to setup node port: %w", err)
 			}
 		}
