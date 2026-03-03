@@ -893,6 +893,112 @@ func TestServiceController(t *testing.T) {
 		r.NoError(err)
 	})
 
+	t.Run("creates per-port endpoint chains for multi-port services", func(t *testing.T) {
+		r := require.New(t)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		testDeps, cleanup := testutils.NewTestDeps()
+		defer cleanup()
+
+		eac := testDeps.EAC
+
+		sc, err := newServiceController(testDeps)
+		r.NoError(err)
+
+		err = sc.Init(ctx)
+		r.NoError(err)
+
+		// Create a multi-port service (like tcp-echo: HTTP health + TCP echo)
+		svcID := entity.Id(svcName())
+		svc := &network_v1alpha.Service{
+			ID: svcID,
+			Ip: []string{"10.10.0.1"},
+			Match: types.Labels{
+				types.Label{Key: "app", Value: "tcp-echo"},
+			},
+			Port: []network_v1alpha.Port{
+				{
+					Name: "health",
+					Port: 3000,
+					Type: "http",
+				},
+				{
+					Name:     "echo",
+					Port:     7000,
+					Type:     "tcp",
+					NodePort: 7000,
+				},
+			},
+		}
+
+		// Store the service in entity store
+		var rpcE entityserver_v1alpha.Entity
+		rpcE.SetAttrs(entity.New(
+			entity.Keyword(entity.Ident, svcID.String()),
+			svc.Encode).Attrs())
+		_, err = eac.Put(ctx, &rpcE)
+		r.NoError(err)
+
+		// Create endpoints for the service (simulating a sandbox at 10.8.0.5)
+		epID := entity.Id("endpoints-" + svcID.String())
+		eps := &network_v1alpha.Endpoints{
+			ID:      epID,
+			Service: svcID,
+			Endpoint: []network_v1alpha.Endpoint{
+				{
+					Ip:   "10.8.0.5",
+					Port: 3000,
+				},
+			},
+		}
+
+		var epRPC entityserver_v1alpha.Entity
+		epRPC.SetAttrs(entity.New(
+			entity.Keyword(entity.Ident, epID.String()),
+			eps.Encode).Attrs())
+		_, err = eac.Put(ctx, &epRPC)
+		r.NoError(err)
+
+		svcEntity := entity.New(svc.Encode)
+		meta := &entity.Meta{
+			Entity:   svcEntity,
+			Revision: 1,
+		}
+
+		// Create should succeed and set up per-port endpoint chains.
+		// Before the fix, all endpoint chains would DNAT to port 3000 (srv.Port[0]).
+		// After the fix, port 3000's chain DNATs to :3000 and port 7000's chain DNATs to :7000.
+		err = sc.Create(ctx, svc, meta)
+		r.NoError(err)
+
+		// Verify per-port endpoint chains via the internal chainEndpoints map.
+		// Each service port gets its own service chain, each with its own endpoint chains.
+		svcIP := netip.MustParseAddr("10.10.0.1")
+		epIP := netip.MustParseAddr("10.8.0.5")
+
+		chain3000 := sc.serviceChain(svcIP, 3000)
+		chain7000 := sc.serviceChain(svcIP, 7000)
+		r.NotEqual(chain3000, chain7000, "service chains for different ports should differ")
+
+		sc.mu.Lock()
+		eps3000, ok3000 := sc.chainEndpoints[chain3000]
+		eps7000, ok7000 := sc.chainEndpoints[chain7000]
+		sc.mu.Unlock()
+
+		r.True(ok3000, "should have endpoint chains for port 3000")
+		r.True(ok7000, "should have endpoint chains for port 7000")
+		r.Len(eps3000, 1, "port 3000 should have one endpoint chain")
+		r.Len(eps7000, 1, "port 7000 should have one endpoint chain")
+
+		// The endpoint chains should differ because they target different ports
+		ep3000 := sc.endpointChain(epIP, 3000)
+		ep7000 := sc.endpointChain(epIP, 7000)
+		r.Equal(ep3000, eps3000[0], "port 3000 endpoint chain should DNAT to :3000")
+		r.Equal(ep7000, eps7000[0], "port 7000 endpoint chain should DNAT to :7000")
+		r.NotEqual(eps3000[0], eps7000[0], "endpoint chains for different ports must differ")
+	})
+
 	t.Run("handles service IP allocation", func(t *testing.T) {
 		r := require.New(t)
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

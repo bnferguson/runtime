@@ -455,35 +455,7 @@ func (s *ServiceController) Create(ctx context.Context, srv *network_v1alpha.Ser
 		return fmt.Errorf("failed to list endpoints: %w", err)
 	}
 
-	tp := srv.Port[0]
-
-	var epChains []string
-
 	cmd := s.cmd.Clone()
-
-	for _, ent := range lr.Values() {
-		var eps network_v1alpha.Endpoints
-		eps.Decode(ent.Entity())
-
-		for _, ep := range eps.Endpoint {
-			destIP, err := netip.ParseAddr(ep.Ip)
-			if err != nil {
-				return fmt.Errorf("failed to parse endpoint IP address: %v", err)
-			}
-
-			target := tp.TargetPort
-			if target == 0 {
-				target = tp.Port
-			}
-
-			ep, err := s.setupEndpointChain(cmd, destIP, uint16(target))
-			if err != nil {
-				return fmt.Errorf("failed to setup endpoint chain: %w", err)
-			}
-
-			epChains = append(epChains, ep)
-		}
-	}
 
 	var firstIp netip.Addr
 
@@ -498,6 +470,31 @@ func (s *ServiceController) Create(ctx context.Context, srv *network_v1alpha.Ser
 		}
 
 		for _, tp := range srv.Port {
+			target := tp.TargetPort
+			if target == 0 {
+				target = tp.Port
+			}
+
+			var epChains []string
+			for _, ent := range lr.Values() {
+				var eps network_v1alpha.Endpoints
+				eps.Decode(ent.Entity())
+
+				for _, ep := range eps.Endpoint {
+					destIP, err := netip.ParseAddr(ep.Ip)
+					if err != nil {
+						return fmt.Errorf("failed to parse endpoint IP address: %v", err)
+					}
+
+					chain, err := s.setupEndpointChain(cmd, destIP, uint16(target))
+					if err != nil {
+						return fmt.Errorf("failed to setup endpoint chain: %w", err)
+					}
+
+					epChains = append(epChains, chain)
+				}
+			}
+
 			if err := s.createServiceChain(cmd, ip, int(tp.Port)); err != nil {
 				return fmt.Errorf("failed to create service chain: %w", err)
 			}
