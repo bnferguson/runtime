@@ -134,7 +134,7 @@ const config: Config = {
             },
             {
               label: 'CLI Reference',
-              to: '/cli-reference',
+              to: '/commands',
             },
           ],
         },

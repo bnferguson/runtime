@@ -1,0 +1,230 @@
+---
+sidebar_position: 20
+sidebar_label: app.toml
+---
+
+# app.toml Reference
+
+Complete reference for `.miren/app.toml` — the configuration file for Miren applications.
+
+For a guide-style introduction, see [App Configuration](/app-configuration).
+
+## File Structure
+
+```toml
+name = "myapp"
+post_import = "make db-migrate"
+include = ["configs/"]
+
+# Global environment variables
+[[env]]
+key = "DATABASE_URL"
+value = "postgres://db.app.miren:5432/myapp"
+
+# Build configuration
+[build]
+version = "3.12"
+dockerfile = "Dockerfile.miren"
+onbuild = ["npm run build"]
+
+# Service definitions
+[services.web]
+command = "node server.js"
+port = 3000
+
+[services.web.concurrency]
+mode = "auto"
+requests_per_instance = 10
+scale_down_delay = "15m"
+shutdown_timeout = "10s"
+
+[services.worker]
+command = "node worker.js"
+
+[services.worker.concurrency]
+mode = "fixed"
+num_instances = 2
+shutdown_timeout = "10s"
+
+[services.db]
+image = "postgres:16"
+
+[[services.db.disks]]
+name = "pgdata"
+mount_path = "/var/lib/postgresql/data"
+size_gb = 20
+
+# Addons
+[addons.storage]
+variant = "minio"
+```
+
+## Top-Level Fields
+
+| Field | Type | Description | Default |
+|-------|------|-------------|---------|
+| `name` | string | Application name | Inferred from directory name |
+| `post_import` | string | Command to run after importing a new version (e.g. database migrations) | — |
+| `include` | string[] | Extra files or directories to include in the build context | — |
+| `concurrency` | int | **Legacy.** Global concurrency target. Use `[services.<name>.concurrency]` instead. | — |
+
+## `[[env]]` — Environment Variables {#env}
+
+Declares environment variables available to all services. Service-level `[[services.<name>.env]]` entries are merged with these.
+
+```toml
+[[env]]
+key = "DATABASE_URL"
+value = "postgres://db.app.miren:5432/myapp"
+
+[[env]]
+key = "SECRET_KEY"
+required = true
+sensitive = true
+description = "Used for session signing"
+```
+
+| Field | Type | Description | Default |
+|-------|------|-------------|---------|
+| `key` | string | Variable name. **Required.** | — |
+| `value` | string | Variable value | `""` |
+| `required` | bool | Fail deploy if value is empty | `false` |
+| `sensitive` | bool | Mask value in CLI output and logs | `false` |
+| `description` | string | Human-readable explanation of this variable | — |
+
+:::note Validation
+Every env entry must have a non-empty `key`. If `required` is `true` and `value` is empty at deploy time, the deploy fails.
+:::
+
+## `[build]` — Build Configuration {#build}
+
+Controls how Miren builds your container image.
+
+```toml
+[build]
+version = "3.12"
+dockerfile = "Dockerfile.custom"
+onbuild = ["npm run build", "npm prune --production"]
+alpine_image = "alpine:3.19"
+```
+
+| Field | Type | Description | Default |
+|-------|------|-------------|---------|
+| `version` | string | Language/runtime version (e.g. `"20"` for Node, `"3.12"` for Python) | Detected from project files |
+| `dockerfile` | string | Path to a custom Dockerfile | Auto-detected (`Dockerfile.miren` or built-in) |
+| `onbuild` | string[] | Commands to run in `/app` after the main build steps | — |
+| `alpine_image` | string | Custom Alpine base image for the runtime stage | Built-in default |
+
+## `[services.<name>]` — Service Configuration {#services}
+
+Each named section under `services` defines a process in your app. See [Services](/services) for usage patterns.
+
+```toml
+[services.web]
+command = "node server.js"
+port = 3000
+port_name = "http"
+port_type = "http"
+
+[services.postgres]
+image = "postgres:16"
+```
+
+| Field | Type | Description | Default |
+|-------|------|-------------|---------|
+| `command` | string | Command to run | Image's default entrypoint |
+| `port` | int | Port the service listens on (web service only) | `3000` |
+| `port_name` | string | Named port identifier | — |
+| `port_type` | string | Port protocol type | — |
+| `image` | string | Container image to use instead of the app's built image | App's built image |
+| `env` | [[env]](#env) | Service-specific environment variables (same schema as global `[[env]]`) | — |
+| `concurrency` | [concurrency](#concurrency) | Scaling configuration | See defaults below |
+| `disks` | [[disk]](#disks) | Persistent disk attachments | — |
+
+### `[services.<name>.concurrency]` — Scaling {#concurrency}
+
+Controls how many instances of a service run. See [Application Scaling](/scaling) for tuning guidance.
+
+**Default for `web`:** auto mode, 10 requests per instance, 15m scale-down delay, 10s shutdown timeout.
+
+**Default for all other services:** fixed mode, 1 instance, 10s shutdown timeout.
+
+```toml
+# Autoscaling
+[services.web.concurrency]
+mode = "auto"
+requests_per_instance = 10
+scale_down_delay = "15m"
+shutdown_timeout = "10s"
+
+# Fixed instances
+[services.worker.concurrency]
+mode = "fixed"
+num_instances = 2
+shutdown_timeout = "10s"
+```
+
+| Field | Type | Description | Default |
+|-------|------|-------------|---------|
+| `mode` | string | `"auto"` or `"fixed"` | `"auto"` for web, `"fixed"` for others |
+| `requests_per_instance` | int | Target concurrent requests per instance (auto mode only) | `10` |
+| `scale_down_delay` | duration | Time to wait before removing idle instances (auto mode only) | `"15m"` |
+| `num_instances` | int | Exact number of instances to run (fixed mode only) | `1` |
+| `shutdown_timeout` | duration | Time to wait for graceful shutdown during redeploy | `"10s"` |
+
+:::note Validation
+- `mode` must be `"auto"` or `"fixed"`.
+- In **auto** mode: `requests_per_instance` must be non-negative, `scale_down_delay` must be a valid Go duration, and `num_instances` must not be set.
+- In **fixed** mode: `num_instances` must be at least 1, and `requests_per_instance` / `scale_down_delay` must not be set.
+- `shutdown_timeout` must be a valid Go duration (e.g. `"10s"`, `"30s"`).
+:::
+
+### `[[services.<name>.disks]]` — Persistent Disks {#disks}
+
+Attaches persistent storage to a service. See [Persistent Storage](/disks) for details on local shared storage vs. Miren Disks.
+
+```toml
+[[services.db.disks]]
+name = "pgdata"
+mount_path = "/var/lib/postgresql/data"
+size_gb = 20
+filesystem = "ext4"
+read_only = false
+lease_timeout = "30s"
+```
+
+| Field | Type | Description | Default |
+|-------|------|-------------|---------|
+| `name` | string | Unique disk name. **Required.** | — |
+| `mount_path` | string | Mount point inside the container. **Required.** | — |
+| `size_gb` | int | Disk size in gigabytes (required for new disks, ignored for existing) | — |
+| `filesystem` | string | `"ext4"`, `"xfs"`, or `"btrfs"` | `"ext4"` |
+| `read_only` | bool | Mount as read-only | `false` |
+| `lease_timeout` | duration | How long to wait when acquiring the exclusive disk lease | — |
+
+:::note Validation
+- `name` and `mount_path` are required.
+- `filesystem` must be `ext4`, `xfs`, or `btrfs`.
+- `size_gb` must be non-negative.
+- `lease_timeout` must be a valid Go duration (e.g. `"30s"`, `"2m"`).
+- Services with disks **must** use `mode = "fixed"` and `num_instances = 1`.
+:::
+
+## `[addons.<name>]` — Addons {#addons}
+
+Configures add-on services managed by Miren.
+
+```toml
+[addons.storage]
+variant = "minio"
+```
+
+| Field | Type | Description | Default |
+|-------|------|-------------|---------|
+| `variant` | string | Addon variant to use | — |
+
+## Duration Format
+
+Fields marked as `duration` accept Go duration strings: a sequence of decimal numbers with unit suffixes. Valid units are `s` (seconds), `m` (minutes), `h` (hours).
+
+Examples: `"10s"`, `"2m"`, `"1h30m"`, `"15m"`.

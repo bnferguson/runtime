@@ -272,7 +272,7 @@ miren route
 
 ### Need Help?
 
-- Check the [CLI Reference](/cli-reference) for command details
+- Check the [CLI Reference](/commands) for command details
 - View the [FAQ](https://miren.dev/developer-preview#faq-1)
 - See [Troubleshooting](/troubleshooting) for diagnostics, bug reports, and community help
 
@@ -286,7 +286,7 @@ We're still learning about system requirements as more users deploy Miren in dif
 
 ## Next Steps
 
-- [Application Scaling](/scaling) - Configure how your app scales
-- [CLI Reference](/cli-reference) - Learn about all available commands
-- [App Commands](/command/app) - Detailed application command reference
-- [Disks](/disks) - Persistent storage for your applications
+- [App Configuration](/app-configuration) — Learn when and how to configure your app
+- [Application Scaling](/scaling) — Configure how your app scales
+- [CLI Reference](/commands) — Learn about all available commands
+- [Disks](/disks) — Persistent storage for your applications

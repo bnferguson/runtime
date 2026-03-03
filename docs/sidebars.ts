@@ -22,6 +22,7 @@ const sidebars: SidebarsConfig = {
       label: 'Features',
       collapsed: false,
       items: [
+        'app-configuration',
         'languages',
         'services',
         'scaling',
@@ -36,12 +37,14 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: 'category',
-      label: 'CLI Reference',
+      label: 'Reference',
       collapsed: false,
       items: [
+        'app-toml',
+        'server-config',
         {
           type: 'category',
-          label: 'Commands',
+          label: 'CLI',
           collapsed: true,
           link: {
             type: 'doc',

@@ -487,7 +487,8 @@ num_instances = 1
 
 ## Next Steps
 
+- [App Configuration](/app-configuration) — Overview of the configuration model
+- [app.toml Reference](/app-toml) — Complete field reference for `.miren/app.toml`
 - [Persistent Storage](/disks) — Local storage and disk options for databases
 - [Application Scaling](/scaling) — Configure how each service scales
 - [Getting Started](/getting-started) — Deploy your first app
-- [CLI Reference](/cli-reference) — All available commands

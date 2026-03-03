@@ -52,7 +52,7 @@ miren logs
 - [Services](/services) - Run multiple processes in your app
 - [Scaling](/scaling) - Configure how your app scales
 - [Disks](/disks) - Add persistent storage to your apps
-- [CLI Reference](/cli-reference) - Learn about all available commands
+- [CLI Reference](/commands) - Learn about all available commands
 
 ---
 

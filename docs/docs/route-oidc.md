@@ -126,4 +126,4 @@ miren route oidc show myapp.example.com
 miren route oidc disable myapp.example.com
 ```
 
-See the [CLI reference](/cli-reference#route-oidc-authentication) for the full list of options.
+See the [CLI reference](/command/route-oidc-enable) for the full list of options.

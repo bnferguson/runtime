@@ -223,5 +223,6 @@ miren sandbox list
 
 ## Next Steps
 
-- [Getting Started](/getting-started) - Deploy your first app
-- [CLI Reference](/cli-reference) - All available commands
+- [app.toml Reference — Concurrency](/app-toml#concurrency) — Complete field reference for concurrency settings
+- [Services](/services) — Define multiple processes in your app
+- [Getting Started](/getting-started) — Deploy your first app

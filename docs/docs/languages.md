@@ -349,6 +349,7 @@ The `onbuild` commands run in the `/app` directory after the main build steps co
 
 ## Next Steps
 
-- [Services](/services) - Configure multiple processes
-- [Scaling](/scaling) - Set up autoscaling
-- [Getting Started](/getting-started) - Deploy your first app
+- [app.toml Reference — Build](/app-toml#build) — Complete field reference for build settings
+- [Services](/services) — Configure multiple processes
+- [Scaling](/scaling) — Set up autoscaling
+- [Getting Started](/getting-started) — Deploy your first app
