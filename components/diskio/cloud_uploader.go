@@ -167,6 +167,11 @@ func (u *CloudSegmentUploader) UploadSegment(ctx context.Context, volumeID, segm
 
 	var completeURL string
 	if parsedURL, parseErr := url.Parse(uploadResp.CompletedURL); parseErr == nil && parsedURL.IsAbs() {
+		baseURL, _ := url.Parse(u.baseURL)
+		if parsedURL.Scheme != baseURL.Scheme || parsedURL.Host != baseURL.Host {
+			return "", fmt.Errorf("complete URL origin %s://%s does not match base URL origin %s://%s",
+				parsedURL.Scheme, parsedURL.Host, baseURL.Scheme, baseURL.Host)
+		}
 		completeURL = uploadResp.CompletedURL
 	} else {
 		completeURL, err = url.JoinPath(u.baseURL, uploadResp.CompletedURL)

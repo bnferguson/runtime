@@ -242,7 +242,7 @@ func DebugDiskStatus(ctx *Context, opts struct {
 	if disk.VolumeId != "" {
 		ctx.Info("  Volume ID: %s", disk.VolumeId)
 	} else if disk.LsvdVolumeId != "" {
-		ctx.Info("  LSVD Volume ID: %s", disk.LsvdVolumeId)
+		ctx.Info("  LSVD Volume ID: %s (legacy)", disk.LsvdVolumeId)
 	}
 
 	return nil
@@ -270,7 +270,7 @@ func DebugDiskMounts(ctx *Context, opts struct{}) error {
 		fsType := fields[2]
 
 		// Only show runtime-managed disk mounts (loop devices under /var/lib/miren/disks)
-		if !strings.Contains(mountPoint, "/var/lib/miren/disks") {
+		if !strings.HasPrefix(mountPoint, "/var/lib/miren/disks") {
 			continue
 		}
 

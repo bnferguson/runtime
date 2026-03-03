@@ -32,6 +32,9 @@ func DiskMigrate(ctx *Context, opts struct {
 		return fmt.Errorf("LSVD volume %q has zero size", opts.VolumeName)
 	}
 
+	if totalSize%int64(lsvd.BlockSize) != 0 {
+		return fmt.Errorf("LSVD volume size %d is not aligned to block size %d", totalSize, lsvd.BlockSize)
+	}
 	totalBlocks := totalSize / int64(lsvd.BlockSize)
 
 	out, err := os.Create(opts.Output)

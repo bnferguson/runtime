@@ -419,6 +419,9 @@ func (c *DiskVolumeController) migrateLSVDVolume(ctx context.Context, volumeName
 		return false, fmt.Errorf("truncating image to %d bytes: %w", sizeBytes, err)
 	}
 
+	if lsvdSize%int64(lsvd.BlockSize) != 0 {
+		return false, fmt.Errorf("LSVD volume size %d is not aligned to block size %d", lsvdSize, lsvd.BlockSize)
+	}
 	totalBlocks := lsvdSize / int64(lsvd.BlockSize)
 	const chunkBlocks = 1024
 	zeros := make([]byte, chunkBlocks*lsvd.BlockSize)

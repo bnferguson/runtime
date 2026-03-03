@@ -285,7 +285,39 @@ func (c *DiskMountController) attachAndMount(ctx context.Context, mount *storage
 	}
 
 	// Now mount the volume
-	return c.mountVolume(ctx, mount)
+	if err := c.mountVolume(ctx, mount); err != nil {
+		// Rollback: detach device, release lease, clean up local state
+		c.log.Warn("mount failed, rolling back attach", "entity_id", entityId, "error", err)
+
+		if volState.Mode == storage_v1alpha.VM_ACCELERATOR {
+			if derr := c.ops.LbdDetach(ctx, devicePath); derr != nil {
+				c.log.Warn("rollback: failed to detach lbd device", "error", derr)
+			}
+		} else {
+			if derr := c.ops.LoopDetach(devicePath); derr != nil {
+				c.log.Warn("rollback: failed to detach loop device", "error", derr)
+			}
+		}
+
+		if leaseNonce != "" && c.cloudClient != nil {
+			if lerr := c.cloudClient.ReleaseLease(ctx, volState.VolumeId, leaseNonce); lerr != nil {
+				c.log.Warn("rollback: failed to release lease", "error", lerr)
+			}
+		}
+
+		c.mu.Lock()
+		delete(c.mounts, entityId)
+		c.mu.Unlock()
+
+		c.state.DeleteMount(entityId)
+		if serr := c.state.Save(); serr != nil {
+			c.log.Warn("rollback: failed to save state", "error", serr)
+		}
+
+		return err
+	}
+
+	return nil
 }
 
 func (c *DiskMountController) mountVolume(ctx context.Context, mount *storage_v1alpha.DiskMount) error {
@@ -446,23 +478,44 @@ func (c *DiskMountController) unmountAndDetach(ctx context.Context, mount *stora
 	}
 
 	// Detach device based on mode (use persisted mode from MountState)
+	var detachErr error
 	if mountState.DevicePath != "" {
 		if mountState.Mode == storage_v1alpha.VM_ACCELERATOR {
 			if err := c.ops.LbdDetach(ctx, mountState.DevicePath); err != nil {
 				c.log.Warn("failed to detach lbd device", "error", err)
+				detachErr = fmt.Errorf("failed to detach lbd device: %w", err)
 			}
 		} else {
 			if err := c.ops.LoopDetach(mountState.DevicePath); err != nil {
 				c.log.Warn("failed to detach loop device", "error", err)
+				detachErr = fmt.Errorf("failed to detach loop device: %w", err)
 			}
 		}
 	}
 
 	// Release cloud lease if one was acquired
+	var leaseErr error
 	if mountState.LeaseNonce != "" && c.cloudClient != nil {
 		if err := c.cloudClient.ReleaseLease(ctx, mountState.VolumeId, mountState.LeaseNonce); err != nil {
 			c.log.Warn("failed to release volume lease", "entity_id", entityId, "error", err)
+			leaseErr = fmt.Errorf("failed to release volume lease: %w", err)
 		}
+	}
+
+	// If detach or lease release failed, report error and keep state for retry
+	if detachErr != nil || leaseErr != nil {
+		errMsg := ""
+		if detachErr != nil {
+			errMsg = detachErr.Error()
+		}
+		if leaseErr != nil {
+			if errMsg != "" {
+				errMsg += "; "
+			}
+			errMsg += leaseErr.Error()
+		}
+		c.setMountError(ctx, mount.ID, errMsg)
+		return fmt.Errorf("detach/release failed: %s", errMsg)
 	}
 
 	// Remove from active mounts
@@ -549,6 +602,10 @@ func (c *DiskMountController) setMountError(ctx context.Context, id entity.Id, e
 
 // ReconcileWithEntities reconciles local state with entity server
 func (c *DiskMountController) ReconcileWithEntities(ctx context.Context) error {
+	if c.eac == nil {
+		return fmt.Errorf("entity access client not set; call SetEAC before reconciling")
+	}
+
 	fullNodeId := "node/" + c.nodeId
 	nodeIdRef := entity.Id(fullNodeId)
 	indexAttr := entity.Ref(storage_v1alpha.DiskMountNodeIdId, nodeIdRef)
@@ -566,11 +623,11 @@ func (c *DiskMountController) ReconcileWithEntities(ctx context.Context) error {
 		var mount storage_v1alpha.DiskMount
 		mount.Decode(entResp.Entity())
 
-		entityIds[string(mount.ID)] = struct{}{}
-
 		if string(mount.NodeId) != fullNodeId {
 			continue
 		}
+
+		entityIds[string(mount.ID)] = struct{}{}
 
 		if err := c.reconcileMount(ctx, &mount); err != nil {
 			c.log.Error("failed to reconcile disk mount",
@@ -607,6 +664,12 @@ func (c *DiskMountController) ReconcileWithEntities(ctx context.Context) error {
 				if err := c.ops.LoopDetach(mountState.DevicePath); err != nil {
 					c.log.Warn("failed to detach loop for orphaned mount", "entity_id", mountState.EntityId, "error", err)
 				}
+			}
+		}
+
+		if mountState.LeaseNonce != "" && c.cloudClient != nil {
+			if err := c.cloudClient.ReleaseLease(ctx, mountState.VolumeId, mountState.LeaseNonce); err != nil {
+				c.log.Warn("failed to release lease for orphaned mount", "entity_id", mountState.EntityId, "error", err)
 			}
 		}
 
