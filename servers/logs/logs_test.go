@@ -430,7 +430,7 @@ func TestStreamLogChunks_ErrorNoTarget(t *testing.T) {
 
 	_, err := client.StreamLogChunks(ctx, target, nil, false, "", callback)
 	r.Error(err)
-	r.Contains(err.Error(), "target must specify either app or sandbox")
+	r.Contains(err.Error(), "target must specify app, sandbox, or system")
 }
 
 func TestStreamLogChunks_AppNotFound(t *testing.T) {

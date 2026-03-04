@@ -200,6 +200,13 @@ func dispatchLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last
 	// Older server - warn about upgrade and limited functionality
 	ctx.Printf("Warning: server does not support optimized log streaming. Upgrade your server for better performance and --service/--build filtering.\n")
 
+	// Server-side filtering (--service, --build) requires streamLogChunks.
+	// If the combined filter differs from the raw user filter, one of these
+	// was applied and we must error rather than silently dropping it.
+	if rawFilter != combinedFilter {
+		return fmt.Errorf("--service and --build filtering require a newer server version")
+	}
+
 	// Parse filter for client-side filtering on older protocol
 	var filter *logfilter.Filter
 	if rawFilter != "" {
@@ -321,9 +328,9 @@ func legacyLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *
 	if last != nil {
 		ts = standard.ToTimestamp(time.Now().Add(-*last))
 	} else {
-		start := time.Now()
-		start = time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, start.Location())
-		ts = standard.ToTimestamp(start)
+		// Legacy protocol can't do server-side limit=100, so default to
+		// last 1 hour as a reasonable bounded window of recent logs.
+		ts = standard.ToTimestamp(time.Now().Add(-1 * time.Hour))
 	}
 
 	for {

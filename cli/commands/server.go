@@ -492,6 +492,12 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	logs := observability.NewLogReader(ctx.ServerState.VictorialogsAddress, ctx.ServerState.VictorialogsTimeout)
 	ctx.ServerState.Logs = logs
 
+	// Wait for VictoriaLogs to be ready before teeing server logs to it.
+	// VictoriaLogs Start() is async, so it may not be accepting HTTP yet.
+	if !observability.WaitForVictoriaLogs(sub, ctx.ServerState.VictorialogsAddress, 30*time.Second) {
+		ctx.Log.Warn("VictoriaLogs not ready after 30s, system log ingestion may be delayed")
+	}
+
 	// Tee server logs to VictoriaLogs so they're queryable via `miren logs system`
 	systemHandler := observability.NewSystemLogHandler(ctx.Log.Handler(), logWriter)
 	ctx.Log = slog.New(systemHandler)
