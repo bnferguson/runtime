@@ -589,9 +589,9 @@ func (c *DiskVolumeController) ensureVolumeMount(ctx context.Context, entityId s
 
 	if !formatted {
 		c.log.Info("formatting device", "device", devicePath, "filesystem", filesystem)
-		formatDeadline := time.Now().Add(10 * time.Minute)
+		formatDeadline := time.Now().Add(1 * time.Minute)
 		backoff := 1 * time.Second
-		maxBackoff := 30 * time.Second
+		maxBackoff := 10 * time.Second
 
 		for {
 			err := c.mntOps.FormatDevice(ctx, devicePath, filesystem)
@@ -603,7 +603,7 @@ func (c *DiskVolumeController) ensureVolumeMount(ctx context.Context, entityId s
 
 			if time.Now().After(formatDeadline) {
 				c.mntOps.LoopDetach(devicePath)
-				return fmt.Errorf("failed to format device after 10 minutes: %w", err)
+				return fmt.Errorf("failed to format device after retries: %w", err)
 			}
 
 			select {

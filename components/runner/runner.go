@@ -477,6 +477,11 @@ func (r *Runner) SetupControllers(
 	defaultRouteAppController := ingress.NewDefaultRouteAppController(log, eas)
 	defaultRouteController := ingress.NewDefaultRouteController(log, eas)
 
+	workers := r.Workers
+	if workers <= 0 {
+		workers = DefaulWorkers
+	}
+
 	// Initialize disk I/O controllers for universal mode (loop devices)
 	dataPath := filepath.Join(r.DataPath, "disk-data")
 	err = os.MkdirAll(dataPath, 0700)
@@ -579,12 +584,12 @@ func (r *Runner) SetupControllers(
 
 	volHandler := controller.AdaptReconcileController[storage_v1alpha.DiskVolume](r.dvc)
 	cm.AddController(controller.NewReconcileController(
-		"disk-volume", log, r.dvc.Index(), eas, volHandler, 5*time.Minute, 1,
+		"disk-volume", log, r.dvc.Index(), eas, volHandler, 5*time.Minute, workers,
 	))
 
 	mntHandler := controller.AdaptReconcileController[storage_v1alpha.DiskMount](r.dmc)
 	cm.AddController(controller.NewReconcileController(
-		"disk-mount", log, r.dmc.Index(), eas, mntHandler, 5*time.Minute, 1,
+		"disk-mount", log, r.dmc.Index(), eas, mntHandler, 5*time.Minute, workers,
 	))
 
 	// Use entity mode controllers
@@ -617,11 +622,6 @@ func (r *Runner) SetupControllers(
 	r.cc = sbc.CC
 	r.namespace = sbc.Namespace
 	r.sbController = sbc
-
-	workers := r.Workers
-	if workers <= 0 {
-		workers = DefaulWorkers
-	}
 
 	sbController := controller.NewReconcileController(
 		"sandbox",

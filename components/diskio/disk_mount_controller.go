@@ -393,9 +393,9 @@ func (c *DiskMountController) mountVolume(ctx context.Context, mount *storage_v1
 	if !formatted {
 		c.log.Info("formatting device", "device", mountState.DevicePath, "filesystem", filesystem)
 
-		formatDeadline := time.Now().Add(10 * time.Minute)
+		formatDeadline := time.Now().Add(1 * time.Minute)
 		backoff := 1 * time.Second
-		maxBackoff := 30 * time.Second
+		maxBackoff := 10 * time.Second
 		attempt := 0
 
 		for {
@@ -414,8 +414,8 @@ func (c *DiskMountController) mountVolume(ctx context.Context, mount *storage_v1
 			)
 
 			if time.Now().After(formatDeadline) {
-				c.setMountError(ctx, mount.ID, fmt.Sprintf("failed to format device after 10 minutes: %v", err))
-				return fmt.Errorf("failed to format device after 10 minutes: %w", err)
+				c.setMountError(ctx, mount.ID, fmt.Sprintf("failed to format device, will retry on next resync: %v", err))
+				return fmt.Errorf("failed to format device after retries: %w", err)
 			}
 
 			select {
