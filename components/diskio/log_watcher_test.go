@@ -139,6 +139,53 @@ func TestLogWatcherSkipsUniversalVolumes(t *testing.T) {
 	}
 }
 
+func TestLogWatcherNilUploaderDeletesOnly(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	logDir := filepath.Join(tmpDir, "vol1", "logs")
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create completed .log files
+	for _, name := range []string{"seg-001.log", "seg-002.log"} {
+		if err := os.WriteFile(filepath.Join(logDir, name), []byte("data"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Create an in-progress .log.tmp file (should be skipped)
+	if err := os.WriteFile(filepath.Join(logDir, "seg-003.log.tmp"), []byte("partial"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	state := NewState()
+	state.SetVolume("disk_volume/vol1", &VolumeState{
+		EntityId: "disk_volume/vol1",
+		VolumeId: "vol1",
+		DiskPath: filepath.Join(tmpDir, "vol1"),
+		Mode:     storage_v1alpha.VM_ACCELERATOR,
+	})
+
+	// nil uploader = delete-only mode
+	watcher := NewLogWatcher(slog.Default(), state, nil, time.Second)
+
+	watcher.scanAndUpload(context.Background())
+
+	// Completed segments should be deleted
+	if _, err := os.Stat(filepath.Join(logDir, "seg-001.log")); !os.IsNotExist(err) {
+		t.Error("seg-001.log should have been deleted")
+	}
+	if _, err := os.Stat(filepath.Join(logDir, "seg-002.log")); !os.IsNotExist(err) {
+		t.Error("seg-002.log should have been deleted")
+	}
+
+	// .tmp file should still exist
+	if _, err := os.Stat(filepath.Join(logDir, "seg-003.log.tmp")); err != nil {
+		t.Error("seg-003.log.tmp should still exist")
+	}
+}
+
 func TestLogWatcherUploadErrorLeavesFile(t *testing.T) {
 	tmpDir := t.TempDir()
 

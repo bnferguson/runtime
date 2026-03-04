@@ -527,7 +527,8 @@ func (r *Runner) SetupControllers(
 	r.closers = append(r.closers, shutdownCloser{r.dvc})
 	r.closers = append(r.closers, shutdownCloser{r.dmc})
 
-	// Start log watcher for accelerator mode volumes if cloud auth is configured
+	// Set up cloud auth for disk replication if configured
+	var logUploader diskio.LogSegmentUploader
 	if r.CloudAuth != nil && r.CloudAuth.Enabled && r.CloudAuth.PrivateKey != "" {
 		cloudURL := r.CloudAuth.CloudURL
 		if cloudURL == "" {
@@ -556,17 +557,24 @@ func (r *Runner) SetupControllers(
 					cloudDiskClient := diskio.NewCloudDiskClient(log, cloudURL, authClient)
 					r.dmc.SetCloudClient(cloudDiskClient)
 
-					uploader := diskio.NewCloudSegmentUploader(log, cloudURL, authClient, diskioState)
-					watcher := diskio.NewLogWatcher(log, diskioState, uploader, 5*time.Second)
-					go func() {
-						if werr := watcher.Run(ctx); werr != nil {
-							log.Error("log watcher stopped", "error", werr)
-						}
-					}()
-					log.Info("started log watcher for accelerator mode volumes")
+					logUploader = diskio.NewCloudSegmentUploader(log, cloudURL, authClient, diskioState)
 				}
 			}
 		}
+	}
+
+	// Always start the log watcher so accelerator mode log segments are
+	// cleaned up even when cloud is not configured (nil uploader = delete only).
+	watcher := diskio.NewLogWatcher(log, diskioState, logUploader, 5*time.Second)
+	go func() {
+		if werr := watcher.Run(ctx); werr != nil {
+			log.Error("log watcher stopped", "error", werr)
+		}
+	}()
+	if logUploader != nil {
+		log.Info("started log watcher with cloud upload")
+	} else {
+		log.Info("started log watcher in delete-only mode (no cloud configured)")
 	}
 
 	volHandler := controller.AdaptReconcileController[storage_v1alpha.DiskVolume](r.dvc)

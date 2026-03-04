@@ -18,16 +18,18 @@ type LogSegmentUploader interface {
 	UploadSegment(ctx context.Context, volumeID, segmentPath string) (segmentID string, err error)
 }
 
-// LogWatcher monitors accelerator volume log directories for completed segments,
-// uploads them, and removes them after successful upload.
+// LogWatcher monitors accelerator volume log directories for completed segments.
+// When an uploader is configured, segments are uploaded then removed.
+// When no uploader is configured (cloud not available), segments are simply deleted.
 type LogWatcher struct {
 	log      *slog.Logger
 	state    *State
-	uploader LogSegmentUploader
+	uploader LogSegmentUploader // nil when cloud is not configured
 	interval time.Duration
 }
 
 // NewLogWatcher creates a new LogWatcher that scans at the given interval.
+// Pass nil for uploader to just delete logs without uploading.
 func NewLogWatcher(log *slog.Logger, state *State, uploader LogSegmentUploader, interval time.Duration) *LogWatcher {
 	return &LogWatcher{
 		log:      log.With("module", "log-watcher"),
@@ -84,10 +86,12 @@ func (w *LogWatcher) scanAndUpload(ctx context.Context) {
 
 			segPath := filepath.Join(logDir, name)
 
-			_, err := w.uploader.UploadSegment(ctx, vol.VolumeId, segPath)
-			if err != nil {
-				w.log.Warn("failed to upload segment", "path", segPath, "error", err)
-				continue
+			if w.uploader != nil {
+				_, err := w.uploader.UploadSegment(ctx, vol.VolumeId, segPath)
+				if err != nil {
+					w.log.Warn("failed to upload segment", "path", segPath, "error", err)
+					continue
+				}
 			}
 
 			// Update the log horizon so replay won't re-apply this segment
@@ -97,7 +101,7 @@ func (w *LogWatcher) scanAndUpload(ctx context.Context) {
 			}
 
 			if err := os.Remove(segPath); err != nil {
-				w.log.Warn("failed to remove uploaded segment", "path", segPath, "error", err)
+				w.log.Warn("failed to remove segment", "path", segPath, "error", err)
 			}
 		}
 	}
