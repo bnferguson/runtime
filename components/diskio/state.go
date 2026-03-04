@@ -128,8 +128,8 @@ func LoadState(dataPath string) (*State, error) {
 
 // Save persists the state to disk atomically
 func (s *State) Save() error {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	if s.path == "" {
 		return fmt.Errorf("state path not set")
@@ -233,6 +233,30 @@ func (s *State) DeleteMount(entityId string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.Mounts, entityId)
+}
+
+// SetMountFromVolume atomically reads the current volume state and, if the
+// volume is mounted, creates a mount entry using the volume's live device and
+// mount paths. This avoids a TOCTOU race where the volume controller could
+// update mount fields between a GetVolume call and a SetMount call.
+// Returns the volume's DevicePath and MountPath on success, or an error if the
+// volume is not found or not mounted.
+func (s *State) SetMountFromVolume(volumeId string, mount *MountState) (devicePath, mountPath string, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	v := s.Volumes[volumeId]
+	if v == nil {
+		return "", "", fmt.Errorf("volume %s not found in state", volumeId)
+	}
+	if !v.Mounted {
+		return "", "", fmt.Errorf("volume %s not mounted by volume controller", volumeId)
+	}
+
+	mount.DevicePath = v.DevicePath
+	mount.MountPath = v.MountPath
+	s.Mounts[mount.EntityId] = mount
+	return v.DevicePath, v.MountPath, nil
 }
 
 // GetVolumeByVolumeId returns a copy of a volume state by volume ID

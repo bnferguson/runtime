@@ -216,32 +216,29 @@ func (c *DiskMountController) attachAndMount(ctx context.Context, mount *storage
 	// For alwaysMount volumes, the volume controller owns the mount.
 	// Just set up tracking and mark DM_MOUNTED.
 	if alwaysMount(volState.Mode) {
-		if !volState.Mounted {
-			c.setMountError(ctx, mount.ID, "volume not mounted by volume controller")
-			return fmt.Errorf("volume %s not mounted by volume controller", volumeId)
+		devPath, mntPath, err := c.state.SetMountFromVolume(volumeId, &MountState{
+			EntityId: entityId,
+			VolumeId: volumeId,
+			Mounted:  true,
+			ReadOnly: mount.ReadOnly,
+			Mode:     volState.Mode,
+		})
+		if err != nil {
+			c.setMountError(ctx, mount.ID, err.Error())
+			return err
 		}
 
-		c.state.SetMount(entityId, &MountState{
-			EntityId:   entityId,
-			VolumeId:   volumeId,
-			DevicePath: volState.DevicePath,
-			MountPath:  volState.MountPath,
-			Mounted:    true,
-			ReadOnly:   mount.ReadOnly,
-			Mode:       volState.Mode,
-		})
 		if err := c.state.Save(); err != nil {
 			c.log.Warn("failed to save state after alwaysMount tracking", "error", err)
 		}
 
-		devPath := volState.DevicePath
 		if err := c.updateMountState(ctx, mount.ID, storage_v1alpha.DM_MOUNTED, &devPath, &devPath, nil); err != nil {
 			c.log.Warn("failed to update mount state to mounted", "error", err)
 		}
 
 		c.log.Info("alwaysMount volume already mounted, tracking lease",
 			"entity_id", entityId,
-			"mount_path", volState.MountPath,
+			"mount_path", mntPath,
 		)
 		return nil
 	}
