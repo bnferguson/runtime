@@ -489,10 +489,14 @@ func (l *Launcher) buildSandboxSpec(
 			if len(svc.Ports) > 0 {
 				// Multi-port path: map each port entry
 				for _, p := range svc.Ports {
+					portType := p.Type
+					if portType == "" {
+						portType = "http"
+					}
 					cp := compute_v1alpha.SandboxSpecContainerPort{
 						Port:     p.Port,
 						Name:     p.Name,
-						Type:     p.Type,
+						Type:     portType,
 						NodePort: p.NodePort,
 					}
 					switch p.Protocol {
@@ -505,20 +509,20 @@ func (l *Launcher) buildSandboxSpec(
 				}
 
 				// PORT env var: first HTTP-typed port, or first port if none is HTTP
-				for _, p := range svc.Ports {
-					if p.Type == "http" {
-						portEnvValue = p.Port
+				for _, cp := range containerPorts {
+					if cp.Type == "http" {
+						portEnvValue = cp.Port
 						break
 					}
 				}
 				if portEnvValue == 0 {
-					portEnvValue = svc.Ports[0].Port
+					portEnvValue = containerPorts[0].Port
 				}
 
 				if serviceName == "web" {
 					hasHTTP := false
 					for _, cp := range containerPorts {
-						if cp.Type == "http" || cp.Type == "" {
+						if cp.Type == "http" {
 							hasHTTP = true
 							break
 						}
