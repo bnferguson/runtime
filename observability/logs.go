@@ -322,12 +322,17 @@ func (l *LogReader) executeStreamQuery(ctx context.Context, query string, logCh 
 	baseURL := normalizeBaseURL(l.Address)
 	queryURL := baseURL + "/select/logsql/query"
 
-	// Sort by time ascending so older logs appear first
-	sortedQuery := query + " | sort by (_time) asc"
+	var sortedQuery string
+	if o.Limit > 0 {
+		// Get the most recent N entries by sorting descending with limit,
+		// then reverse client-side to display in chronological order.
+		sortedQuery = fmt.Sprintf("%s | sort by (_time) desc | limit %d", query, o.Limit)
+	} else {
+		sortedQuery = query + " | sort by (_time) asc"
+	}
 
 	params := url.Values{}
 	params.Set("query", sortedQuery)
-	// No limit - stream all results
 
 	startTime := o.From
 	if startTime.IsZero() {
@@ -356,7 +361,43 @@ func (l *LogReader) executeStreamQuery(ctx context.Context, query string, logCh 
 		return fmt.Errorf("victorialogs returned status %d: %s", resp.StatusCode, string(body))
 	}
 
+	if o.Limit > 0 {
+		// Results are in reverse chronological order; buffer and reverse.
+		return l.parseLogStreamReversed(ctx, resp.Body, logCh)
+	}
 	return l.parseLogStream(ctx, resp.Body, logCh)
+}
+
+// parseLogStreamReversed collects all entries from the stream, reverses them,
+// and sends them to the channel in chronological order. Used for limited queries
+// where results arrive in descending time order.
+func (l *LogReader) parseLogStreamReversed(ctx context.Context, body io.Reader, logCh chan<- LogEntry) error {
+	var entries []LogEntry
+	scanner := bufio.NewScanner(body)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		entry, err := l.parseLogLine(line)
+		if err != nil {
+			continue
+		}
+		entries = append(entries, entry)
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+
+	// Reverse to chronological order
+	for i := len(entries) - 1; i >= 0; i-- {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case logCh <- entries[i]:
+		}
+	}
+	return nil
 }
 
 func (l *LogReader) executeTailQuery(ctx context.Context, query string, logCh chan<- LogEntry, opts ...LogReaderOption) error {

@@ -45,45 +45,54 @@ func buildBuildFilter(version, userFilter string) string {
 	return buildFilter + " " + userFilter
 }
 
-func Logs(ctx *Context, opts struct {
+// buildSystemFilter creates a filter for system logs, optionally scoped to a component.
+func buildSystemFilter(component, userFilter string) string {
+	filter := `source:"system"`
+	if component != "" {
+		filter += fmt.Sprintf(" module:%q", component)
+	}
+	if userFilter != "" {
+		filter += " " + userFilter
+	}
+	return filter
+}
+
+// resolveAppName resolves the application name from explicit flag, directory
+// context, or returns an error if it can't be determined.
+func resolveAppName(app, dir string) (string, error) {
+	if app != "" {
+		return app, nil
+	}
+
+	var ac *appconfig.AppConfig
+	var err error
+
+	if dir != "." {
+		ac, err = appconfig.LoadAppConfigUnder(dir)
+	} else {
+		ac, err = appconfig.LoadAppConfig()
+	}
+
+	if err == nil && ac != nil && ac.Name != "" {
+		return ac.Name, nil
+	}
+	return "", fmt.Errorf("must specify --app or run from an app directory")
+}
+
+// LogsApp shows application logs. This is the default subcommand for `miren logs`.
+func LogsApp(ctx *Context, opts struct {
 	ConfigCentric
 
-	App     string         `short:"a" long:"app" description:"Application get logs for" env:"MIREN_APP"`
+	App     string         `short:"a" long:"app" description:"Application to get logs for" env:"MIREN_APP"`
 	Dir     string         `short:"d" long:"dir" description:"Directory to run from" default:"."`
 	Last    *time.Duration `short:"l" long:"last" description:"Show logs from the last duration"`
-	Sandbox string         `short:"s" long:"sandbox" description:"Show logs for a specific sandbox ID"`
-	Build   string         `short:"b" long:"build" description:"Show build logs for a specific version"`
 	Follow  bool           `short:"f" long:"follow" description:"Follow log output (live tail)"`
 	Filter  string         `short:"g" long:"grep" description:"Filter logs (e.g., 'error', '\"exact phrase\"', 'error -debug', '/regex/')"`
 	Service string         `long:"service" description:"Filter logs by service name (e.g., 'web', 'worker')"`
 }) error {
-	// Check for conflicting options
-	if opts.App != "" && opts.Sandbox != "" {
-		return fmt.Errorf("cannot specify both --app and --sandbox")
-	}
-	if opts.Build != "" && opts.Sandbox != "" {
-		return fmt.Errorf("cannot specify both --build and --sandbox")
-	}
-	if opts.Build != "" && opts.Service != "" {
-		return fmt.Errorf("cannot specify both --build and --service")
-	}
-
-	// If neither is specified, try to load app from directory context
-	if opts.App == "" && opts.Sandbox == "" {
-		var ac *appconfig.AppConfig
-		var err error
-
-		if opts.Dir != "." {
-			ac, err = appconfig.LoadAppConfigUnder(opts.Dir)
-		} else {
-			ac, err = appconfig.LoadAppConfig()
-		}
-
-		if err == nil && ac != nil && ac.Name != "" {
-			opts.App = ac.Name
-		} else {
-			return fmt.Errorf("must specify either --app or --sandbox, or run from an app directory")
-		}
+	app, err := resolveAppName(opts.App, opts.Dir)
+	if err != nil {
+		return err
 	}
 
 	cl, err := ctx.RPCClient("dev.miren.runtime/logs")
@@ -91,54 +100,127 @@ func Logs(ctx *Context, opts struct {
 		return err
 	}
 
-	// Normalize sandbox ID to include the "sandbox/" prefix for log queries
-	if opts.Sandbox != "" {
-		opts.Sandbox = normalizeSandboxID(opts.Sandbox)
+	combinedFilter := buildFilterWithService(opts.Filter, opts.Service)
+	return dispatchLogs(ctx, cl, app, "", opts.Last, opts.Follow, opts.Filter, combinedFilter)
+}
+
+// LogsSandbox shows logs for a specific sandbox.
+func LogsSandbox(ctx *Context, opts struct {
+	ConfigCentric
+
+	SandboxID string         `position:"0" usage:"Sandbox ID" required:"true"`
+	Last      *time.Duration `short:"l" long:"last" description:"Show logs from the last duration"`
+	Follow    bool           `short:"f" long:"follow" description:"Follow log output (live tail)"`
+	Filter    string         `short:"g" long:"grep" description:"Filter logs (e.g., 'error', '\"exact phrase\"', 'error -debug', '/regex/')"`
+}) error {
+	sandbox := normalizeSandboxID(opts.SandboxID)
+
+	cl, err := ctx.RPCClient("dev.miren.runtime/logs")
+	if err != nil {
+		return err
 	}
 
-	// Parse filter early to validate syntax
+	return dispatchLogs(ctx, cl, "", sandbox, opts.Last, opts.Follow, opts.Filter, opts.Filter)
+}
+
+// LogsBuild shows build logs for a specific version.
+func LogsBuild(ctx *Context, opts struct {
+	ConfigCentric
+
+	App     string         `short:"a" long:"app" description:"Application to get logs for" env:"MIREN_APP"`
+	Dir     string         `short:"d" long:"dir" description:"Directory to run from" default:"."`
+	Version string         `position:"0" usage:"Build version (e.g., v3)" required:"true"`
+	Last    *time.Duration `short:"l" long:"last" description:"Show logs from the last duration"`
+	Follow  bool           `short:"f" long:"follow" description:"Follow log output (live tail)"`
+	Filter  string         `short:"g" long:"grep" description:"Filter logs (e.g., 'error', '\"exact phrase\"', 'error -debug', '/regex/')"`
+}) error {
+	app, err := resolveAppName(opts.App, opts.Dir)
+	if err != nil {
+		return err
+	}
+
+	cl, err := ctx.RPCClient("dev.miren.runtime/logs")
+	if err != nil {
+		return err
+	}
+
+	combinedFilter := buildBuildFilter(opts.Version, opts.Filter)
+	return dispatchLogs(ctx, cl, app, "", opts.Last, opts.Follow, opts.Filter, combinedFilter)
+}
+
+// LogsSystem shows system/server logs, optionally filtered by component.
+func LogsSystem(ctx *Context, opts struct {
+	ConfigCentric
+
+	Component string         `position:"0" usage:"System component to filter by (e.g., 'etcd', 'scheduler')"`
+	Last      *time.Duration `short:"l" long:"last" description:"Show logs from the last duration"`
+	Follow    bool           `short:"f" long:"follow" description:"Follow log output (live tail)"`
+	Filter    string         `short:"g" long:"grep" description:"Filter logs (e.g., 'error', '\"exact phrase\"', 'error -debug', '/regex/')"`
+}) error {
+	cl, err := ctx.RPCClient("dev.miren.runtime/logs")
+	if err != nil {
+		return err
+	}
+
+	if !cl.HasMethod(ctx, "streamLogChunks") {
+		return fmt.Errorf("system logs require a newer server version")
+	}
+
+	target := &app_v1alpha.LogTarget{}
+	target.SetSystem(true)
+
+	combinedFilter := buildSystemFilter(opts.Component, opts.Filter)
+
+	var ts *standard.Timestamp
+	if opts.Last != nil {
+		ts = standard.ToTimestamp(time.Now().Add(-*opts.Last))
+	}
+	// When no --last and no --follow, ts is nil → server returns last 100 lines
+
+	ac := app_v1alpha.LogsClient{Client: cl}
+	callback := stream.Callback(func(chunk *app_v1alpha.LogChunk) error {
+		for _, l := range chunk.Entries() {
+			printLogEntry(ctx, l)
+		}
+		return nil
+	})
+
+	_, err = ac.StreamLogChunks(ctx, target, ts, opts.Follow, combinedFilter, callback)
+	return err
+}
+
+// dispatchLogs handles protocol negotiation and dispatches to the appropriate
+// log streaming method based on server capabilities.
+func dispatchLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *time.Duration, follow bool, rawFilter, combinedFilter string) error {
+	// Check if server supports streaming (prefer chunked for efficiency)
+	if cl.HasMethod(ctx, "streamLogChunks") {
+		return streamLogChunks(ctx, cl, app, sandbox, last, follow, combinedFilter)
+	}
+
+	// Older server - warn about upgrade and limited functionality
+	ctx.Printf("Warning: server does not support optimized log streaming. Upgrade your server for better performance and --service/--build filtering.\n")
+
+	// Parse filter for client-side filtering on older protocol
 	var filter *logfilter.Filter
-	if opts.Filter != "" {
+	if rawFilter != "" {
 		var err error
-		filter, err = logfilter.Parse(opts.Filter)
+		filter, err = logfilter.Parse(rawFilter)
 		if err != nil {
 			return fmt.Errorf("invalid filter: %w", err)
 		}
 	}
 
-	// Build combined filter for server-side filtering
-	var combinedFilter string
-	if opts.Build != "" {
-		combinedFilter = buildBuildFilter(opts.Build, opts.Filter)
-	} else {
-		combinedFilter = buildFilterWithService(opts.Filter, opts.Service)
-	}
-
-	// Check if server supports streaming (prefer chunked for efficiency)
-	if cl.HasMethod(ctx, "streamLogChunks") {
-		return streamLogChunks(ctx, cl, opts.App, opts.Sandbox, opts.Last, opts.Follow, combinedFilter)
-	}
-
-	// Older server - warn about upgrade and limited functionality
-	ctx.Printf("Warning: server does not support optimized log streaming. Upgrade your server for better performance and --service/--build filtering.\n")
-	if opts.Service != "" {
-		return fmt.Errorf("--service filtering requires a newer server version")
-	}
-	if opts.Build != "" {
-		return fmt.Errorf("--build filtering requires a newer server version")
-	}
-
 	if cl.HasMethod(ctx, "streamLogs") {
-		return streamLogs(ctx, cl, opts.App, opts.Sandbox, opts.Last, opts.Follow, filter)
+		return streamLogs(ctx, cl, app, sandbox, last, follow, filter)
 	}
 
 	// Warn if --follow requested but not supported
-	if opts.Follow {
+	if follow {
 		ctx.Printf("Warning: server does not support --follow, showing recent logs only\n")
 	}
 
 	// Fall back to legacy pagination
-	return legacyLogs(ctx, cl, opts.App, opts.Sandbox, opts.Last, filter)
+	return legacyLogs(ctx, cl, app, sandbox, last, filter)
 }
 
 var streamTypePrefixes = map[string]string{
@@ -146,6 +228,22 @@ var streamTypePrefixes = map[string]string{
 	"stderr":   "E",
 	"error":    "ERR",
 	"user-oob": "U",
+}
+
+func printLogEntry(ctx *Context, l *app_v1alpha.LogEntry) {
+	prefix := ""
+	if l.HasSource() && l.Source() != "" {
+		source := l.Source()
+		if len(source) > 12 {
+			source = source[:3] + "…" + source[len(source)-8:]
+		}
+		prefix = "[" + source + "] "
+	}
+	ctx.Printf("%s %s: %s%s\n",
+		streamTypePrefixes[l.Stream()],
+		standard.FromTimestamp(l.Timestamp()).Format("2006-01-02 15:04:05"),
+		prefix,
+		l.Line())
 }
 
 func streamLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *time.Duration, follow bool, filter *logfilter.Filter) error {
@@ -163,13 +261,10 @@ func streamLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *
 	var ts *standard.Timestamp
 	if last != nil {
 		ts = standard.ToTimestamp(time.Now().Add(-*last))
-	} else if !follow {
-		// For non-follow mode without explicit --last, default to today
-		start := time.Now()
-		start = time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, start.Location())
-		ts = standard.ToTimestamp(start)
 	}
-	// For follow mode without --last, ts is nil which means start from now
+	// When no --last: ts is nil
+	// - follow mode: start from now
+	// - non-follow: server returns last 100 lines
 
 	// Create callback to print logs as they arrive
 	callback := stream.Callback(func(l *app_v1alpha.LogEntry) error {
@@ -178,19 +273,7 @@ func streamLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *
 			return nil
 		}
 
-		prefix := ""
-		if l.HasSource() && l.Source() != "" {
-			source := l.Source()
-			if len(source) > 12 {
-				source = source[:3] + "…" + source[len(source)-8:]
-			}
-			prefix = "[" + source + "] "
-		}
-		ctx.Printf("%s %s: %s%s\n",
-			streamTypePrefixes[l.Stream()],
-			standard.FromTimestamp(l.Timestamp()).Format("2006-01-02 15:04:05"),
-			prefix,
-			l.Line())
+		printLogEntry(ctx, l)
 		return nil
 	})
 
@@ -213,30 +296,15 @@ func streamLogChunks(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, l
 	var ts *standard.Timestamp
 	if last != nil {
 		ts = standard.ToTimestamp(time.Now().Add(-*last))
-	} else if !follow {
-		// For non-follow mode without explicit --last, default to today
-		start := time.Now()
-		start = time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, start.Location())
-		ts = standard.ToTimestamp(start)
 	}
-	// For follow mode without --last, ts is nil which means start from now
+	// When no --last: ts is nil
+	// - follow mode: start from now
+	// - non-follow: server returns last 100 lines
 
 	// Create callback to print logs as they arrive in chunks
 	callback := stream.Callback(func(chunk *app_v1alpha.LogChunk) error {
 		for _, l := range chunk.Entries() {
-			prefix := ""
-			if l.HasSource() && l.Source() != "" {
-				source := l.Source()
-				if len(source) > 12 {
-					source = source[:3] + "…" + source[len(source)-8:]
-				}
-				prefix = "[" + source + "] "
-			}
-			ctx.Printf("%s %s: %s%s\n",
-				streamTypePrefixes[l.Stream()],
-				standard.FromTimestamp(l.Timestamp()).Format("2006-01-02 15:04:05"),
-				prefix,
-				l.Line())
+			printLogEntry(ctx, l)
 		}
 		return nil
 	})
@@ -284,19 +352,7 @@ func legacyLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *
 				continue
 			}
 
-			prefix := ""
-			if l.HasSource() && l.Source() != "" {
-				source := l.Source()
-				if len(source) > 12 {
-					source = source[:3] + "…" + source[len(source)-8:]
-				}
-				prefix = "[" + source + "] "
-			}
-			ctx.Printf("%s %s: %s%s\n",
-				streamTypePrefixes[l.Stream()],
-				standard.FromTimestamp(l.Timestamp()).Format("2006-01-02 15:04:05"),
-				prefix,
-				l.Line())
+			printLogEntry(ctx, l)
 		}
 
 		if len(logs) != 100 {

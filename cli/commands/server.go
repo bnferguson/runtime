@@ -492,6 +492,10 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	logs := observability.NewLogReader(ctx.ServerState.VictorialogsAddress, ctx.ServerState.VictorialogsTimeout)
 	ctx.ServerState.Logs = logs
 
+	// Tee server logs to VictoriaLogs so they're queryable via `miren logs system`
+	systemHandler := observability.NewSystemLogHandler(ctx.Log.Handler(), logWriter)
+	ctx.Log = slog.New(systemHandler)
+
 	// Discover local IPs using ipdiscovery
 	discovery, err := ipdiscovery.DiscoverWithTimeout(5*time.Second, ctx.Log)
 	if err != nil {

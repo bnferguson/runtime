@@ -1,8 +1,21 @@
 package commands
 
-const logsDescription = `## Time Range
+const logsDescription = `## Subcommands
 
-By default, logs show entries from today. Use ` + "`" + `--last` + "`" + ` to specify a different time range:
+` + "`" + `miren logs` + "`" + ` has subcommands for different log sources:
+
+` + "```" + `bash
+miren logs app       # Application logs (default)
+miren logs sandbox   # Sandbox logs
+miren logs build     # Build logs
+miren logs system    # System/server logs
+` + "```" + `
+
+Running ` + "`" + `miren logs` + "`" + ` without a subcommand shows app logs (backward compatible).
+
+## Time Range
+
+By default, logs show the last 100 lines. Use ` + "`" + `--last` + "`" + ` to specify a time range:
 
 ` + "```" + `bash
 # Show logs from the last 5 minutes
@@ -21,25 +34,22 @@ Use ` + "`" + `--follow` + "`" + ` (or ` + "`" + `-f` + "`" + `) to stream logs 
 
 ` + "```" + `bash
 # Follow logs as they arrive
-miren logs --follow
+miren logs -f
 
 # Follow logs for a specific app
-miren logs --app myapp -f
+miren logs app -a myapp -f
 ` + "```" + `
 
 ## Filtering by Service
 
-Use ` + "`" + `--service` + "`" + ` to filter logs by service name. This is useful for applications with multiple services (e.g., web, worker):
+Use ` + "`" + `--service` + "`" + ` to filter logs by service name (app logs only):
 
 ` + "```" + `bash
 # Show only logs from the web service
-miren logs --service web
+miren logs app --service web
 
 # Show worker service logs containing "error"
-miren logs --service worker -g error
-
-# Follow web service logs
-miren logs --service web -f
+miren logs app --service worker -g error
 ` + "```" + `
 
 ## Filtering Logs
