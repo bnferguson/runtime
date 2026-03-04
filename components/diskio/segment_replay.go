@@ -223,7 +223,11 @@ func readLogHorizon(diskPath string) (string, error) {
 
 func writeLogHorizon(diskPath, label string) error {
 	path := filepath.Join(diskPath, logHorizonFile)
-	return os.WriteFile(path, []byte(label+"\n"), 0644)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(label+"\n"), 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // isValidTAI64NLabel checks if a string is a valid TAI64N label (24 hex chars).
