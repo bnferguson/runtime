@@ -167,8 +167,6 @@ func (d *DiskLeaseController) reconcileLease(ctx context.Context, lease *storage
 	case storage_v1alpha.BOUND:
 		// Verify disk is actually mounted, mount if needed
 		err = d.handleBoundLease(ctx, lease)
-		// Update lease details for expiry tracking
-		d.updateLeaseDetails(lease)
 	case storage_v1alpha.FAILED:
 		err = d.handleFailedLease(ctx, lease)
 	default:
@@ -602,14 +600,6 @@ func (d *DiskLeaseController) releaseLease(leaseId, diskId string) {
 		delete(d.leaseDetails, leaseId)
 		d.Log.Info("Lease released", "lease", leaseId, "disk", diskId)
 	}
-}
-
-// updateLeaseDetails updates lease information
-func (d *DiskLeaseController) updateLeaseDetails(lease *storage_v1alpha.DiskLease) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	_ = d.leaseDetails[lease.ID.String()]
 }
 
 // getDiskMountPath returns the standard mount path for a disk volume
