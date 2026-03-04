@@ -232,7 +232,7 @@ func (c *Controller) Reconcile(ctx context.Context, route *ingress_v1alpha.HttpR
 }
 
 // Delete handles http_route deletion - we keep the cert in cache/disk for potential reuse
-func (c *Controller) Delete(ctx context.Context, id entity.Id) error {
+func (c *Controller) Delete(ctx context.Context, id entity.Id, obj *ingress_v1alpha.HttpRoute) error {
 	c.Log.Debug("http_route deleted, keeping certificate in cache", "route", id)
 	return nil
 }

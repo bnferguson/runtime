@@ -66,6 +66,6 @@ func (m *MountWatchController) Update(ctx context.Context, mount *storage_v1alph
 	return nil
 }
 
-func (m *MountWatchController) Delete(ctx context.Context, id entity.Id) error {
+func (m *MountWatchController) Delete(ctx context.Context, id entity.Id, obj *storage_v1alpha.LsvdMount) error {
 	return nil
 }

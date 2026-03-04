@@ -69,7 +69,7 @@ func (c *DefaultRouteAppController) Update(ctx context.Context, app *core_v1alph
 }
 
 // Delete handles app deletion events
-func (c *DefaultRouteAppController) Delete(ctx context.Context, id entity.Id) error {
+func (c *DefaultRouteAppController) Delete(ctx context.Context, id entity.Id, obj *core_v1alpha.App) error {
 	c.Log.Info("App deleted", "app", id)
 
 	// Check if this app had a default route

@@ -59,7 +59,7 @@ func (c *DefaultRouteController) Update(ctx context.Context, route *ingress_v1al
 }
 
 // Delete handles http_route deletion events
-func (c *DefaultRouteController) Delete(ctx context.Context, id entity.Id) error {
+func (c *DefaultRouteController) Delete(ctx context.Context, id entity.Id, obj *ingress_v1alpha.HttpRoute) error {
 	c.Log.Info("HttpRoute deleted; doing nothing", "route", id)
 	// Note: We don't automatically promote another route to default when
 	// the default route is deleted, as per the requirements

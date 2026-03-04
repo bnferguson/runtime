@@ -10,3 +10,6 @@ import (
 func (c *SandboxController) configureFirewall(sb *compute.Sandbox, ep *network.EndpointConfig) error {
 	return nil
 }
+
+func (c *SandboxController) unconfigureFirewall(sb *compute.Sandbox) {
+}

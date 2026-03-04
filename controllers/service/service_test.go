@@ -241,7 +241,7 @@ func TestServiceController(t *testing.T) {
 		r.True(found, "Expected to find endpoints for service")
 
 		// Clean up
-		err = sbC.Delete(ctx, sbID)
+		err = sbC.Delete(ctx, sbID, nil)
 		r.NoError(err)
 	})
 
@@ -370,7 +370,7 @@ func TestServiceController(t *testing.T) {
 		r.NotEmpty(sandboxIP)
 
 		// Delete the sandbox
-		err = sbC.Delete(ctx, sbID)
+		err = sbC.Delete(ctx, sbID, nil)
 		r.NoError(err)
 
 		// Poll for endpoints to be created
@@ -611,7 +611,7 @@ func TestServiceController(t *testing.T) {
 		r.Equal(2, serviceEndpoints, "Expected to find 2 endpoint entities for service")
 
 		// Delete first sandbox
-		err = sbC.Delete(ctx, sbID1)
+		err = sbC.Delete(ctx, sbID1, nil)
 		r.NoError(err)
 
 		// Poll for endpoints to be created
@@ -638,7 +638,7 @@ func TestServiceController(t *testing.T) {
 		r.Equal(1, serviceEndpoints, "Expected to find 1 endpoint entity for service after deleting first sandbox")
 
 		// Clean up
-		err = sbC.Delete(ctx, sbID2)
+		err = sbC.Delete(ctx, sbID2, nil)
 		r.NoError(err)
 	})
 

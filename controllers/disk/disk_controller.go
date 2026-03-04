@@ -100,7 +100,7 @@ func (d *DiskController) Update(ctx context.Context, disk *storage_v1alpha.Disk,
 }
 
 // Delete handles deletion of a disk entity
-func (d *DiskController) Delete(ctx context.Context, id entity.Id) error {
+func (d *DiskController) Delete(ctx context.Context, id entity.Id, obj *storage_v1alpha.Disk) error {
 	d.Log.Info("Processing disk deletion", "disk", id)
 	// Deletion is handled through the DELETING status in reconcileDisk
 	return nil

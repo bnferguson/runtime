@@ -124,7 +124,7 @@ func (d *DiskLeaseController) Update(ctx context.Context, lease *storage_v1alpha
 }
 
 // Delete handles deletion of a disk lease entity
-func (d *DiskLeaseController) Delete(ctx context.Context, id entity.Id) error {
+func (d *DiskLeaseController) Delete(ctx context.Context, id entity.Id, obj *storage_v1alpha.DiskLease) error {
 	d.Log.Info("Processing lease deletion", "lease", id)
 
 	leaseId := id.String()

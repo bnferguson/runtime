@@ -301,7 +301,7 @@ func (c *BasicController) Create(ctx context.Context, obj *TestEntity, meta *ent
 	return nil
 }
 
-func (c *BasicController) Delete(ctx context.Context, id entity.Id) error {
+func (c *BasicController) Delete(ctx context.Context, id entity.Id, obj *TestEntity) error {
 	c.DeleteCalls = append(c.DeleteCalls, string(id))
 	return nil
 }

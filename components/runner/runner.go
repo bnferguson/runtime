@@ -217,7 +217,7 @@ func (r *Runner) Drain(ctx context.Context) error {
 		}
 
 		r.Log.Info("stopping sandbox", "id", md.ID)
-		err := r.sbController.Delete(ctx, md.ID)
+		err := r.sbController.Delete(ctx, md.ID, nil)
 		if err != nil {
 			r.Log.Error("failed to stop sandbox", "id", md.ID, "error", err)
 			drainErr = multierror.Append(drainErr, fmt.Errorf("failed to stop sandbox %s: %w", md.ID, err))
