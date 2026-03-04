@@ -66,6 +66,6 @@ func (v *VolumeWatchController) Update(ctx context.Context, vol *storage_v1alpha
 	return nil
 }
 
-func (v *VolumeWatchController) Delete(ctx context.Context, id entity.Id) error {
+func (v *VolumeWatchController) Delete(ctx context.Context, id entity.Id, obj *storage_v1alpha.LsvdVolume) error {
 	return nil
 }

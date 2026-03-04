@@ -771,7 +771,7 @@ func TestSandbox(t *testing.T) {
 		r.NoError(err)
 
 		// Stop the first sandbox (this should set status to DEAD)
-		err = sbc.Delete(ctx, sbID1)
+		err = sbc.Delete(ctx, sbID1, nil)
 		r.NoError(err)
 
 		// Manually update the UpdatedAt timestamp to be older than our test time horizon
@@ -816,7 +816,7 @@ func TestSandbox(t *testing.T) {
 		r.Equal(compute.RUNNING, remainingSb.Status)
 
 		// Clean up the remaining sandbox
-		err = sbc.Delete(ctx, sbID2)
+		err = sbc.Delete(ctx, sbID2, nil)
 		r.NoError(err)
 	})
 
@@ -930,7 +930,7 @@ func TestSandbox(t *testing.T) {
 		}
 
 		// Clean up
-		err = co.Delete(ctx, id)
+		err = co.Delete(ctx, id, nil)
 		r.NoError(err)
 
 		// NOTE we only track port binding now, not unbounding.
@@ -1050,7 +1050,7 @@ func TestSandbox(t *testing.T) {
 		}
 
 		// Clean up
-		err = co.Delete(ctx, id)
+		err = co.Delete(ctx, id, nil)
 		r.NoError(err)
 	})
 
@@ -1226,7 +1226,7 @@ func TestSandbox(t *testing.T) {
 		}, 15*time.Second, 500*time.Millisecond, "task should stay running and logs should be collected")
 
 		// Clean up
-		err = co1.Delete(ctx, id)
+		err = co1.Delete(ctx, id, nil)
 		r.NoError(err)
 	})
 

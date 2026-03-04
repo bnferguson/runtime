@@ -61,7 +61,7 @@ func TestDiskLeaseController_Delete(t *testing.T) {
 	}
 
 	// Process the deletion
-	err := dlc.Delete(context.Background(), entity.Id("disk-lease/test-lease"))
+	err := dlc.Delete(context.Background(), entity.Id("disk-lease/test-lease"), nil)
 	require.NoError(t, err)
 
 	// Should remove from active leases

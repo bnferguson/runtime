@@ -358,7 +358,7 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 		c.Log.Info("marking unhealthy sandbox as DEAD and cleaning up", "id", id)
 
 		// Try to clean up the sandbox
-		err := c.Delete(ctx, id)
+		err := c.Delete(ctx, id, nil)
 		if err != nil {
 			c.Log.Error("failed to cleanup unhealthy sandbox", "id", id, "err", err)
 			// Continue with other sandboxes even if one fails
@@ -2229,10 +2229,11 @@ cleanup:
 	return nil
 }
 
-func (c *SandboxController) Delete(ctx context.Context, id entity.Id) error {
+func (c *SandboxController) Delete(ctx context.Context, id entity.Id, sb *compute.Sandbox) error {
 	c.Log.Debug("delete callback received, cleaning up sandbox", "id", id)
-	// Delete is called when an entity has been deleted from the store.
-	// Just pass through to stopSandbox which will discover everything from containerd.
+	if sb != nil {
+		c.unconfigureFirewall(sb)
+	}
 	return c.stopSandbox(ctx, id)
 }
 
@@ -2301,7 +2302,7 @@ func (c *SandboxController) stopSandbox(ctx context.Context, id entity.Id) error
 	} else if !errors.Is(entityErr, cond.ErrNotFound{}) {
 		c.Log.Warn("failed to get sandbox entity for cleanup", "id", id, "err", entityErr)
 	} else {
-		c.Log.Warn("sandbox entity already deleted, skipping firewall cleanup", "id", id)
+		c.Log.Debug("sandbox entity already deleted, firewall cleanup handled by DeleteEntity if available", "id", id)
 	}
 
 	// Fallback if we couldn't get LogEntity from labels

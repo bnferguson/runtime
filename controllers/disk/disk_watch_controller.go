@@ -47,7 +47,7 @@ func (d *DiskWatchController) Update(ctx context.Context, disk *storage_v1alpha.
 }
 
 // Delete handles deletion of a disk entity
-func (d *DiskWatchController) Delete(ctx context.Context, id entity.Id) error {
+func (d *DiskWatchController) Delete(ctx context.Context, id entity.Id, obj *storage_v1alpha.Disk) error {
 	// Disk deleted - dependent leases will handle this
 	return nil
 }

@@ -537,7 +537,11 @@ type ControllerEntity interface {
 type GenericController[P ControllerEntity] interface {
 	Init(context.Context) error
 	Create(ctx context.Context, obj P, meta *entity.Meta) error
-	Delete(ctx context.Context, e entity.Id) error
+	// Delete is called when an entity is deleted. The obj parameter contains the
+	// entity data from before deletion (available since delete watch events now
+	// include the previous value). It may be nil if the entity data was unavailable
+	// (e.g., watch reconnect after etcd compaction).
+	Delete(ctx context.Context, id entity.Id, obj P) error
 }
 
 // UpdatingController is an optional interface that controllers can implement
@@ -609,8 +613,13 @@ func AdaptController[
 			return entity.Diff(meta.Entity, orig), err
 
 		case EventDeleted:
-			if err := cont.Delete(ctx, event.Id); err != nil {
-				return nil, fmt.Errorf("failed to create entity: %w", err)
+			var obj P
+			if event.Entity != nil {
+				obj = new(T)
+				obj.Decode(event.Entity)
+			}
+			if err := cont.Delete(ctx, event.Id, obj); err != nil {
+				return nil, fmt.Errorf("failed to delete entity: %w", err)
 			}
 		}
 
@@ -658,7 +667,6 @@ func AdaptReconcileController[
 			return entity.Diff(meta.Entity, orig), err
 
 		case EventDeleted:
-			// Check if the controller implements DeletingReconcileController
 			if deleter, ok := any(cont).(DeletingReconcileController); ok {
 				if err := deleter.Delete(ctx, event.Id); err != nil {
 					return nil, fmt.Errorf("failed to delete entity: %w", err)

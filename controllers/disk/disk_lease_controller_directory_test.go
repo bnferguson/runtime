@@ -240,7 +240,7 @@ func TestDiskLeaseController_DirectoryMode_Integration(t *testing.T) {
 		assert.False(t, exists)
 
 		// Step 3: Delete the lease
-		err = dlc.Delete(ctx, lease.ID)
+		err = dlc.Delete(ctx, lease.ID, nil)
 		require.NoError(t, err)
 
 		// Verify complete cleanup

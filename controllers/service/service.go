@@ -531,6 +531,6 @@ func (s *ServiceController) Create(ctx context.Context, srv *network_v1alpha.Ser
 	return nil
 }
 
-func (s *ServiceController) Delete(ctx context.Context, id entity.Id) error {
+func (s *ServiceController) Delete(ctx context.Context, id entity.Id, obj *network_v1alpha.Service) error {
 	return nil
 }
