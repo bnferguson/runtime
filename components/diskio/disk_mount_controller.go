@@ -265,6 +265,17 @@ func (c *DiskMountController) attachAndMount(ctx context.Context, mount *storage
 
 	imagePath := filepath.Join(volState.DiskPath, "disk.img")
 
+	// Detach any stale device before re-attaching. After a restart the old
+	// device may already be gone, so errors are ignored.
+	if ms := c.state.GetMount(entityId); ms != nil && ms.DevicePath != "" {
+		c.log.Info("detaching stale device before re-attach", "entity_id", entityId, "device", ms.DevicePath)
+		if strings.HasPrefix(ms.DevicePath, "/dev/lbd") {
+			_ = c.ops.LbdDetach(ctx, ms.DevicePath)
+		} else if strings.HasPrefix(ms.DevicePath, "/dev/loop") {
+			_ = c.ops.LoopDetach(ms.DevicePath)
+		}
+	}
+
 	// Attach device based on volume mode
 	var devicePath string
 	var err error
