@@ -66,6 +66,6 @@ func (m *DiskMountWatchController) Update(ctx context.Context, mount *storage_v1
 	return nil
 }
 
-func (m *DiskMountWatchController) Delete(ctx context.Context, id entity.Id) error {
+func (m *DiskMountWatchController) Delete(ctx context.Context, id entity.Id, _ *storage_v1alpha.DiskMount) error {
 	return nil
 }

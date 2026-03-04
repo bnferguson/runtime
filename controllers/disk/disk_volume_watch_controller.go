@@ -66,6 +66,6 @@ func (v *DiskVolumeWatchController) Update(ctx context.Context, vol *storage_v1a
 	return nil
 }
 
-func (v *DiskVolumeWatchController) Delete(ctx context.Context, id entity.Id) error {
+func (v *DiskVolumeWatchController) Delete(ctx context.Context, id entity.Id, _ *storage_v1alpha.DiskVolume) error {
 	return nil
 }
