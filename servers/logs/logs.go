@@ -131,27 +131,15 @@ func (s *Server) StreamLogs(ctx context.Context, state *app_v1alpha.LogsStreamLo
 	if args.HasFrom() {
 		fromTime := standard.FromTimestamp(args.From())
 		opts = append(opts, observability.WithFromTime(fromTime))
+	} else if !args.Follow() {
+		opts = append(opts, observability.WithLimit(defaultTailLimit))
 	}
 
-	// Build log target from RPC target
-	var logTarget observability.LogTarget
-
-	if target.HasSandbox() && target.Sandbox() != "" {
-		logTarget.SandboxID = target.Sandbox()
-		s.Log.Debug("streaming logs by sandbox", "sandbox", logTarget.SandboxID, "follow", args.Follow())
-	} else if target.HasApp() && target.App() != "" {
-		// Resolve app to entity ID
-		var appRec core_v1alpha.App
-		err := s.EC.Get(ctx, target.App(), &appRec)
-		if err != nil {
-			s.Log.Error("failed to get app", "app", target.App(), "err", err)
-			return err
-		}
-		logTarget.EntityID = appRec.EntityId().String()
-		s.Log.Debug("streaming logs by app", "app", target.App(), "entityID", logTarget.EntityID, "follow", args.Follow())
-	} else {
-		return fmt.Errorf("target must specify either app or sandbox")
+	logTarget, err := s.resolveLogTarget(ctx, target)
+	if err != nil {
+		return err
 	}
+	s.Log.Debug("streaming logs", "target", logTarget, "follow", args.Follow())
 
 	// Create channel for log entries
 	logCh := make(chan observability.LogEntry, 100)
@@ -189,6 +177,50 @@ func (s *Server) StreamLogs(ctx context.Context, state *app_v1alpha.LogsStreamLo
 }
 
 const defaultChunkSize = 100
+const defaultTailLimit = 100
+
+// resolveLogTarget converts an RPC LogTarget into an observability.LogTarget,
+// resolving app names to entity IDs as needed.
+func (s *Server) resolveLogTarget(ctx context.Context, target *app_v1alpha.LogTarget) (observability.LogTarget, error) {
+	var logTarget observability.LogTarget
+
+	hasSystem := target.HasSystem() && target.System()
+	hasSandbox := target.HasSandbox() && target.Sandbox() != ""
+	hasApp := target.HasApp() && target.App() != ""
+
+	selected := 0
+	if hasSystem {
+		selected++
+	}
+	if hasSandbox {
+		selected++
+	}
+	if hasApp {
+		selected++
+	}
+	if selected != 1 {
+		return logTarget, fmt.Errorf("target must specify exactly one of app, sandbox, or system")
+	}
+
+	if hasSystem {
+		logTarget.EntityID = observability.SystemLogEntityID
+		return logTarget, nil
+	}
+
+	if hasSandbox {
+		logTarget.SandboxID = target.Sandbox()
+		return logTarget, nil
+	}
+
+	var appRec core_v1alpha.App
+	err := s.EC.Get(ctx, target.App(), &appRec)
+	if err != nil {
+		s.Log.Error("failed to get app", "app", target.App(), "err", err)
+		return logTarget, err
+	}
+	logTarget.EntityID = appRec.EntityId().String()
+	return logTarget, nil
+}
 
 func (s *Server) StreamLogChunks(ctx context.Context, state *app_v1alpha.LogsStreamLogChunks) error {
 	args := state.Args()
@@ -207,27 +239,15 @@ func (s *Server) StreamLogChunks(ctx context.Context, state *app_v1alpha.LogsStr
 	if args.HasFrom() {
 		fromTime := standard.FromTimestamp(args.From())
 		opts = append(opts, observability.WithFromTime(fromTime))
+	} else if !args.Follow() {
+		opts = append(opts, observability.WithLimit(defaultTailLimit))
 	}
 
-	// Build log target from RPC target
-	var logTarget observability.LogTarget
-
-	if target.HasSandbox() && target.Sandbox() != "" {
-		logTarget.SandboxID = target.Sandbox()
-		s.Log.Debug("streaming log chunks by sandbox", "sandbox", logTarget.SandboxID, "follow", args.Follow())
-	} else if target.HasApp() && target.App() != "" {
-		// Resolve app to entity ID
-		var appRec core_v1alpha.App
-		err := s.EC.Get(ctx, target.App(), &appRec)
-		if err != nil {
-			s.Log.Error("failed to get app", "app", target.App(), "err", err)
-			return err
-		}
-		logTarget.EntityID = appRec.EntityId().String()
-		s.Log.Debug("streaming log chunks by app", "app", target.App(), "entityID", logTarget.EntityID, "follow", args.Follow())
-	} else {
-		return fmt.Errorf("target must specify either app or sandbox")
+	logTarget, err := s.resolveLogTarget(ctx, target)
+	if err != nil {
+		return err
 	}
+	s.Log.Debug("streaming log chunks", "target", logTarget, "follow", args.Follow())
 
 	// Parse and compile filter to LogsQL for VictoriaLogs
 	if args.HasFilter() && args.Filter() != "" {

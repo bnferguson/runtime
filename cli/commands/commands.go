@@ -123,7 +123,7 @@ miren deploy --analyze
 			Body: "miren rollback -a myapp",
 		}),
 	))
-	d.Dispatch("logs", Infer("logs", "Get logs for an application", Logs,
+	d.Dispatch("logs", Infer("logs", "View logs (defaults to app logs)", LogsApp,
 		WithDescription(logsDescription),
 		WithExample(mflags.Example{
 			Name: "View logs for the current app",
@@ -137,9 +137,54 @@ miren deploy --analyze
 			Name: "Show logs from the last 5 minutes, filtered for errors",
 			Body: "miren logs --last 5m -g error",
 		}),
+	))
+	d.Dispatch("logs app", Infer("logs app", "View application logs", LogsApp,
+		WithDescription(logsDescription),
+		WithExample(mflags.Example{
+			Name: "View logs for the current app",
+			Body: "miren logs app",
+		}),
+		WithExample(mflags.Example{
+			Name: "Follow logs for a specific app",
+			Body: "miren logs app -a myapp -f",
+		}),
 		WithExample(mflags.Example{
 			Name: "Filter logs by service",
-			Body: "miren logs --service web -f",
+			Body: "miren logs app --service web -f",
+		}),
+	))
+	d.Dispatch("logs sandbox", Infer("logs sandbox", "View sandbox logs", LogsSandbox,
+		WithExample(mflags.Example{
+			Name: "View logs for a sandbox",
+			Body: "miren logs sandbox sb_abc123",
+		}),
+		WithExample(mflags.Example{
+			Name: "Follow sandbox logs",
+			Body: "miren logs sandbox sb_abc123 -f",
+		}),
+	))
+	d.Dispatch("logs build", Infer("logs build", "View build logs", LogsBuild,
+		WithExample(mflags.Example{
+			Name: "View build logs for a version",
+			Body: "miren logs build v3",
+		}),
+		WithExample(mflags.Example{
+			Name: "View build logs for a specific app",
+			Body: "miren logs build v3 -a myapp",
+		}),
+	))
+	d.Dispatch("logs system", Infer("logs system", "View system logs", LogsSystem,
+		WithExample(mflags.Example{
+			Name: "View all system logs",
+			Body: "miren logs system",
+		}),
+		WithExample(mflags.Example{
+			Name: "View logs for a specific component",
+			Body: "miren logs system etcd",
+		}),
+		WithExample(mflags.Example{
+			Name: "Follow system logs",
+			Body: "miren logs system -f",
 		}),
 	))
 

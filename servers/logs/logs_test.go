@@ -31,10 +31,21 @@ type mockLogEntry struct {
 
 func createMockVictoriaLogs(t *testing.T, entries []mockLogEntry, delay time.Duration) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query().Get("query")
+
+		// Simulate VictoriaLogs returning results in desc order when requested
+		ordered := entries
+		if strings.Contains(query, "desc") {
+			ordered = make([]mockLogEntry, len(entries))
+			for i, e := range entries {
+				ordered[len(entries)-1-i] = e
+			}
+		}
+
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		w.WriteHeader(http.StatusOK)
 
-		for _, entry := range entries {
+		for _, entry := range ordered {
 			if delay > 0 {
 				time.Sleep(delay)
 			}
@@ -58,17 +69,16 @@ func createFilteringMockVictoriaLogs(t *testing.T, entries []mockLogEntry) *http
 		query := r.URL.Query().Get("query")
 		t.Logf("Received query: %s", query)
 
+		descOrder := strings.Contains(query, "desc")
+
 		// Strip pipe operators (like "| sort by (_time)")
 		if pipeIdx := strings.Index(query, " |"); pipeIdx != -1 {
 			query = query[:pipeIdx]
 		}
 
-		w.Header().Set("Content-Type", "application/x-ndjson")
-		w.WriteHeader(http.StatusOK)
-
+		// Filter entries first
+		var filtered []mockLogEntry
 		for _, entry := range entries {
-			// Simple filter simulation: if query contains a word filter, check if msg contains it
-			// This simulates VictoriaLogs LogsQL word filtering
 			parts := strings.Split(query, " ")
 			shouldInclude := true
 			for _, part := range parts[1:] { // Skip the entity/sandbox part
@@ -77,16 +87,29 @@ func createFilteringMockVictoriaLogs(t *testing.T, entries []mockLogEntry) *http
 					break
 				}
 			}
-
 			if shouldInclude {
-				data, err := json.Marshal(entry)
-				if err != nil {
-					t.Errorf("failed to marshal entry: %v", err)
-					return
-				}
-				w.Write(data)
-				w.Write([]byte("\n"))
+				filtered = append(filtered, entry)
 			}
+		}
+
+		// Simulate VictoriaLogs returning results in desc order when requested
+		if descOrder {
+			for i, j := 0, len(filtered)-1; i < j; i, j = i+1, j-1 {
+				filtered[i], filtered[j] = filtered[j], filtered[i]
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.WriteHeader(http.StatusOK)
+
+		for _, entry := range filtered {
+			data, err := json.Marshal(entry)
+			if err != nil {
+				t.Errorf("failed to marshal entry: %v", err)
+				return
+			}
+			w.Write(data)
+			w.Write([]byte("\n"))
 		}
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
@@ -430,7 +453,7 @@ func TestStreamLogChunks_ErrorNoTarget(t *testing.T) {
 
 	_, err := client.StreamLogChunks(ctx, target, nil, false, "", callback)
 	r.Error(err)
-	r.Contains(err.Error(), "target must specify either app or sandbox")
+	r.Contains(err.Error(), "target must specify exactly one of app, sandbox, or system")
 }
 
 func TestStreamLogChunks_AppNotFound(t *testing.T) {

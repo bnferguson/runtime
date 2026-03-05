@@ -77,3 +77,74 @@ func TestNormalizeSandboxID(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildBuildFilter(t *testing.T) {
+	tests := []struct {
+		name       string
+		version    string
+		userFilter string
+		want       string
+	}{
+		{
+			name:    "version only",
+			version: "v3",
+			want:    `source:build version:"v3"`,
+		},
+		{
+			name:       "version with filter",
+			version:    "v3",
+			userFilter: "error",
+			want:       `source:build version:"v3" error`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildBuildFilter(tt.version, tt.userFilter)
+			if got != tt.want {
+				t.Errorf("buildBuildFilter(%q, %q) = %q, want %q",
+					tt.version, tt.userFilter, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildSystemFilter(t *testing.T) {
+	tests := []struct {
+		name       string
+		component  string
+		userFilter string
+		want       string
+	}{
+		{
+			name: "no component, no filter",
+			want: `source:"system"`,
+		},
+		{
+			name:      "component only",
+			component: "etcd",
+			want:      `source:"system" module:"etcd"`,
+		},
+		{
+			name:       "filter only",
+			userFilter: "error",
+			want:       `source:"system" error`,
+		},
+		{
+			name:       "component and filter",
+			component:  "scheduler",
+			userFilter: "error",
+			want:       `source:"system" module:"scheduler" error`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildSystemFilter(tt.component, tt.userFilter)
+			if got != tt.want {
+				t.Errorf("buildSystemFilter(%q, %q) = %q, want %q",
+					tt.component, tt.userFilter, got, tt.want)
+			}
+		})
+	}
+}

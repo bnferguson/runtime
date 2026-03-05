@@ -14,6 +14,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"miren.dev/runtime/components/base"
+	"miren.dev/runtime/pkg/containerdx"
 	"miren.dev/runtime/pkg/imagerefs"
 	"miren.dev/runtime/pkg/slogout"
 )
@@ -232,6 +233,7 @@ func (c *VictoriaLogsComponent) createContainer(ctx context.Context, image conta
 		),
 		oci.WithHostHostsFile,
 		oci.WithHostResolvconf,
+		containerdx.WithRlimitNOFILE(65536),
 
 		oci.WithMounts([]specs.Mount{
 			{

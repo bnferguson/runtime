@@ -124,5 +124,6 @@ httpingress                          [15ms]
 
 ## Next Steps
 
+- [Logs](/logs) — View and filter application, build, and system logs
 - [Services](/services) — Configure your app's services
 - [Application Scaling](/scaling) — Understand cold starts and autoscaling

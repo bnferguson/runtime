@@ -14,6 +14,7 @@ import (
 type logTargetData struct {
 	App     *string `cbor:"0,keyasint,omitempty" json:"app,omitempty"`
 	Sandbox *string `cbor:"1,keyasint,omitempty" json:"sandbox,omitempty"`
+	System  *bool   `cbor:"2,keyasint,omitempty" json:"system,omitempty"`
 }
 
 type LogTarget struct {
@@ -48,6 +49,21 @@ func (v *LogTarget) Sandbox() string {
 
 func (v *LogTarget) SetSandbox(sandbox string) {
 	v.data.Sandbox = &sandbox
+}
+
+func (v *LogTarget) HasSystem() bool {
+	return v.data.System != nil
+}
+
+func (v *LogTarget) System() bool {
+	if v.data.System == nil {
+		return false
+	}
+	return *v.data.System
+}
+
+func (v *LogTarget) SetSystem(system bool) {
+	v.data.System = &system
 }
 
 func (v *LogTarget) MarshalCBOR() ([]byte, error) {
