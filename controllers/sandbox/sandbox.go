@@ -1660,7 +1660,7 @@ func (c *SandboxController) bootContainers(
 		// Start port monitoring for this container if it has ports
 		if len(ports) > 0 && len(ep.Addresses) > 0 {
 			ip := ep.Addresses[0].Addr().String()
-			c.portMonitor.MonitorContainer(id, ip, ports)
+			c.portMonitor.MonitorContainer(id, ip, sbPid, ports)
 		}
 	}
 
