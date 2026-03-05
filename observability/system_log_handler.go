@@ -95,7 +95,9 @@ func (h *SystemLogHandler) WithGroup(name string) slog.Handler {
 // WaitForVictoriaLogs blocks until VictoriaLogs is reachable or the context
 // is cancelled. Returns true if VictoriaLogs became available.
 func WaitForVictoriaLogs(ctx context.Context, address string, timeout time.Duration) bool {
-	deadline := time.After(timeout)
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -103,13 +105,10 @@ func WaitForVictoriaLogs(ctx context.Context, address string, timeout time.Durat
 
 	for {
 		select {
-		case <-ctx.Done():
-			return false
-		case <-deadline:
+		case <-waitCtx.Done():
 			return false
 		case <-ticker.C:
-			// Try a simple query to check if VictoriaLogs is up
-			_, err := reader.Read(ctx, "health-check", WithLimit(1))
+			_, err := reader.Read(waitCtx, "health-check", WithLimit(1))
 			if err == nil {
 				return true
 			}

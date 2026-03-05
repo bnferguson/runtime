@@ -217,7 +217,7 @@ func (s *Server) StreamLogChunks(ctx context.Context, state *app_v1alpha.LogsStr
 		if !rpc.AllowApp(ctx, target.App()) {
 			return rpc.AppAccessError(ctx, target.App())
 		}
-	} else if !target.HasSystem() && rpc.BoundApp(ctx) != "" {
+	} else if rpc.BoundApp(ctx) != "" {
 		return fmt.Errorf("%w: app-scoped caller must specify app target", rpc.ErrUnauthorized)
 	}
 

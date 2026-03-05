@@ -654,10 +654,18 @@ func WithoutRoot(ctx context.Context, client oci.Client, c *containers.Container
 }
 
 // WithRlimitNOFILE sets the RLIMIT_NOFILE (max open files) for the container process.
+// Uses upsert semantics to avoid duplicate entries, which violate the OCI spec.
 func WithRlimitNOFILE(n uint64) oci.SpecOpts {
 	return func(_ context.Context, _ oci.Client, _ *containers.Container, s *runtimespec.Spec) error {
 		if s.Process == nil {
 			s.Process = &runtimespec.Process{}
+		}
+		for i := range s.Process.Rlimits {
+			if s.Process.Rlimits[i].Type == "RLIMIT_NOFILE" {
+				s.Process.Rlimits[i].Soft = n
+				s.Process.Rlimits[i].Hard = n
+				return nil
+			}
 		}
 		s.Process.Rlimits = append(s.Process.Rlimits, runtimespec.POSIXRlimit{
 			Type: "RLIMIT_NOFILE",

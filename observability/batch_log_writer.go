@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"sync"
 	"time"
 )
@@ -25,9 +24,10 @@ type BatchLogWriter struct {
 	buf   bytes.Buffer
 	count int
 
-	flushCh chan struct{}
-	done    chan struct{}
-	wg      sync.WaitGroup
+	flushCh   chan struct{}
+	done      chan struct{}
+	wg        sync.WaitGroup
+	closeOnce sync.Once
 }
 
 // NewBatchLogWriter wraps a PersistentLogWriter with batching. Entries are
@@ -86,8 +86,11 @@ func (b *BatchLogWriter) WriteEntry(entity string, le LogEntry) error {
 }
 
 // Close signals the background goroutine to perform a final flush and stop.
+// It is safe to call multiple times.
 func (b *BatchLogWriter) Close() {
-	close(b.done)
+	b.closeOnce.Do(func() {
+		close(b.done)
+	})
 	b.wg.Wait()
 }
 
@@ -129,7 +132,5 @@ func (b *BatchLogWriter) flush() {
 		return
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		io.Copy(io.Discard, resp.Body)
-	}
+	_, _ = io.Copy(io.Discard, resp.Body)
 }
