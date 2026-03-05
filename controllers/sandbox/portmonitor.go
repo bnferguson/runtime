@@ -1,11 +1,14 @@
 package sandbox
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/netip"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,6 +30,7 @@ type PortMonitor struct {
 type monitorTask struct {
 	containerID string
 	ip          string
+	pid         int
 	ports       []int
 	cancel      context.CancelFunc
 }
@@ -43,8 +47,11 @@ func NewPortMonitor(log *slog.Logger, ports observability.PortTracker) *PortMoni
 	}
 }
 
-// MonitorContainer starts monitoring ports for a container
-func (pm *PortMonitor) MonitorContainer(containerID string, ip string, ports []int) {
+// MonitorContainer starts monitoring ports for a container.
+// It checks port binding by reading /proc/<pid>/net/tcp from the container's
+// network namespace (via the pause container's PID) rather than doing a TCP
+// dial from the host, which can be interfered with by iptables DNAT rules.
+func (pm *PortMonitor) MonitorContainer(containerID string, ip string, pid int, ports []int) {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 
@@ -58,6 +65,7 @@ func (pm *PortMonitor) MonitorContainer(containerID string, ip string, ports []i
 	task := &monitorTask{
 		containerID: containerID,
 		ip:          ip,
+		pid:         pid,
 		ports:       ports,
 		cancel:      taskCancel,
 	}
@@ -146,7 +154,7 @@ func (pm *PortMonitor) monitorPorts(ctx context.Context, task *monitorTask) {
 					continue // Already bound
 				}
 
-				isBound := pm.checkPort(task.ip, port)
+				isBound := checkPort(task.pid, port)
 				if !isBound {
 					continue // Still unbound
 				}
@@ -166,12 +174,69 @@ func (pm *PortMonitor) monitorPorts(ctx context.Context, task *monitorTask) {
 	}
 }
 
-func (pm *PortMonitor) checkPort(ip string, port int) bool {
-	address := net.JoinHostPort(ip, fmt.Sprintf("%d", port))
-	conn, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
+// checkPort checks whether the given port is in LISTEN state inside the
+// network namespace of the given PID by reading /proc/<pid>/net/tcp{,6}.
+// This avoids TCP dials from the host which can be interfered with by
+// iptables DNAT rules for node_port mappings.
+func checkPort(pid int, port int) bool {
+	for _, proto := range []string{"tcp", "tcp6"} {
+		path := fmt.Sprintf("/proc/%d/net/%s", pid, proto)
+		if portListening(path, port) {
+			return true
+		}
+	}
+	return false
+}
+
+// portListening parses a /proc/net/tcp{,6} file and returns true if any entry
+// has the given local port in LISTEN state (0A).
+//
+// The file format has a header line followed by entries like:
+//
+//	sl  local_address rem_address   st tx_queue rx_queue ...
+//	0: 00000000:0CEA 00000000:0000 0A 00000000:00000000 ...
+//
+// Field 1 (local_address) contains host:port in hex; field 3 (st) is the state.
+func portListening(path string, port int) bool {
+	f, err := os.Open(path)
 	if err != nil {
 		return false
 	}
-	_ = conn.Close()
-	return true
+	defer f.Close()
+
+	portHex := fmt.Sprintf("%04X", port)
+
+	scanner := bufio.NewScanner(f)
+	// Skip header line
+	if !scanner.Scan() {
+		return false
+	}
+
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 4 {
+			continue
+		}
+
+		// fields[1] is local_address "ADDR:PORT", fields[3] is state
+		localAddr := fields[1]
+		state := fields[3]
+
+		// State 0A = LISTEN
+		if state != "0A" {
+			continue
+		}
+
+		// Extract port from local_address (everything after the last colon)
+		idx := strings.LastIndex(localAddr, ":")
+		if idx < 0 {
+			continue
+		}
+
+		if strings.EqualFold(localAddr[idx+1:], portHex) {
+			return true
+		}
+	}
+
+	return false
 }
