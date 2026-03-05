@@ -34,6 +34,7 @@ const sidebars: SidebarsConfig = {
         'admin-interface',
         'working-with-miren-cloud',
         'observability',
+        'logs',
       ],
     },
     {

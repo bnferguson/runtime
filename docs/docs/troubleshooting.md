@@ -71,10 +71,10 @@ Failed deployments are marked with a red `✗`. Use `--detailed` for more info i
 **2. Check build logs**
 
 ```bash
-miren logs -a myapp --build VERSION
+miren logs build -a myapp VERSION
 ```
 
-Replace `VERSION` with the version from the deployment history. This shows the build output so you can see where things went wrong.
+Replace `VERSION` with the version from the deployment history. This shows the build output so you can see where things went wrong. See [Logs](/logs) for more on filtering and following logs.
 
 ## Server-level issues
 

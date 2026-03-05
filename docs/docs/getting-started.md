@@ -167,7 +167,7 @@ miren logs
 View logs for a specific app:
 
 ```bash
-miren logs --app myapp
+miren logs app -a myapp
 ```
 
 Show logs from the last 5 minutes:
@@ -175,6 +175,8 @@ Show logs from the last 5 minutes:
 ```bash
 miren logs --last 5m
 ```
+
+See [Logs](/logs) for the full reference on filtering, build logs, system logs, and more.
 
 ## Managing Applications
 

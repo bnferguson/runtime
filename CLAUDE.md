@@ -134,6 +134,11 @@ m app list
 - `make dev-dagger` - Start development environment with Dagger
 - `make services-dagger` - Run services container for debugging
 
+### Documentation
+- `cd docs && bun install && bun run build` - Build the documentation site (Docusaurus, uses bun NOT npm)
+- `cd docs && bun run start` - Start local dev server on port 3333
+- Docs source lives in `docs/docs/` as Markdown files; sidebar is configured in `docs/sidebars.ts`
+
 ### Other Commands
 - `make image` - Export Docker image
 - `make release-data` - Create release package tar.gz
