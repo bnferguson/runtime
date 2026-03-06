@@ -16,6 +16,7 @@ const (
 	FeatureAdminAPI           = "adminapi"
 	FeatureRouteOIDC          = "routeoidc"
 	FeatureAddons             = "addons"
+	FeatureSagas              = "sagas"
 )
 
 // AllFeatures returns a list of all known feature names
@@ -27,6 +28,7 @@ func AllFeatures() []string {
 		FeatureAdminAPI,
 		FeatureRouteOIDC,
 		FeatureAddons,
+		FeatureSagas,
 	}
 }
 
@@ -39,6 +41,7 @@ func FeatureDescriptions() map[string]string {
 		FeatureAdminAPI:           "Enable the admin API for application management functions",
 		FeatureRouteOIDC:          "Enable OIDC authentication for HTTP routes",
 		FeatureAddons:             "Enable the addon system for managed backing services",
+		FeatureSagas:              "Use saga-based crash-recoverable workflows for sandbox lifecycle",
 	}
 }
 
@@ -55,6 +58,7 @@ var featureDefaults = map[string]bool{
 	FeatureAdminAPI:           false,
 	FeatureRouteOIDC:          false,
 	FeatureAddons:             false,
+	FeatureSagas:              false,
 }
 
 // Init initializes the labs feature flags from the provided flag strings.
@@ -165,4 +169,10 @@ func RouteOIDC() bool {
 // Enable the addon system for managed backing services
 func Addons() bool {
 	return IsEnabled(FeatureAddons)
+}
+
+// Sagas returns whether the sagas feature is enabled.
+// Use saga-based crash-recoverable workflows for sandbox lifecycle
+func Sagas() bool {
+	return IsEnabled(FeatureSagas)
 }

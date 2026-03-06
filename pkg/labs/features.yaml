@@ -28,3 +28,8 @@ features:
     predicate: Addons
     description: Enable the addon system for managed backing services
     default: false
+
+  - name: sagas
+    predicate: Sagas
+    description: Use saga-based crash-recoverable workflows for sandbox lifecycle
+    default: false
