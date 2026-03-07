@@ -406,7 +406,9 @@ type waitPortsIn struct {
 	WaitPortPorts []int    `json:"wait_port_ports" saga:"wait_port_ports"`
 }
 
-type waitPortsOut struct{}
+type waitPortsOut struct {
+	PortsReady saga.Edge `saga:"ports_ready"`
+}
 
 func waitPorts(ctx context.Context, in waitPortsIn) (waitPortsOut, error) {
 	deps := saga.Get[*createSandboxDeps](ctx)
@@ -435,7 +437,8 @@ func undoWaitPorts(_ context.Context, _ waitPortsIn, _ waitPortsOut) error {
 // --- Set running ---
 
 type setRunningIn struct {
-	SandboxID string `json:"sandbox_id" saga:"sandbox_id"`
+	SandboxID  string    `json:"sandbox_id" saga:"sandbox_id"`
+	PortsReady saga.Edge `saga:"ports_ready"`
 }
 
 type setRunningOut struct{}
@@ -476,9 +479,10 @@ func undoSetRunning(_ context.Context, _ setRunningIn, _ setRunningOut) error {
 // --- Update services ---
 
 type updateServicesIn struct {
-	SandboxID string   `json:"sandbox_id" saga:"sandbox_id"`
-	Addresses []string `json:"addresses" saga:"addresses"`
-	Revision  int64    `json:"revision" saga:"revision"`
+	SandboxID  string    `json:"sandbox_id" saga:"sandbox_id"`
+	Addresses  []string  `json:"addresses" saga:"addresses"`
+	Revision   int64     `json:"revision" saga:"revision"`
+	PortsReady saga.Edge `saga:"ports_ready"`
 }
 
 type updateServicesOut struct{}

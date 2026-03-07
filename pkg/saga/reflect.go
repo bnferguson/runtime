@@ -8,12 +8,16 @@ import (
 	"strings"
 )
 
+// edgeType is the reflect.Type of saga.Edge, used to detect ordering-only fields.
+var edgeType = reflect.TypeOf(Edge{})
+
 // fieldMapping maps struct field names to saga keys based on struct tags.
 type fieldMapping struct {
 	fieldName string
 	jsonKey   string // The JSON key name (from json tag or field name)
 	sagaKey   string
 	optional  bool
+	isEdge    bool // true for saga.Edge fields (ordering-only, no data)
 }
 
 // extractMappings extracts saga key mappings from a struct type's tags.
@@ -69,6 +73,7 @@ func extractMappings(t reflect.Type) ([]fieldMapping, error) {
 			jsonKey:   jsonKey,
 			sagaKey:   sagaKey,
 			optional:  optional,
+			isEdge:    field.Type == edgeType,
 		})
 	}
 	return mappings, nil
@@ -90,6 +95,9 @@ func (a *typedAction) Execute(ctx context.Context, inputs ActionInputs) (any, er
 	// Create input struct and populate from inputs
 	inVal := reflect.New(a.inType).Elem()
 	for _, m := range a.inMappings {
+		if m.isEdge {
+			continue // Edge fields are ordering-only, no data to populate
+		}
 		field := inVal.FieldByName(m.fieldName)
 		if !field.IsValid() || !field.CanSet() {
 			continue
@@ -133,6 +141,9 @@ func (a *typedAction) Undo(ctx context.Context, inputs ActionInputs, output any)
 	// Create input struct and populate from inputs
 	inVal := reflect.New(a.inType).Elem()
 	for _, m := range a.inMappings {
+		if m.isEdge {
+			continue // Edge fields are ordering-only, no data to populate
+		}
 		field := inVal.FieldByName(m.fieldName)
 		if !field.IsValid() || !field.CanSet() {
 			continue

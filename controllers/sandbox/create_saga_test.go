@@ -526,8 +526,7 @@ func TestCreateSandboxSaga_CreateContainerFails(t *testing.T) {
 	exec := h.execution(t)
 	assert.Equal(t, saga.StatusFailed, exec.Status)
 
-	// allocNetwork, setRunning, patchNetwork all ran before createContainer
-	// (setRunning has no data deps beyond sandbox_id so it runs early)
+	// allocNetwork and patchNetwork ran before createContainer
 	assert.Equal(t, 1, h.networking.allocateCalls)
 	assert.GreaterOrEqual(t, len(h.entities.patchCalls), 1)
 
@@ -599,17 +598,18 @@ func TestCreateSandboxSaga_WaitPortsFails(t *testing.T) {
 	exec := h.execution(t)
 	assert.Equal(t, saga.StatusFailed, exec.Status)
 
-	// All 8 prior forward actions completed (including setRunning and updateServices
-	// which run early due to topological ordering)
+	// All prior forward actions up through wait-ports completed;
+	// set-running and update-services depend on wait-ports via Edge
+	// so they did NOT run before wait-ports failed.
 	assert.Equal(t, 1, h.networking.allocateCalls)
 	assert.Equal(t, 1, h.runtime.createContainerCalls)
 	assert.Equal(t, 1, h.runtime.bootInitialTaskCalls)
 	assert.Equal(t, 1, h.runtime.bootContainersCalls)
 	assert.Equal(t, 1, h.obs.addMetricsCalls)
+	assert.Equal(t, 0, h.obs.updateSvcsCalls, "update-services should not run before wait-ports")
 
 	// Undos run in reverse: metrics removed, subcontainers destroyed,
-	// task killed, container cleaned, IP released (plus no-op undos for
-	// setRunning, updateServices, patchNetwork)
+	// task killed, container cleaned, IP released (plus no-op undos for patchNetwork)
 	assert.Equal(t, 1, h.obs.removeMetricsCalls)
 	assert.Equal(t, 1, h.runtime.destroySubCtrsCalls)
 	assert.Equal(t, 1, h.runtime.releaseDiskLeasesCalls)
