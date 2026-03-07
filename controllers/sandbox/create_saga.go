@@ -74,20 +74,27 @@ func allocNetwork(ctx context.Context, in allocNetworkIn) (allocNetworkOut, erro
 func undoAllocNetwork(ctx context.Context, _ allocNetworkIn, out allocNetworkOut) error {
 	deps := saga.Get[*createSandboxDeps](ctx)
 	log := saga.Get[*slog.Logger](ctx)
+	var undoErr error
 
 	for _, addrStr := range out.Addresses {
 		prefix, err := netip.ParsePrefix(addrStr)
 		if err != nil {
 			log.Error("saga undo: failed to parse address", "addr", addrStr, "error", err)
+			if undoErr == nil {
+				undoErr = fmt.Errorf("parsing address %q: %w", addrStr, err)
+			}
 			continue
 		}
 		if err := deps.networking.ReleaseAddr(prefix.Addr()); err != nil {
 			log.Error("saga undo: failed to release IP", "addr", prefix.Addr(), "error", err)
+			if undoErr == nil {
+				undoErr = fmt.Errorf("releasing IP %s: %w", prefix.Addr(), err)
+			}
 		} else {
 			log.Debug("saga undo: released IP", "addr", prefix.Addr())
 		}
 	}
-	return nil
+	return undoErr
 }
 
 // --- Patch network entity ---
@@ -339,7 +346,7 @@ func undoBootContainers(ctx context.Context, in bootContainersIn, _ bootContaine
 	log.Debug("saga undo: destroyed subcontainers", "sandbox", in.SandboxID)
 
 	if err := deps.runtime.ReleaseDiskLeases(ctx, entity.Id(in.SandboxID)); err != nil {
-		log.Error("saga undo: failed to release disk leases", "sandbox", in.SandboxID, "error", err)
+		return fmt.Errorf("saga undo: releasing disk leases for %s: %w", in.SandboxID, err)
 	}
 	return nil
 }
