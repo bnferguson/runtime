@@ -7,12 +7,9 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/containerd/containerd/namespaces"
 	containerd "github.com/containerd/containerd/v2/client"
-	"github.com/containerd/errdefs"
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
-	"miren.dev/runtime/network"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/saga"
 )
@@ -33,11 +30,11 @@ const (
 
 // createSandboxDeps holds the dependencies injected into the saga context.
 // These are retrieved via saga.Get[*createSandboxDeps](ctx) within actions.
-// Note: writeTracker is accessed via ctrl.writeTracker rather than captured
-// separately, because SetWriteTracker is called after Init when the saga
-// definition is registered.
 type createSandboxDeps struct {
-	ctrl *SandboxController
+	entities   SandboxEntityStore
+	networking SandboxNetworking
+	runtime    SandboxContainerRuntime
+	obs        SandboxObservability
 }
 
 // --- Action input/output types ---
@@ -54,15 +51,12 @@ func allocNetwork(ctx context.Context, in allocNetworkIn) (allocNetworkOut, erro
 	deps := saga.Get[*createSandboxDeps](ctx)
 	log := saga.Get[*slog.Logger](ctx)
 
-	// Fetch sandbox entity to pass to allocateNetwork
-	resp, err := deps.ctrl.EAC.Get(ctx, in.SandboxID)
+	sb, _, err := deps.entities.GetSandbox(ctx, in.SandboxID)
 	if err != nil {
 		return allocNetworkOut{}, fmt.Errorf("fetching sandbox: %w", err)
 	}
-	var co compute.Sandbox
-	co.Decode(resp.Entity().Entity())
 
-	ep, err := deps.ctrl.allocateNetwork(ctx, &co)
+	ep, err := deps.networking.AllocateNetwork(ctx, sb)
 	if err != nil {
 		return allocNetworkOut{}, fmt.Errorf("allocating network: %w", err)
 	}
@@ -76,7 +70,7 @@ func allocNetwork(ctx context.Context, in allocNetworkIn) (allocNetworkOut, erro
 	return allocNetworkOut{Addresses: addrs}, nil
 }
 
-func undoAllocNetwork(ctx context.Context, in allocNetworkIn, out allocNetworkOut) error {
+func undoAllocNetwork(ctx context.Context, _ allocNetworkIn, out allocNetworkOut) error {
 	deps := saga.Get[*createSandboxDeps](ctx)
 	log := saga.Get[*slog.Logger](ctx)
 
@@ -86,7 +80,7 @@ func undoAllocNetwork(ctx context.Context, in allocNetworkIn, out allocNetworkOu
 			log.Error("saga undo: failed to parse address", "addr", addrStr, "error", err)
 			continue
 		}
-		if err := deps.ctrl.Subnet.ReleaseAddr(prefix.Addr()); err != nil {
+		if err := deps.networking.ReleaseAddr(prefix.Addr()); err != nil {
 			log.Error("saga undo: failed to release IP", "addr", prefix.Addr(), "error", err)
 		} else {
 			log.Debug("saga undo: released IP", "addr", prefix.Addr())
@@ -109,33 +103,28 @@ type patchNetworkOut struct {
 func patchNetwork(ctx context.Context, in patchNetworkIn) (patchNetworkOut, error) {
 	deps := saga.Get[*createSandboxDeps](ctx)
 
-	// Build network components from addresses
 	var networkAttrs []any
 	networkAttrs = append(networkAttrs, entity.Ref(entity.DBId, entity.Id(in.SandboxID)))
 
+	bridgeName := deps.networking.BridgeName()
 	for _, addrStr := range in.Addresses {
 		net := compute.Network{
 			Address: addrStr,
-			Subnet:  deps.ctrl.Bridge,
+			Subnet:  bridgeName,
 		}
 		networkAttrs = append(networkAttrs, entity.Component(compute.SandboxNetworkId, net.Encode()))
 	}
 
 	patchEnt := entity.New(networkAttrs...)
-	res, err := deps.ctrl.EAC.Patch(ctx, patchEnt.Attrs(), 0)
+	revision, err := deps.entities.PatchSandbox(ctx, patchEnt.Attrs(), 0)
 	if err != nil {
 		return patchNetworkOut{}, fmt.Errorf("patching sandbox with network: %w", err)
 	}
 
-	if deps.ctrl.writeTracker != nil && res.HasRevision() {
-		deps.ctrl.writeTracker.RecordWrite(res.Revision())
-	}
-
-	return patchNetworkOut{Revision: res.Revision()}, nil
+	return patchNetworkOut{Revision: revision}, nil
 }
 
 func undoPatchNetwork(_ context.Context, _ patchNetworkIn, _ patchNetworkOut) error {
-	// Entity patches don't need explicit undo; the sandbox will be marked DEAD
 	return nil
 }
 
@@ -155,39 +144,28 @@ func createContainer(ctx context.Context, in createContainerIn) (createContainer
 	deps := saga.Get[*createSandboxDeps](ctx)
 	log := saga.Get[*slog.Logger](ctx)
 
-	ctx = namespaces.WithNamespace(ctx, deps.ctrl.Namespace)
-
-	// Fetch current sandbox state
-	resp, err := deps.ctrl.EAC.Get(ctx, in.SandboxID)
+	sb, meta, err := deps.entities.GetSandbox(ctx, in.SandboxID)
 	if err != nil {
 		return createContainerOut{}, fmt.Errorf("fetching sandbox: %w", err)
 	}
-	var co compute.Sandbox
-	co.Decode(resp.Entity().Entity())
 
-	// Rebuild endpoint config from stored addresses
-	ep, err := rebuildEndpointConfig(deps.ctrl, in.Addresses)
+	ep, err := deps.networking.RebuildEndpointConfig(in.Addresses)
 	if err != nil {
 		return createContainerOut{}, fmt.Errorf("rebuilding endpoint config: %w", err)
 	}
 
-	// Build entity meta for buildSpec
-	meta := &entity.Meta{
-		Entity:   resp.Entity().Entity(),
-		Revision: in.Revision,
+	if in.Revision != 0 {
+		meta.Revision = in.Revision
 	}
 
-	// Build OCI spec
-	opts, err := deps.ctrl.buildSpec(ctx, &co, ep, meta)
+	opts, err := deps.runtime.BuildSpec(ctx, sb, ep, meta)
 	if err != nil {
 		return createContainerOut{}, fmt.Errorf("building spec: %w", err)
 	}
 
-	// Create pause container (idempotent for crash replay)
-	cid := pauseContainerId(co.ID)
-	_, err = deps.ctrl.CC.NewContainer(ctx, cid, opts...)
-	if err != nil && !errdefs.IsAlreadyExists(err) {
-		return createContainerOut{}, fmt.Errorf("creating container %s: %w", co.ID, err)
+	cid, err := deps.runtime.CreateContainer(ctx, string(sb.ID), opts...)
+	if err != nil {
+		return createContainerOut{}, fmt.Errorf("creating container %s: %w", sb.ID, err)
 	}
 
 	log.Debug("saga: created container", "sandbox", in.SandboxID, "container", cid)
@@ -202,13 +180,12 @@ func undoCreateContainer(ctx context.Context, _ createContainerIn, out createCon
 		return nil
 	}
 
-	ctx = namespaces.WithNamespace(ctx, deps.ctrl.Namespace)
-	container, err := deps.ctrl.CC.LoadContainer(ctx, out.ContainerID)
+	container, err := deps.runtime.LoadContainer(ctx, out.ContainerID)
 	if err != nil {
 		log.Debug("saga undo: container not found, already cleaned up", "id", out.ContainerID)
 		return nil
 	}
-	deps.ctrl.cleanupContainer(ctx, container)
+	deps.runtime.CleanupContainer(ctx, container)
 	log.Debug("saga undo: deleted container", "id", out.ContainerID)
 	return nil
 }
@@ -230,35 +207,26 @@ func bootTask(ctx context.Context, in bootTaskIn) (bootTaskOut, error) {
 	deps := saga.Get[*createSandboxDeps](ctx)
 	log := saga.Get[*slog.Logger](ctx)
 
-	ctx = namespaces.WithNamespace(ctx, deps.ctrl.Namespace)
-
-	// Fetch sandbox
-	resp, err := deps.ctrl.EAC.Get(ctx, in.SandboxID)
+	sb, _, err := deps.entities.GetSandbox(ctx, in.SandboxID)
 	if err != nil {
 		return bootTaskOut{}, fmt.Errorf("fetching sandbox: %w", err)
 	}
-	var co compute.Sandbox
-	co.Decode(resp.Entity().Entity())
 
-	// Rebuild endpoint config
-	ep, err := rebuildEndpointConfig(deps.ctrl, in.Addresses)
+	ep, err := deps.networking.RebuildEndpointConfig(in.Addresses)
 	if err != nil {
 		return bootTaskOut{}, fmt.Errorf("rebuilding endpoint config: %w", err)
 	}
 
-	// Load container
-	container, err := deps.ctrl.CC.LoadContainer(ctx, in.ContainerID)
+	container, err := deps.runtime.LoadContainer(ctx, in.ContainerID)
 	if err != nil {
 		return bootTaskOut{}, fmt.Errorf("loading container: %w", err)
 	}
 
-	// Boot initial task
-	task, err := deps.ctrl.bootInitialTask(ctx, &co, ep, container)
+	task, err := deps.runtime.BootInitialTask(ctx, sb, ep, container)
 	if err != nil {
 		return bootTaskOut{}, fmt.Errorf("booting task: %w", err)
 	}
 
-	// Get cgroups path from container spec
 	rootSpec, err := container.Spec(ctx)
 	if err != nil {
 		return bootTaskOut{}, fmt.Errorf("getting container spec: %w", err)
@@ -273,18 +241,12 @@ func undoBootTask(ctx context.Context, in bootTaskIn, _ bootTaskOut) error {
 	deps := saga.Get[*createSandboxDeps](ctx)
 	log := saga.Get[*slog.Logger](ctx)
 
-	ctx = namespaces.WithNamespace(ctx, deps.ctrl.Namespace)
-
-	// Unconfigure firewall for this sandbox
-	resp, err := deps.ctrl.EAC.Get(ctx, in.SandboxID)
+	sb, _, err := deps.entities.GetSandbox(ctx, in.SandboxID)
 	if err == nil {
-		var co compute.Sandbox
-		co.Decode(resp.Entity().Entity())
-		deps.ctrl.unconfigureFirewall(&co)
+		deps.runtime.UnconfigureFirewall(sb)
 	}
 
-	// Kill task via container
-	container, err := deps.ctrl.CC.LoadContainer(ctx, in.ContainerID)
+	container, err := deps.runtime.LoadContainer(ctx, in.ContainerID)
 	if err != nil {
 		log.Debug("saga undo: container not found for task kill", "id", in.ContainerID)
 		return nil
@@ -324,39 +286,29 @@ func bootContainers(ctx context.Context, in bootContainersIn) (bootContainersOut
 	deps := saga.Get[*createSandboxDeps](ctx)
 	log := saga.Get[*slog.Logger](ctx)
 
-	ctx = namespaces.WithNamespace(ctx, deps.ctrl.Namespace)
-
-	// Fetch sandbox
-	resp, err := deps.ctrl.EAC.Get(ctx, in.SandboxID)
+	sb, meta, err := deps.entities.GetSandbox(ctx, in.SandboxID)
 	if err != nil {
 		return bootContainersOut{}, fmt.Errorf("fetching sandbox: %w", err)
 	}
-	var co compute.Sandbox
-	co.Decode(resp.Entity().Entity())
 
-	// Rebuild endpoint config
-	ep, err := rebuildEndpointConfig(deps.ctrl, in.Addresses)
+	ep, err := deps.networking.RebuildEndpointConfig(in.Addresses)
 	if err != nil {
 		return bootContainersOut{}, fmt.Errorf("rebuilding endpoint config: %w", err)
 	}
 
-	// Build cgroups map
 	cgroups := map[string]string{"": in.Cgroups}
 
-	// Build meta
-	meta := &entity.Meta{
-		Entity:   resp.Entity().Entity(),
-		Revision: in.Revision,
+	// Use meta from entity store, override revision from saga input if provided
+	if in.Revision != 0 {
+		meta.Revision = in.Revision
 	}
 
-	// Configure volumes
-	volumeMounts, err := deps.ctrl.configureVolumes(ctx, &co, meta)
+	volumeMounts, err := deps.runtime.ConfigureVolumes(ctx, sb, meta)
 	if err != nil {
 		return bootContainersOut{}, fmt.Errorf("configuring volumes: %w", err)
 	}
 
-	// Boot app containers
-	waitPorts, err := deps.ctrl.bootContainers(ctx, &co, ep, in.TaskPID, cgroups, meta, volumeMounts)
+	waitPorts, err := deps.runtime.BootContainers(ctx, sb, ep, in.TaskPID, cgroups, meta, volumeMounts)
 	if err != nil {
 		return bootContainersOut{}, fmt.Errorf("booting containers: %w", err)
 	}
@@ -364,8 +316,8 @@ func bootContainers(ctx context.Context, in bootContainersIn) (bootContainersOut
 	var wpIDs []string
 	var wpPorts []int
 	for _, wp := range waitPorts {
-		wpIDs = append(wpIDs, wp.id)
-		wpPorts = append(wpPorts, wp.port)
+		wpIDs = append(wpIDs, wp.ID)
+		wpPorts = append(wpPorts, wp.Port)
 	}
 
 	log.Debug("saga: booted containers", "sandbox", in.SandboxID, "ports", len(waitPorts))
@@ -376,12 +328,10 @@ func undoBootContainers(ctx context.Context, in bootContainersIn, _ bootContaine
 	deps := saga.Get[*createSandboxDeps](ctx)
 	log := saga.Get[*slog.Logger](ctx)
 
-	ctx = namespaces.WithNamespace(ctx, deps.ctrl.Namespace)
-	deps.ctrl.destroySubContainers(ctx, entity.Id(in.SandboxID))
+	deps.runtime.DestroySubContainers(ctx, entity.Id(in.SandboxID))
 	log.Debug("saga undo: destroyed subcontainers", "sandbox", in.SandboxID)
 
-	// Release disk leases
-	if err := deps.ctrl.releaseDiskLeases(ctx, entity.Id(in.SandboxID)); err != nil {
+	if err := deps.runtime.ReleaseDiskLeases(ctx, entity.Id(in.SandboxID)); err != nil {
 		log.Error("saga undo: failed to release disk leases", "sandbox", in.SandboxID, "error", err)
 	}
 	return nil
@@ -401,29 +351,26 @@ type addMetricsOut struct {
 func addMetrics(ctx context.Context, in addMetricsIn) (addMetricsOut, error) {
 	deps := saga.Get[*createSandboxDeps](ctx)
 
-	// Fetch sandbox for spec info
-	resp, err := deps.ctrl.EAC.Get(ctx, in.SandboxID)
+	sb, _, err := deps.entities.GetSandbox(ctx, in.SandboxID)
 	if err != nil {
 		return addMetricsOut{}, fmt.Errorf("fetching sandbox: %w", err)
 	}
-	var co compute.Sandbox
-	co.Decode(resp.Entity().Entity())
 
-	le := co.Spec.LogEntity
+	le := sb.Spec.LogEntity
 	if le == "" {
-		le = co.ID.String()
+		le = sb.ID.String()
 	}
 
-	attrs := map[string]string{"sandbox": co.ID.String()}
-	if co.Spec.Version != "" {
-		attrs["version"] = co.Spec.Version.String()
+	attrs := map[string]string{"sandbox": sb.ID.String()}
+	if sb.Spec.Version != "" {
+		attrs["version"] = sb.Spec.Version.String()
 	}
-	for _, lbl := range co.Spec.LogAttribute {
+	for _, lbl := range sb.Spec.LogAttribute {
 		attrs[lbl.Key] = lbl.Value
 	}
 
 	cgroups := map[string]string{"": in.Cgroups}
-	if err := deps.ctrl.Metrics.Add(le, cgroups, attrs); err != nil {
+	if err := deps.obs.AddMetrics(le, cgroups, attrs); err != nil {
 		return addMetricsOut{}, fmt.Errorf("adding metrics: %w", err)
 	}
 
@@ -433,7 +380,7 @@ func addMetrics(ctx context.Context, in addMetricsIn) (addMetricsOut, error) {
 func undoAddMetrics(ctx context.Context, _ addMetricsIn, out addMetricsOut) error {
 	deps := saga.Get[*createSandboxDeps](ctx)
 	if out.LogEntity != "" {
-		deps.ctrl.Metrics.Remove(out.LogEntity)
+		deps.obs.RemoveMetrics(out.LogEntity)
 	}
 	return nil
 }
@@ -461,7 +408,7 @@ func waitPorts(ctx context.Context, in waitPortsIn) (waitPortsOut, error) {
 	}
 	for i := range in.WaitPortIDs {
 		log.Info("saga: waiting for port", "sandbox", in.SandboxID, "port", in.WaitPortPorts[i])
-		if err := deps.ctrl.waitForPort(ctx, in.WaitPortIDs[i], in.WaitPortPorts[i], portTimeout); err != nil {
+		if err := deps.runtime.WaitForPort(ctx, in.WaitPortIDs[i], in.WaitPortPorts[i], portTimeout); err != nil {
 			return waitPortsOut{}, fmt.Errorf("port %d not reachable: %w", in.WaitPortPorts[i], err)
 		}
 	}
@@ -484,31 +431,24 @@ func setRunning(ctx context.Context, in setRunningIn) (setRunningOut, error) {
 	deps := saga.Get[*createSandboxDeps](ctx)
 	log := saga.Get[*slog.Logger](ctx)
 
-	// Fetch current status to avoid race condition
-	resp, err := deps.ctrl.EAC.Get(ctx, in.SandboxID)
+	sb, _, err := deps.entities.GetSandbox(ctx, in.SandboxID)
 	if err != nil {
 		log.Warn("saga: failed to fetch sandbox status", "id", in.SandboxID, "error", err)
 	} else {
-		var currentSandbox compute.Sandbox
-		currentSandbox.Decode(resp.Entity().Entity())
-		if currentSandbox.Status == compute.DEAD || currentSandbox.Status == compute.STOPPED {
+		if sb.Status == compute.DEAD || sb.Status == compute.STOPPED {
 			log.Info("saga: sandbox already in terminal state",
-				"id", in.SandboxID, "status", currentSandbox.Status)
+				"id", in.SandboxID, "status", sb.Status)
 			return setRunningOut{}, nil
 		}
 	}
 
-	// Update status to RUNNING
-	result, err := deps.ctrl.EAC.Patch(ctx, entity.New(
+	patchAttrs := entity.New(
 		entity.Ref(entity.DBId, entity.Id(in.SandboxID)),
 		(&compute.Sandbox{Status: compute.RUNNING}).Encode,
-	).Attrs(), 0)
+	)
+	_, err = deps.entities.PatchSandbox(ctx, patchAttrs.Attrs(), 0)
 	if err != nil {
 		return setRunningOut{}, fmt.Errorf("setting status to RUNNING: %w", err)
-	}
-
-	if deps.ctrl.writeTracker != nil && result.HasRevision() {
-		deps.ctrl.writeTracker.RecordWrite(result.Revision())
 	}
 
 	log.Info("saga: sandbox set to RUNNING", "id", in.SandboxID)
@@ -519,17 +459,14 @@ func undoSetRunning(ctx context.Context, in setRunningIn, _ setRunningOut) error
 	deps := saga.Get[*createSandboxDeps](ctx)
 	log := saga.Get[*slog.Logger](ctx)
 
-	result, err := deps.ctrl.EAC.Patch(ctx, entity.New(
+	patchAttrs := entity.New(
 		entity.Ref(entity.DBId, entity.Id(in.SandboxID)),
 		(&compute.Sandbox{Status: compute.DEAD}).Encode,
-	).Attrs(), 0)
+	)
+	_, err := deps.entities.PatchSandbox(ctx, patchAttrs.Attrs(), 0)
 	if err != nil {
 		log.Error("saga undo: failed to set status to DEAD", "id", in.SandboxID, "error", err)
 		return nil // best-effort
-	}
-
-	if deps.ctrl.writeTracker != nil && result.HasRevision() {
-		deps.ctrl.writeTracker.RecordWrite(result.Revision())
 	}
 	return nil
 }
@@ -547,26 +484,21 @@ type updateServicesOut struct{}
 func updateServices(ctx context.Context, in updateServicesIn) (updateServicesOut, error) {
 	deps := saga.Get[*createSandboxDeps](ctx)
 
-	// Fetch sandbox
-	resp, err := deps.ctrl.EAC.Get(ctx, in.SandboxID)
+	sb, meta, err := deps.entities.GetSandbox(ctx, in.SandboxID)
 	if err != nil {
 		return updateServicesOut{}, fmt.Errorf("fetching sandbox: %w", err)
 	}
-	var co compute.Sandbox
-	co.Decode(resp.Entity().Entity())
 
-	// Rebuild endpoint config
-	ep, err := rebuildEndpointConfig(deps.ctrl, in.Addresses)
+	ep, err := deps.networking.RebuildEndpointConfig(in.Addresses)
 	if err != nil {
 		return updateServicesOut{}, fmt.Errorf("rebuilding endpoint config: %w", err)
 	}
 
-	meta := &entity.Meta{
-		Entity:   resp.Entity().Entity(),
-		Revision: in.Revision,
+	if in.Revision != 0 {
+		meta.Revision = in.Revision
 	}
 
-	if err := deps.ctrl.updateServices(ctx, &co, meta, ep); err != nil {
+	if err := deps.obs.UpdateServices(ctx, sb, meta, ep); err != nil {
 		return updateServicesOut{}, fmt.Errorf("updating services: %w", err)
 	}
 
@@ -574,34 +506,7 @@ func updateServices(ctx context.Context, in updateServicesIn) (updateServicesOut
 }
 
 func undoUpdateServices(_ context.Context, _ updateServicesIn, _ updateServicesOut) error {
-	// Services reconcile themselves; no explicit undo needed
 	return nil
-}
-
-// --- Helpers ---
-
-// rebuildEndpointConfig reconstructs a network.EndpointConfig from stored address strings.
-func rebuildEndpointConfig(ctrl *SandboxController, addresses []string) (*network.EndpointConfig, error) {
-	ep := &network.EndpointConfig{
-		Bridge: &network.BridgeConfig{
-			Name:      ctrl.Bridge,
-			Addresses: []netip.Prefix{ctrl.Subnet.Router()},
-		},
-	}
-
-	for _, addrStr := range addresses {
-		prefix, err := netip.ParsePrefix(addrStr)
-		if err != nil {
-			return nil, fmt.Errorf("parsing address %q: %w", addrStr, err)
-		}
-		ep.Addresses = append(ep.Addresses, prefix)
-	}
-
-	if err := ep.DeriveDefaultGateway(); err != nil {
-		return nil, fmt.Errorf("deriving default gateway: %w", err)
-	}
-
-	return ep, nil
 }
 
 // portWaitTimeout is the timeout for waiting for ports to bind.
@@ -610,14 +515,19 @@ var portWaitTimeout = 15 * time.Second
 // registerCreateSandboxSaga registers the saga definition for sandbox creation.
 func registerCreateSandboxSaga(
 	registry *saga.Registry,
-	ctrl *SandboxController,
+	entities SandboxEntityStore,
+	networking SandboxNetworking,
+	runtime SandboxContainerRuntime,
+	obs SandboxObservability,
 	log *slog.Logger,
 ) error {
 	deps := &createSandboxDeps{
-		ctrl: ctrl,
+		entities:   entities,
+		networking: networking,
+		runtime:    runtime,
+		obs:        obs,
 	}
 
-	// Build and register the saga definition
 	return saga.Define(sagaCreateSandbox).
 		Using(deps).
 		Using(log).

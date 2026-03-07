@@ -19,6 +19,7 @@ import (
 // saga-based implementation.
 type SagaSandboxController struct {
 	inner    *SandboxController
+	ops      *sandboxOps
 	executor *saga.Executor
 	registry *saga.Registry
 	log      *slog.Logger
@@ -30,7 +31,6 @@ func NewSagaSandboxController(
 	storage saga.Storage,
 	log *slog.Logger,
 ) (*SagaSandboxController, error) {
-	// Create the inner controller
 	inner, err := NewSandboxController(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("creating inner controller: %w", err)
@@ -44,6 +44,7 @@ func NewSagaSandboxController(
 
 	return &SagaSandboxController{
 		inner:    inner,
+		ops:      &sandboxOps{ctrl: inner},
 		executor: executor,
 		registry: registry,
 		log:      log.With("module", "saga-sandbox-controller"),
@@ -56,17 +57,13 @@ func (s *SagaSandboxController) Init(ctx context.Context) error {
 		return err
 	}
 
-	// Register saga definition — writeTracker is resolved at execution time
-	// via deps.ctrl.writeTracker since SetWriteTracker is called after Init.
-	if err := registerCreateSandboxSaga(s.registry, s.inner, s.log); err != nil {
+	if err := registerCreateSandboxSaga(s.registry, s.ops, s.ops, s.ops, s.ops, s.log); err != nil {
 		return fmt.Errorf("registering create-sandbox saga: %w", err)
 	}
 
 	// Recover any incomplete sagas from a previous crash
 	if err := s.executor.Recover(ctx); err != nil {
 		s.log.Error("saga recovery completed with errors", "error", err)
-		// Don't fail Init - we want the controller to start even if some
-		// recovery operations failed. They'll be retried on the next restart.
 	}
 
 	return nil
@@ -82,15 +79,14 @@ func (s *SagaSandboxController) Create(ctx context.Context, co *compute.Sandbox,
 		return nil
 	case compute.STOPPED:
 		s.log.Debug("sandbox is stopped, verifying it is no longer running")
-		return s.inner.stopSandbox(ctx, co.ID)
+		return s.inner.StopSandbox(ctx, co.ID)
 	case "", compute.PENDING, compute.RUNNING:
-		searchRes, err := s.inner.checkSandbox(ctx, co, meta)
+		searchRes, err := s.inner.CheckSandbox(ctx, co, meta)
 		if err != nil {
 			s.log.Error("error checking sandbox, proceeding with create", "err", err)
 		} else {
 			switch searchRes {
 			case same:
-				// Handle stale PENDING status correction
 				if co.Status == compute.PENDING {
 					createdAt := meta.GetCreatedAt()
 					age := time.Since(createdAt)
@@ -103,12 +99,9 @@ func (s *SagaSandboxController) Create(ctx context.Context, co *compute.Sandbox,
 							entity.Ref(entity.DBId, co.ID),
 							(&compute.Sandbox{Status: compute.RUNNING}).Encode,
 						)
-						result, err := s.inner.EAC.Patch(ctx, patchAttrs.Attrs(), meta.Revision)
+						_, err := s.ops.PatchSandbox(ctx, patchAttrs.Attrs(), meta.Revision)
 						if err != nil {
 							return fmt.Errorf("failed to update sandbox status to RUNNING: %w", err)
-						}
-						if s.inner.writeTracker != nil && result.HasRevision() {
-							s.inner.writeTracker.RecordWrite(result.Revision())
 						}
 						return nil
 					}
@@ -127,16 +120,13 @@ func (s *SagaSandboxController) Create(ctx context.Context, co *compute.Sandbox,
 						entity.Ref(entity.DBId, co.ID),
 						(&compute.Sandbox{Status: compute.DEAD}).Encode,
 					)
-					result, err := s.inner.EAC.Patch(ctx, patchAttrs.Attrs(), 0)
+					_, err := s.ops.PatchSandbox(ctx, patchAttrs.Attrs(), 0)
 					if err != nil {
 						return fmt.Errorf("failed to mark sandbox as DEAD: %w", err)
 					}
-					if s.inner.writeTracker != nil && result.HasRevision() {
-						s.inner.writeTracker.RecordWrite(result.Revision())
-					}
 				}
 
-				if err := s.inner.stopSandbox(ctx, co.ID); err != nil {
+				if err := s.inner.StopSandbox(ctx, co.ID); err != nil {
 					return fmt.Errorf("failed to cleanup unhealthy sandbox: %w", err)
 				}
 				return nil

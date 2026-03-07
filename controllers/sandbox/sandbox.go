@@ -209,7 +209,7 @@ func (c *SandboxController) SetPortStatus(id string, port observability.BoundPor
 	c.portCond.Broadcast()
 }
 
-func (c *SandboxController) waitForPort(ctx context.Context, id string, port int, timeout time.Duration) error {
+func (c *SandboxController) WaitForPort(ctx context.Context, id string, port int, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 
 	// Create a channel to signal when port is ready
@@ -529,7 +529,7 @@ func PauseContainerID(id entity.Id) string {
 	return containerPrefix(id) + "_pause"
 }
 
-func (c *SandboxController) checkSandbox(ctx context.Context, co *compute.Sandbox, meta *entity.Meta) (int, error) {
+func (c *SandboxController) CheckSandbox(ctx context.Context, co *compute.Sandbox, meta *entity.Meta) (int, error) {
 	c.Log.Debug("checking for existing sandbox", "id", co.ID)
 
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
@@ -752,9 +752,9 @@ func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, met
 		return nil
 	case compute.STOPPED:
 		c.Log.Debug("sandbox is stopped, verifying it is no longer running")
-		return c.stopSandbox(ctx, co.ID)
+		return c.StopSandbox(ctx, co.ID)
 	case "", compute.PENDING, compute.RUNNING:
-		searchRes, err := c.checkSandbox(ctx, co, meta)
+		searchRes, err := c.CheckSandbox(ctx, co, meta)
 		if err != nil {
 			c.Log.Error("error checking sandbox, proceeding with create", "err", err)
 		} else {
@@ -821,7 +821,7 @@ func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, met
 				}
 
 				// Clean up the unhealthy sandbox
-				err := c.stopSandbox(ctx, co.ID)
+				err := c.StopSandbox(ctx, co.ID)
 				if err != nil {
 					c.Log.Error("failed to cleanup unhealthy sandbox", "id", co.ID, "err", err)
 					return fmt.Errorf("failed to cleanup unhealthy sandbox: %w", err)
@@ -853,7 +853,7 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
-	ep, err := c.allocateNetwork(ctx, co)
+	ep, err := c.AllocateNetwork(ctx, co)
 	if err != nil {
 		return fmt.Errorf("failed to allocate network: %w", err)
 	}
@@ -882,13 +882,13 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 		c.writeTracker.RecordWrite(res.Revision())
 	}
 
-	opts, err := c.buildSpec(ctx, co, ep, meta)
+	opts, err := c.BuildSpec(ctx, co, ep, meta)
 	if err != nil {
 		c.deallocateNetwork(ctx, ep)
 		return fmt.Errorf("failed to build container spec: %w", err)
 	}
 
-	volumeMounts, err := c.configureVolumes(ctx, co, meta)
+	volumeMounts, err := c.ConfigureVolumes(ctx, co, meta)
 	if err != nil {
 		c.deallocateNetwork(ctx, ep)
 		return fmt.Errorf("failed to configure volumes: %w", err)
@@ -914,14 +914,19 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 			c.deallocateNetwork(ctx, ep)
 
 			// Clean up any subcontainers that might have been created
-			c.destroySubContainers(ctx, co.ID)
+			c.DestroySubContainers(ctx, co.ID)
 
 			// Clean up the pause container using the common cleanup function
-			c.cleanupContainer(ctx, container)
+			c.CleanupContainer(ctx, container)
+
+			// Update sandbox status to DEAD in entity store
+			co.Status = compute.DEAD
+			meta.Update(co.Encode())
+			c.Log.Info("marked sandbox as DEAD due to boot failure", "id", co.ID)
 		}
 	}()
 
-	task, err := c.bootInitialTask(ctx, co, ep, container)
+	task, err := c.BootInitialTask(ctx, co, ep, container)
 	if err != nil {
 		return err
 	}
@@ -935,7 +940,7 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 		"": rootSpec.Linux.CgroupsPath,
 	}
 
-	waitPorts, err := c.bootContainers(ctx, co, ep, int(task.Pid()), cgroups, meta, volumeMounts)
+	waitPorts, err := c.BootContainers(ctx, co, ep, int(task.Pid()), cgroups, meta, volumeMounts)
 	if err != nil {
 		return err
 	}
@@ -970,10 +975,10 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 	// Fail-hard: if ports never bind, fail the sandbox so pool can retry
 	portTimeout := 15 * time.Second
 	for _, wp := range waitPorts {
-		c.Log.Info("waiting for ports to be bound", "id", cid, "port", wp.port, "timeout", portTimeout)
-		if err := c.waitForPort(ctx, wp.id, wp.port, portTimeout); err != nil {
+		c.Log.Info("waiting for ports to be bound", "id", cid, "port", wp.Port, "timeout", portTimeout)
+		if err := c.WaitForPort(ctx, wp.ID, wp.Port, portTimeout); err != nil {
 			return fmt.Errorf("sandbox failed network health check: port %d not reachable after %v: %w",
-				wp.port, portTimeout, err)
+				wp.Port, portTimeout, err)
 		}
 	}
 
@@ -1006,7 +1011,7 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 		return fmt.Errorf("failed to update entity metadata: %w", err)
 	}
 
-	err = c.updateServices(ctx, co, meta, ep)
+	err = c.UpdateServices(ctx, co, meta, ep)
 	if err != nil {
 		return fmt.Errorf("failed to update services: %w", err)
 	}
@@ -1014,7 +1019,7 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 	return nil
 }
 
-func (c *SandboxController) updateServices(
+func (c *SandboxController) UpdateServices(
 	ctx context.Context,
 	co *compute.Sandbox,
 	meta *entity.Meta,
@@ -1149,7 +1154,7 @@ func (c *SandboxController) deallocateNetwork(ctx context.Context, ep *network.E
 	}
 }
 
-func (c *SandboxController) allocateNetwork(
+func (c *SandboxController) AllocateNetwork(
 	ctx context.Context,
 	co *compute.Sandbox,
 ) (*network.EndpointConfig, error) {
@@ -1268,7 +1273,7 @@ func (c *SandboxController) resolver() remotes.Resolver {
 	})
 }
 
-func (c *SandboxController) buildSpec(
+func (c *SandboxController) BuildSpec(
 	ctx context.Context,
 	sb *compute.Sandbox,
 	ep *network.EndpointConfig,
@@ -1466,7 +1471,7 @@ func (c *SandboxController) logConsumer(sb *compute.Sandbox, container string) *
 	return NewSandboxLogs(c.Log, le, attrs, c.LogWriter)
 }
 
-func (c *SandboxController) bootInitialTask(
+func (c *SandboxController) BootInitialTask(
 	ctx context.Context,
 	sb *compute.Sandbox,
 	ep *network.EndpointConfig,
@@ -1500,13 +1505,14 @@ func (c *SandboxController) bootInitialTask(
 	return task, nil
 }
 
-type waitPort struct {
-	id   string
-	port int
+// WaitPort describes a container port to wait for during sandbox creation.
+type WaitPort struct {
+	ID   string
+	Port int
 }
 
-// cleanupContainer removes a container and its snapshot during failure scenarios
-func (c *SandboxController) cleanupContainer(ctx context.Context, cont containerd.Container) {
+// CleanupContainer removes a container and its snapshot during failure scenarios
+func (c *SandboxController) CleanupContainer(ctx context.Context, cont containerd.Container) {
 	if cont == nil {
 		return
 	}
@@ -1563,12 +1569,12 @@ func (c *SandboxController) cleanupContainer(ctx context.Context, cont container
 func (c *SandboxController) cleanupContainers(ctx context.Context, containers []containerd.Container) {
 	for _, cont := range containers {
 		if cont != nil {
-			c.cleanupContainer(ctx, cont)
+			c.CleanupContainer(ctx, cont)
 		}
 	}
 }
 
-func (c *SandboxController) bootContainers(
+func (c *SandboxController) BootContainers(
 	ctx context.Context,
 	sb *compute.Sandbox,
 	ep *network.EndpointConfig,
@@ -1576,12 +1582,12 @@ func (c *SandboxController) bootContainers(
 	cgroups map[string]string,
 	meta *entity.Meta,
 	volumeMounts map[string]string,
-) ([]waitPort, error) {
+) ([]WaitPort, error) {
 	c.Log.Info("booting containers", "count", len(sb.Spec.Container))
 
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
-	var ret []waitPort
+	var ret []WaitPort
 	var createdContainers []containerd.Container
 
 	// Clean up any created containers on failure
@@ -1605,9 +1611,9 @@ func (c *SandboxController) bootContainers(
 		var ports []int
 		for _, port := range container.Port {
 			ports = append(ports, int(port.Port))
-			ret = append(ret, waitPort{
-				id:   id,
-				port: int(port.Port),
+			ret = append(ret, WaitPort{
+				ID:   id,
+				Port: int(port.Port),
 			})
 		}
 
@@ -2053,7 +2059,7 @@ func getShutdownTimeout(ctx context.Context, cont containerd.Container) time.Dur
 	return timeout
 }
 
-func (c *SandboxController) destroySubContainers(ctx context.Context, id entity.Id) error {
+func (c *SandboxController) DestroySubContainers(ctx context.Context, id entity.Id) error {
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
 	// Discover subcontainers from containerd
@@ -2237,12 +2243,12 @@ cleanup:
 func (c *SandboxController) Delete(ctx context.Context, id entity.Id, sb *compute.Sandbox) error {
 	c.Log.Debug("delete callback received, cleaning up sandbox", "id", id)
 	if sb != nil {
-		c.unconfigureFirewall(sb)
+		c.UnconfigureFirewall(sb)
 	}
-	return c.stopSandbox(ctx, id)
+	return c.StopSandbox(ctx, id)
 }
 
-func (c *SandboxController) stopSandbox(ctx context.Context, id entity.Id) error {
+func (c *SandboxController) StopSandbox(ctx context.Context, id entity.Id) error {
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
 	c.Log.Debug("stopping sandbox", "id", id)
@@ -2283,7 +2289,7 @@ func (c *SandboxController) stopSandbox(ctx context.Context, id entity.Id) error
 		sb.Decode(resp.Entity().Entity())
 
 		// Clean up iptables DNAT rules before destroying containers
-		c.unconfigureFirewall(&sb)
+		c.UnconfigureFirewall(&sb)
 
 		// Use entity store IPs as fallback if container labels didn't have them
 		if len(sandboxIPs) == 0 {
@@ -2323,14 +2329,14 @@ func (c *SandboxController) stopSandbox(ctx context.Context, id entity.Id) error
 
 	// Release disk leases early so replacement sandboxes can acquire them
 	// while we wait for container shutdown
-	if err := c.releaseDiskLeases(ctx, id); err != nil {
+	if err := c.ReleaseDiskLeases(ctx, id); err != nil {
 		c.Log.Error("failed to release disk leases", "id", id, "error", err)
 		// Continue with cleanup even if this fails
 	}
 
 	// Destroy subcontainers - this will discover them from containerd
 	c.Log.Debug("destroying subcontainers", "id", id)
-	err = c.destroySubContainers(ctx, id)
+	err = c.DestroySubContainers(ctx, id)
 	if err != nil {
 		c.Log.Error("failed to destroy subcontainers", "id", id, "err", err)
 		// Continue with cleanup even if this fails
@@ -2412,7 +2418,7 @@ func (c *SandboxController) stopSandbox(ctx context.Context, id entity.Id) error
 // releaseDiskLeases releases all disk leases owned by the given sandbox.
 // This transitions leases to RELEASED status, which triggers the disk lease
 // controller to unmount the volumes and release the underlying resources.
-func (c *SandboxController) releaseDiskLeases(ctx context.Context, sandboxID entity.Id) error {
+func (c *SandboxController) ReleaseDiskLeases(ctx context.Context, sandboxID entity.Id) error {
 	// Find all disk leases owned by this sandbox
 	listResp, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, storage.KindDiskLease))
 	if err != nil {
@@ -2493,7 +2499,7 @@ func (c *SandboxController) Periodic(ctx context.Context, timeHorizon time.Durat
 					"updated_at", updatedAt.Format(time.RFC3339),
 					"age", now.Sub(updatedAt).String())
 
-				if err := c.releaseDiskLeases(ctx, sb.ID); err != nil {
+				if err := c.ReleaseDiskLeases(ctx, sb.ID); err != nil {
 					c.Log.Error("failed to release disk leases during periodic cleanup", "id", sb.ID, "error", err)
 					continue
 				}

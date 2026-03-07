@@ -84,7 +84,7 @@ func (c *SandboxController) configurePort(p compute.SandboxSpecContainerPort, ep
 	return nil
 }
 
-func (c *SandboxController) unconfigureFirewall(sb *compute.Sandbox) {
+func (c *SandboxController) UnconfigureFirewall(sb *compute.Sandbox) {
 	if len(sb.Network) == 0 {
 		c.Log.Warn("no network info on sandbox, skipping firewall cleanup", "sandbox", sb.ID.String())
 		return

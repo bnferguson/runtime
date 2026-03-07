@@ -253,7 +253,7 @@ func TestSandbox(t *testing.T) {
 		r.Equal(ca.Addr().String()+"/24", addr, "address doesn't match")
 
 		t.Run("create on existing sandbox is no-op", func(t *testing.T) {
-			searchRes, err := co.checkSandbox(ctx, &sb, meta)
+			searchRes, err := co.CheckSandbox(ctx, &sb, meta)
 			r.NoError(err)
 
 			r.Equal(same, searchRes)
@@ -1071,12 +1071,12 @@ func TestSandbox(t *testing.T) {
 			Ports: []observability.BoundPort{{Port: 8080}},
 		}
 
-		err := c.waitForPort(ctx, "test-id", 8080, 5*time.Second)
+		err := c.WaitForPort(ctx, "test-id", 8080, 5*time.Second)
 		r.NoError(err, "should return immediately when port is already bound")
 
 		// Test timeout when port never binds
 		start := time.Now()
-		err = c.waitForPort(ctx, "test-id", 9999, 100*time.Millisecond)
+		err = c.WaitForPort(ctx, "test-id", 9999, 100*time.Millisecond)
 		elapsed := time.Since(start)
 
 		r.Error(err, "should timeout when port never binds")
@@ -1091,7 +1091,7 @@ func TestSandbox(t *testing.T) {
 		}()
 
 		start = time.Now()
-		err = c.waitForPort(ctx, "test-id", 7777, 5*time.Second)
+		err = c.WaitForPort(ctx, "test-id", 7777, 5*time.Second)
 		elapsed = time.Since(start)
 
 		r.NoError(err, "should return when port is bound during wait")
@@ -1106,7 +1106,7 @@ func TestSandbox(t *testing.T) {
 		}()
 
 		start = time.Now()
-		err = c.waitForPort(ctx, "test-id", 6666, 5*time.Second)
+		err = c.WaitForPort(ctx, "test-id", 6666, 5*time.Second)
 		elapsed = time.Since(start)
 
 		r.Error(err, "should error on context cancellation")

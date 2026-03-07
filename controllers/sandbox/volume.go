@@ -15,8 +15,8 @@ import (
 	"miren.dev/runtime/pkg/idgen"
 )
 
-// configureVolumes prepares volumes and returns a map of volume name to actual mount path
-func (c *SandboxController) configureVolumes(ctx context.Context, sb *compute.Sandbox, meta *entity.Meta) (map[string]string, error) {
+// ConfigureVolumes prepares volumes and returns a map of volume name to actual mount path
+func (c *SandboxController) ConfigureVolumes(ctx context.Context, sb *compute.Sandbox, meta *entity.Meta) (map[string]string, error) {
 	volumeMounts := make(map[string]string)
 
 	for _, volume := range sb.Spec.Volume {

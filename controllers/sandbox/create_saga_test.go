@@ -9,8 +9,6 @@ import (
 
 func TestRebuildEndpointConfigParseAddresses(t *testing.T) {
 	t.Run("valid addresses are parsed", func(t *testing.T) {
-		// We can't easily create a full SandboxController without real deps,
-		// so test the address parsing logic directly
 		addresses := []string{"10.0.0.5/32", "10.0.0.6/32"}
 		var parsed []netip.Prefix
 		for _, addrStr := range addresses {
@@ -54,9 +52,23 @@ func TestSagaActionTypes(t *testing.T) {
 		assert.Equal(t, 2, len(out.WaitPortIDs))
 		assert.Equal(t, 2, len(out.WaitPortPorts))
 	})
+
+	t.Run("WaitPort has exported fields", func(t *testing.T) {
+		wp := WaitPort{ID: "test-id", Port: 8080}
+		assert.Equal(t, "test-id", wp.ID)
+		assert.Equal(t, 8080, wp.Port)
+	})
 }
 
 func TestSandboxLifecycleInterface(t *testing.T) {
 	var _ SandboxLifecycle = (*SandboxController)(nil)
 	var _ SandboxLifecycle = (*SagaSandboxController)(nil)
 }
+
+// Compile-time interface satisfaction checks for sandboxOps.
+var (
+	_ SandboxEntityStore      = (*sandboxOps)(nil)
+	_ SandboxNetworking       = (*sandboxOps)(nil)
+	_ SandboxContainerRuntime = (*sandboxOps)(nil)
+	_ SandboxObservability    = (*sandboxOps)(nil)
+)
