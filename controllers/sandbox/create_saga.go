@@ -278,8 +278,9 @@ type bootContainersIn struct {
 }
 
 type bootContainersOut struct {
-	WaitPortIDs   []string `json:"wait_port_ids" saga:"wait_port_ids"`
-	WaitPortPorts []int    `json:"wait_port_ports" saga:"wait_port_ports"`
+	WaitPortIDs   []string          `json:"wait_port_ids" saga:"wait_port_ids"`
+	WaitPortPorts []int             `json:"wait_port_ports" saga:"wait_port_ports"`
+	AllCgroups    map[string]string `json:"all_cgroups" saga:"all_cgroups"`
 }
 
 func bootContainers(ctx context.Context, in bootContainersIn) (bootContainersOut, error) {
@@ -321,7 +322,7 @@ func bootContainers(ctx context.Context, in bootContainersIn) (bootContainersOut
 	}
 
 	log.Debug("saga: booted containers", "sandbox", in.SandboxID, "ports", len(waitPorts))
-	return bootContainersOut{WaitPortIDs: wpIDs, WaitPortPorts: wpPorts}, nil
+	return bootContainersOut{WaitPortIDs: wpIDs, WaitPortPorts: wpPorts, AllCgroups: cgroups}, nil
 }
 
 func undoBootContainers(ctx context.Context, in bootContainersIn, _ bootContainersOut) error {
@@ -340,8 +341,8 @@ func undoBootContainers(ctx context.Context, in bootContainersIn, _ bootContaine
 // --- Add metrics ---
 
 type addMetricsIn struct {
-	SandboxID string `json:"sandbox_id" saga:"sandbox_id"`
-	Cgroups   string `json:"cgroups" saga:"cgroups"`
+	SandboxID  string            `json:"sandbox_id" saga:"sandbox_id"`
+	AllCgroups map[string]string `json:"all_cgroups" saga:"all_cgroups"`
 }
 
 type addMetricsOut struct {
@@ -369,8 +370,7 @@ func addMetrics(ctx context.Context, in addMetricsIn) (addMetricsOut, error) {
 		attrs[lbl.Key] = lbl.Value
 	}
 
-	cgroups := map[string]string{"": in.Cgroups}
-	if err := deps.obs.AddMetrics(le, cgroups, attrs); err != nil {
+	if err := deps.obs.AddMetrics(le, in.AllCgroups, attrs); err != nil {
 		return addMetricsOut{}, fmt.Errorf("adding metrics: %w", err)
 	}
 
