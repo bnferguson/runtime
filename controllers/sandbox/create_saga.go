@@ -13,7 +13,6 @@ import (
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/network"
-	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/saga"
 )
@@ -34,9 +33,11 @@ const (
 
 // createSandboxDeps holds the dependencies injected into the saga context.
 // These are retrieved via saga.Get[*createSandboxDeps](ctx) within actions.
+// Note: writeTracker is accessed via ctrl.writeTracker rather than captured
+// separately, because SetWriteTracker is called after Init when the saga
+// definition is registered.
 type createSandboxDeps struct {
-	ctrl         *SandboxController
-	writeTracker controller.WriteTracker
+	ctrl *SandboxController
 }
 
 // --- Action input/output types ---
@@ -126,8 +127,8 @@ func patchNetwork(ctx context.Context, in patchNetworkIn) (patchNetworkOut, erro
 		return patchNetworkOut{}, fmt.Errorf("patching sandbox with network: %w", err)
 	}
 
-	if deps.writeTracker != nil && res.HasRevision() {
-		deps.writeTracker.RecordWrite(res.Revision())
+	if deps.ctrl.writeTracker != nil && res.HasRevision() {
+		deps.ctrl.writeTracker.RecordWrite(res.Revision())
 	}
 
 	return patchNetworkOut{Revision: res.Revision()}, nil
@@ -506,8 +507,8 @@ func setRunning(ctx context.Context, in setRunningIn) (setRunningOut, error) {
 		return setRunningOut{}, fmt.Errorf("setting status to RUNNING: %w", err)
 	}
 
-	if deps.writeTracker != nil && result.HasRevision() {
-		deps.writeTracker.RecordWrite(result.Revision())
+	if deps.ctrl.writeTracker != nil && result.HasRevision() {
+		deps.ctrl.writeTracker.RecordWrite(result.Revision())
 	}
 
 	log.Info("saga: sandbox set to RUNNING", "id", in.SandboxID)
@@ -527,8 +528,8 @@ func undoSetRunning(ctx context.Context, in setRunningIn, _ setRunningOut) error
 		return nil // best-effort
 	}
 
-	if deps.writeTracker != nil && result.HasRevision() {
-		deps.writeTracker.RecordWrite(result.Revision())
+	if deps.ctrl.writeTracker != nil && result.HasRevision() {
+		deps.ctrl.writeTracker.RecordWrite(result.Revision())
 	}
 	return nil
 }
@@ -610,12 +611,10 @@ var portWaitTimeout = 15 * time.Second
 func registerCreateSandboxSaga(
 	registry *saga.Registry,
 	ctrl *SandboxController,
-	writeTracker controller.WriteTracker,
 	log *slog.Logger,
 ) error {
 	deps := &createSandboxDeps{
-		ctrl:         ctrl,
-		writeTracker: writeTracker,
+		ctrl: ctrl,
 	}
 
 	// Build and register the saga definition

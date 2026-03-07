@@ -56,8 +56,9 @@ func (s *SagaSandboxController) Init(ctx context.Context) error {
 		return err
 	}
 
-	// Register saga definition after Init so writeTracker is available
-	if err := registerCreateSandboxSaga(s.registry, s.inner, s.inner.writeTracker, s.log); err != nil {
+	// Register saga definition — writeTracker is resolved at execution time
+	// via deps.ctrl.writeTracker since SetWriteTracker is called after Init.
+	if err := registerCreateSandboxSaga(s.registry, s.inner, s.log); err != nil {
 		return fmt.Errorf("registering create-sandbox saga: %w", err)
 	}
 
