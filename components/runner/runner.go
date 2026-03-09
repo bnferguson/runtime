@@ -482,6 +482,11 @@ func (r *Runner) SetupControllers(
 		workers = DefaulWorkers
 	}
 
+	// Stop any orphaned lsvd-server process left over from a previous version.
+	// Before universal mode, the lsvd-server ran as an outboard process; during
+	// upgrade it must be stopped since the new code no longer manages it.
+	stopOrphanedLSVDServer(log, r.DataPath)
+
 	// Initialize disk I/O controllers for universal mode (loop devices)
 	dataPath := filepath.Join(r.DataPath, "disk-data")
 	err = os.MkdirAll(dataPath, 0700)
