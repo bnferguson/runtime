@@ -2353,22 +2353,23 @@ func (c *SandboxController) stopSandbox(ctx context.Context, id entity.Id) error
 			c.Log.Error("failed to delete pause container", "id", id, "err", err)
 		}
 
-		// Release IPs
-		for ipStr := range sandboxIPs {
-			addr, err := netip.ParseAddr(ipStr)
-			if err == nil {
-				err = c.Subnet.ReleaseAddr(addr)
-				if err != nil {
-					c.Log.Error("failed to release IP", "addr", addr, "err", err)
-				} else {
-					c.Log.Debug("released IP", "addr", addr)
-				}
-			} else {
-				c.Log.Error("failed to parse IP", "addr", ipStr, "err", err)
-			}
-		}
-
 		c.Log.Info("container stopped", "id", id)
+	}
+
+	// Release IPs — runs even if pause container was already gone,
+	// since sandboxIPs may have been recovered from the entity store.
+	for ipStr := range sandboxIPs {
+		addr, err := netip.ParseAddr(ipStr)
+		if err == nil {
+			err = c.Subnet.ReleaseAddr(addr)
+			if err != nil {
+				c.Log.Error("failed to release IP", "addr", addr, "err", err)
+			} else {
+				c.Log.Debug("released IP", "addr", addr)
+			}
+		} else {
+			c.Log.Error("failed to parse IP", "addr", ipStr, "err", err)
+		}
 	}
 
 	// Clean up temp directory
