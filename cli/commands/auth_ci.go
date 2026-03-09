@@ -10,7 +10,7 @@ import (
 
 const gitHubActionsIssuer = "https://token.actions.githubusercontent.com"
 
-func OidcAdd(ctx *Context, opts struct {
+func AuthCI(ctx *Context, opts struct {
 	GitHub        string `long:"github" description:"GitHub owner/repo shorthand (sets issuer, subject, provider)"`
 	Issuer        string `long:"issuer" description:"OIDC issuer URL"`
 	Subject       string `long:"subject" description:"Glob pattern for the token subject"`
@@ -111,7 +111,7 @@ func OidcAdd(ctx *Context, opts struct {
 	return nil
 }
 
-func OidcList(ctx *Context, opts struct {
+func AuthCIList(ctx *Context, opts struct {
 	AppCentric
 }) error {
 	client, err := ctx.RPCClient("dev.miren.runtime/oidc-bindings")
@@ -129,7 +129,7 @@ func OidcList(ctx *Context, opts struct {
 
 	bindings := resp.Bindings()
 	if len(bindings) == 0 {
-		ctx.Printf("No OIDC bindings found for app %s\n", opts.App)
+		ctx.Printf("No CI authentication bindings found for app %s\n", opts.App)
 		return nil
 	}
 
@@ -162,8 +162,8 @@ func OidcList(ctx *Context, opts struct {
 	return nil
 }
 
-func OidcRemove(ctx *Context, opts struct {
-	ID string `position:"0" usage:"ID of the OIDC binding to remove"`
+func AuthCIRemove(ctx *Context, opts struct {
+	ID string `position:"0" usage:"ID of the CI authentication binding to remove"`
 	ConfigCentric
 }) error {
 	if opts.ID == "" {
@@ -187,7 +187,7 @@ func OidcRemove(ctx *Context, opts struct {
 		return fmt.Errorf("%s", resp.Error())
 	}
 
-	ctx.Printf("Removed OIDC binding %s\n", opts.ID)
+	ctx.Printf("Removed CI authentication binding %s\n", opts.ID)
 	return nil
 }
 

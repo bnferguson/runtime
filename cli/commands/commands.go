@@ -512,12 +512,6 @@ miren deploy --analyze
 		))
 	}
 
-	// OIDC binding commands
-	d.Dispatch("oidc", Section("oidc", "OIDC authentication binding management", ""))
-	d.Dispatch("oidc add", Infer("oidc add", "Add an OIDC binding to an application", OidcAdd))
-	d.Dispatch("oidc list", Infer("oidc list", "List OIDC bindings for an application", OidcList))
-	d.Dispatch("oidc remove", Infer("oidc remove", "Remove an OIDC binding", OidcRemove))
-
 	// Config commands
 	d.Dispatch("config", Section("config", "Configuration file management", ""))
 	d.Dispatch("config info", Infer("config info", "Show configuration file locations and format", ConfigInfo,
@@ -757,6 +751,9 @@ miren deploy --analyze
 			Body: "miren auth generate",
 		}),
 	))
+	d.Dispatch("auth ci", Infer("auth ci", "Add a CI authentication binding to an application", AuthCI))
+	d.Dispatch("auth ci list", Infer("auth ci list", "List CI authentication bindings for an application", AuthCIList))
+	d.Dispatch("auth ci remove", Infer("auth ci remove", "Remove a CI authentication binding", AuthCIRemove))
 
 	// Admin commands
 	d.Dispatch("admin", Infer("admin", "Call an admin method on an application", Admin,
