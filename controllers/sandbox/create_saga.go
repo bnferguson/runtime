@@ -173,6 +173,10 @@ func createContainer(ctx context.Context, in createContainerIn) (createContainer
 
 	cid, err := deps.runtime.CreateContainer(ctx, string(sb.ID), opts...)
 	if err != nil {
+		if errdefs.IsAlreadyExists(err) {
+			log.Debug("saga: container already exists", "sandbox", in.SandboxID)
+			return createContainerOut{ContainerID: pauseContainerId(sb.ID)}, nil
+		}
 		return createContainerOut{}, fmt.Errorf("creating container %s: %w", sb.ID, err)
 	}
 
@@ -271,7 +275,7 @@ func undoBootTask(ctx context.Context, in bootTaskIn, _ bootTaskOut) error {
 
 	_, err = task.Delete(ctx, containerd.WithProcessKill)
 	if err != nil {
-		log.Error("saga undo: failed to kill task", "id", in.ContainerID, "error", err)
+		return fmt.Errorf("saga undo: killing task %s: %w", in.ContainerID, err)
 	}
 	log.Debug("saga undo: killed task", "id", in.ContainerID)
 	return nil
