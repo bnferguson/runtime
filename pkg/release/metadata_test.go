@@ -14,7 +14,7 @@ func TestParseMetadata(t *testing.T) {
 		"artifacts": [
 			{"name": "miren-base-linux-amd64.tar.gz", "sha256": "sha256hash1", "size": 1024},
 			{"name": "miren-base-linux-arm64.tar.gz", "sha256": "sha256hash2", "size": 2048},
-			{"name": "miren-linux-amd64.zip", "sha256": "sha256hash3", "platform": "linux", "arch": "amd64"}
+			{"name": "miren-linux-amd64.tar.gz", "sha256": "sha256hash3", "platform": "linux", "arch": "amd64"}
 		]
 	}`
 

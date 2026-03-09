@@ -2,7 +2,6 @@ package release
 
 import (
 	"archive/tar"
-	"archive/zip"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -77,14 +76,9 @@ func (d *assetDownloader) Download(ctx context.Context, artifact Artifact, opts 
 		}
 	}
 
-	// Download artifact - preserve original extension
+	// Download artifact
 	downloadURL := artifact.GetDownloadURL()
-	var archivePath string
-	if strings.HasSuffix(downloadURL, ".zip") {
-		archivePath = filepath.Join(tmpDir, "artifact.zip")
-	} else {
-		archivePath = filepath.Join(tmpDir, "artifact.tar.gz")
-	}
+	archivePath := filepath.Join(tmpDir, "artifact.tar.gz")
 
 	size, err := d.downloadFile(ctx, downloadURL, archivePath, opts.ProgressWriter)
 	if err != nil {
@@ -98,13 +92,8 @@ func (d *assetDownloader) Download(ctx context.Context, artifact Artifact, opts 
 		}
 	}
 
-	// Extract the binary based on file type
-	var binaryPath string
-	if strings.HasSuffix(archivePath, ".zip") {
-		binaryPath, err = d.extractZip(archivePath, opts.TargetDir)
-	} else {
-		binaryPath, err = d.extractTarGz(archivePath, opts.TargetDir)
-	}
+	// Extract the binary
+	binaryPath, err := d.extractTarGz(archivePath, opts.TargetDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to extract binary: %w", err)
 	}
@@ -380,91 +369,3 @@ func (d *assetDownloader) extractTarGz(tarPath, targetDir string) (string, error
 	return "", fmt.Errorf("miren binary not found in archive")
 }
 
-// extractZip extracts the miren binary from a zip archive
-func (d *assetDownloader) extractZip(zipPath, targetDir string) (string, error) {
-	reader, err := zip.OpenReader(zipPath)
-	if err != nil {
-		return "", err
-	}
-	defer reader.Close()
-
-	// Create temp extraction directory
-	extractDir, err := os.MkdirTemp(targetDir, "extract-*")
-	if err != nil {
-		return "", err
-	}
-	defer os.RemoveAll(extractDir)
-
-	// Look for the miren binary
-	for _, file := range reader.File {
-		// Sanitize and validate the path to prevent path traversal attacks
-		cleanName := filepath.Clean(file.Name)
-
-		// Skip entries with problematic names
-		if cleanName == "" || cleanName == "." || cleanName == ".." {
-			continue
-		}
-
-		// Reject absolute paths
-		if filepath.IsAbs(cleanName) {
-			return "", fmt.Errorf("zip contains absolute path: %s", file.Name)
-		}
-
-		// Check for path traversal by validating the target path
-		// This catches both ".." components and symlink-based escapes
-		targetPath := filepath.Join(extractDir, cleanName)
-		relPath, err := filepath.Rel(extractDir, targetPath)
-		if err != nil || strings.HasPrefix(relPath, "..") || filepath.IsAbs(relPath) {
-			return "", fmt.Errorf("zip contains path traversal: %s", file.Name)
-		}
-
-		if filepath.Base(cleanName) == "miren" {
-			// Open the file in the zip
-			rc, err := file.Open()
-			if err != nil {
-				return "", err
-			}
-			defer rc.Close()
-
-			// Create a temporary file in a private directory with restrictive permissions
-			tempFile, err := os.CreateTemp("", "miren-extract-*.tmp")
-			if err != nil {
-				return "", err
-			}
-			tempPath := tempFile.Name()
-
-			// Ensure cleanup on error
-			defer func() {
-				if err != nil {
-					os.Remove(tempPath)
-				}
-			}()
-
-			// Copy contents to temp file
-			if _, err := io.Copy(tempFile, rc); err != nil {
-				tempFile.Close()
-				return "", err
-			}
-
-			// Close the temp file before setting permissions and moving
-			if err := tempFile.Close(); err != nil {
-				return "", err
-			}
-
-			// Set executable permissions on temp file
-			if err := os.Chmod(tempPath, 0755); err != nil {
-				return "", err
-			}
-
-			// Atomically move temp file to final location
-			finalPath := filepath.Join(targetDir, "miren.new")
-			if err := os.Rename(tempPath, finalPath); err != nil {
-				return "", err
-			}
-
-			return finalPath, nil
-		}
-	}
-
-	return "", fmt.Errorf("miren binary not found in zip archive")
-}

@@ -156,7 +156,7 @@ func Upgrade(ctx *Context, opts struct {
 	current, _ := mgr.GetCurrentVersion(ctx)
 
 	// Create artifact descriptor - use binary type for CLI upgrades (just the miren binary)
-	// Binary artifacts are .zip files available for all platforms
+	// Binary artifacts are .tar.gz files available for all platforms
 	artifact := release.NewArtifact(release.ArtifactTypeBinary, version)
 
 	// Perform upgrade

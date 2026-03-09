@@ -82,14 +82,14 @@ func TestArtifact_GetDownloadURL(t *testing.T) {
 			want: "https://api.miren.cloud/assets/release/miren/v1.2.3/miren-base-linux-arm64.tar.gz",
 		},
 		{
-			name: "release artifact non-linux fallback to zip",
+			name: "release artifact non-linux fallback to tar.gz",
 			artifact: Artifact{
 				Type:     ArtifactTypeRelease,
 				Version:  "main",
 				Arch:     "amd64",
 				Platform: "darwin",
 			},
-			want: "https://api.miren.cloud/assets/release/miren/main/miren-darwin-amd64.zip",
+			want: "https://api.miren.cloud/assets/release/miren/main/miren-darwin-amd64.tar.gz",
 		},
 		{
 			name: "binary artifact linux",
@@ -99,7 +99,7 @@ func TestArtifact_GetDownloadURL(t *testing.T) {
 				Arch:     "amd64",
 				Platform: "linux",
 			},
-			want: "https://api.miren.cloud/assets/release/miren/main/miren-linux-amd64.zip",
+			want: "https://api.miren.cloud/assets/release/miren/main/miren-linux-amd64.tar.gz",
 		},
 		{
 			name: "binary artifact darwin",
@@ -109,7 +109,7 @@ func TestArtifact_GetDownloadURL(t *testing.T) {
 				Arch:     "arm64",
 				Platform: "darwin",
 			},
-			want: "https://api.miren.cloud/assets/release/miren/v1.0.0/miren-darwin-arm64.zip",
+			want: "https://api.miren.cloud/assets/release/miren/v1.0.0/miren-darwin-arm64.tar.gz",
 		},
 	}
 

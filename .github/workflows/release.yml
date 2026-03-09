@@ -199,14 +199,17 @@ jobs:
 
     - name: Package binary
       run: |
-        # Create a zip file with the binary
+        tar -czf miren-${{ matrix.os }}-${{ matrix.arch }}.tar.gz -C bin miren
+        # Transitional: also produce .zip for older clients
         zip -j miren-${{ matrix.os }}-${{ matrix.arch }}.zip bin/miren
 
     - name: Upload build artifact
       uses: actions/upload-artifact@v4
       with:
         name: miren-${{ matrix.os }}-${{ matrix.arch }}
-        path: miren-${{ matrix.os }}-${{ matrix.arch }}.zip
+        path: |
+          miren-${{ matrix.os }}-${{ matrix.arch }}.tar.gz
+          miren-${{ matrix.os }}-${{ matrix.arch }}.zip
         retention-days: 1
 
   build-and-push-docker:
@@ -415,9 +418,15 @@ jobs:
               "${arch}"
           done
 
-          # Upload binary artifacts
+          # Upload binary artifacts (.tar.gz is the primary format)
           for os in linux darwin; do
             for arch in amd64 arm64; do
+              upload_artifact \
+                "artifacts/miren-${os}-${arch}/miren-${os}-${arch}.tar.gz" \
+                "miren-${os}-${arch}.tar.gz" \
+                "${os}" \
+                "${arch}"
+              # Transitional: also upload .zip for older clients
               upload_artifact \
                 "artifacts/miren-${os}-${arch}/miren-${os}-${arch}.zip" \
                 "miren-${os}-${arch}.zip" \

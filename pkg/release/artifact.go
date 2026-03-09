@@ -10,7 +10,7 @@ import (
 type ArtifactType string
 
 const (
-	// ArtifactTypeBinary contains just the miren binary (.zip)
+	// ArtifactTypeBinary contains just the miren binary (.tar.gz)
 	ArtifactTypeBinary ArtifactType = "binary"
 	// ArtifactTypeBase contains miren plus supporting binaries (.tar.gz, Linux only)
 	ArtifactTypeBase ArtifactType = "base"
@@ -40,9 +40,9 @@ func NewArtifact(artifactType ArtifactType, version string) Artifact {
 func (a Artifact) GetDownloadURL() string {
 	baseURL := "https://api.miren.cloud/assets/release/miren"
 
-	// Binary artifacts (just the miren binary) - available for all platforms as .zip
+	// Binary artifacts (just the miren binary) - available for all platforms as .tar.gz
 	if a.Type == ArtifactTypeBinary {
-		filename := fmt.Sprintf("miren-%s-%s.zip", a.Platform, a.Arch)
+		filename := fmt.Sprintf("miren-%s-%s.tar.gz", a.Platform, a.Arch)
 		fullURL, _ := url.JoinPath(baseURL, a.Version, filename)
 		return fullURL
 	}
@@ -54,7 +54,7 @@ func (a Artifact) GetDownloadURL() string {
 			return fullURL
 		}
 		// Non-Linux platforms should use binary artifacts
-		filename := fmt.Sprintf("miren-%s-%s.zip", a.Platform, a.Arch)
+		filename := fmt.Sprintf("miren-%s-%s.tar.gz", a.Platform, a.Arch)
 		fullURL, _ := url.JoinPath(baseURL, a.Version, filename)
 		return fullURL
 	}
