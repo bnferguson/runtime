@@ -320,6 +320,7 @@ jobs:
           set -eo pipefail
 
           REF_NAME="${{ needs.init.outputs.ref }}"
+          TOKEN="${{ steps.get-oidc-token.outputs.token }}"
 
           # Determine if this is a tag build
           IS_TAG_BUILD=false
@@ -358,43 +359,24 @@ jobs:
 
           echo "Upload paths: ${paths[*]}"
 
-          # Create a manifest to track uploaded artifacts and their checksums
-          echo '[]' > artifact-manifest.json
+          # --- Phase 1: Prepare checksums, manifest, and upload queue ---
 
-          # Function to upload a file and its checksum, and track in manifest
-          upload_artifact() {
+          echo '[]' > artifact-manifest.json
+          : > upload-queue.txt
+
+          prepare_artifact() {
             local file_path="$1"
             local artifact_name="$2"
             local platform="${3:-}"
             local arch="${4:-}"
 
-            echo "Uploading ${artifact_name}..."
+            echo "Preparing ${artifact_name}..."
 
-            # Generate SHA256 checksum in standard format for sha256sum -c compatibility
             local checksum=$(sha256sum "${file_path}" | cut -d' ' -f1)
             echo "${checksum}  ${artifact_name}" > "${artifact_name}.sha256"
 
-            # Get file size
             local size=$(stat -c%s "${file_path}" 2>/dev/null || stat -f%z "${file_path}" 2>/dev/null || echo 0)
 
-            # Upload to all paths (paths array is set in outer scope)
-            for path in "${paths[@]}"; do
-              echo "Uploading to path: $path"
-
-              # Upload main file
-              curl --fail-with-body --retry 3 -X PUT \
-                -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
-                -F "file=@${file_path}" \
-                "https://api.miren.cloud/assets/release/miren/${path}/${artifact_name}"
-
-              # Upload checksum file
-              curl --fail-with-body --retry 3 -X PUT \
-                -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
-                -F "file=@${artifact_name}.sha256" \
-                "https://api.miren.cloud/assets/release/miren/${path}/${artifact_name}.sha256"
-            done
-
-            # Build artifact info object
             local artifact_obj=$(jq -n \
               --arg name "${artifact_name}" \
               --arg sha256 "${checksum}" \
@@ -405,29 +387,33 @@ jobs:
                if $platform != "" then . + {platform: $platform} else . end |
                if $arch != "" then . + {arch: $arch} else . end')
 
-            # Add to manifest array
             jq --argjson obj "$artifact_obj" '. += [$obj]' artifact-manifest.json > tmp.json && mv tmp.json artifact-manifest.json
+
+            for path in "${paths[@]}"; do
+              echo "${file_path}|https://api.miren.cloud/assets/release/miren/${path}/${artifact_name}" >> upload-queue.txt
+              echo "${artifact_name}.sha256|https://api.miren.cloud/assets/release/miren/${path}/${artifact_name}.sha256" >> upload-queue.txt
+            done
           }
 
-          # Upload release packages
+          # Prepare release packages
           for arch in amd64 arm64; do
-            upload_artifact \
+            prepare_artifact \
               "artifacts/miren-base-linux-${arch}/release-base-linux-${arch}.tar.gz" \
               "miren-base-linux-${arch}.tar.gz" \
               "linux" \
               "${arch}"
           done
 
-          # Upload binary artifacts (.tar.gz is the primary format)
+          # Prepare binary artifacts (.tar.gz is the primary format)
           for os in linux darwin; do
             for arch in amd64 arm64; do
-              upload_artifact \
+              prepare_artifact \
                 "artifacts/miren-${os}-${arch}/miren-${os}-${arch}.tar.gz" \
                 "miren-${os}-${arch}.tar.gz" \
                 "${os}" \
                 "${arch}"
               # Transitional: also upload .zip for older clients
-              upload_artifact \
+              prepare_artifact \
                 "artifacts/miren-${os}-${arch}/miren-${os}-${arch}.zip" \
                 "miren-${os}-${arch}.zip" \
                 "${os}" \
@@ -435,21 +421,19 @@ jobs:
             done
           done
 
-          # Upload docker-compose configuration
-          upload_artifact \
+          # Prepare docker-compose configuration
+          prepare_artifact \
             "docker/docker-compose.yml" \
             "docker-compose.yml"
 
-          # Generate version metadata with the artifact manifest
+          # Generate version.json before uploads start
           echo "Generating version.json with artifact manifest..."
 
-          # Get git information
           COMMIT=$(git rev-parse HEAD)
           COMMIT_SHORT=$(git rev-parse --short HEAD)
           BRANCH="${{ needs.init.outputs.ref }}"
           BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-          # Determine version string
           if [[ $BRANCH =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
             VERSION="$BRANCH"
           elif [[ $BRANCH =~ ^release/(.*) ]]; then
@@ -458,7 +442,6 @@ jobs:
             VERSION="$BRANCH:$COMMIT_SHORT"
           fi
 
-          # Create version.json with the artifact manifest
           jq -n \
             --arg version "$VERSION" \
             --arg commit "$COMMIT" \
@@ -476,11 +459,61 @@ jobs:
           echo "Generated version.json:"
           cat version.json
 
-          # Upload version metadata to all paths
+          TOTAL_UPLOADS=$(wc -l < upload-queue.txt)
+          echo "Queued ${TOTAL_UPLOADS} artifact uploads"
+
+          # --- Phase 2: Upload artifacts in parallel ---
+
+          upload_one() {
+            local file="$1" url="$2"
+            echo "Uploading ${file} -> ${url}"
+            curl --fail-with-body --retry 3 --retry-all-errors \
+              --connect-timeout 10 --max-time 180 -X PUT \
+              -H "Authorization: Bearer ${TOKEN}" \
+              -F "file=@${file}" \
+              "${url}"
+          }
+
+          MAX_PARALLEL=4
+          FAILED=0
+          running_pids=()
+
+          while IFS='|' read -r file url; do
+            # Wait if we've hit the concurrency cap
+            while (( ${#running_pids[@]} >= MAX_PARALLEL )); do
+              wait -n 2>/dev/null || FAILED=$((FAILED + 1))
+              new_pids=()
+              for pid in "${running_pids[@]}"; do
+                if kill -0 "$pid" 2>/dev/null; then
+                  new_pids+=("$pid")
+                fi
+              done
+              running_pids=("${new_pids[@]}")
+            done
+
+            upload_one "$file" "$url" &
+            running_pids+=($!)
+          done < upload-queue.txt
+
+          # Wait for all remaining uploads
+          for pid in "${running_pids[@]}"; do
+            wait "$pid" || FAILED=$((FAILED + 1))
+          done
+
+          if (( FAILED > 0 )); then
+            echo "ERROR: ${FAILED} upload(s) failed"
+            exit 1
+          fi
+
+          echo "All ${TOTAL_UPLOADS} artifact uploads succeeded"
+
+          # --- Phase 3: Upload version.json last (must follow all artifacts) ---
+
           for path in "${paths[@]}"; do
             echo "Uploading version.json to $path..."
-            curl --fail-with-body --retry 3 -X PUT \
-              -H "Authorization: Bearer ${{ steps.get-oidc-token.outputs.token }}" \
+            curl --fail-with-body --retry 3 --retry-all-errors \
+              --connect-timeout 10 --max-time 180 -X PUT \
+              -H "Authorization: Bearer ${TOKEN}" \
               -F "file=@version.json" \
               "https://api.miren.cloud/assets/release/miren/${path}/version.json"
           done
