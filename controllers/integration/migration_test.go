@@ -20,7 +20,7 @@ import (
 // writes real LSVD data on disk, then boots a sandbox against it.  The full
 // controller pipeline should:
 //  1. Detect the provisioned disk has no disk_volume → create one
-//  2. DiskVolumeController finds an LSVD volume with the same name → migrates data
+//  2. DiskVolumeController finds the lsvd_volume entity → looks up volume_id → migrates data
 //  3. Lease binds, mount succeeds, sandbox is running
 //  4. disk.img contains the migrated LSVD data
 func TestLSVDMigrationFullLifecycle(t *testing.T) {
@@ -28,21 +28,19 @@ func TestLSVDMigrationFullLifecycle(t *testing.T) {
 	h := NewTestHarness(t)
 
 	const diskName = "my-app-data"
+	const lsvdEntitySuffix = "lsvd-vol-test123"
+	const lsvdVolumeUUID = "a1b2c3d4-uuid"
 
-	// --- Step 1: Create real LSVD volume with known data ---
-	lsvdVolDir := filepath.Join(h.DataPath, "volumes", diskName)
-	require.NoError(t, os.MkdirAll(lsvdVolDir, 0755))
+	// --- Step 1: Create real LSVD volume with production directory layout ---
+	// In production, the old LSVD volume controller stored data at:
+	//   disk-data/volumes/{lsvd-entity-suffix}/volumes/{volumeId}/info.json
+	lsvdEntityDir := filepath.Join(h.DataPath, "volumes", lsvdEntitySuffix)
+	require.NoError(t, os.MkdirAll(lsvdEntityDir, 0755))
 
-	// Write info.json so LSVD recognizes this as an existing volume.
-	// Size = 1GB (1073741824 bytes).
-	require.NoError(t, os.WriteFile(
-		filepath.Join(lsvdVolDir, "info.json"),
-		[]byte(`{"name":"`+diskName+`","size":1073741824}`),
-		0644,
-	))
-
-	lsvdDisk, err := lsvd.NewDisk(ctx, h.Log, h.DataPath,
-		lsvd.WithVolumeName(diskName),
+	// Create the LSVD volume inside the entity directory using lsvd.NewDisk
+	// which creates: {lsvdEntityDir}/volumes/{name}/info.json
+	lsvdDisk, err := lsvd.NewDisk(ctx, h.Log, lsvdEntityDir,
+		lsvd.WithVolumeName(lsvdVolumeUUID),
 	)
 	require.NoError(t, err)
 
@@ -62,19 +60,37 @@ func TestLSVDMigrationFullLifecycle(t *testing.T) {
 
 	require.NoError(t, lsvdDisk.Close(ctx))
 
-	// --- Step 2: Create a Disk entity as it would exist after old LSVD provisioning ---
+	// --- Step 2: Create entities as they would exist after old LSVD provisioning ---
+
 	diskID := entity.Id("disk/lsvd-migration-test")
 	disk := &storage.Disk{
 		Name:         diskName,
 		SizeGb:       1,
 		Filesystem:   storage.EXT4,
 		Status:       storage.PROVISIONED,
-		LsvdVolumeId: "old-lsvd-vol-id",
+		LsvdVolumeId: lsvdVolumeUUID, // In production this is the LSVD volume UUID
 	}
 
 	_, err = h.EAC.Create(ctx, entity.New(
 		entity.DBId, diskID,
 		disk.Encode,
+	).Attrs())
+	require.NoError(t, err)
+
+	// Create the lsvd_volume entity that the old system would have created.
+	// The entity suffix is the directory name, VolumeId is the LSVD volume UUID.
+	lsvdVolEntity := &storage.LsvdVolume{
+		DiskId:      diskID,
+		VolumeId:    lsvdVolumeUUID,
+		Name:        diskName,
+		SizeGb:      1,
+		Filesystem:  "ext4",
+		ActualState: storage.VOL_READY,
+		NodeId:      entity.Id("node/" + testNodeId),
+	}
+	_, err = h.EAC.Create(ctx, entity.New(
+		entity.DBId, entity.Id("lsvd_volume/"+lsvdEntitySuffix),
+		lsvdVolEntity.Encode,
 	).Attrs())
 	require.NoError(t, err)
 
@@ -111,6 +127,7 @@ func TestLSVDMigrationFullLifecycle(t *testing.T) {
 	assert.Equal(t, 1, countMountedMounts(t, ctx, h))
 
 	// LSVD info.json should have been renamed to info.json.migrated
+	lsvdVolDir := filepath.Join(lsvdEntityDir, "volumes", lsvdVolumeUUID)
 	_, err = os.Stat(filepath.Join(lsvdVolDir, "info.json"))
 	assert.True(t, os.IsNotExist(err), "info.json should be renamed after migration")
 	_, err = os.Stat(filepath.Join(lsvdVolDir, "info.json.migrated"))
@@ -160,6 +177,7 @@ func TestLSVDMigrationNoLSVDData(t *testing.T) {
 	h := NewTestHarness(t)
 
 	const diskName = "no-lsvd-data"
+	const lsvdEntitySuffix = "lsvd-vol-stale"
 
 	// Create disk entity as if from old LSVD system (but no LSVD data on disk)
 	diskID := entity.Id("disk/no-lsvd-migration")
@@ -168,12 +186,29 @@ func TestLSVDMigrationNoLSVDData(t *testing.T) {
 		SizeGb:       1,
 		Filesystem:   storage.EXT4,
 		Status:       storage.PROVISIONED,
-		LsvdVolumeId: "stale-lsvd-id",
+		LsvdVolumeId: "some-uuid",
 	}
 
 	_, err := h.EAC.Create(ctx, entity.New(
 		entity.DBId, diskID,
 		disk.Encode,
+	).Attrs())
+	require.NoError(t, err)
+
+	// Create the lsvd_volume entity but don't create any LSVD data on disk.
+	// The migration should gracefully handle the missing directory.
+	lsvdVolEntity := &storage.LsvdVolume{
+		DiskId:      diskID,
+		VolumeId:    "some-uuid",
+		Name:        diskName,
+		SizeGb:      1,
+		Filesystem:  "ext4",
+		ActualState: storage.VOL_READY,
+		NodeId:      entity.Id("node/" + testNodeId),
+	}
+	_, err = h.EAC.Create(ctx, entity.New(
+		entity.DBId, entity.Id("lsvd_volume/"+lsvdEntitySuffix),
+		lsvdVolEntity.Encode,
 	).Attrs())
 	require.NoError(t, err)
 
@@ -207,18 +242,15 @@ func TestLSVDMigrationThenRedeployment(t *testing.T) {
 	h := NewTestHarness(t)
 
 	const diskName = "redeploy-disk"
+	const lsvdEntitySuffix = "lsvd-vol-redeploy"
+	const lsvdVolumeUUID = "redeploy-uuid"
 
-	// Create LSVD volume with known data
-	lsvdVolDir := filepath.Join(h.DataPath, "volumes", diskName)
-	require.NoError(t, os.MkdirAll(lsvdVolDir, 0755))
-	require.NoError(t, os.WriteFile(
-		filepath.Join(lsvdVolDir, "info.json"),
-		[]byte(`{"name":"`+diskName+`","size":1073741824}`),
-		0644,
-	))
+	// Create LSVD volume with production directory layout and known data
+	lsvdEntityDir := filepath.Join(h.DataPath, "volumes", lsvdEntitySuffix)
+	require.NoError(t, os.MkdirAll(lsvdEntityDir, 0755))
 
-	lsvdDisk, err := lsvd.NewDisk(ctx, h.Log, h.DataPath,
-		lsvd.WithVolumeName(diskName),
+	lsvdDisk, err := lsvd.NewDisk(ctx, h.Log, lsvdEntityDir,
+		lsvd.WithVolumeName(lsvdVolumeUUID),
 	)
 	require.NoError(t, err)
 
@@ -236,11 +268,27 @@ func TestLSVDMigrationThenRedeployment(t *testing.T) {
 		SizeGb:       1,
 		Filesystem:   storage.EXT4,
 		Status:       storage.PROVISIONED,
-		LsvdVolumeId: "old-lsvd-id",
+		LsvdVolumeId: lsvdVolumeUUID,
 	}
 	_, err = h.EAC.Create(ctx, entity.New(
 		entity.DBId, diskID,
 		disk.Encode,
+	).Attrs())
+	require.NoError(t, err)
+
+	// Create the lsvd_volume entity
+	lsvdVolEntity := &storage.LsvdVolume{
+		DiskId:      diskID,
+		VolumeId:    lsvdVolumeUUID,
+		Name:        diskName,
+		SizeGb:      1,
+		Filesystem:  "ext4",
+		ActualState: storage.VOL_READY,
+		NodeId:      entity.Id("node/" + testNodeId),
+	}
+	_, err = h.EAC.Create(ctx, entity.New(
+		entity.DBId, entity.Id("lsvd_volume/"+lsvdEntitySuffix),
+		lsvdVolEntity.Encode,
 	).Attrs())
 	require.NoError(t, err)
 

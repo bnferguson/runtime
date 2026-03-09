@@ -509,17 +509,18 @@ func TestDiskVolumeControllerMigrateLSVDVolume(t *testing.T) {
 	dataPath := t.TempDir()
 	nodeId := "test-node-1"
 
-	// Create the LSVD volume info with a proper size first
-	lsvdVolDir := filepath.Join(dataPath, "volumes", "test-disk")
-	require.NoError(t, os.MkdirAll(lsvdVolDir, 0755))
-	require.NoError(t, os.WriteFile(
-		filepath.Join(lsvdVolDir, "info.json"),
-		[]byte(`{"name":"test-disk","size":1073741824}`), // 1GB
-		0644,
-	))
+	const lsvdEntitySuffix = "lsvd-vol-migrate1"
+	const lsvdVolumeUUID = "uuid-migrate1"
+	const diskName = "test-disk"
+	diskID := entity.Id("disk/test-migrate")
 
-	// Open the LSVD volume (not auto-creating, since we pre-created it)
-	disk, err := lsvd.NewDisk(ctx, log, dataPath, lsvd.WithVolumeName("test-disk"))
+	// Create LSVD data with production nested directory layout:
+	// volumes/{lsvdEntitySuffix}/volumes/{uuid}/info.json
+	lsvdEntityDir := filepath.Join(dataPath, "volumes", lsvdEntitySuffix)
+	require.NoError(t, os.MkdirAll(lsvdEntityDir, 0755))
+
+	lsvdDisk, err := lsvd.NewDisk(ctx, log, lsvdEntityDir,
+		lsvd.WithVolumeName(lsvdVolumeUUID))
 	require.NoError(t, err)
 
 	// Write block of 0x42 at LBA 0
@@ -527,31 +528,56 @@ func TestDiskVolumeControllerMigrateLSVDVolume(t *testing.T) {
 	for i := range block0 {
 		block0[i] = 0x42
 	}
-	err = disk.WriteExtent(ctx, block0.MapTo(0))
-	require.NoError(t, err)
+	require.NoError(t, lsvdDisk.WriteExtent(ctx, block0.MapTo(0)))
 
 	// Write block of 0xFF at LBA 5
 	block5 := make(lsvd.RawBlocks, lsvd.BlockSize)
 	for i := range block5 {
 		block5[i] = 0xFF
 	}
-	err = disk.WriteExtent(ctx, block5.MapTo(5))
+	require.NoError(t, lsvdDisk.WriteExtent(ctx, block5.MapTo(5)))
+	require.NoError(t, lsvdDisk.Close(ctx))
+
+	// Create the disk entity with LsvdVolumeId set
+	diskEnt := &storage_v1alpha.Disk{
+		Name:         diskName,
+		SizeGb:       1,
+		Filesystem:   storage_v1alpha.EXT4,
+		Status:       storage_v1alpha.PROVISIONED,
+		LsvdVolumeId: lsvdVolumeUUID, // In production this is the LSVD volume UUID
+	}
+	_, err = es.EAC.Create(ctx, entity.New(
+		entity.DBId, diskID,
+		diskEnt.Encode,
+	).Attrs())
 	require.NoError(t, err)
 
-	err = disk.Close(ctx)
+	// Create the lsvd_volume entity
+	lsvdVolEnt := &storage_v1alpha.LsvdVolume{
+		DiskId:      diskID,
+		VolumeId:    lsvdVolumeUUID,
+		Name:        diskName,
+		SizeGb:      1,
+		Filesystem:  "ext4",
+		ActualState: storage_v1alpha.VOL_READY,
+		NodeId:      entity.Id("node/" + nodeId),
+	}
+	_, err = es.EAC.Create(ctx, entity.New(
+		entity.DBId, entity.Id("lsvd_volume/"+lsvdEntitySuffix),
+		lsvdVolEnt.Encode,
+	).Attrs())
 	require.NoError(t, err)
-
-	// Pre-create target volume directory (mock ops don't create real dirs)
-	targetDir := filepath.Join(dataPath, "volumes", "vol-123")
-	require.NoError(t, os.MkdirAll(targetDir, 0755))
 
 	state := NewState()
 	ops := newMockDiskVolumeOps()
 	vc := newTestDiskVolumeController(log, dataPath, nodeId, es.EAC, state, ops)
 
+	// The disk_volume entity uses the lsvd entity suffix as its ID
+	// (matching production flow where DiskController reuses lsvd suffix)
 	vol := &storage_v1alpha.DiskVolume{
-		ID:           "disk_volume/vol-123",
-		Name:         "test-disk",
+		ID:           entity.Id("disk_volume/" + lsvdEntitySuffix),
+		Name:         diskName,
+		DiskId:       diskID,
 		NodeId:       entity.Id("node/" + nodeId),
 		SizeGb:       1,
 		Filesystem:   "ext4",
@@ -566,7 +592,7 @@ func TestDiskVolumeControllerMigrateLSVDVolume(t *testing.T) {
 	// Verify disk.img was created via migration (not mock CreateDiskImage)
 	assert.Empty(t, ops.createdImages, "should not use CreateDiskImage for migrated volume")
 
-	imgPath := filepath.Join(targetDir, "disk.img")
+	imgPath := filepath.Join(lsvdEntityDir, "disk.img")
 	imgFile, err := os.Open(imgPath)
 	require.NoError(t, err)
 	defer imgFile.Close()
@@ -591,13 +617,14 @@ func TestDiskVolumeControllerMigrateLSVDVolume(t *testing.T) {
 	}
 
 	// Verify LSVD volume marked as migrated
-	_, err = os.Stat(filepath.Join(dataPath, "volumes", "test-disk", "info.json"))
+	lsvdVolDir := filepath.Join(lsvdEntityDir, "volumes", lsvdVolumeUUID)
+	_, err = os.Stat(filepath.Join(lsvdVolDir, "info.json"))
 	assert.True(t, os.IsNotExist(err), "info.json should be renamed")
-	_, err = os.Stat(filepath.Join(dataPath, "volumes", "test-disk", "info.json.migrated"))
+	_, err = os.Stat(filepath.Join(lsvdVolDir, "info.json.migrated"))
 	assert.NoError(t, err, "info.json.migrated should exist")
 
 	// Verify entity was updated to READY
-	resp, err := es.EAC.Get(ctx, "disk_volume/vol-123")
+	resp, err := es.EAC.Get(ctx, "disk_volume/"+lsvdEntitySuffix)
 	require.NoError(t, err)
 	var updated storage_v1alpha.DiskVolume
 	updated.Decode(resp.Entity().Entity())
@@ -688,7 +715,7 @@ func TestMigrateLSVDVolume(t *testing.T) {
 		vc := newMigrateTestController(t, dataPath)
 
 		destPath := filepath.Join(dataPath, "output.img")
-		migrated, err := vc.migrateLSVDVolume(ctx, "no-such-volume", destPath, 1<<30)
+		migrated, err := vc.copyLSVDToImage(ctx, dataPath, "no-such-volume", "no-such-volume", destPath, 1<<30)
 
 		require.NoError(t, err)
 		assert.False(t, migrated)
@@ -714,7 +741,7 @@ func TestMigrateLSVDVolume(t *testing.T) {
 		destPath := filepath.Join(destDir, "disk.img")
 
 		vc := newMigrateTestController(t, dataPath)
-		migrated, err := vc.migrateLSVDVolume(ctx, "single-block", destPath, 1<<20)
+		migrated, err := vc.copyLSVDToImage(ctx, dataPath, "single-block", "single-block", destPath, 1<<20)
 
 		require.NoError(t, err)
 		assert.True(t, migrated)
@@ -749,7 +776,7 @@ func TestMigrateLSVDVolume(t *testing.T) {
 		destPath := filepath.Join(destDir, "disk.img")
 
 		vc := newMigrateTestController(t, dataPath)
-		migrated, err := vc.migrateLSVDVolume(ctx, "sparse-vol", destPath, 1<<20)
+		migrated, err := vc.copyLSVDToImage(ctx, dataPath, "sparse-vol", "sparse-vol", destPath, 1<<20)
 
 		require.NoError(t, err)
 		assert.True(t, migrated)
@@ -796,7 +823,7 @@ func TestMigrateLSVDVolume(t *testing.T) {
 		destPath := filepath.Join(destDir, "disk.img")
 
 		vc := newMigrateTestController(t, dataPath)
-		migrated, err := vc.migrateLSVDVolume(ctx, "rename-test", destPath, 1<<20)
+		migrated, err := vc.copyLSVDToImage(ctx, dataPath, "rename-test", "rename-test", destPath, 1<<20)
 
 		require.NoError(t, err)
 		assert.True(t, migrated)
@@ -830,7 +857,7 @@ func TestMigrateLSVDVolume(t *testing.T) {
 		vc := newMigrateTestController(t, dataPath)
 
 		// Request a smaller size than the LSVD volume — output should use the larger LSVD size
-		migrated, err := vc.migrateLSVDVolume(ctx, "big-vol", destPath, 1*1024*1024)
+		migrated, err := vc.copyLSVDToImage(ctx, dataPath, "big-vol", "big-vol", destPath, 1*1024*1024)
 
 		require.NoError(t, err)
 		assert.True(t, migrated)
@@ -859,7 +886,7 @@ func TestMigrateLSVDVolume(t *testing.T) {
 		vc := newMigrateTestController(t, dataPath)
 
 		requestedSize := int64(5 * 1024 * 1024)
-		migrated, err := vc.migrateLSVDVolume(ctx, "small-vol", destPath, requestedSize)
+		migrated, err := vc.copyLSVDToImage(ctx, dataPath, "small-vol", "small-vol", destPath, requestedSize)
 
 		require.NoError(t, err)
 		assert.True(t, migrated)
@@ -891,7 +918,7 @@ func TestMigrateLSVDVolume(t *testing.T) {
 		destPath := filepath.Join(destDir, "disk.img")
 
 		vc := newMigrateTestController(t, dataPath)
-		migrated, err := vc.migrateLSVDVolume(ctx, "chunk-boundary", destPath, 8*1024*1024)
+		migrated, err := vc.copyLSVDToImage(ctx, dataPath, "chunk-boundary", "chunk-boundary", destPath, 8*1024*1024)
 
 		require.NoError(t, err)
 		assert.True(t, migrated)
@@ -930,7 +957,7 @@ func TestMigrateLSVDVolume(t *testing.T) {
 		destPath := filepath.Join(destDir, "disk.img")
 
 		vc := newMigrateTestController(t, dataPath)
-		migrated, err := vc.migrateLSVDVolume(ctx, "empty-vol", destPath, 1<<20)
+		migrated, err := vc.copyLSVDToImage(ctx, dataPath, "empty-vol", "empty-vol", destPath, 1<<20)
 
 		require.NoError(t, err)
 		assert.True(t, migrated)
@@ -990,7 +1017,7 @@ func TestMigrateLSVDVolume(t *testing.T) {
 		destPath := filepath.Join(destDir, "disk.img")
 
 		vc := newMigrateTestController(t, dataPath)
-		migrated, err := vc.migrateLSVDVolume(ctx, "overwrite-vol", destPath, 1<<20)
+		migrated, err := vc.copyLSVDToImage(ctx, dataPath, "overwrite-vol", "overwrite-vol", destPath, 1<<20)
 
 		require.NoError(t, err)
 		assert.True(t, migrated)
@@ -1040,7 +1067,7 @@ func TestMigrateLSVDVolume(t *testing.T) {
 		destPath := filepath.Join(destDir, "disk.img")
 
 		vc := newMigrateTestController(t, dataPath)
-		migrated, err := vc.migrateLSVDVolume(ctx, "multi-block", destPath, 1<<20)
+		migrated, err := vc.copyLSVDToImage(ctx, dataPath, "multi-block", "multi-block", destPath, 1<<20)
 
 		require.NoError(t, err)
 		assert.True(t, migrated)
@@ -1083,7 +1110,7 @@ func TestMigrateLSVDVolume(t *testing.T) {
 
 		// Point to a non-existent directory
 		destPath := filepath.Join(dataPath, "no-such-dir", "disk.img")
-		migrated, err := vc.migrateLSVDVolume(ctx, "dest-err", destPath, 1<<20)
+		migrated, err := vc.copyLSVDToImage(ctx, dataPath, "dest-err", "dest-err", destPath, 1<<20)
 
 		assert.False(t, migrated)
 		assert.Error(t, err)
@@ -1104,7 +1131,7 @@ func TestMigrateLSVDVolume(t *testing.T) {
 		destPath := filepath.Join(destDir, "disk.img")
 
 		vc := newMigrateTestController(t, dataPath)
-		migrated, err := vc.migrateLSVDVolume(ctx, "corrupt-vol", destPath, 1<<20)
+		migrated, err := vc.copyLSVDToImage(ctx, dataPath, "corrupt-vol", "corrupt-vol", destPath, 1<<20)
 
 		assert.False(t, migrated)
 		assert.Error(t, err)

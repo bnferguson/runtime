@@ -262,10 +262,9 @@ func (d *DiskLeaseController) handlePendingLease(ctx context.Context, lease *sto
 	volumeId := disk.VolumeId
 	if volumeId == "" {
 		d.cleanupLeaseReservation(diskId)
-
-		lease.Status = storage_v1alpha.FAILED
-		lease.ErrorMessage = "Disk has no associated volume"
-
+		d.Log.Info("Disk has no volume ID yet, lease will retry",
+			"disk", diskId,
+			"lease", leaseId)
 		return nil
 	}
 

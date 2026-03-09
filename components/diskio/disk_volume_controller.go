@@ -61,7 +61,34 @@ func (c *DiskVolumeController) SetKeepMounts(v bool) {
 
 func (c *DiskVolumeController) Init(ctx context.Context) error {
 	c.cleanupMigratedLSVD()
+	c.cleanupLSVDState()
 	return nil
+}
+
+// cleanupLSVDState removes old lsvd_volume entries from the persisted state
+// file left over from the previous LSVD-based system.
+func (c *DiskVolumeController) cleanupLSVDState() {
+	cleaned := false
+	for _, vol := range c.state.ListVolumes() {
+		if strings.HasPrefix(vol.EntityId, "lsvd_volume/") {
+			c.log.Info("removing old lsvd_volume state entry", "entity_id", vol.EntityId)
+			c.state.DeleteVolume(vol.EntityId)
+			cleaned = true
+		}
+	}
+	for _, mnt := range c.state.ListMounts() {
+		if strings.HasPrefix(mnt.EntityId, "lsvd_mount/") || strings.HasPrefix(mnt.EntityId, "lsvd_volume/") ||
+			strings.HasPrefix(mnt.VolumeId, "lsvd_volume/") {
+			c.log.Info("removing old lsvd mount state entry", "entity_id", mnt.EntityId)
+			c.state.DeleteMount(mnt.EntityId)
+			cleaned = true
+		}
+	}
+	if cleaned {
+		if err := c.state.Save(); err != nil {
+			c.log.Warn("failed to save state after LSVD cleanup", "error", err)
+		}
+	}
 }
 
 func (c *DiskVolumeController) cleanupMigratedLSVD() {
@@ -71,13 +98,34 @@ func (c *DiskVolumeController) cleanupMigratedLSVD() {
 		return
 	}
 
+	// Check if any unmigrated LSVD volumes remain. We need to check both the
+	// flat layout (volumes/{name}/info.json) used by tests and the nested
+	// layout (volumes/lsvd-vol-{id}/volumes/{volId}/info.json) from production.
 	for _, ent := range entries {
-		infoPath := filepath.Join(volumesDir, ent.Name(), "info.json")
-		if _, err := os.Stat(infoPath); err == nil {
+		if !ent.IsDir() {
+			continue
+		}
+		dir := filepath.Join(volumesDir, ent.Name())
+
+		// Flat layout check
+		if _, err := os.Stat(filepath.Join(dir, "info.json")); err == nil {
 			return // Unmigrated LSVD volume exists, don't clean up
+		}
+
+		// Nested layout check
+		nestedVols := filepath.Join(dir, "volumes")
+		nestedEntries, nerr := os.ReadDir(nestedVols)
+		if nerr != nil {
+			continue
+		}
+		for _, nent := range nestedEntries {
+			if _, err := os.Stat(filepath.Join(nestedVols, nent.Name(), "info.json")); err == nil {
+				return // Unmigrated LSVD volume exists, don't clean up
+			}
 		}
 	}
 
+	// All LSVD volumes have been migrated — clean up old data
 	segmentsDir := filepath.Join(c.dataPath, "segments")
 	if _, err := os.Stat(segmentsDir); err == nil {
 		c.log.Info("all LSVD volumes migrated, cleaning up segments directory")
@@ -85,12 +133,40 @@ func (c *DiskVolumeController) cleanupMigratedLSVD() {
 	}
 
 	for _, ent := range entries {
-		migratedPath := filepath.Join(volumesDir, ent.Name(), "info.json.migrated")
-		if _, err := os.Stat(migratedPath); err == nil {
-			os.Remove(migratedPath)
-			segFile := filepath.Join(volumesDir, ent.Name(), "segments")
-			os.Remove(segFile)
-			os.Remove(filepath.Join(volumesDir, ent.Name()))
+		if !ent.IsDir() {
+			continue
+		}
+		dir := filepath.Join(volumesDir, ent.Name())
+
+		// Clean up flat layout migration markers
+		if _, err := os.Stat(filepath.Join(dir, "info.json.migrated")); err == nil {
+			os.Remove(filepath.Join(dir, "info.json.migrated"))
+			os.Remove(filepath.Join(dir, "segments"))
+			os.Remove(dir)
+			continue
+		}
+
+		// Clean up nested layout (old lsvd-vol-* directories)
+		if !strings.HasPrefix(ent.Name(), "lsvd-vol-") {
+			continue
+		}
+		// If this is an old LSVD entity dir with only migrated markers remaining, remove it
+		nestedVols := filepath.Join(dir, "volumes")
+		nestedEntries, nerr := os.ReadDir(nestedVols)
+		if nerr != nil {
+			continue
+		}
+		allMigrated := true
+		for _, nent := range nestedEntries {
+			volDir := filepath.Join(nestedVols, nent.Name())
+			if _, err := os.Stat(filepath.Join(volDir, "info.json.migrated")); err != nil {
+				allMigrated = false
+				break
+			}
+		}
+		if allMigrated {
+			c.log.Info("cleaning up migrated LSVD entity directory", "path", dir)
+			os.RemoveAll(dir)
 		}
 	}
 }
@@ -181,9 +257,12 @@ func (c *DiskVolumeController) reconcileVolumePresent(ctx context.Context, volum
 			c.log.Warn("volume directory missing despite DV_READY, resetting to pending", "entity_id", entityId)
 			return c.createVolume(ctx, volume)
 		}
-		volumeId := entityId
-		if idx := strings.LastIndex(entityId, "/"); idx != -1 {
-			volumeId = entityId[idx+1:]
+		volumeId := volume.MountId
+		if volumeId == "" {
+			volumeId = entityId
+			if idx := strings.LastIndex(entityId, "/"); idx != -1 {
+				volumeId = entityId[idx+1:]
+			}
 		}
 		volState := &VolumeState{
 			EntityId:   entityId,
@@ -265,7 +344,7 @@ func (c *DiskVolumeController) createVolume(ctx context.Context, volume *storage
 	sizeBytes := units.GigaBytes(volume.SizeGb).Bytes().Int64()
 
 	// Check for LSVD volume to migrate
-	migrated, err := c.migrateLSVDVolume(ctx, volume.Name, imagePath, sizeBytes)
+	migrated, err := c.migrateLSVDVolume(ctx, volume.DiskId, volume.Name, imagePath, sizeBytes)
 	if err != nil {
 		c.setVolumeError(ctx, volume.ID, fmt.Sprintf("LSVD migration failed: %v", err))
 		return fmt.Errorf("LSVD migration failed for %s: %w", volume.Name, err)
@@ -287,10 +366,13 @@ func (c *DiskVolumeController) createVolume(ctx context.Context, volume *storage
 		}
 	}
 
-	// Use the entity ID suffix as the volume ID
-	volumeId := entityId
-	if idx := strings.LastIndex(entityId, "/"); idx != -1 {
-		volumeId = entityId[idx+1:]
+	// Use MountId if set (e.g. from LSVD migration), otherwise entity suffix
+	volumeId := volume.MountId
+	if volumeId == "" {
+		volumeId = entityId
+		if idx := strings.LastIndex(entityId, "/"); idx != -1 {
+			volumeId = entityId[idx+1:]
+		}
 	}
 
 	// Update state
@@ -441,27 +523,47 @@ func (c *DiskVolumeController) setVolumeError(ctx context.Context, id entity.Id,
 	}
 }
 
-// migrateLSVDVolume checks if an LSVD volume with the given name exists and migrates
-// its data to a universal mode disk image. Returns true if migration was performed.
-func (c *DiskVolumeController) migrateLSVDVolume(ctx context.Context, volumeName, destImagePath string, sizeBytes int64) (bool, error) {
-	infoPath := filepath.Join(c.dataPath, "volumes", volumeName, "info.json")
-	if _, err := os.Stat(infoPath); err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-		return false, fmt.Errorf("checking LSVD metadata at %s: %w", infoPath, err)
+// migrateLSVDVolume checks if the parent disk has an LsvdVolumeId, locates the
+// old LSVD data directory, and migrates its contents to a new disk image.
+// Returns true if migration was performed.
+func (c *DiskVolumeController) migrateLSVDVolume(ctx context.Context, diskId entity.Id, volumeName, destImagePath string, sizeBytes int64) (bool, error) {
+	lsvdDir, lsvdVolName, err := c.findLSVDVolume(ctx, diskId)
+	if err != nil {
+		return false, err
+	}
+	if lsvdDir == "" {
+		return false, nil
 	}
 
-	c.log.Info("found LSVD volume, migrating to universal mode",
-		"volume_name", volumeName,
+	return c.copyLSVDToImage(ctx, lsvdDir, lsvdVolName, volumeName, destImagePath, sizeBytes)
+}
+
+// copyLSVDToImage reads an LSVD volume from lsvdDir/volumes/lsvdVolName and
+// writes its contents into a sparse disk image at destImagePath.
+func (c *DiskVolumeController) copyLSVDToImage(ctx context.Context, lsvdDir, lsvdVolName, volumeName, destImagePath string, sizeBytes int64) (bool, error) {
+	// Verify info.json exists before attempting migration
+	infoPath := filepath.Join(lsvdDir, "volumes", lsvdVolName, "info.json")
+	if _, err := os.Stat(infoPath); err != nil {
+		if os.IsNotExist(err) {
+			c.log.Info("LSVD directory found but info.json missing, skipping migration",
+				"lsvd_dir", lsvdDir, "volume", lsvdVolName)
+			return false, nil
+		}
+		return false, fmt.Errorf("checking LSVD info.json at %s: %w", infoPath, err)
+	}
+
+	c.log.Info("found LSVD volume, migrating data",
+		"disk_name", volumeName,
+		"lsvd_dir", lsvdDir,
+		"lsvd_volume", lsvdVolName,
 		"dest", destImagePath)
 
-	disk, err := lsvd.NewDisk(ctx, c.log, c.dataPath,
-		lsvd.WithVolumeName(volumeName),
+	disk, err := lsvd.NewDisk(ctx, c.log, lsvdDir,
+		lsvd.WithVolumeName(lsvdVolName),
 		lsvd.ReadOnly(),
 		lsvd.AutoCreate(false))
 	if err != nil {
-		return false, fmt.Errorf("opening LSVD volume %q: %w", volumeName, err)
+		return false, fmt.Errorf("opening LSVD volume %q in %s: %w", lsvdVolName, lsvdDir, err)
 	}
 	defer disk.Close(ctx)
 
@@ -480,10 +582,10 @@ func (c *DiskVolumeController) migrateLSVDVolume(ctx context.Context, volumeName
 		return false, fmt.Errorf("truncating image to %d bytes: %w", sizeBytes, err)
 	}
 
-	if lsvdSize%int64(lsvd.BlockSize) != 0 {
-		return false, fmt.Errorf("LSVD volume size %d is not aligned to block size %d", lsvdSize, lsvd.BlockSize)
+	if sizeBytes%int64(lsvd.BlockSize) != 0 {
+		return false, fmt.Errorf("volume size %d is not aligned to block size %d", sizeBytes, lsvd.BlockSize)
 	}
-	totalBlocks := lsvdSize / int64(lsvd.BlockSize)
+	totalBlocks := sizeBytes / int64(lsvd.BlockSize)
 	const chunkBlocks = 1024
 	zeros := make([]byte, chunkBlocks*lsvd.BlockSize)
 	lsvdCtx := lsvd.NewContext(ctx)
@@ -528,6 +630,130 @@ func (c *DiskVolumeController) migrateLSVDVolume(ctx context.Context, volumeName
 	}
 
 	return true, nil
+}
+
+// findLSVDVolume looks up the parent disk entity and its associated lsvd_volume
+// entity to deterministically locate the old LSVD data directory. The old LSVD
+// system stored volume data at:
+//
+//	disk-data/volumes/{lsvd-vol-entity-suffix}/volumes/{volumeId}/info.json
+//
+// where the entity suffix comes from the lsvd_volume entity ID and volumeId
+// is stored in the lsvd_volume.volume_id field.
+//
+// Returns the LSVD root dir and the volume name within it, or empty strings
+// if no LSVD data is found.
+func (c *DiskVolumeController) findLSVDVolume(ctx context.Context, diskId entity.Id) (lsvdDir, lsvdVolName string, err error) {
+	if c.eac == nil || diskId == "" {
+		return "", "", nil
+	}
+
+	// Look up the disk to check if it has an LsvdVolumeId at all.
+	resp, err := c.eac.Get(ctx, string(diskId))
+	if err != nil {
+		return "", "", fmt.Errorf("looking up disk %s: %w", diskId, err)
+	}
+
+	var disk storage_v1alpha.Disk
+	disk.Decode(resp.Entity().Entity())
+
+	if disk.LsvdVolumeId == "" {
+		return "", "", nil
+	}
+
+	// Find the lsvd_volume entity for this disk using the disk_id index.
+	// disk.LsvdVolumeId is the LSVD volume UUID, but we need the entity
+	// suffix (used as the directory name) and the volume_id field.
+	lsvdResp, err := c.eac.List(ctx, entity.Ref(storage_v1alpha.LsvdVolumeDiskIdId, diskId))
+	if err != nil {
+		c.log.Info("failed to list lsvd_volume entities, falling back to directory scan",
+			"disk", diskId, "error", err)
+		return c.findLSVDVolumeByDirScan(diskId)
+	}
+
+	values := lsvdResp.Values()
+	if len(values) == 0 {
+		c.log.Info("no lsvd_volume entity found for disk, falling back to directory scan",
+			"disk", diskId)
+		return c.findLSVDVolumeByDirScan(diskId)
+	}
+
+	var lsvdVol storage_v1alpha.LsvdVolume
+	lsvdVol.Decode(values[0].Entity())
+
+	if lsvdVol.VolumeId == "" {
+		c.log.Info("lsvd_volume entity has no volume_id, falling back to directory scan",
+			"disk", diskId, "lsvd_volume", lsvdVol.ID)
+		return c.findLSVDVolumeByDirScan(diskId)
+	}
+
+	// The old volume controller stored data at disk-data/volumes/{entity-suffix}/.
+	// Extract the suffix from the entity ID (e.g., "lsvd_volume/lsvd-vol-ABC" → "lsvd-vol-ABC").
+	entitySuffix := string(lsvdVol.ID)
+	if idx := strings.LastIndex(entitySuffix, "/"); idx != -1 {
+		entitySuffix = entitySuffix[idx+1:]
+	}
+
+	lsvdEntityDir := filepath.Join(c.dataPath, "volumes", entitySuffix)
+	if _, err := os.Stat(lsvdEntityDir); err != nil {
+		if os.IsNotExist(err) {
+			c.log.Info("LSVD entity directory not found on disk",
+				"disk", diskId,
+				"lsvd_volume", lsvdVol.ID,
+				"expected_path", lsvdEntityDir)
+			return "", "", nil
+		}
+		return "", "", fmt.Errorf("checking LSVD directory %s: %w", lsvdEntityDir, err)
+	}
+
+	c.log.Info("found LSVD volume via entity lookup",
+		"disk", diskId,
+		"lsvd_volume", lsvdVol.ID,
+		"volume_id", lsvdVol.VolumeId,
+		"dir", lsvdEntityDir)
+
+	return lsvdEntityDir, lsvdVol.VolumeId, nil
+}
+
+// findLSVDVolumeByDirScan is the fallback path when the lsvd_volume entity
+// is missing or has no volume_id. It scans the volumes directory for any
+// lsvd-vol-* directory containing a nested volume with info.json.
+func (c *DiskVolumeController) findLSVDVolumeByDirScan(diskId entity.Id) (string, string, error) {
+	volumesDir := filepath.Join(c.dataPath, "volumes")
+	entries, err := os.ReadDir(volumesDir)
+	if err != nil {
+		return "", "", nil
+	}
+
+	for _, ent := range entries {
+		if !ent.IsDir() || !strings.HasPrefix(ent.Name(), "lsvd-vol-") {
+			continue
+		}
+
+		lsvdEntityDir := filepath.Join(volumesDir, ent.Name())
+		nestedVolsDir := filepath.Join(lsvdEntityDir, "volumes")
+		nestedEntries, nerr := os.ReadDir(nestedVolsDir)
+		if nerr != nil {
+			continue
+		}
+
+		for _, nent := range nestedEntries {
+			if !nent.IsDir() {
+				continue
+			}
+			infoPath := filepath.Join(nestedVolsDir, nent.Name(), "info.json")
+			if _, serr := os.Stat(infoPath); serr == nil {
+				c.log.Info("found LSVD volume via directory scan",
+					"disk", diskId,
+					"dir", lsvdEntityDir,
+					"volume", nent.Name())
+				return lsvdEntityDir, nent.Name(), nil
+			}
+		}
+	}
+
+	c.log.Info("no LSVD volume data found on disk", "disk", diskId)
+	return "", "", nil
 }
 
 // diskMountBasePath is the standard path where disk volumes are mounted,

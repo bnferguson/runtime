@@ -517,6 +517,10 @@ func (r *Runner) SetupControllers(
 	r.dvc = diskio.NewDiskVolumeController(log, dataPath, r.Id, diskioState, volOps, mntOps)
 	r.dvc.SetEAC(eas)
 
+	if err := r.dvc.Init(ctx); err != nil {
+		return nil, fmt.Errorf("disk volume controller init: %w", err)
+	}
+
 	// Reconcile volumes with entity server on startup to re-mount any
 	// universal mode volumes that were mounted before the last shutdown.
 	if err := r.dvc.ReconcileWithEntities(ctx); err != nil {
