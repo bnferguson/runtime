@@ -18,6 +18,27 @@ func writeAppToml(t *testing.T, dir, content string) {
 	}
 }
 
+func TestInferAppName(t *testing.T) {
+	tests := []struct {
+		dir  string
+		want string
+	}{
+		{"/home/user/my-app", "my-app"},
+		{"/home/user/My App", "my-app"},
+		{"/home/user/my_app", "my-app"},
+		{"/home/user/MyApp", "myapp"},
+		{"/home/user/HELLO", "hello"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.dir, func(t *testing.T) {
+			got := inferAppName(tt.dir)
+			if got != tt.want {
+				t.Errorf("inferAppName(%q) = %q, want %q", tt.dir, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestAppCentricValidate(t *testing.T) {
 	t.Run("invalid TOML syntax returns parse error", func(t *testing.T) {
 		dir := t.TempDir()
@@ -73,7 +94,7 @@ command = ["foo", "bar"]
 		}
 	})
 
-	t.Run("no app.toml returns app is required", func(t *testing.T) {
+	t.Run("no app.toml returns helpful error mentioning miren init", func(t *testing.T) {
 		dir := t.TempDir()
 
 		a := AppCentric{Dir: dir}
@@ -81,8 +102,11 @@ command = ["foo", "bar"]
 		if err == nil {
 			t.Fatal("expected error when no app.toml exists")
 		}
-		if err.Error() != "app is required" {
-			t.Errorf("expected 'app is required', got: %v", err)
+		if !strings.Contains(err.Error(), "miren init") {
+			t.Errorf("expected error to mention 'miren init', got: %v", err)
+		}
+		if !strings.Contains(err.Error(), "-a") {
+			t.Errorf("expected error to mention '-a' flag, got: %v", err)
 		}
 	})
 
