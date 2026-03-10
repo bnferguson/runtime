@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
@@ -241,59 +242,113 @@ func (r *Runner) ContainerdNamespace() string {
 	return r.namespace
 }
 
-// pauseAllContainers pauses all running containerd tasks that are user
-// workloads (not infrastructure). Containers with IDs starting with "miren-"
-// are infrastructure (etcd, etc.) and must not be paused.
-// Returns the list of tasks that were successfully paused so they can be
-// resumed later. Containers that fail to pause are logged but skipped —
-// migration proceeds regardless since it must happen to complete the upgrade.
-func (r *Runner) pauseAllContainers(ctx context.Context, log *slog.Logger) []containerd.Task {
+// stopUserContainers stops all running user workload containers so their file
+// descriptors to disk images are released before migration. Containers with
+// IDs starting with "miren-" are infrastructure (etcd, etc.) and are left
+// running. The sandbox controller will recreate stopped containers during its
+// subsequent reconciliation.
+func (r *Runner) stopUserContainers(ctx context.Context, log *slog.Logger) {
 	cc := r.deps.CC
 	containers, err := cc.Containers(ctx)
 	if err != nil {
-		log.Warn("failed to list containers for pause", "error", err)
-		return nil
+		log.Warn("failed to list containers for stop", "error", err)
+		return
 	}
 
-	var paused []containerd.Task
+	// Collect tasks to stop and set up wait channels before sending signals
+	type pendingStop struct {
+		id     string
+		task   containerd.Task
+		exitCh <-chan containerd.ExitStatus
+	}
+
+	var pending []pendingStop
 	for _, c := range containers {
 		if strings.HasPrefix(c.ID(), "miren-") {
-			continue // infrastructure container, do not pause
+			continue
 		}
 
 		task, err := c.Task(ctx, nil)
 		if err != nil {
-			continue // no running task
+			continue
 		}
 
 		status, err := task.Status(ctx)
-		if err != nil || status.Status != containerd.Running {
+		if err != nil || status.Status == containerd.Stopped {
 			continue
 		}
 
-		log.Info("pausing container for disk migration", "id", c.ID())
-		if err := task.Pause(ctx); err != nil {
-			log.Warn("failed to pause container, migration will proceed anyway", "id", c.ID(), "error", err)
+		exitCh, err := task.Wait(ctx)
+		if err != nil {
 			continue
 		}
-		paused = append(paused, task)
-	}
 
-	if len(paused) > 0 {
-		log.Info("paused containers for disk migration", "count", len(paused))
-	}
-	return paused
-}
-
-// resumeAllContainers resumes previously paused containerd tasks.
-func (r *Runner) resumeAllContainers(ctx context.Context, log *slog.Logger, tasks []containerd.Task) {
-	for _, task := range tasks {
-		if err := task.Resume(ctx); err != nil {
-			log.Warn("failed to resume container after migration", "error", err)
+		log.Info("sending SIGTERM to container for disk migration", "id", c.ID())
+		if err := task.Kill(ctx, syscall.SIGTERM); err != nil {
+			log.Warn("failed to send SIGTERM, migration will proceed anyway", "id", c.ID(), "error", err)
 			continue
 		}
+
+		pending = append(pending, pendingStop{id: c.ID(), task: task, exitCh: exitCh})
 	}
-	log.Info("resumed containers after disk migration", "count", len(tasks))
+
+	if len(pending) == 0 {
+		return
+	}
+
+	// Wait for all containers in parallel with a shared 10s deadline
+	timer := time.NewTimer(10 * time.Second)
+	defer timer.Stop()
+
+	remaining := make(map[int]struct{})
+	for i := range pending {
+		remaining[i] = struct{}{}
+	}
+
+	for len(remaining) > 0 {
+		select {
+		case <-timer.C:
+			// Timeout — SIGKILL everything still running
+			for i := range remaining {
+				p := &pending[i]
+				log.Warn("container did not exit in 10s, sending SIGKILL", "id", p.id)
+				_ = p.task.Kill(ctx, syscall.SIGKILL)
+			}
+			// Wait briefly for SIGKILL to take effect
+			for i := range remaining {
+				p := &pending[i]
+				killCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+				select {
+				case <-p.exitCh:
+				case <-killCtx.Done():
+				}
+				cancel()
+				if _, err := p.task.Delete(ctx); err != nil {
+					log.Warn("failed to delete task after kill", "id", p.id, "error", err)
+				}
+			}
+			remaining = nil
+		case <-ctx.Done():
+			return
+		default:
+			// Poll all remaining exit channels without blocking
+			for i := range remaining {
+				select {
+				case <-pending[i].exitCh:
+					if _, err := pending[i].task.Delete(ctx); err != nil {
+						log.Warn("failed to delete task after stop", "id", pending[i].id, "error", err)
+					}
+					delete(remaining, i)
+				default:
+				}
+			}
+			if len(remaining) > 0 {
+				time.Sleep(50 * time.Millisecond)
+			}
+		}
+	}
+
+	log.Info("stopped containers for disk migration", "count", len(pending))
 }
 
 func (r *Runner) ContainerdContainerForSandbox(ctx context.Context, id entity.Id) (containerd.Container, error) {
@@ -580,23 +635,17 @@ func (r *Runner) SetupControllers(
 		return nil, fmt.Errorf("disk volume controller init: %w", err)
 	}
 
-	// If LSVD migration is pending, pause all containers so we don't corrupt
-	// data by migrating a disk that's in use by a running container.
-	migrationPending := r.dvc.HasPendingMigration(ctx)
-	var pausedTasks []containerd.Task
-	if migrationPending {
-		pausedTasks = r.pauseAllContainers(ctx, log)
+	// If LSVD migration is pending, stop user containers so their file
+	// descriptors to disk images are released before migration. The sandbox
+	// controller will recreate them during its subsequent reconciliation.
+	if r.dvc.HasPendingMigration(ctx) {
+		r.stopUserContainers(ctx, log)
 	}
 
 	// Reconcile volumes with entity server on startup to re-mount any
 	// universal mode volumes that were mounted before the last shutdown.
 	if err := r.dvc.ReconcileWithEntities(ctx); err != nil {
 		log.Warn("failed to reconcile disk volumes on startup", "error", err)
-	}
-
-	// Resume containers after migration is complete.
-	if len(pausedTasks) > 0 {
-		r.resumeAllContainers(ctx, log, pausedTasks)
 	}
 
 	r.dmc = diskio.NewDiskMountController(log, dataPath, r.Id, diskioState, mntOps)
