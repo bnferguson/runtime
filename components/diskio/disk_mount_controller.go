@@ -278,6 +278,10 @@ func (c *DiskMountController) attachAndMount(ctx context.Context, mount *storage
 	var err error
 	if volState.Mode == storage_v1alpha.VM_ACCELERATOR {
 		logDir := filepath.Join(volState.DiskPath, "logs")
+		if err := c.ops.CreateDir(logDir, 0755); err != nil {
+			c.setMountError(ctx, mount.ID, fmt.Sprintf("failed to create log directory: %v", err))
+			return fmt.Errorf("failed to create log directory: %w", err)
+		}
 		devicePath, err = c.ops.LbdAttach(ctx, imagePath, logDir)
 		if err != nil {
 			if leaseNonce != "" {

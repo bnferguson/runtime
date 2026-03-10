@@ -22,7 +22,7 @@ func DiskBackup(ctx *Context, opts struct {
 	}
 
 	eac := entityserver_v1alpha.NewEntityAccessClient(client)
-	resolver := newEntityDiskResolver(eac)
+	resolver := newEntityDiskResolver(eac, nil)
 
 	target, err := snapshot.PrepareBackup(ctx, resolver, opts.Name, opts.DataPath)
 	if err != nil {

@@ -242,7 +242,7 @@ func (d *DiskLeaseController) handlePendingLease(ctx context.Context, lease *sto
 
 	// Check disk provisioning status
 	if disk.Status != storage_v1alpha.PROVISIONED {
-		if disk.Status == storage_v1alpha.PROVISIONING {
+		if disk.Status == storage_v1alpha.PROVISIONING || disk.Status == storage_v1alpha.RESTORING {
 			d.cleanupLeaseReservation(diskId)
 			d.Log.Info("Disk is still provisioning, lease will retry",
 				"disk", diskId,

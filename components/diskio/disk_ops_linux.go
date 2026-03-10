@@ -180,6 +180,7 @@ func (r *realDiskMountOps) LbdAvailable() bool {
 }
 
 func (r *realDiskMountOps) Mount(device, mountPath, filesystem string, readOnly bool) error {
+	filesystem = normalizeFilesystem(filesystem)
 	flags := uintptr(0)
 	if readOnly {
 		flags |= syscall.MS_RDONLY
@@ -239,6 +240,7 @@ func (r *realDiskMountOps) FindMounts(pathPrefix string) []ActiveMount {
 }
 
 func (r *realDiskMountOps) IsFormatted(ctx context.Context, device, filesystem string) (bool, error) {
+	filesystem = normalizeFilesystem(filesystem)
 	cmd := exec.CommandContext(ctx, "blkid", "-o", "value", "-s", "TYPE", device)
 	output, err := cmd.Output()
 	if err != nil {
@@ -254,6 +256,7 @@ func (r *realDiskMountOps) IsFormatted(ctx context.Context, device, filesystem s
 }
 
 func (r *realDiskMountOps) FormatDevice(ctx context.Context, device, filesystem string) error {
+	filesystem = normalizeFilesystem(filesystem)
 	var cmd *exec.Cmd
 	switch filesystem {
 	case "ext4":
@@ -272,6 +275,12 @@ func (r *realDiskMountOps) FormatDevice(ctx context.Context, device, filesystem 
 	}
 
 	return nil
+}
+
+// normalizeFilesystem strips the "filesystem." enum prefix if present,
+// returning the plain filesystem name (e.g., "ext4").
+func normalizeFilesystem(fs string) string {
+	return strings.TrimPrefix(fs, "filesystem.")
 }
 
 const (

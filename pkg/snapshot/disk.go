@@ -40,6 +40,11 @@ type DiskResolver interface {
 	FindLeases(ctx context.Context, diskID string) ([]LeaseState, error)
 }
 
+// DiskCreator can create disk and volume entities for restore.
+type DiskCreator interface {
+	CreateDiskAndVolume(ctx context.Context, name string, sizeBytes int64, filesystem string, dataPath string) (*RestoreTarget, error)
+}
+
 // BackupTarget contains resolved and validated information needed to
 // perform a disk backup.
 type BackupTarget struct {
@@ -54,6 +59,8 @@ type BackupTarget struct {
 type RestoreTarget struct {
 	Name      string
 	ImagePath string
+	Created   bool                               // true if the disk was freshly created (no --force needed)
+	Finalize  func(ctx context.Context) error    // called after image is written to complete entity setup
 }
 
 // PrepareBackup resolves disk entities and validates the disk is in a
@@ -83,10 +90,22 @@ func PrepareBackup(ctx context.Context, resolver DiskResolver, name string, data
 
 // PrepareRestore resolves disk entities and validates the disk is in a
 // state suitable for restore (not deleting, no bound leases).
-func PrepareRestore(ctx context.Context, resolver DiskResolver, name string, dataPath string) (*RestoreTarget, error) {
+// If the disk doesn't exist and creator is non-nil, it creates the disk
+// and volume entities. If creator is nil and the disk doesn't exist,
+// it returns an error.
+func PrepareRestore(ctx context.Context, resolver DiskResolver, name string, dataPath string, opts ...RestoreOption) (*RestoreTarget, error) {
+	var cfg restoreConfig
+	for _, o := range opts {
+		o(&cfg)
+	}
+
 	disk, err := resolver.FindDisk(ctx, name)
 	if err != nil {
-		return nil, err
+		if cfg.creator == nil {
+			return nil, err
+		}
+		// Disk not found — create it
+		return cfg.creator.CreateDiskAndVolume(ctx, name, cfg.sizeBytes, cfg.filesystem, dataPath)
 	}
 
 	if disk.Status == StatusDeleting {
@@ -113,6 +132,24 @@ func PrepareRestore(ctx context.Context, resolver DiskResolver, name string, dat
 		Name:      name,
 		ImagePath: resolveImagePath(vol, dataPath),
 	}, nil
+}
+
+type restoreConfig struct {
+	creator    DiskCreator
+	sizeBytes  int64
+	filesystem string
+}
+
+// RestoreOption configures PrepareRestore behavior.
+type RestoreOption func(*restoreConfig)
+
+// WithCreator enables auto-creation of disk entities if they don't exist.
+func WithCreator(c DiskCreator, sizeBytes int64, filesystem string) RestoreOption {
+	return func(cfg *restoreConfig) {
+		cfg.creator = c
+		cfg.sizeBytes = sizeBytes
+		cfg.filesystem = filesystem
+	}
 }
 
 func resolveImagePath(vol *VolumeState, dataPath string) string {

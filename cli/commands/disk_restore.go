@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/snapshot"
 )
@@ -48,20 +49,25 @@ func DiskRestore(ctx *Context, opts struct {
 	}
 
 	eac := entityserver_v1alpha.NewEntityAccessClient(client)
-	resolver := newEntityDiskResolver(eac)
+	ec := entityserver.NewClient(ctx.Log, eac)
+	resolver := newEntityDiskResolver(eac, ec)
 
-	target, err := snapshot.PrepareRestore(ctx, resolver, diskName, opts.DataPath)
+	target, err := snapshot.PrepareRestore(ctx, resolver, diskName, opts.DataPath,
+		snapshot.WithCreator(resolver, meta.SizeBytes, meta.Filesystem),
+	)
 	if err != nil {
 		return err
 	}
 
-	if _, err := os.Stat(target.ImagePath); err == nil {
-		if !opts.Force {
-			return fmt.Errorf("disk image already exists at %s — use --force to overwrite", target.ImagePath)
+	if !target.Created {
+		if _, err := os.Stat(target.ImagePath); err == nil {
+			if !opts.Force {
+				return fmt.Errorf("disk image already exists at %s — use --force to overwrite", target.ImagePath)
+			}
+			ctx.Warn("Overwriting existing disk image at %s", target.ImagePath)
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("checking existing image at %s: %w", target.ImagePath, err)
 		}
-		ctx.Warn("Overwriting existing disk image at %s", target.ImagePath)
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("checking existing image at %s: %w", target.ImagePath, err)
 	}
 
 	ctx.Info("Restoring to: %s", target.ImagePath)
@@ -100,6 +106,13 @@ func DiskRestore(ctx *Context, opts struct {
 
 	if err := os.Rename(tmpPath, target.ImagePath); err != nil {
 		return fmt.Errorf("moving restored image into place: %w", err)
+	}
+
+	if target.Finalize != nil {
+		ctx.Info("Finalizing disk entities...")
+		if err := target.Finalize(ctx); err != nil {
+			return fmt.Errorf("finalizing restore: %w", err)
+		}
 	}
 
 	duration := time.Since(start)

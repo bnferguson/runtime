@@ -22,7 +22,7 @@ kinds:
     status:
       type: enum
       doc: Current state of the disk
-      choices: [provisioning, provisioned, attached, detached, deleting, error]
+      choices: [provisioning, provisioned, attached, detached, deleting, error, restoring]
       default: provisioning
       indexed: true
 

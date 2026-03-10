@@ -3,10 +3,17 @@ package commands
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 
+	compute "miren.dev/runtime/api/compute/compute_v1alpha"
+	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/snapshot"
 )
 
@@ -14,10 +21,11 @@ import (
 // access RPC client.
 type entityDiskResolver struct {
 	eac *entityserver_v1alpha.EntityAccessClient
+	ec  *entityserver.Client
 }
 
-func newEntityDiskResolver(eac *entityserver_v1alpha.EntityAccessClient) *entityDiskResolver {
-	return &entityDiskResolver{eac: eac}
+func newEntityDiskResolver(eac *entityserver_v1alpha.EntityAccessClient, ec *entityserver.Client) *entityDiskResolver {
+	return &entityDiskResolver{eac: eac, ec: ec}
 }
 
 func (r *entityDiskResolver) FindDisk(ctx context.Context, name string) (*snapshot.DiskState, error) {
@@ -36,7 +44,7 @@ func (r *entityDiskResolver) FindDisk(ctx context.Context, name string) (*snapsh
 				ID:         string(disk.ID),
 				Name:       disk.Name,
 				Status:     string(disk.Status),
-				Filesystem: string(disk.Filesystem),
+				Filesystem: strings.TrimPrefix(string(disk.Filesystem), "filesystem."),
 			})
 		}
 	}
@@ -73,6 +81,125 @@ func (r *entityDiskResolver) FindVolume(ctx context.Context, diskID string) (*sn
 	}, nil
 }
 
+// CreateDiskAndVolume creates a new disk entity in RESTORING state so the disk
+// controller ignores it while restore writes the image. The returned
+// RestoreTarget includes a Finalize callback that creates the disk_volume
+// entity and transitions the disk to PROVISIONED.
+func (r *entityDiskResolver) CreateDiskAndVolume(ctx context.Context, name string, sizeBytes int64, filesystem string, dataPath string) (*snapshot.RestoreTarget, error) {
+	sizeGb := sizeBytes / (1 << 30)
+	if sizeGb == 0 {
+		sizeGb = 1
+	}
+
+	// Normalize filesystem string — strip enum prefix if present
+	filesystem = strings.TrimPrefix(strings.ToLower(filesystem), "filesystem.")
+
+	var fs storage_v1alpha.DiskFilesystem
+	switch filesystem {
+	case "ext4":
+		fs = storage_v1alpha.EXT4
+	case "xfs":
+		fs = storage_v1alpha.XFS
+	case "btrfs":
+		fs = storage_v1alpha.BTRFS
+	default:
+		fs = storage_v1alpha.EXT4
+	}
+
+	diskId := idgen.GenNS("disk")
+	volId := idgen.GenNS("disk-vol")
+	imagePath := filepath.Join(dataPath, "disk-data", "volumes", volId, "disk.img")
+
+	disk := &storage_v1alpha.Disk{
+		Name:       name,
+		SizeGb:     sizeGb,
+		Filesystem: fs,
+		Status:     storage_v1alpha.RESTORING,
+	}
+
+	diskEntityId, err := r.ec.Create(ctx, diskId, disk)
+	if err != nil {
+		return nil, fmt.Errorf("creating disk entity: %w", err)
+	}
+
+	nodeId, err := r.findNodeId(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("finding node: %w", err)
+	}
+
+	return &snapshot.RestoreTarget{
+		Name:      name,
+		ImagePath: imagePath,
+		Created:   true,
+		Finalize: func(fctx context.Context) error {
+			// Create disk_volume now that the image is written.
+			vol := &storage_v1alpha.DiskVolume{
+				Name:         name,
+				DiskId:       diskEntityId,
+				VolumeId:     volId,
+				SizeGb:       sizeGb,
+				Filesystem:   filesystem,
+				VolumeMode:   detectVolumeMode(),
+				DesiredState: storage_v1alpha.DV_PRESENT,
+				ActualState:  storage_v1alpha.DV_READY,
+				ImagePath:    imagePath,
+				NodeId:       nodeId,
+			}
+
+			_, err := r.eac.Create(fctx, entity.New(
+				entity.DBId, entity.Id("disk_volume/"+volId),
+				vol.Encode,
+			).Attrs())
+			if err != nil {
+				return fmt.Errorf("creating disk_volume entity: %w", err)
+			}
+
+			// Transition disk to PROVISIONED with volume ID.
+			_, err = r.eac.Patch(fctx, []entity.Attr{
+				entity.Ref(entity.DBId, diskEntityId),
+				entity.Ref(storage_v1alpha.DiskStatusId, storage_v1alpha.DiskStatusProvisionedId),
+				entity.String(storage_v1alpha.DiskVolumeIdId, volId),
+			}, 0)
+			if err != nil {
+				return fmt.Errorf("updating disk to provisioned: %w", err)
+			}
+
+			return nil
+		},
+	}, nil
+}
+
+// findNodeId finds the coordinator node. Stateful sandboxes (those with
+// disk volumes) run on the coordinator, so disk_volume entities must
+// reference it.
+func (r *entityDiskResolver) findNodeId(ctx context.Context) (entity.Id, error) {
+	resp, err := r.eac.List(ctx, entity.Ref(entity.EntityKind, compute.KindNode))
+	if err != nil {
+		return "", fmt.Errorf("listing nodes: %w", err)
+	}
+
+	values := resp.Values()
+	if len(values) == 0 {
+		return "", fmt.Errorf("no nodes found")
+	}
+
+	// If there's only one node, use it.
+	if len(values) == 1 {
+		return entity.Id(values[0].Entity().Id()), nil
+	}
+
+	// Multiple nodes — find the coordinator (role=coordinator constraint).
+	for _, v := range values {
+		var node compute.Node
+		node.Decode(v.Entity())
+		if role, _ := node.Constraints.Get("role"); role == "coordinator" {
+			return node.ID, nil
+		}
+	}
+
+	return "", fmt.Errorf("multiple nodes found but none has role=coordinator")
+}
+
 func (r *entityDiskResolver) FindLeases(ctx context.Context, diskID string) ([]snapshot.LeaseState, error) {
 	resp, err := r.eac.List(ctx, entity.Ref(storage_v1alpha.DiskLeaseDiskIdId, entity.Id(diskID)))
 	if err != nil {
@@ -90,4 +217,14 @@ func (r *entityDiskResolver) FindLeases(ctx context.Context, diskID string) ([]s
 	}
 
 	return leases, nil
+}
+
+func detectVolumeMode() storage_v1alpha.DiskVolumeVolumeMode {
+	if mode := os.Getenv("MIREN_DISK_MODE"); mode == "accelerator" {
+		return storage_v1alpha.VM_ACCELERATOR
+	}
+	if _, err := exec.LookPath("lbdctl"); err == nil {
+		return storage_v1alpha.VM_ACCELERATOR
+	}
+	return storage_v1alpha.VM_UNIVERSAL
 }

@@ -112,6 +112,9 @@ func (d *DiskController) reconcileDisk(ctx context.Context, disk *storage_v1alph
 	case storage_v1alpha.ATTACHED, storage_v1alpha.DETACHED:
 		// These states are managed by disk lease controller
 		return nil
+	case storage_v1alpha.RESTORING:
+		// Disk is being restored externally; ignore until restore completes
+		return nil
 	case storage_v1alpha.ERROR:
 		// Error state is terminal, no action needed
 		return nil
