@@ -512,6 +512,13 @@ func TestBunDetect(t *testing.T) {
 			expected: false,
 		},
 		{
+			name: "bunx in scripts",
+			files: map[string]string{
+				"package.json": `{"name": "app", "scripts": {"test": "bunx vitest"}}`,
+			},
+			expected: true,
+		},
+		{
 			name: "bun at end of script command",
 			files: map[string]string{
 				"package.json": `{"name": "app", "scripts": {"start": "npx something && bun"}}`,

@@ -69,7 +69,7 @@ func (s *BunStack) detectPackageManagerBun() bool {
 	return strings.HasPrefix(pkg.PackageManager, "bun@")
 }
 
-var bunCommandRe = regexp.MustCompile(`(?:^|\s)bun(?:\s|$)`)
+var bunCommandRe = regexp.MustCompile(`(?:^|\s)bunx?(?:\s|$)`)
 
 func (s *BunStack) detectBunInScripts() bool {
 	scripts := s.getPackageScripts()
