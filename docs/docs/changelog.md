@@ -5,6 +5,23 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *main*
 
+**Features**
+- **Multi-port and non-HTTP services** - Apps can now expose multiple ports with different protocols (TCP, UDP, HTTP) using `[[services.<name>.ports]]` in app.toml. Node ports are validated at deploy time to prevent conflicts. Enables use cases like IRC servers alongside HTTP endpoints. ([#641](https://github.com/mirendev/runtime/pull/641))
+- **CI deployments with GitHub Actions** - Deploy from GitHub Actions and other CI systems using short-lived identity tokens instead of long-lived secrets. Bind repos to apps with `miren auth ci add --github OWNER/REPO -a APP`, and GitHub Actions will authenticate automatically. Target clusters from CI with the `MIREN_CLUSTER` env var. ([#631](https://github.com/mirendev/runtime/pull/631), [#633](https://github.com/mirendev/runtime/pull/633), [#635](https://github.com/mirendev/runtime/pull/635))
+- **Required environment variables** - Declare env vars as `required = true` in app.toml and deploys will fail early with a clear message listing what's missing. Vars can also be marked `sensitive` and given a `description` that appears in `miren env list`. ([#638](https://github.com/mirendev/runtime/pull/638))
+
+**Improvements**
+- **Zero-config app initialization** - Running any app command without an `app.toml` now offers to run `miren init` for you interactively, inferring the app name from your directory. In CI, the error message tells you what to do. ([#654](https://github.com/mirendev/runtime/pull/654))
+- **Bun runtime detection without lockfile** - Bun apps without dependencies are now detected via `bunfig.toml`, the `packageManager` field in package.json, or `bun`/`bunx` commands in package.json scripts. ([#656](https://github.com/mirendev/runtime/pull/656))
+- **`env set`/`env delete` show deployment progress** - Environment variable changes now go through the deployment service and show activation progress and routes, matching the UX of `deploy` and `rollback`. ([#630](https://github.com/mirendev/runtime/pull/630))
+
+**Bug Fixes**
+- **Fixed 502 errors during deployment rollovers** - The HTTP ingress now retries on a stale connection instead of immediately returning 502, and the launcher waits for new sandboxes to be ready before scaling down old ones. ([#637](https://github.com/mirendev/runtime/pull/637))
+- **Fixed streaming responses being buffered** - SSE, chunked downloads, and long-polling now work correctly. The previous timeout implementation buffered entire responses in memory before sending; timeouts are now handled at the transport level so data streams incrementally. ([#634](https://github.com/mirendev/runtime/pull/634))
+- **Fixed `miren exec` panic after command finishes** - `miren exec` and `miren app run` no longer panic when the remote command completes. ([#655](https://github.com/mirendev/runtime/pull/655))
+- **Fixed `app run` panic when stdin isn't a terminal** - `miren app run` no longer panics in non-interactive contexts like piped input or CI. ([#632](https://github.com/mirendev/runtime/pull/632))
+- **Fixed firewall rules leaking on sandbox teardown** - Port forwarding rules are now cleaned up when sandboxes stop, preventing stale rules from making node ports unreachable after redeployment. ([#644](https://github.com/mirendev/runtime/pull/644))
+
 ---
 
 ## v0.4.1
