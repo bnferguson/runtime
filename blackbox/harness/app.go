@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -9,6 +10,14 @@ import (
 	"testing"
 	"time"
 )
+
+// runID is a process-unique identifier so that app names don't collide across
+// concurrent or back-to-back test runs against the same cluster.
+var runID = func() string {
+	b := make([]byte, 4)
+	_, _ = rand.Read(b)
+	return fmt.Sprintf("%x", b)
+}()
 
 // AppOptions configures a test app deployment.
 type AppOptions struct {
@@ -27,12 +36,12 @@ type AppOptions struct {
 	ReadyTimeout time.Duration
 }
 
-// UniqueAppName generates a short, deterministic name from the test name and a
-// base string. The format is bb-<base>-<hash> where hash is 6 hex chars derived
-// from the full test name to avoid collisions.
+// UniqueAppName generates a short app name unique to this test and process. The
+// format is bb-<base>-<hash> where hash is 6 hex chars derived from the test
+// name plus a process-unique run ID to avoid collisions across concurrent runs.
 func UniqueAppName(t *testing.T, base string) string {
 	t.Helper()
-	h := sha256.Sum256([]byte(t.Name()))
+	h := sha256.Sum256([]byte(t.Name() + "/" + runID))
 	return fmt.Sprintf("bb-%s-%.6x", base, h[:3])
 }
 
