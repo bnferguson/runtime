@@ -65,6 +65,40 @@ func (c *DiskVolumeController) Init(ctx context.Context) error {
 	return nil
 }
 
+// HasPendingMigration checks whether any disks have LSVD data that still
+// needs to be migrated. This is used at startup to decide whether containers
+// must be paused before reconciliation.
+func (c *DiskVolumeController) HasPendingMigration(ctx context.Context) bool {
+	if c.eac == nil {
+		return false
+	}
+
+	// List all disks and check for LsvdVolumeId
+	resp, err := c.eac.List(ctx, entity.Ref(entity.EntityKind, storage_v1alpha.KindDisk))
+	if err != nil {
+		c.log.Warn("failed to list disks for migration check", "error", err)
+		return false
+	}
+
+	for _, entResp := range resp.Values() {
+		var disk storage_v1alpha.Disk
+		disk.Decode(entResp.Entity())
+
+		if disk.LsvdVolumeId == "" {
+			continue
+		}
+
+		// Disk has LSVD data — check if it already has a disk_volume
+		volResp, err := c.eac.List(ctx, entity.Ref(storage_v1alpha.DiskVolumeDiskIdId, disk.ID))
+		if err != nil || len(volResp.Values()) == 0 {
+			c.log.Info("pending LSVD migration detected", "disk", disk.ID)
+			return true
+		}
+	}
+
+	return false
+}
+
 // cleanupLSVDState removes old lsvd_volume entries from the persisted state
 // file left over from the previous LSVD-based system.
 func (c *DiskVolumeController) cleanupLSVDState() {

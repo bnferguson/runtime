@@ -237,6 +237,61 @@ func (r *Runner) ContainerdNamespace() string {
 	return r.namespace
 }
 
+// pauseAllContainers pauses all running containerd tasks that are user
+// workloads (not infrastructure). Containers with IDs starting with "miren-"
+// are infrastructure (etcd, etc.) and must not be paused.
+// Returns the list of tasks that were successfully paused so they can be
+// resumed later. Containers that fail to pause are logged but skipped —
+// migration proceeds regardless since it must happen to complete the upgrade.
+func (r *Runner) pauseAllContainers(ctx context.Context, log *slog.Logger) []containerd.Task {
+	cc := r.deps.CC
+	containers, err := cc.Containers(ctx)
+	if err != nil {
+		log.Warn("failed to list containers for pause", "error", err)
+		return nil
+	}
+
+	var paused []containerd.Task
+	for _, c := range containers {
+		if strings.HasPrefix(c.ID(), "miren-") {
+			continue // infrastructure container, do not pause
+		}
+
+		task, err := c.Task(ctx, nil)
+		if err != nil {
+			continue // no running task
+		}
+
+		status, err := task.Status(ctx)
+		if err != nil || status.Status != containerd.Running {
+			continue
+		}
+
+		log.Info("pausing container for disk migration", "id", c.ID())
+		if err := task.Pause(ctx); err != nil {
+			log.Warn("failed to pause container", "id", c.ID(), "error", err)
+			continue
+		}
+		paused = append(paused, task)
+	}
+
+	if len(paused) > 0 {
+		log.Info("paused containers for disk migration", "count", len(paused))
+	}
+	return paused
+}
+
+// resumeAllContainers resumes previously paused containerd tasks.
+func (r *Runner) resumeAllContainers(ctx context.Context, log *slog.Logger, tasks []containerd.Task) {
+	for _, task := range tasks {
+		if err := task.Resume(ctx); err != nil {
+			log.Warn("failed to resume container after migration", "error", err)
+			continue
+		}
+	}
+	log.Info("resumed containers after disk migration", "count", len(tasks))
+}
+
 func (r *Runner) ContainerdContainerForSandbox(ctx context.Context, id entity.Id) (containerd.Container, error) {
 	cl, err := r.cc.ContainerService().List(ctx)
 	if err != nil {
@@ -521,10 +576,23 @@ func (r *Runner) SetupControllers(
 		return nil, fmt.Errorf("disk volume controller init: %w", err)
 	}
 
+	// If LSVD migration is pending, pause all containers so we don't corrupt
+	// data by migrating a disk that's in use by a running container.
+	migrationPending := r.dvc.HasPendingMigration(ctx)
+	var pausedTasks []containerd.Task
+	if migrationPending {
+		pausedTasks = r.pauseAllContainers(ctx, log)
+	}
+
 	// Reconcile volumes with entity server on startup to re-mount any
 	// universal mode volumes that were mounted before the last shutdown.
 	if err := r.dvc.ReconcileWithEntities(ctx); err != nil {
 		log.Warn("failed to reconcile disk volumes on startup", "error", err)
+	}
+
+	// Resume containers after migration is complete.
+	if len(pausedTasks) > 0 {
+		r.resumeAllContainers(ctx, log, pausedTasks)
 	}
 
 	r.dmc = diskio.NewDiskMountController(log, dataPath, r.Id, diskioState, mntOps)
