@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -11,11 +13,13 @@ import (
 	"github.com/NimbleMarkets/ntcharts/linechart/timeserieslinechart"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"golang.org/x/term"
 
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/rpc/standard"
+	"miren.dev/runtime/pkg/ui"
 	"miren.dev/runtime/pkg/units"
 )
 
@@ -49,7 +53,49 @@ func (a *AppCentric) Validate(glbl *GlobalFlags) error {
 		if a.config != nil && a.config.Name != "" {
 			a.App = a.config.Name
 		} else {
-			return fmt.Errorf("app is required")
+			// No app name from flag or config — try to help the user.
+			workDir := a.Dir
+			if workDir == "." || workDir == "" {
+				wd, err := os.Getwd()
+				if err != nil {
+					return fmt.Errorf("no app configuration found — run 'miren init' to get started, or pass -a <name>")
+				}
+				workDir = wd
+			} else {
+				absDir, err := filepath.Abs(workDir)
+				if err == nil {
+					workDir = absDir
+				}
+			}
+
+			appName := inferAppName(workDir)
+
+			noAppMsg := "no app configuration found — run 'miren init' to get started, or pass -a <name>"
+
+			if !term.IsTerminal(int(os.Stdin.Fd())) {
+				return fmt.Errorf("%s", noAppMsg)
+			}
+
+			confirmed, err := ui.Confirm(
+				ui.WithMessage(fmt.Sprintf("Looks like this directory isn't set up yet. Run 'miren init' to create app %q here?", appName)),
+				ui.WithDefault(true),
+				ui.WithIndent("  "),
+			)
+			if err != nil || !confirmed {
+				return fmt.Errorf("%s", noAppMsg)
+			}
+
+			if _, err := initApp(workDir, appName); err != nil {
+				return fmt.Errorf("failed to initialize app: %w", err)
+			}
+
+			// Reload the config we just created. workDir is already absolute.
+			a.config, err = appconfig.LoadAppConfigUnder(workDir)
+			if err != nil {
+				return fmt.Errorf("error loading %s: %w", appconfig.AppConfigPath, err)
+			}
+
+			a.App = appName
 		}
 	}
 
