@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -10,6 +11,8 @@ import (
 	"github.com/quic-go/webtransport-go"
 	"miren.dev/runtime/pkg/cond"
 )
+
+var errInlineClientClosed = errors.New("inline client closed")
 
 const inlineStreamPoolSize = 10
 
@@ -33,25 +36,35 @@ type inlineClient struct {
 }
 
 // initPool initializes the stream pool
-func (c *inlineClient) initPool() {
+func (c *inlineClient) initPool() error {
 	c.poolMu.Lock()
 	defer c.poolMu.Unlock()
 
+	if c.closed {
+		return errInlineClientClosed
+	}
+
 	if c.pool != nil {
-		return
+		return nil
 	}
 
 	c.pool = make(chan *streamConn, inlineStreamPoolSize)
+	return nil
 }
 
 // getStream gets a stream from the pool or creates a new one if pool is not full
 func (c *inlineClient) getStream(ctx context.Context) (*streamConn, error) {
 	// Ensure pool is initialized
-	c.initPool()
+	if err := c.initPool(); err != nil {
+		return nil, err
+	}
 
 	// Try to get an existing stream from the pool
 	select {
-	case conn := <-c.pool:
+	case conn, ok := <-c.pool:
+		if !ok {
+			return nil, errInlineClientClosed
+		}
 		return conn, nil
 	default:
 		// Pool is empty, check if we can create a new stream
@@ -82,7 +95,10 @@ func (c *inlineClient) getStream(ctx context.Context) (*streamConn, error) {
 
 		// Pool is at capacity, wait for a stream to become available
 		select {
-		case conn := <-c.pool:
+		case conn, ok := <-c.pool:
+			if !ok {
+				return nil, errInlineClientClosed
+			}
 			return conn, nil
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -195,8 +211,10 @@ func (c *inlineClient) Close() error {
 	}
 
 	// Close all streams in the pool
-	close(c.pool)
-	for conn := range c.pool {
+	ch := c.pool
+	c.pool = nil
+	close(ch)
+	for conn := range ch {
 		_ = conn.stream.Close()
 		c.activeCount--
 	}

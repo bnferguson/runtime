@@ -225,6 +225,7 @@ func ChanReader[T any](ch <-chan T) RecvStream[T] {
 
 func ChanWriter[T any](ctx context.Context, rs *RecvStreamClient[T], ch chan<- T) {
 	go func() {
+		defer close(ch)
 		defer rs.Close()
 
 		for {
