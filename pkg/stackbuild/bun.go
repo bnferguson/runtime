@@ -2,6 +2,8 @@ package stackbuild
 
 import (
 	"encoding/json"
+	"regexp"
+	"strings"
 
 	"github.com/moby/buildkit/client/llb"
 	"miren.dev/runtime/pkg/imagerefs"
@@ -34,9 +36,47 @@ func (s *BunStack) Detect() bool {
 		s.Event("file", "bun.lockb", "Found bun.lockb (Bun runtime, legacy)")
 		return true
 	}
+	if s.hasFile("bunfig.toml") {
+		s.Event("file", "bunfig.toml", "Found bunfig.toml (Bun runtime)")
+		return true
+	}
+	if s.detectPackageManagerBun() {
+		s.Event("config", "packageManager", "package.json packageManager field specifies bun")
+		return true
+	}
+	if s.detectBunInScripts() {
+		s.Event("config", "scripts", "package.json scripts reference bun")
+		return true
+	}
 	if s.detectInFile("Procfile", `web:\s+bun`) {
 		s.Event("file", "Procfile", "Procfile references bun")
 		return true
+	}
+	return false
+}
+
+func (s *BunStack) detectPackageManagerBun() bool {
+	data, err := s.readFile("package.json")
+	if err != nil {
+		return false
+	}
+	var pkg struct {
+		PackageManager string `json:"packageManager"`
+	}
+	if err := json.Unmarshal(data, &pkg); err != nil {
+		return false
+	}
+	return strings.HasPrefix(pkg.PackageManager, "bun@")
+}
+
+var bunCommandRe = regexp.MustCompile(`(?:^|\s)bunx?(?:\s|$)`)
+
+func (s *BunStack) detectBunInScripts() bool {
+	scripts := s.getPackageScripts()
+	for _, cmd := range scripts {
+		if bunCommandRe.MatchString(cmd) {
+			return true
+		}
 	}
 	return false
 }

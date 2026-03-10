@@ -438,6 +438,127 @@ func TestBun(t *testing.T) {
 	buildLLB(t, dir, state)
 }
 
+func TestBunDetect(t *testing.T) {
+	testCases := []struct {
+		name     string
+		files    map[string]string
+		expected bool
+	}{
+		{
+			name: "bun.lock",
+			files: map[string]string{
+				"package.json": `{"name": "app"}`,
+				"bun.lock":     "",
+			},
+			expected: true,
+		},
+		{
+			name: "bun.lockb legacy",
+			files: map[string]string{
+				"package.json": `{"name": "app"}`,
+				"bun.lockb":    "",
+			},
+			expected: true,
+		},
+		{
+			name: "bunfig.toml",
+			files: map[string]string{
+				"package.json": `{"name": "app"}`,
+				"bunfig.toml":  "[install]\noptional = true\n",
+			},
+			expected: true,
+		},
+		{
+			name: "packageManager field",
+			files: map[string]string{
+				"package.json": `{"name": "app", "packageManager": "bun@1.1.0"}`,
+			},
+			expected: true,
+		},
+		{
+			name: "bun in scripts",
+			files: map[string]string{
+				"package.json": `{"name": "app", "scripts": {"start": "bun run index.ts"}}`,
+			},
+			expected: true,
+		},
+		{
+			name: "bun as standalone command in scripts",
+			files: map[string]string{
+				"package.json": `{"name": "app", "scripts": {"dev": "bun --watch index.ts"}}`,
+			},
+			expected: true,
+		},
+		{
+			name: "Procfile with bun",
+			files: map[string]string{
+				"package.json": `{"name": "app"}`,
+				"Procfile":     "web: bun run start",
+			},
+			expected: true,
+		},
+		{
+			name: "plain package.json no bun signals",
+			files: map[string]string{
+				"package.json": `{"name": "app", "scripts": {"start": "node index.js"}}`,
+			},
+			expected: false,
+		},
+		{
+			name: "no package.json",
+			files: map[string]string{
+				"index.ts": "console.log('hi')",
+			},
+			expected: false,
+		},
+		{
+			name: "bunx in scripts",
+			files: map[string]string{
+				"package.json": `{"name": "app", "scripts": {"test": "bunx vitest"}}`,
+			},
+			expected: true,
+		},
+		{
+			name: "bun at end of script command",
+			files: map[string]string{
+				"package.json": `{"name": "app", "scripts": {"start": "npx something && bun"}}`,
+			},
+			expected: true,
+		},
+		{
+			name: "bundle in scripts is not bun",
+			files: map[string]string{
+				"package.json": `{"name": "app", "scripts": {"start": "bundle exec rails server"}}`,
+			},
+			expected: false,
+		},
+		{
+			name: "packageManager field for npm not bun",
+			files: map[string]string{
+				"package.json": `{"name": "app", "packageManager": "npm@10.0.0"}`,
+			},
+			expected: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+
+			for name, content := range tc.files {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0644))
+			}
+
+			stack := &BunStack{
+				MetaStack: MetaStack{
+					dir: dir,
+				},
+			}
+			require.Equal(t, tc.expected, stack.Detect())
+		})
+	}
+}
+
 func TestGo(t *testing.T) {
 	if !checkDocker() {
 		t.Skip("Docker not available")
