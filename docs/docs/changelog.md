@@ -5,6 +5,11 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *main*
 
+---
+
+## v0.5.0
+*2026-03-10*
+
 **Features**
 - **Multi-port and non-HTTP services** - Apps can now expose multiple ports with different protocols (TCP, UDP, HTTP) using `[[services.<name>.ports]]` in app.toml. Node ports are validated at deploy time to prevent conflicts. Enables use cases like IRC servers alongside HTTP endpoints. ([#641](https://github.com/mirendev/runtime/pull/641))
 - **CI deployments with GitHub Actions** - Deploy from GitHub Actions and other CI systems using short-lived identity tokens instead of long-lived secrets. Bind repos to apps with `miren auth ci add --github OWNER/REPO -a APP`, and GitHub Actions will authenticate automatically. Target clusters from CI with the `MIREN_CLUSTER` env var. ([#631](https://github.com/mirendev/runtime/pull/631), [#633](https://github.com/mirendev/runtime/pull/633), [#635](https://github.com/mirendev/runtime/pull/635))
