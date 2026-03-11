@@ -810,6 +810,10 @@ Warning: These commands are intended for advanced users and developers. They may
 	d.Dispatch("debug entity patch", Infer("debug entity patch", "Patch an existing entity", EntityPatch))
 	d.Dispatch("debug entity ensure", Infer("debug entity ensure", "Ensure an entity exists", EntityEnsure))
 
+	// Disk commands
+	d.Dispatch("disk backup", Infer("disk backup", "Backup a disk to a snapshot file", DiskBackup))
+	d.Dispatch("disk restore", Infer("disk restore", "Restore a disk from a snapshot file", DiskRestore))
+
 	// Debug disk commands
 	d.Dispatch("debug disk", Section("debug disk", "Disk entity debug commands", "", WithSectionDescription(diskSectionDescription)))
 	d.Dispatch("debug disk create", Infer("debug disk create", "Create a disk entity for testing", DebugDiskCreate,
@@ -826,17 +830,7 @@ Warning: These commands are intended for advanced users and developers. They may
 	d.Dispatch("debug disk lease-delete", Infer("debug disk lease-delete", "Delete a disk lease entity", DebugDiskLeaseDelete))
 	d.Dispatch("debug disk lease-status", Infer("debug disk lease-status", "Show detailed status of a disk lease", DebugDiskLeaseStatus))
 	d.Dispatch("debug disk mounts", Infer("debug disk mounts", "List all mounted disks from /proc/mounts", DebugDiskMounts))
-
-	// Debug LSVD commands
-	d.Dispatch("debug lsvd", Section("debug lsvd", "LSVD server debug commands", ""))
-	d.Dispatch("debug lsvd info", Infer("debug lsvd info", "Show combined LSVD server volumes, mounts, and metrics", DebugLsvdInfo))
-	d.Dispatch("debug lsvd volumes", Infer("debug lsvd volumes", "List volumes managed by LSVD server", DebugLsvdVolumes))
-	d.Dispatch("debug lsvd mounts", Infer("debug lsvd mounts", "List mounts managed by LSVD server", DebugLsvdMounts))
-	d.Dispatch("debug lsvd metrics", Infer("debug lsvd metrics", "Show LSVD reconciliation metrics", DebugLsvdMetrics))
-
-	// Debug outboard commands
-	d.Dispatch("debug outboard", Section("debug outboard", "Outboard process debug commands", ""))
-	d.Dispatch("debug outboard health", Infer("debug outboard health", "Check health of an outboard process", DebugOutboardHealth))
+	d.Dispatch("debug disk migrate", Infer("debug disk migrate", "Migrate LSVD volume to raw disk image", DiskMigrate))
 
 	// Debug netdb commands
 	d.Dispatch("debug netdb", Section("debug netdb", "Network database debug commands", ""))
@@ -847,7 +841,6 @@ Warning: These commands are intended for advanced users and developers. They may
 
 	// Internal commands (hidden from help, used by miren internals)
 	d.Dispatch("internal", Section("internal", "Internal commands used by miren components", ""))
-	d.Dispatch("internal lsvd", Infer("internal lsvd", "Run LSVD server for disk management", ServerLsvd))
 
 	addCommands(d)
 }

@@ -23,7 +23,7 @@ func DebugDiskCreate(ctx *Context, opts struct {
 	Filesystem string `short:"f" long:"filesystem" description:"Filesystem type (ext4, xfs, btrfs)" default:"ext4"`
 	CreatedBy  string `short:"c" long:"created-by" description:"Creator ID for the disk"`
 	RemoteOnly bool   `short:"r" long:"remote-only" description:"Store disk only in remote storage (no local replica)"`
-	VolumeID   string `short:"V" long:"volume-id" description:"Attach to existing LSVD volume instead of creating new one"`
+	VolumeID   string `short:"V" long:"volume-id" description:"Attach to existing volume instead of creating new one"`
 }) error {
 	// Use the context's RPC client
 	client, err := ctx.RPCClient("entities")
@@ -62,7 +62,7 @@ func DebugDiskCreate(ctx *Context, opts struct {
 
 	// Set volume ID if attaching to existing volume
 	if opts.VolumeID != "" {
-		disk.LsvdVolumeId = opts.VolumeID
+		disk.VolumeId = opts.VolumeID
 	}
 
 	// Set created by if provided
@@ -137,11 +137,16 @@ func DebugDiskList(ctx *Context, opts struct {
 		ctx.Info("  Filesystem: %s", disk.Filesystem)
 		ctx.Info("  Status: %s", disk.Status)
 		ctx.Info("  Remote Only: %v", disk.RemoteOnly)
+		if disk.Mode != "" {
+			ctx.Info("  Mode: %s", disk.Mode)
+		}
 		if disk.CreatedBy != "" {
 			ctx.Info("  Created By: %s", disk.CreatedBy)
 		}
-		if disk.LsvdVolumeId != "" {
-			ctx.Info("  LSVD Volume ID: %s", disk.LsvdVolumeId)
+		if disk.VolumeId != "" {
+			ctx.Info("  Volume ID: %s", disk.VolumeId)
+		} else if disk.LsvdVolumeId != "" {
+			ctx.Info("  LSVD Volume ID: %s (legacy)", disk.LsvdVolumeId)
 		}
 		ctx.Info("")
 	}
@@ -226,17 +231,19 @@ func DebugDiskStatus(ctx *Context, opts struct {
 	ctx.Info("  Status: %s", disk.Status)
 	ctx.Info("  Remote Only: %v", disk.RemoteOnly)
 
+	if disk.Mode != "" {
+		ctx.Info("  Mode: %s", disk.Mode)
+	}
+
 	if disk.CreatedBy != "" {
 		ctx.Info("  Created By: %s", disk.CreatedBy)
 	}
 
-	if disk.LsvdVolumeId != "" {
-		ctx.Info("  LSVD Volume ID: %s", disk.LsvdVolumeId)
+	if disk.VolumeId != "" {
+		ctx.Info("  Volume ID: %s", disk.VolumeId)
+	} else if disk.LsvdVolumeId != "" {
+		ctx.Info("  LSVD Volume ID: %s (legacy)", disk.LsvdVolumeId)
 	}
-
-	// Check for mount path in attributes
-	// Note: Custom attributes like mount_path would need to be retrieved from the entity attributes
-	// This is left as a placeholder for future implementation
 
 	return nil
 }
@@ -262,8 +269,8 @@ func DebugDiskMounts(ctx *Context, opts struct{}) error {
 		mountPoint := fields[1]
 		fsType := fields[2]
 
-		// Only show LSVD volume devices (runtime-managed disks)
-		if !strings.Contains(device, "lsvd-vol") {
+		// Only show runtime-managed disk mounts (loop devices under /var/lib/miren/disks)
+		if !strings.HasPrefix(mountPoint, "/var/lib/miren/disks") {
 			continue
 		}
 

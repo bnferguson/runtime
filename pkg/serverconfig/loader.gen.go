@@ -226,6 +226,10 @@ func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 		cfg.Server.DataPath = flags.ServerConfigDataPath
 	}
 
+	if flags.ServerConfigDiskMode != nil && *flags.ServerConfigDiskMode != "" {
+		cfg.Server.DiskMode = flags.ServerConfigDiskMode
+	}
+
 	if flags.ServerConfigHTTPRequestTimeout != nil {
 		cfg.Server.HTTPRequestTimeout = flags.ServerConfigHTTPRequestTimeout
 	}

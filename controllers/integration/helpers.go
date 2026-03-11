@@ -79,34 +79,34 @@ func listDisks(t *testing.T, ctx context.Context, h *TestHarness) []*storage.Dis
 	return disks
 }
 
-// listLsvdVolumes lists all LsvdVolume entities in the store.
-func listLsvdVolumes(t *testing.T, ctx context.Context, h *TestHarness) []*storage.LsvdVolume {
+// listDiskVolumes lists all DiskVolume entities in the store.
+func listDiskVolumes(t *testing.T, ctx context.Context, h *TestHarness) []*storage.DiskVolume {
 	t.Helper()
-	resp, err := h.EAC.List(ctx, entity.Ref(entity.EntityKind, storage.KindLsvdVolume))
+	resp, err := h.EAC.List(ctx, entity.Ref(entity.EntityKind, storage.KindDiskVolume))
 	if err != nil {
-		t.Fatalf("listLsvdVolumes: %v", err)
+		t.Fatalf("listDiskVolumes: %v", err)
 	}
 
-	var vols []*storage.LsvdVolume
+	var vols []*storage.DiskVolume
 	for _, e := range resp.Values() {
-		var vol storage.LsvdVolume
+		var vol storage.DiskVolume
 		vol.Decode(e.Entity())
 		vols = append(vols, &vol)
 	}
 	return vols
 }
 
-// listLsvdMounts lists all LsvdMount entities in the store.
-func listLsvdMounts(t *testing.T, ctx context.Context, h *TestHarness) []*storage.LsvdMount {
+// listDiskMounts lists all DiskMount entities in the store.
+func listDiskMounts(t *testing.T, ctx context.Context, h *TestHarness) []*storage.DiskMount {
 	t.Helper()
-	resp, err := h.EAC.List(ctx, entity.Ref(entity.EntityKind, storage.KindLsvdMount))
+	resp, err := h.EAC.List(ctx, entity.Ref(entity.EntityKind, storage.KindDiskMount))
 	if err != nil {
-		t.Fatalf("listLsvdMounts: %v", err)
+		t.Fatalf("listDiskMounts: %v", err)
 	}
 
-	var mounts []*storage.LsvdMount
+	var mounts []*storage.DiskMount
 	for _, e := range resp.Values() {
-		var mount storage.LsvdMount
+		var mount storage.DiskMount
 		mount.Decode(e.Entity())
 		mounts = append(mounts, &mount)
 	}
@@ -215,23 +215,23 @@ func patchLeaseStatus(t *testing.T, ctx context.Context, h *TestHarness, leaseID
 	}
 }
 
-// countMountedMounts returns the number of lsvd_mount entities in MNT_MOUNTED state.
+// countMountedMounts returns the number of disk_mount entities in DM_MOUNTED state.
 func countMountedMounts(t *testing.T, ctx context.Context, h *TestHarness) int {
 	t.Helper()
-	mounts := listLsvdMounts(t, ctx, h)
+	mounts := listDiskMounts(t, ctx, h)
 	count := 0
 	for _, m := range mounts {
-		if m.ActualState == storage.MNT_MOUNTED {
+		if m.ActualState == storage.DM_MOUNTED {
 			count++
 		}
 	}
 	return count
 }
 
-// getMountForLease returns the lsvd_mount entity for a given lease, or nil if not found.
-func getMountForLease(t *testing.T, ctx context.Context, h *TestHarness, leaseID entity.Id) *storage.LsvdMount {
+// getMountForLease returns the disk_mount entity for a given lease, or nil if not found.
+func getMountForLease(t *testing.T, ctx context.Context, h *TestHarness, leaseID entity.Id) *storage.DiskMount {
 	t.Helper()
-	resp, err := h.EAC.List(ctx, entity.Ref(storage.LsvdMountDiskLeaseIdId, leaseID))
+	resp, err := h.EAC.List(ctx, entity.Ref(storage.DiskMountDiskLeaseIdId, leaseID))
 	if err != nil {
 		t.Fatalf("getMountForLease(%s): %v", leaseID, err)
 	}
@@ -239,7 +239,7 @@ func getMountForLease(t *testing.T, ctx context.Context, h *TestHarness, leaseID
 	if len(values) == 0 {
 		return nil
 	}
-	var mount storage.LsvdMount
+	var mount storage.DiskMount
 	mount.Decode(values[0].Entity())
 	return &mount
 }
@@ -258,44 +258,44 @@ func patchDiskStatus(t *testing.T, ctx context.Context, h *TestHarness, diskID e
 	}
 }
 
-// patchMountActualState patches an lsvd_mount entity's actual_state.
+// patchMountActualState patches a disk_mount entity's actual_state.
 func patchMountActualState(t *testing.T, ctx context.Context, h *TestHarness, mountID entity.Id, stateId entity.Id) {
 	t.Helper()
 	_, err := h.EAC.Patch(ctx, []entity.Attr{
 		entity.Ref(entity.DBId, mountID),
-		entity.Ref(storage.LsvdMountActualStateId, stateId),
+		entity.Ref(storage.DiskMountActualStateId, stateId),
 	}, 0)
 	if err != nil {
 		t.Fatalf("patchMountActualState(%s): %v", mountID, err)
 	}
 }
 
-// patchMountError patches an lsvd_mount entity to MNT_ERROR with an error message.
+// patchMountError patches a disk_mount entity to DM_ERROR with an error message.
 func patchMountError(t *testing.T, ctx context.Context, h *TestHarness, mountID entity.Id, errorMsg string) {
 	t.Helper()
 	_, err := h.EAC.Patch(ctx, []entity.Attr{
 		entity.Ref(entity.DBId, mountID),
-		entity.Ref(storage.LsvdMountActualStateId, storage.LsvdMountActualStateMntErrorId),
-		entity.String(storage.LsvdMountErrorMessageId, errorMsg),
+		entity.Ref(storage.DiskMountActualStateId, storage.DiskMountActualStateDmErrorId),
+		entity.String(storage.DiskMountErrorMessageId, errorMsg),
 	}, 0)
 	if err != nil {
 		t.Fatalf("patchMountError(%s): %v", mountID, err)
 	}
 }
 
-// getMountByID fetches an LsvdMount entity by its entity ID.
-func getMountByID(t *testing.T, ctx context.Context, h *TestHarness, id entity.Id) *storage.LsvdMount {
+// getMountByID fetches a DiskMount entity by its entity ID.
+func getMountByID(t *testing.T, ctx context.Context, h *TestHarness, id entity.Id) *storage.DiskMount {
 	t.Helper()
 	resp, err := h.EAC.Get(ctx, id.String())
 	if err != nil {
 		t.Fatalf("getMountByID(%s): %v", id, err)
 	}
-	var mount storage.LsvdMount
+	var mount storage.DiskMount
 	mount.Decode(resp.Entity().Entity())
 	return &mount
 }
 
-// deleteMountEntity deletes an lsvd_mount entity from the store.
+// deleteMountEntity deletes a disk_mount entity from the store.
 func deleteMountEntity(t *testing.T, ctx context.Context, h *TestHarness, mountID entity.Id) {
 	t.Helper()
 	_, err := h.EAC.Delete(ctx, mountID.String())

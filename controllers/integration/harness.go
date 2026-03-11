@@ -8,7 +8,7 @@ import (
 
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
-	lsvdserver "miren.dev/runtime/components/lsvd/server"
+	"miren.dev/runtime/components/diskio"
 	"miren.dev/runtime/controllers/disk"
 	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
@@ -29,10 +29,10 @@ type TestHarness struct {
 	DiskCtrl      *disk.DiskController
 	DiskLeaseCtrl *disk.DiskLeaseController
 
-	// LSVD controllers (with mock ops)
-	LsvdVolumeCtrl *lsvdserver.VolumeController
-	LsvdMountCtrl  *lsvdserver.MountController
-	LsvdState      *lsvdserver.State
+	// Disk I/O controllers (with mock ops)
+	DiskVolumeCtrl *diskio.DiskVolumeController
+	DiskMountCtrl  *diskio.DiskMountController
+	DiskioState    *diskio.State
 
 	// Fake sandbox
 	FakeSandbox *FakeSandboxController
@@ -40,12 +40,15 @@ type TestHarness struct {
 	// ReconcileControllers (for ProcessEventForTest)
 	DiskRC      *controller.ReconcileController
 	DiskLeaseRC *controller.ReconcileController
-	LsvdVolRC   *controller.ReconcileController
-	LsvdMntRC   *controller.ReconcileController
+	DiskVolRC   *controller.ReconcileController
+	DiskMntRC   *controller.ReconcileController
 
 	// Mock ops for test inspection
-	MockVolumeOps *mockVolumeOps
-	MockMountOps  *mockMountOps
+	MockVolumeOps *mockDiskVolumeOps
+	MockMountOps  *mockDiskMountOps
+
+	// DataPath is the temp directory used for disk data (volumes, segments, etc.)
+	DataPath string
 }
 
 // NewTestHarness creates a fully wired test harness for disk lifecycle integration tests.
@@ -58,33 +61,30 @@ func NewTestHarness(t *testing.T) *TestHarness {
 
 	eac := es.EAC
 
-	// Create LSVD state backed by a temp file so Save() succeeds
+	// Create diskio state backed by a temp file so Save() succeeds
 	dataPath := t.TempDir()
-	lsvdState := lsvdserver.NewState()
-	lsvdState.SetPath(dataPath)
+	diskioState := diskio.NewState()
+	diskioState.SetPath(dataPath)
 
 	// Create mock ops
-	volOps := newMockVolumeOps()
-	mntOps := newMockMountOps()
-	lsvdVolCtrl := lsvdserver.NewVolumeController(log, dataPath, testNodeId, lsvdState, volOps)
-	lsvdVolCtrl.SetEAC(eac)
+	volOps := newMockDiskVolumeOps()
+	mntOps := newMockDiskMountOps()
+	diskVolCtrl := diskio.NewDiskVolumeController(log, dataPath, testNodeId, diskioState, volOps, mntOps)
+	diskVolCtrl.SetEAC(eac)
 
-	lsvdMntCtrl := lsvdserver.NewMountController(log, dataPath, testNodeId, lsvdState, mntOps)
-	lsvdMntCtrl.SetEAC(eac)
+	diskMntCtrl := diskio.NewDiskMountController(log, dataPath, testNodeId, diskioState, mntOps)
+	diskMntCtrl.SetEAC(eac)
 
-	// Create disk controllers and force LSVD mode so they create lsvd_volume
-	// and lsvd_mount entities instead of falling back to directory mode.
-	// The mock ops above handle the actual volume/mount operations.
-	diskCtrl := disk.NewDiskController(log, eac, testNodeId)
+	// Create disk controllers using universal mode
+	diskCtrl := disk.NewDiskController(log, eac, testNodeId, "")
 	diskCtrl.Init(ctx) //nolint:errcheck
-	diskCtrl.ForceLSVDMode()
-	diskLeaseCtrl := disk.NewDiskLeaseController(log, eac, testNodeId)
+	diskCtrl.ForceUniversalMode()
+	diskLeaseCtrl := disk.NewDiskLeaseController(log, eac, testNodeId, "")
 	diskLeaseCtrl.Init(ctx) //nolint:errcheck
-	diskLeaseCtrl.ForceLSVDMode()
 
 	// Create ReconcileControllers for each.
 	// We do NOT create watch controllers because ReconcileAll already reconciles
-	// all entity kinds each iteration, making the watch→Enqueue pattern unnecessary.
+	// all entity kinds each iteration, making the watch->Enqueue pattern unnecessary.
 	diskRC := controller.NewReconcileController(
 		"disk",
 		log,
@@ -103,21 +103,21 @@ func NewTestHarness(t *testing.T) *TestHarness {
 		0, 1,
 	)
 
-	lsvdVolRC := controller.NewReconcileController(
-		"lsvd-volume",
+	diskVolRC := controller.NewReconcileController(
+		"disk-volume",
 		log,
-		lsvdVolCtrl.Index(),
+		diskVolCtrl.Index(),
 		eac,
-		controller.AdaptReconcileController(lsvdVolCtrl),
+		controller.AdaptReconcileController(diskVolCtrl),
 		0, 1,
 	)
 
-	lsvdMntRC := controller.NewReconcileController(
-		"lsvd-mount",
+	diskMntRC := controller.NewReconcileController(
+		"disk-mount",
 		log,
-		lsvdMntCtrl.Index(),
+		diskMntCtrl.Index(),
 		eac,
-		controller.AdaptReconcileController(lsvdMntCtrl),
+		controller.AdaptReconcileController(diskMntCtrl),
 		0, 1,
 	)
 
@@ -131,16 +131,17 @@ func NewTestHarness(t *testing.T) *TestHarness {
 		EAC:            eac,
 		DiskCtrl:       diskCtrl,
 		DiskLeaseCtrl:  diskLeaseCtrl,
-		LsvdVolumeCtrl: lsvdVolCtrl,
-		LsvdMountCtrl:  lsvdMntCtrl,
-		LsvdState:      lsvdState,
+		DiskVolumeCtrl: diskVolCtrl,
+		DiskMountCtrl:  diskMntCtrl,
+		DiskioState:    diskioState,
 		FakeSandbox:    fakeSandbox,
 		DiskRC:         diskRC,
 		DiskLeaseRC:    diskLeaseRC,
-		LsvdVolRC:      lsvdVolRC,
-		LsvdMntRC:      lsvdMntRC,
+		DiskVolRC:      diskVolRC,
+		DiskMntRC:      diskMntRC,
 		MockVolumeOps:  volOps,
 		MockMountOps:   mntOps,
+		DataPath:       dataPath,
 	}
 }
 
@@ -174,10 +175,10 @@ func (h *TestHarness) controllerForEntity(id entity.Id) *controller.ReconcileCon
 		return h.DiskLeaseRC
 	case hasPrefix(s, "disk/"):
 		return h.DiskRC
-	case hasPrefix(s, "lsvd_volume/"):
-		return h.LsvdVolRC
-	case hasPrefix(s, "lsvd_mount/"):
-		return h.LsvdMntRC
+	case hasPrefix(s, "disk_volume/"):
+		return h.DiskVolRC
+	case hasPrefix(s, "disk_mount/"):
+		return h.DiskMntRC
 	default:
 		return nil
 	}
@@ -199,8 +200,8 @@ func (h *TestHarness) ReconcileAll(ctx context.Context, maxIterations int) {
 		rc    *controller.ReconcileController
 	}{
 		{entity.Ref(entity.EntityKind, storage_v1alpha.KindDisk), h.DiskRC},
-		{entity.Ref(storage_v1alpha.LsvdVolumeNodeIdId, nodeId), h.LsvdVolRC},
-		{entity.Ref(storage_v1alpha.LsvdMountNodeIdId, nodeId), h.LsvdMntRC},
+		{entity.Ref(storage_v1alpha.DiskVolumeNodeIdId, nodeId), h.DiskVolRC},
+		{entity.Ref(storage_v1alpha.DiskMountNodeIdId, nodeId), h.DiskMntRC},
 		{entity.Ref(entity.EntityKind, storage_v1alpha.KindDiskLease), h.DiskLeaseRC},
 	}
 
@@ -249,15 +250,15 @@ func (h *TestHarness) reconcileByIndex(ctx context.Context, index entity.Attr, r
 	}
 }
 
-// snapshotRevisions returns a map of entity ID → revision for all disk-related entities.
+// snapshotRevisions returns a map of entity ID -> revision for all disk-related entities.
 func (h *TestHarness) snapshotRevisions(ctx context.Context) map[string]int64 {
 	snap := make(map[string]int64)
 
 	for _, kind := range []entity.Id{
 		storage_v1alpha.KindDisk,
 		storage_v1alpha.KindDiskLease,
-		storage_v1alpha.KindLsvdVolume,
-		storage_v1alpha.KindLsvdMount,
+		storage_v1alpha.KindDiskVolume,
+		storage_v1alpha.KindDiskMount,
 	} {
 		resp, err := h.EAC.List(ctx, entity.Ref(entity.EntityKind, kind))
 		if err != nil {

@@ -25,6 +25,7 @@ type CLIFlags struct {
 	ServerConfigAddress                  *string  `long:"address" short:"a" description:"Address to listen on (host:port). For IPv6 use brackets, e.g. \"[::1]:8443\"."`
 	ServerConfigConfigClusterName        *string  `long:"config-cluster-name" short:"C" description:"Name of the cluster in client config"`
 	ServerConfigDataPath                 *string  `long:"data-path" short:"d" description:"Data path"`
+	ServerConfigDiskMode                 *string  `long:"disk-mode" description:"Disk I/O mode: auto (default, detect from hardware), universal (loop devices), or accelerator (lbd devices)"`
 	ServerConfigHTTPRequestTimeout       *int     `long:"http-request-timeout" description:"HTTP request timeout in seconds"`
 	ServerConfigNetworkBackend           *string  `long:"network-backend" description:"Network backend for sandbox connectivity: vxlan (default) or wireguard"`
 	ServerConfigReleasePath              *string  `long:"release-path" description:"Path to release directory containing binaries"`

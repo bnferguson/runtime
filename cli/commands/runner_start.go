@@ -88,6 +88,7 @@ func RunnerStart(ctx *Context, opts struct {
 		Workers:       runner.DefaulWorkers,
 		DataPath:      opts.DataPath,
 		Config:        clientCfg,
+		DiskMode:      cfg.DiskMode,
 	}
 
 	// Create resolver for network operations

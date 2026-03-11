@@ -22,13 +22,25 @@ kinds:
     status:
       type: enum
       doc: Current state of the disk
-      choices: [provisioning, provisioned, attached, detached, deleting, error]
+      choices: [provisioning, provisioned, attached, detached, deleting, error, restoring]
       default: provisioning
       indexed: true
 
     lsvd_volume_id:
       type: string
       doc: LSVD backend volume identifier
+      indexed: true
+
+    mode:
+      type: enum
+      doc: Disk I/O mode
+      choices: [universal, accelerator]
+      default: universal
+      indexed: true
+
+    volume_id:
+      type: string
+      doc: Volume identifier for universal/accelerator mode disks
       indexed: true
 
     remote_only:
@@ -156,10 +168,74 @@ kinds:
       required: true
       indexed: true
 
-  lsvd_mount:
+  disk_volume:
+    name:
+      type: string
+      doc: Human-readable name for the volume (from parent disk)
+
+    disk_id:
+      type: ref
+      doc: Reference to the parent Disk entity
+      required: true
+      indexed: true
+
+    volume_id:
+      type: string
+      doc: Volume identifier (generated during creation)
+      indexed: true
+
+    size_gb:
+      type: int
+      doc: Volume size in gigabytes
+      required: true
+
+    filesystem:
+      type: string
+      doc: Filesystem type (ext4, xfs, btrfs)
+      default: ext4
+
+    volume_mode:
+      type: enum
+      doc: Disk I/O mode
+      choices: [vm_universal, vm_accelerator]
+      default: vm_universal
+
+    image_path:
+      type: string
+      doc: Path to backing image file
+
+    desired_state:
+      type: enum
+      doc: What state should this volume be in
+      choices: [dv_present, dv_absent]
+      default: dv_present
+      indexed: true
+
+    actual_state:
+      type: enum
+      doc: Current state of the volume
+      choices: [dv_pending, dv_creating, dv_ready, dv_deleting, dv_deleted, dv_error]
+      default: dv_pending
+      indexed: true
+
+    error_message:
+      type: string
+      doc: Error details if actual_state is error
+
+    mount_id:
+      type: string
+      doc: Override for the mount point directory name (defaults to entity suffix if empty)
+
+    node_id:
+      type: ref
+      doc: Node where this volume should be provisioned
+      required: true
+      indexed: true
+
+  disk_mount:
     volume_id:
       type: ref
-      doc: Reference to the lsvd_volume entity
+      doc: Reference to the disk_volume entity
       required: true
       indexed: true
 
@@ -178,26 +254,26 @@ kinds:
       doc: Whether the mount is read-only
       default: false
 
-    nbd_index:
-      type: int
-      doc: NBD device index (set by lsvd-server)
-
     device_path:
       type: string
-      doc: Full path to the device node (set by lsvd-server)
+      doc: Full path to the device node (e.g., /dev/loopN)
+
+    loop_device:
+      type: string
+      doc: Loop device name for universal mode
 
     desired_state:
       type: enum
       doc: What state should this mount be in
-      choices: [mnt_want_mounted, mnt_want_unmounted]
-      default: mnt_want_mounted
+      choices: [dm_want_mounted, dm_want_unmounted]
+      default: dm_want_mounted
       indexed: true
 
     actual_state:
       type: enum
-      doc: Current state of the mount (set by lsvd-server)
-      choices: [mnt_pending, mnt_attaching, mnt_attached, mnt_mounting, mnt_mounted, mnt_unmounting, mnt_detaching, mnt_detached, mnt_error]
-      default: mnt_pending
+      doc: Current state of the mount
+      choices: [dm_pending, dm_attaching, dm_attached, dm_mounting, dm_mounted, dm_unmounting, dm_detaching, dm_detached, dm_error]
+      default: dm_pending
       indexed: true
 
     node_id:
@@ -209,7 +285,3 @@ kinds:
     error_message:
       type: string
       doc: Error details if actual_state is error
-
-    lease_nonce:
-      type: string
-      doc: Volume lease nonce from remote Disk API

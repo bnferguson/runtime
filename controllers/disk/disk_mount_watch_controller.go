@@ -1,0 +1,71 @@
+package disk
+
+import (
+	"context"
+	"log/slog"
+
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/api/storage/storage_v1alpha"
+	"miren.dev/runtime/pkg/controller"
+	"miren.dev/runtime/pkg/entity"
+)
+
+// DiskMountWatchController watches for disk_mount state changes and triggers
+// re-reconciliation of the parent disk_lease entity. This bridges the gap where
+// the disk lease controller creates a disk_mount and needs to know when the
+// mount controller finishes mounting it.
+type DiskMountWatchController struct {
+	Log *slog.Logger
+	EAC *entityserver_v1alpha.EntityAccessClient
+
+	LeaseController *controller.ReconcileController
+}
+
+// NewDiskMountWatchController creates a new disk mount watch controller.
+func NewDiskMountWatchController(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, leaseController *controller.ReconcileController) *DiskMountWatchController {
+	return &DiskMountWatchController{
+		Log:             log.With("module", "disk-mount-watch"),
+		EAC:             eac,
+		LeaseController: leaseController,
+	}
+}
+
+func (m *DiskMountWatchController) Init(ctx context.Context) error {
+	return nil
+}
+
+func (m *DiskMountWatchController) Create(ctx context.Context, mount *storage_v1alpha.DiskMount, meta *entity.Meta) error {
+	return nil
+}
+
+func (m *DiskMountWatchController) Update(ctx context.Context, mount *storage_v1alpha.DiskMount, meta *entity.Meta) error {
+	if mount.DiskLeaseId == "" {
+		return nil
+	}
+
+	m.Log.Debug("disk_mount changed, re-reconciling parent disk lease",
+		"mount", mount.ID,
+		"lease", mount.DiskLeaseId,
+		"actual_state", mount.ActualState)
+
+	resp, err := m.EAC.Get(ctx, string(mount.DiskLeaseId))
+	if err != nil {
+		m.Log.Warn("failed to get parent disk lease for mount change",
+			"mount", mount.ID,
+			"lease", mount.DiskLeaseId,
+			"error", err)
+		return nil
+	}
+
+	m.LeaseController.Enqueue(controller.Event{
+		Type:   controller.EventUpdated,
+		Id:     mount.DiskLeaseId,
+		Entity: resp.Entity().Entity(),
+	})
+
+	return nil
+}
+
+func (m *DiskMountWatchController) Delete(ctx context.Context, id entity.Id, _ *storage_v1alpha.DiskMount) error {
+	return nil
+}

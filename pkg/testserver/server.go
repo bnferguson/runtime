@@ -164,7 +164,6 @@ func TestServer(t *testing.T) error {
 		DisableLocalNet: false,
 		Resolver:        res,
 		SandboxMetrics:  sbMetrics,
-		SkipLSVD:        true,
 		IsCoordinator:   true,
 	}
 

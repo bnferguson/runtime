@@ -60,6 +60,7 @@ func DefaultServerConfig() ServerConfig {
 		Address:                 strPtr(":8443"),
 		ConfigClusterName:       strPtr("local"),
 		DataPath:                strPtr("/var/lib/miren"),
+		DiskMode:                strPtr(""),
 		HTTPRequestTimeout:      intPtr(60),
 		NetworkBackend:          strPtr("vxlan"),
 		ReleasePath:             strPtr(""),

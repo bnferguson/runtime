@@ -218,6 +218,14 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 
 	}
 
+	// Apply MIREN_DISK_MODE
+	if val := os.Getenv("MIREN_DISK_MODE"); val != "" {
+
+		cfg.Server.DiskMode = &val
+		log.Debug("applied env var", "key", "MIREN_DISK_MODE")
+
+	}
+
 	// Apply MIREN_SERVER_HTTP_REQUEST_TIMEOUT
 	if val := os.Getenv("MIREN_SERVER_HTTP_REQUEST_TIMEOUT"); val != "" {
 

@@ -13,7 +13,7 @@ import (
 
 func TestDiskLeaseController_New(t *testing.T) {
 	log := slog.Default()
-	controller := NewDiskLeaseController(log, nil, "test-node")
+	controller := NewDiskLeaseController(log, nil, "test-node", "")
 
 	assert.NotNil(t, controller)
 	assert.NotNil(t, controller.Log)
@@ -23,7 +23,7 @@ func TestDiskLeaseController_New(t *testing.T) {
 
 func TestDiskLeaseController_LeaseConflict(t *testing.T) {
 	log := slog.Default()
-	dlc := NewDiskLeaseController(log, nil, "test-node")
+	dlc := NewDiskLeaseController(log, nil, "test-node", "")
 
 	// Simulate existing lease for the disk
 	dlc.activeLeases["disk/test-disk"] = "disk-lease/existing-lease"
@@ -50,7 +50,7 @@ func TestDiskLeaseController_LeaseConflict(t *testing.T) {
 
 func TestDiskLeaseController_Delete(t *testing.T) {
 	log := slog.Default()
-	dlc := NewDiskLeaseController(log, nil, "test-node")
+	dlc := NewDiskLeaseController(log, nil, "test-node", "")
 
 	// Setup active lease and lease details
 	dlc.activeLeases["disk/test-disk"] = "disk-lease/test-lease"
@@ -75,7 +75,7 @@ func TestDiskLeaseController_Delete(t *testing.T) {
 
 func TestDiskLeaseController_Release(t *testing.T) {
 	log := slog.Default()
-	dlc := NewDiskLeaseController(log, nil, "test-node")
+	dlc := NewDiskLeaseController(log, nil, "test-node", "")
 
 	// Setup active lease
 	dlc.activeLeases["disk/test-disk"] = "disk-lease/test-lease"
@@ -108,7 +108,7 @@ func TestDiskLeaseController_Release(t *testing.T) {
 
 func TestDiskLeaseController_ReleaseIdempotent(t *testing.T) {
 	log := slog.Default()
-	dlc := NewDiskLeaseController(log, nil, "test-node")
+	dlc := NewDiskLeaseController(log, nil, "test-node", "")
 
 	// Setup: No active lease (already released)
 	releasedLease := &storage_v1alpha.DiskLease{
@@ -135,7 +135,7 @@ func TestDiskLeaseController_ReleaseIdempotent(t *testing.T) {
 
 func TestDiskLeaseController_CleanupOldReleasedLeases(t *testing.T) {
 	log := slog.Default()
-	dlc := NewDiskLeaseController(log, nil, "test-node")
+	dlc := NewDiskLeaseController(log, nil, "test-node", "")
 
 	// Since we don't have a real EAC, we test the logic in isolation
 	// The controller should skip cleanup when EAC is nil (test mode)

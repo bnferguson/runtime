@@ -2,173 +2,142 @@ package integration
 
 import (
 	"context"
-	"net"
 	"os"
 
-	lsvdserver "miren.dev/runtime/components/lsvd/server"
-	"miren.dev/runtime/pkg/units"
+	"miren.dev/runtime/components/diskio"
 )
 
-// mockVolumeOps implements lsvdserver.VolumeOps for testing.
-type mockVolumeOps struct {
+// mockDiskVolumeOps implements diskio.DiskVolumeOps for testing.
+type mockDiskVolumeOps struct {
 	createdDirs   []string
 	existingPaths map[string]bool
 }
 
-func newMockVolumeOps() *mockVolumeOps {
-	return &mockVolumeOps{
+func newMockDiskVolumeOps() *mockDiskVolumeOps {
+	return &mockDiskVolumeOps{
 		existingPaths: make(map[string]bool),
 	}
 }
 
-func (m *mockVolumeOps) CreateVolumeDir(path string) error {
+func (m *mockDiskVolumeOps) CreateVolumeDir(path string) error {
 	m.createdDirs = append(m.createdDirs, path)
 	m.existingPaths[path] = true
-	return nil
+	// Also create the real directory so migration code (os.Create) works
+	return os.MkdirAll(path, 0755)
 }
 
-func (m *mockVolumeOps) RemoveVolumeDir(path string) error {
+func (m *mockDiskVolumeOps) RemoveVolumeDir(path string) error {
 	delete(m.existingPaths, path)
 	return nil
 }
 
-func (m *mockVolumeOps) VolumePathExists(path string) bool {
+func (m *mockDiskVolumeOps) VolumePathExists(path string) bool {
 	return m.existingPaths[path]
 }
 
-func (m *mockVolumeOps) InitLSVDVolume(_ context.Context, _, volumeId string, _ units.Bytes, _ map[string]any, _ bool) (string, error) {
-	return volumeId, nil
+func (m *mockDiskVolumeOps) CreateDiskImage(path string, _ int64) error {
+	m.existingPaths[path] = true
+	return nil
+}
+
+func (m *mockDiskVolumeOps) RemoveDiskImage(path string) error {
+	delete(m.existingPaths, path)
+	return nil
 }
 
 // Verify interface compliance
-var _ lsvdserver.VolumeOps = (*mockVolumeOps)(nil)
+var _ diskio.DiskVolumeOps = (*mockDiskVolumeOps)(nil)
 
-// mockMountOps implements lsvdserver.MountOps for testing.
-// In integration tests we use directory-mode on the DiskController/DiskLeaseController
-// side, so the MountController's ops are only called for lsvd_mount entity reconciliation.
-// The mock ops simulate successful NBD attach/mount/format flows without real OS interaction.
-type mockMountOps struct {
+// mockDiskMountOps implements diskio.DiskMountOps for testing.
+type mockDiskMountOps struct {
 	existingMounts map[string]bool
 	formattedDisks map[string]string // device -> filesystem
-	nbdStatuses    map[uint32]error
-	nextNBDIndex   uint32
-	openDiskCalls  int
-
-	mockDisk *mockLSVDDisk
+	loopDevices    map[string]string // imagePath -> devicePath
+	nextLoopIndex  int
 }
 
-func newMockMountOps() *mockMountOps {
-	return &mockMountOps{
+func newMockDiskMountOps() *mockDiskMountOps {
+	return &mockDiskMountOps{
 		existingMounts: make(map[string]bool),
 		formattedDisks: make(map[string]string),
-		nbdStatuses:    make(map[uint32]error),
-		nextNBDIndex:   1,
-		mockDisk:       &mockLSVDDisk{size: 10 * 1024 * 1024 * 1024}, // 10GB
+		loopDevices:    make(map[string]string),
+		nextLoopIndex:  1,
 	}
 }
 
-func (m *mockMountOps) CreateDir(_ string, _ os.FileMode) error {
+func (m *mockDiskMountOps) CreateDir(_ string, _ os.FileMode) error {
 	return nil
 }
 
-func (m *mockMountOps) RemoveFile(_ string) error {
+func (m *mockDiskMountOps) RemoveFile(_ string) error {
 	return nil
 }
 
-func (m *mockMountOps) NBDLoopback(_ context.Context, _ uint64) (uint32, net.Conn, *os.File, func() error, error) {
-	idx := m.nextNBDIndex
-	m.nextNBDIndex++
-	m.nbdStatuses[idx] = nil
-
-	// Create a pipe for mock conn
-	serverConn, clientConn := net.Pipe()
-	_ = serverConn // not used in tests
-
-	tmpFile, err := os.CreateTemp("", "mock-nbd-*")
-	if err != nil {
-		return 0, nil, nil, nil, err
-	}
-
-	cleanup := func() error {
-		clientConn.Close()
-		serverConn.Close()
-		_ = tmpFile.Close()
-		os.Remove(tmpFile.Name())
-		return nil
-	}
-
-	return idx, clientConn, tmpFile, cleanup, nil
+func (m *mockDiskMountOps) LoopAttach(imagePath string) (string, error) {
+	devPath := "/dev/loop" + string(rune('0'+m.nextLoopIndex))
+	m.nextLoopIndex++
+	m.loopDevices[imagePath] = devPath
+	return devPath, nil
 }
 
-func (m *mockMountOps) NBDStatus(idx uint32) error {
-	if err, ok := m.nbdStatuses[idx]; ok {
-		return err
+func (m *mockDiskMountOps) LoopDetach(devicePath string) error {
+	for img, dev := range m.loopDevices {
+		if dev == devicePath {
+			delete(m.loopDevices, img)
+			break
+		}
 	}
 	return nil
 }
 
-func (m *mockMountOps) NBDDisconnect(_ uint32) error {
+func (m *mockDiskMountOps) LbdAttach(_ context.Context, imagePath, _ string) (string, error) {
+	devPath := "/dev/lbd" + string(rune('0'+m.nextLoopIndex))
+	m.nextLoopIndex++
+	m.loopDevices[imagePath] = devPath
+	return devPath, nil
+}
+
+func (m *mockDiskMountOps) LbdDetach(_ context.Context, devicePath string) error {
+	for img, dev := range m.loopDevices {
+		if dev == devicePath {
+			delete(m.loopDevices, img)
+			break
+		}
+	}
 	return nil
 }
 
-func (m *mockMountOps) CreateDeviceNode(_ string, _ uint32) error {
-	return nil
+func (m *mockDiskMountOps) LbdAvailable() bool {
+	return false
 }
 
-func (m *mockMountOps) Mount(_, mountPath, _ string, _ bool) error {
+func (m *mockDiskMountOps) Mount(_, mountPath, _ string, _ bool) error {
 	m.existingMounts[mountPath] = true
 	return nil
 }
 
-func (m *mockMountOps) Unmount(path string) error {
+func (m *mockDiskMountOps) Unmount(path string) error {
 	delete(m.existingMounts, path)
 	return nil
 }
 
-func (m *mockMountOps) IsMounted(path string) bool {
+func (m *mockDiskMountOps) IsMounted(path string) bool {
 	return m.existingMounts[path]
 }
 
-func (m *mockMountOps) IsFormatted(device, _ string) (bool, error) {
+func (m *mockDiskMountOps) IsFormatted(_ context.Context, device, _ string) (bool, error) {
 	_, ok := m.formattedDisks[device]
 	return ok, nil
 }
 
-func (m *mockMountOps) FormatDevice(_ context.Context, device, filesystem string) error {
+func (m *mockDiskMountOps) FormatDevice(_ context.Context, device, filesystem string) error {
 	m.formattedDisks[device] = filesystem
 	return nil
 }
 
-func (m *mockMountOps) OpenLSVDDisk(_ context.Context, _, _ string, _ bool, _ string) (lsvdserver.LSVDDisk, error) {
-	m.openDiskCalls++
-	return m.mockDisk, nil
-}
-
-func (m *mockMountOps) AcquireVolumeLease(_ context.Context, _ string, _ map[string]any) (string, error) {
-	return "mock-nonce", nil
-}
-
-func (m *mockMountOps) ReleaseVolumeLease(_ context.Context, _, _ string) error {
+func (m *mockDiskMountOps) FindMounts(_ string) []diskio.ActiveMount {
 	return nil
 }
 
 // Verify interface compliance
-var _ lsvdserver.MountOps = (*mockMountOps)(nil)
-
-// mockLSVDDisk implements lsvdserver.LSVDDisk for testing.
-type mockLSVDDisk struct {
-	size int64
-}
-
-func (d *mockLSVDDisk) Close(_ context.Context) error {
-	return nil
-}
-
-func (d *mockLSVDDisk) Size() int64 {
-	return d.size
-}
-
-func (d *mockLSVDDisk) HandleNBD(ctx context.Context, _ net.Conn, _ *os.File) error {
-	<-ctx.Done()
-	return ctx.Err()
-}
+var _ diskio.DiskMountOps = (*mockDiskMountOps)(nil)

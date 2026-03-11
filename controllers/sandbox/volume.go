@@ -249,7 +249,7 @@ func (c *SandboxController) ensureDisk(ctx context.Context, diskName string, siz
 // so we don't need transfer logic here.
 func (c *SandboxController) acquireDiskLease(ctx context.Context, diskID entity.Id, nodeID entity.Id, sandboxID entity.Id, appID entity.Id, mountPath string, readOnly bool) (entity.Id, error) {
 	// Check if we already have a lease for this disk on this node
-	listResp, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, storage.KindDiskLease))
+	listResp, err := c.EAC.List(ctx, entity.Ref(storage.DiskLeaseDiskIdId, diskID))
 	if err != nil {
 		return entity.Id(""), fmt.Errorf("failed to list disk leases: %w", err)
 	}
@@ -258,8 +258,8 @@ func (c *SandboxController) acquireDiskLease(ctx context.Context, diskID entity.
 		var lease storage.DiskLease
 		lease.Decode(e.Entity())
 
-		// Check if this lease is for our disk and node
-		if lease.DiskId == diskID && lease.NodeId == nodeID {
+		// Index already filters by diskID; also check nodeID
+		if lease.NodeId == nodeID {
 			// If the lease is owned by this sandbox, return it (retry case)
 			if lease.SandboxId == sandboxID {
 				c.Log.Info("found existing disk lease for this sandbox",
@@ -370,7 +370,7 @@ func (c *SandboxController) waitForLeaseBound(ctx context.Context, leaseID entit
 
 			switch lease.Status {
 			case storage.BOUND:
-				// Lease is bound, get disk to find LSVD volume ID
+				// Lease is bound, get disk to find volume ID
 				diskResp, err := c.EAC.Get(ctx, lease.DiskId.String())
 				if err != nil {
 					return "", fmt.Errorf("failed to get disk entity: %w", err)
@@ -379,16 +379,17 @@ func (c *SandboxController) waitForLeaseBound(ctx context.Context, leaseID entit
 				var disk storage.Disk
 				disk.Decode(diskResp.Entity().Entity())
 
-				if disk.LsvdVolumeId == "" {
-					return "", fmt.Errorf("disk has no LSVD volume ID")
+				volumeId := disk.VolumeId
+				if volumeId == "" {
+					return "", fmt.Errorf("disk has no volume ID")
 				}
 
-				// Disk is mounted at /var/lib/miren/disks/{lsvd_volume_id}
-				diskPath := filepath.Join("/var/lib/miren/disks", disk.LsvdVolumeId)
+				// Disk is mounted at /var/lib/miren/disks/{volume_id}
+				diskPath := filepath.Join("/var/lib/miren/disks", volumeId)
 				c.Log.Info("disk lease bound successfully",
 					"lease", leaseID,
 					"disk", disk.ID,
-					"lsvd_volume_id", disk.LsvdVolumeId,
+					"volume_id", volumeId,
 					"disk_path", diskPath)
 				return diskPath, nil
 

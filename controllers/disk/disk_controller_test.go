@@ -9,7 +9,7 @@ import (
 
 func TestDiskController_New(t *testing.T) {
 	log := slog.Default()
-	controller := NewDiskController(log, nil, "test-node")
+	controller := NewDiskController(log, nil, "test-node", "")
 
 	assert.NotNil(t, controller)
 	assert.NotNil(t, controller.Log)

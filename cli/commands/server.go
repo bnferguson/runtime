@@ -785,25 +785,25 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 
 	// Build RunnerDeps from ServerState (all dependencies already initialized)
 	deps := runner.RunnerDeps{
-		CC:               ctx.ServerState.CC,
-		Namespace:        ctx.ServerState.Namespace,
-		Bridge:           ctx.ServerState.Bridge,
-		Tempdir:          ctx.ServerState.Tempdir,
-		Subnet:           ctx.ServerState.Subnet,
-		NetServ:          ctx.ServerState.NetServ,
-		LogsMaintainer:   ctx.ServerState.LogsMaintainer,
-		LogWriter:        logWriter,
-		StatusMon:        ctx.ServerState.StatusMon,
-		IPv4Routable:     ctx.ServerState.IPv4Routable,
-		ServicePrefixes:  ctx.ServerState.ServicePrefixes,
-		DisableLocalNet:  false,
-		Resolver:         res,
-		SandboxMetrics:   ctx.ServerState.SandboxMetrics,
-		EntityServerAddr: normalizeServerAddr(srvaddr),
-		IsCoordinator:    true,
+		CC:              ctx.ServerState.CC,
+		Namespace:       ctx.ServerState.Namespace,
+		Bridge:          ctx.ServerState.Bridge,
+		Tempdir:         ctx.ServerState.Tempdir,
+		Subnet:          ctx.ServerState.Subnet,
+		NetServ:         ctx.ServerState.NetServ,
+		LogsMaintainer:  ctx.ServerState.LogsMaintainer,
+		LogWriter:       logWriter,
+		StatusMon:       ctx.ServerState.StatusMon,
+		IPv4Routable:    ctx.ServerState.IPv4Routable,
+		ServicePrefixes: ctx.ServerState.ServicePrefixes,
+		DisableLocalNet: false,
+		Resolver:        res,
+		SandboxMetrics:  ctx.ServerState.SandboxMetrics,
+		IsCoordinator:   true,
 	}
 
 	rc.DataPath = cfg.Server.GetDataPath()
+	rc.DiskMode = cfg.Server.GetDiskMode()
 
 	r, err := runner.NewRunner(ctx.Log, deps, rc)
 	if err != nil {
@@ -938,8 +938,8 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 			case sig := <-sigChan:
 				switch sig {
 				case syscall.SIGUSR1:
-					// Restart mode - preserve outboard processes like lsvd-server
-					ctx.Log.Info("SIGUSR1 received - restart mode (preserving outboard processes)")
+					// Restart mode
+					ctx.Log.Info("SIGUSR1 received - restart mode")
 					r.SetRestartMode(true)
 					return fmt.Errorf("restart requested via SIGUSR1")
 
@@ -1154,17 +1154,4 @@ func stopAllSandboxContainers(ctx context.Context, log *slog.Logger, cc *contain
 
 	log.Info("stopped sandbox containers", "count", stoppedCount)
 	return nil
-}
-
-// normalizeServerAddr converts a server address to a form usable for local connections.
-// Addresses like ":8443", "0.0.0.0:8443", and "[::]:8443" become "localhost:8443".
-func normalizeServerAddr(addr string) string {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return addr
-	}
-	if host == "" || host == "0.0.0.0" || host == "::" {
-		return net.JoinHostPort("localhost", port)
-	}
-	return addr
 }

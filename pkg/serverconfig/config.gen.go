@@ -232,6 +232,7 @@ type ServerConfig struct {
 	Address                 *string `toml:"address" env:"MIREN_SERVER_ADDRESS"`
 	ConfigClusterName       *string `toml:"config_cluster_name" env:"MIREN_SERVER_CONFIG_CLUSTER_NAME"`
 	DataPath                *string `toml:"data_path" env:"MIREN_SERVER_DATA_PATH"`
+	DiskMode                *string `toml:"disk_mode" env:"MIREN_DISK_MODE"`
 	HTTPRequestTimeout      *int    `toml:"http_request_timeout" env:"MIREN_SERVER_HTTP_REQUEST_TIMEOUT"`
 	NetworkBackend          *string `toml:"network_backend" env:"MIREN_SERVER_NETWORK_BACKEND"`
 	ReleasePath             *string `toml:"release_path" env:"MIREN_SERVER_RELEASE_PATH"`
@@ -278,6 +279,19 @@ func (c *ServerConfig) GetDataPath() string {
 // SetDataPath sets the value of DataPath
 func (c *ServerConfig) SetDataPath(v string) {
 	c.DataPath = &v
+}
+
+// GetDiskMode returns the value of DiskMode or its zero value if nil
+func (c *ServerConfig) GetDiskMode() string {
+	if c.DiskMode != nil {
+		return *c.DiskMode
+	}
+	return ""
+}
+
+// SetDiskMode sets the value of DiskMode
+func (c *ServerConfig) SetDiskMode(v string) {
+	c.DiskMode = &v
 }
 
 // GetHTTPRequestTimeout returns the value of HTTPRequestTimeout or its zero value if nil

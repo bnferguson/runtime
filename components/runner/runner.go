@@ -8,6 +8,8 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
@@ -23,8 +25,7 @@ import (
 	"miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/components/coordinate"
-	"miren.dev/runtime/components/lsvd"
-	lsvdserver "miren.dev/runtime/components/lsvd/server"
+	"miren.dev/runtime/components/diskio"
 	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/controllers/disk"
 	"miren.dev/runtime/controllers/ingress"
@@ -32,6 +33,7 @@ import (
 	"miren.dev/runtime/controllers/service"
 	"miren.dev/runtime/network"
 	"miren.dev/runtime/observability"
+	"miren.dev/runtime/pkg/cloudauth"
 	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
@@ -55,6 +57,9 @@ type RunnerConfig struct {
 
 	// Optional cloud authentication configuration for disk replication
 	CloudAuth *coordinate.CloudAuthConfig `json:"cloud_auth,omitempty" cbor:"cloud_auth,omitempty" yaml:"cloud_auth,omitempty"`
+
+	// DiskMode configures disk I/O mode ("", "auto", "universal", "accelerator")
+	DiskMode string `json:"disk_mode,omitempty" cbor:"disk_mode,omitempty" yaml:"disk_mode,omitempty"`
 }
 
 // RunnerDeps holds dependencies needed by the Runner to construct controllers.
@@ -84,13 +89,6 @@ type RunnerDeps struct {
 	// Sandbox metrics
 	SandboxMetrics *sandbox.Metrics
 
-	// Entity server address for lsvd-server (required for disk operations)
-	EntityServerAddr string
-
-	// SkipLSVD skips starting the lsvd-server as an outboard process
-	// and instead runs the LSVD volume and mount controllers in-process.
-	SkipLSVD bool
-
 	// IsCoordinator indicates this runner is the coordinator node.
 	// Affects scheduling: stateful sandboxes are routed to the coordinator.
 	IsCoordinator bool
@@ -114,6 +112,10 @@ const (
 type shutdownCloser struct{ s interface{ Shutdown() } }
 
 func (c shutdownCloser) Close() error { c.s.Shutdown(); return nil }
+
+type waitCloser struct{ s interface{ Wait() } }
+
+func (c waitCloser) Close() error { c.s.Wait(); return nil }
 
 func NewRunner(log *slog.Logger, deps RunnerDeps, cfg RunnerConfig) (*Runner, error) {
 	if cfg.DataPath == "" {
@@ -153,8 +155,9 @@ type Runner struct {
 
 	sbController *sandbox.SandboxController
 
-	// LSVD component (only used in entity mode)
-	lsvdComponent *lsvd.Component
+	// Disk controllers, stored for SetRestartMode propagation
+	dvc *diskio.DiskVolumeController
+	dmc *diskio.DiskMountController
 }
 
 func (r *Runner) Close() error {
@@ -171,10 +174,13 @@ func (r *Runner) Close() error {
 }
 
 // SetRestartMode sets whether outboard processes should be preserved when closing.
-// When true, processes like lsvd-server will continue running during server restart.
+// When true, disk mounts are left in place so the replacement process can pick them up.
 func (r *Runner) SetRestartMode(v bool) {
-	if r.lsvdComponent != nil {
-		r.lsvdComponent.SetRestartMode(v)
+	if r.dvc != nil {
+		r.dvc.SetKeepMounts(v)
+	}
+	if r.dmc != nil {
+		r.dmc.SetKeepMounts(v)
 	}
 }
 
@@ -237,6 +243,115 @@ func (r *Runner) Drain(ctx context.Context) error {
 
 func (r *Runner) ContainerdNamespace() string {
 	return r.namespace
+}
+
+// stopUserContainers stops all running user workload containers so their file
+// descriptors to disk images are released before migration. Containers with
+// IDs starting with "miren-" are infrastructure (etcd, etc.) and are left
+// running. The sandbox controller will recreate stopped containers during its
+// subsequent reconciliation.
+func (r *Runner) stopUserContainers(ctx context.Context, log *slog.Logger) {
+	cc := r.deps.CC
+	containers, err := cc.Containers(ctx)
+	if err != nil {
+		log.Warn("failed to list containers for stop", "error", err)
+		return
+	}
+
+	// Collect tasks to stop and set up wait channels before sending signals
+	type pendingStop struct {
+		id     string
+		task   containerd.Task
+		exitCh <-chan containerd.ExitStatus
+	}
+
+	var pending []pendingStop
+	for _, c := range containers {
+		if strings.HasPrefix(c.ID(), "miren-") {
+			continue
+		}
+
+		task, err := c.Task(ctx, nil)
+		if err != nil {
+			continue
+		}
+
+		status, err := task.Status(ctx)
+		if err != nil || status.Status == containerd.Stopped {
+			continue
+		}
+
+		exitCh, err := task.Wait(ctx)
+		if err != nil {
+			continue
+		}
+
+		log.Info("sending SIGTERM to container for disk migration", "id", c.ID())
+		if err := task.Kill(ctx, syscall.SIGTERM); err != nil {
+			log.Warn("failed to send SIGTERM, migration will proceed anyway", "id", c.ID(), "error", err)
+			continue
+		}
+
+		pending = append(pending, pendingStop{id: c.ID(), task: task, exitCh: exitCh})
+	}
+
+	if len(pending) == 0 {
+		return
+	}
+
+	// Wait for all containers in parallel with a shared 10s deadline
+	timer := time.NewTimer(10 * time.Second)
+	defer timer.Stop()
+
+	remaining := make(map[int]struct{})
+	for i := range pending {
+		remaining[i] = struct{}{}
+	}
+
+	for len(remaining) > 0 {
+		select {
+		case <-timer.C:
+			// Timeout — SIGKILL everything still running
+			for i := range remaining {
+				p := &pending[i]
+				log.Warn("container did not exit in 10s, sending SIGKILL", "id", p.id)
+				_ = p.task.Kill(ctx, syscall.SIGKILL)
+			}
+			// Wait briefly for SIGKILL to take effect
+			for i := range remaining {
+				p := &pending[i]
+				killCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+				select {
+				case <-p.exitCh:
+				case <-killCtx.Done():
+				}
+				cancel()
+				if _, err := p.task.Delete(ctx); err != nil {
+					log.Warn("failed to delete task after kill", "id", p.id, "error", err)
+				}
+			}
+			remaining = nil
+		case <-ctx.Done():
+			return
+		default:
+			// Poll all remaining exit channels without blocking
+			for i := range remaining {
+				select {
+				case <-pending[i].exitCh:
+					if _, err := pending[i].task.Delete(ctx); err != nil {
+						log.Warn("failed to delete task after stop", "id", pending[i].id, "error", err)
+					}
+					delete(remaining, i)
+				default:
+				}
+			}
+			if len(remaining) > 0 {
+				time.Sleep(50 * time.Millisecond)
+			}
+		}
+	}
+
+	log.Info("stopped containers for disk migration", "count", len(pending))
 }
 
 func (r *Runner) ContainerdContainerForSandbox(ctx context.Context, id entity.Id) (containerd.Container, error) {
@@ -479,102 +594,141 @@ func (r *Runner) SetupControllers(
 	defaultRouteAppController := ingress.NewDefaultRouteAppController(log, eas)
 	defaultRouteController := ingress.NewDefaultRouteController(log, eas)
 
-	// Initialize disk controllers with LSVD entity mode
-	// Entity mode uses lsvd-server as an outboard process for disk operations
+	workers := r.Workers
+	if workers <= 0 {
+		workers = DefaulWorkers
+	}
+
+	// Stop any orphaned lsvd-server process left over from a previous version.
+	// Before universal mode, the lsvd-server ran as an outboard process; during
+	// upgrade it must be stopped since the new code no longer manages it.
+	stopOrphanedLSVDServer(log, r.DataPath)
+
+	// Initialize disk I/O controllers for universal mode (loop devices)
 	dataPath := filepath.Join(r.DataPath, "disk-data")
 	err = os.MkdirAll(dataPath, 0700)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create disk data path: %w", err)
 	}
 
-	// Start lsvd component unless explicitly skipped (for tests)
-	if !r.deps.SkipLSVD {
-		if r.deps.EntityServerAddr == "" {
-			return nil, fmt.Errorf("entity server address is required for LSVD entity mode")
+	// Ensure loop device nodes exist (they may be missing in containers)
+	if err := diskio.EnsureLoopDevices(log); err != nil {
+		log.Warn("Loop devices not available, disk mounts will fail", "error", err)
+	}
+
+	// Try to set up lbd devices for accelerator mode
+	if err := diskio.EnsureLbdDevices(log); err != nil {
+		log.Info("lbd devices not available, accelerator mode will not work", "error", err)
+	}
+
+	diskioState, err := diskio.LoadState(dataPath)
+	if err != nil {
+		log.Warn("failed to load disk state, starting fresh", "error", err)
+		diskioState = diskio.NewState()
+		diskioState.SetPath(dataPath)
+	}
+
+	volOps := diskio.NewRealDiskVolumeOps(log)
+	mntOps := diskio.NewRealDiskMountOps(log)
+
+	r.dvc = diskio.NewDiskVolumeController(log, dataPath, r.Id, diskioState, volOps, mntOps)
+	r.dvc.SetEAC(eas)
+
+	if err := r.dvc.Init(ctx); err != nil {
+		return nil, fmt.Errorf("disk volume controller init: %w", err)
+	}
+
+	// If LSVD migration is pending, stop user containers so their file
+	// descriptors to disk images are released before migration. The sandbox
+	// controller will recreate them during its subsequent reconciliation.
+	if r.dvc.HasPendingMigration(ctx) {
+		r.stopUserContainers(ctx, log)
+	}
+
+	// Reconcile volumes with entity server on startup to re-mount any
+	// universal mode volumes that were mounted before the last shutdown.
+	if err := r.dvc.ReconcileWithEntities(ctx); err != nil {
+		log.Warn("failed to reconcile disk volumes on startup", "error", err)
+	}
+
+	r.dmc = diskio.NewDiskMountController(log, dataPath, r.Id, diskioState, mntOps)
+	r.dmc.SetEAC(eas)
+
+	// Reconcile mounts with entity server on startup to re-mount any
+	// accelerator volumes that were mounted before the last shutdown.
+	if err := r.dmc.ReconcileWithEntities(ctx); err != nil {
+		log.Warn("failed to reconcile disk mounts on startup", "error", err)
+	}
+
+	// Register volume controller shutdown before mount controller so mounts
+	// owned by the volume controller are cleaned up first
+	r.closers = append(r.closers, shutdownCloser{r.dvc})
+	r.closers = append(r.closers, shutdownCloser{r.dmc})
+
+	// Set up cloud auth for disk replication if configured
+	var logUploader diskio.LogSegmentUploader
+	if r.CloudAuth != nil && r.CloudAuth.Enabled && r.CloudAuth.PrivateKey != "" {
+		cloudURL := r.CloudAuth.CloudURL
+		if cloudURL == "" {
+			cloudURL = coordinate.DefaultCloudURL
 		}
 
-		log.Info("Using LSVD entity mode with lsvd-server",
-			"node_id", r.Id)
+		var keyData []byte
+		if strings.HasPrefix(r.CloudAuth.PrivateKey, "-----BEGIN PRIVATE KEY-----") {
+			keyData = []byte(r.CloudAuth.PrivateKey)
+		} else {
+			keyData, err = os.ReadFile(r.CloudAuth.PrivateKey)
+			if err != nil {
+				log.Warn("failed to load cloud auth private key for log watcher", "error", err)
+			}
+		}
 
-		// Write service config with credentials if available
-		if r.Config != nil {
-			if cluster, err := r.Config.GetActiveCluster(); err == nil {
-				if cluster.ClientCert != "" && cluster.ClientKey != "" {
-					svcConfig := &lsvd.ServiceConfig{
-						ClientCert: []byte(cluster.ClientCert),
-						ClientKey:  []byte(cluster.ClientKey),
-					}
-					if r.CloudAuth != nil && r.CloudAuth.Enabled {
-						svcConfig.CloudURL = r.CloudAuth.CloudURL
-						svcConfig.PrivateKey = r.CloudAuth.PrivateKey
-					}
-					svcConfigPath := filepath.Join(dataPath, "service.config")
-					if err := lsvd.SaveServiceConfig(svcConfigPath, svcConfig); err != nil {
-						log.Warn("Failed to write service config for lsvd-server", "error", err)
-					} else {
-						log.Info("Wrote service config for lsvd-server")
-					}
+		if keyData != nil {
+			keyPair, kerr := cloudauth.LoadKeyPairFromPEM(string(keyData))
+			if kerr != nil {
+				log.Warn("failed to parse cloud auth private key for log watcher", "error", kerr)
+			} else {
+				authClient, aerr := cloudauth.NewAuthClient(cloudURL, keyPair)
+				if aerr != nil {
+					log.Warn("failed to create auth client for log watcher", "error", aerr)
+				} else {
+					cloudDiskClient := diskio.NewCloudDiskClient(log, cloudURL, authClient)
+					r.dmc.SetCloudClient(cloudDiskClient)
+
+					logUploader = diskio.NewCloudSegmentUploader(log, cloudURL, authClient, diskioState)
 				}
 			}
 		}
-
-		// Create and start lsvd component
-		lsvdComp := lsvd.NewComponent(log, dataPath)
-
-		outboardPath := filepath.Join(r.DataPath, "outboard", "lsvd-server")
-
-		lsvdConfig := &lsvd.Config{
-			DataPath:         dataPath,
-			OutboardPath:     outboardPath,
-			EntityServerAddr: r.deps.EntityServerAddr,
-			NodeId:           r.Id,
-		}
-
-		if err := lsvdComp.StartOrReconnect(ctx, lsvdConfig); err != nil {
-			return nil, fmt.Errorf("failed to start lsvd-server: %w", err)
-		}
-
-		r.lsvdComponent = lsvdComp
-
-		// Clean up lsvd-server if subsequent initialization fails
-		defer func() {
-			if retErr != nil {
-				_ = lsvdComp.Close()
-			}
-		}()
-
-		r.closers = append(r.closers, lsvdComp)
-	} else {
-		log.Info("Running LSVD controllers in-process")
-
-		volumeOps := lsvdserver.NewRealVolumeOps(log, nil, "")
-		mountOps := lsvdserver.NewRealMountOps(log, nil, "")
-
-		lsvdState := lsvdserver.NewState()
-		lsvdState.SetPath(dataPath)
-
-		vc := lsvdserver.NewVolumeController(log, dataPath, r.Id, lsvdState, volumeOps)
-		vc.SetEAC(eas)
-
-		mc := lsvdserver.NewMountController(log, dataPath, r.Id, lsvdState, mountOps)
-		mc.SetEAC(eas)
-
-		r.closers = append(r.closers, shutdownCloser{mc})
-
-		volHandler := controller.AdaptReconcileController[storage_v1alpha.LsvdVolume](vc)
-		cm.AddController(controller.NewReconcileController(
-			"lsvd-volume", log, vc.Index(), eas, volHandler, 0, 1,
-		))
-
-		mntHandler := controller.AdaptReconcileController[storage_v1alpha.LsvdMount](mc)
-		cm.AddController(controller.NewReconcileController(
-			"lsvd-mount", log, mc.Index(), eas, mntHandler, 0, 1,
-		))
 	}
 
+	// Always start the log watcher so accelerator mode log segments are
+	// cleaned up even when cloud is not configured (nil uploader = delete only).
+	watcher := diskio.NewLogWatcher(log, diskioState, logUploader, 5*time.Second)
+	go func() {
+		if werr := watcher.Run(ctx); werr != nil {
+			log.Error("log watcher stopped", "error", werr)
+		}
+	}()
+	r.closers = append(r.closers, waitCloser{watcher})
+	if logUploader != nil {
+		log.Info("started log watcher with cloud upload")
+	} else {
+		log.Info("started log watcher in delete-only mode (no cloud configured)")
+	}
+
+	volHandler := controller.AdaptReconcileController[storage_v1alpha.DiskVolume](r.dvc)
+	cm.AddController(controller.NewReconcileController(
+		"disk-volume", log, r.dvc.Index(), eas, volHandler, 5*time.Minute, workers,
+	))
+
+	mntHandler := controller.AdaptReconcileController[storage_v1alpha.DiskMount](r.dmc)
+	cm.AddController(controller.NewReconcileController(
+		"disk-mount", log, r.dmc.Index(), eas, mntHandler, 5*time.Minute, workers,
+	))
+
 	// Use entity mode controllers
-	diskController := disk.NewDiskController(log, eas, r.Id)
-	diskLeaseController := disk.NewDiskLeaseController(log, eas, r.Id)
+	diskController := disk.NewDiskController(log, eas, r.Id, r.DiskMode)
+	diskLeaseController := disk.NewDiskLeaseController(log, eas, r.Id, r.DiskMode)
 
 	// Add disk controller to closers list so it gets cleaned up on shutdown
 	r.closers = append(r.closers, diskController)
@@ -602,11 +756,6 @@ func (r *Runner) SetupControllers(
 	r.cc = sbc.CC
 	r.namespace = sbc.Namespace
 	r.sbController = sbc
-
-	workers := r.Workers
-	if workers <= 0 {
-		workers = DefaulWorkers
-	}
 
 	sbController := controller.NewReconcileController(
 		"sandbox",
@@ -719,31 +868,31 @@ func (r *Runner) SetupControllers(
 		),
 	)
 
-	// Add volume watch controller to trigger disk re-reconciliation when
-	// lsvd_volume entities change (e.g. volume becomes ready after provisioning)
-	volumeWatchController := disk.NewVolumeWatchController(log, eas, diskRC)
+	// Add disk_volume watch controller to trigger disk re-reconciliation when
+	// disk_volume entities change (e.g. volume becomes DV_READY after provisioning)
+	diskVolumeWatchController := disk.NewDiskVolumeWatchController(log, eas, diskRC)
 	cm.AddController(
 		controller.NewReconcileController(
-			"volume-watch",
+			"disk-volume-watch",
 			log,
-			entity.Ref(entity.EntityKind, storage_v1alpha.KindLsvdVolume),
+			entity.Ref(entity.EntityKind, storage_v1alpha.KindDiskVolume),
 			eas,
-			controller.AdaptController(volumeWatchController),
-			0, // No periodic resync needed
+			controller.AdaptController(diskVolumeWatchController),
+			0,
 			1,
 		),
 	)
 
-	// Add mount watch controller to trigger disk lease re-reconciliation when
-	// lsvd_mount entities change (e.g. mount becomes MNT_MOUNTED after mounting)
-	mountWatchController := disk.NewMountWatchController(log, eas, diskLeaseRC)
+	// Add disk_mount watch controller to trigger disk lease re-reconciliation when
+	// disk_mount entities change (e.g. mount becomes DM_MOUNTED after mounting)
+	diskMountWatchController := disk.NewDiskMountWatchController(log, eas, diskLeaseRC)
 	cm.AddController(
 		controller.NewReconcileController(
-			"mount-watch",
+			"disk-mount-watch",
 			log,
-			entity.Ref(entity.EntityKind, storage_v1alpha.KindLsvdMount),
+			entity.Ref(entity.EntityKind, storage_v1alpha.KindDiskMount),
 			eas,
-			controller.AdaptController(mountWatchController),
+			controller.AdaptController(diskMountWatchController),
 			0,
 			1,
 		),

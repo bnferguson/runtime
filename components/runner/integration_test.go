@@ -89,7 +89,6 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 		DisableLocalNet: false,
 		Resolver:        res,
 		SandboxMetrics:  sbMetrics,
-		SkipLSVD:        true, // Skip lsvd-server for this test
 	}
 
 	// Create and start runner

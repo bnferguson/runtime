@@ -172,6 +172,17 @@ configs:
         validation:
           enum: [vxlan, wireguard]
 
+      disk_mode:
+        type: string
+        default: ""
+        cli:
+          long: disk-mode
+          description: "Disk I/O mode: auto (default, detect from hardware), universal (loop devices), or accelerator (lbd devices)"
+        env: MIREN_DISK_MODE
+        toml: disk_mode
+        validation:
+          enum: ["", auto, universal, accelerator]
+
   TLSConfig:
     description: TLS/certificate settings
     fields:

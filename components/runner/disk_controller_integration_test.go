@@ -20,11 +20,11 @@ func TestDiskControllersCanBeCreated(t *testing.T) {
 		log := slog.Default()
 
 		// Create disk controller (entity-only mode)
-		diskController := disk.NewDiskController(log, nil, "test-node")
+		diskController := disk.NewDiskController(log, nil, "test-node", "")
 		r.NotNil(diskController)
 
 		// Create disk lease controller (entity-only mode)
-		diskLeaseController := disk.NewDiskLeaseController(log, nil, "test-node")
+		diskLeaseController := disk.NewDiskLeaseController(log, nil, "test-node", "")
 		r.NotNil(diskLeaseController)
 
 		// Verify controllers can be initialized
@@ -40,8 +40,8 @@ func TestDiskControllersCanBeCreated(t *testing.T) {
 		log := slog.Default()
 
 		// Create controllers (entity-only mode)
-		diskController := disk.NewDiskController(log, nil, "test-node")
-		diskLeaseController := disk.NewDiskLeaseController(log, nil, "test-node")
+		diskController := disk.NewDiskController(log, nil, "test-node", "")
+		diskLeaseController := disk.NewDiskLeaseController(log, nil, "test-node", "")
 
 		// Verify they can be adapted for the controller manager
 		diskAdapter := controller.AdaptController(diskController)

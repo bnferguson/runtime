@@ -64,21 +64,21 @@ func TestSandboxStartWithDisk(t *testing.T) {
 	// Verify final state
 	disk := getDisk(t, ctx, h, diskID)
 	assert.Equal(t, storage.PROVISIONED, disk.Status, "disk should be PROVISIONED")
-	assert.NotEmpty(t, disk.LsvdVolumeId, "disk should have an LsvdVolumeId")
+	assert.NotEmpty(t, disk.VolumeId, "disk should have a VolumeId")
 
 	lease := getLease(t, ctx, h, leaseID)
 	assert.Equal(t, storage.BOUND, lease.Status, "lease should be BOUND")
 	assert.Equal(t, diskID, lease.DiskId)
 	assert.Equal(t, sandboxID, lease.SandboxId)
 
-	// Verify lsvd entities
-	vols := listLsvdVolumes(t, ctx, h)
-	assert.Len(t, vols, 1, "should have exactly 1 lsvd_volume")
-	assert.Equal(t, storage.VOL_READY, vols[0].ActualState)
+	// Verify disk_volume entities
+	vols := listDiskVolumes(t, ctx, h)
+	assert.Len(t, vols, 1, "should have exactly 1 disk_volume")
+	assert.Equal(t, storage.DV_READY, vols[0].ActualState)
 
-	mounts := listLsvdMounts(t, ctx, h)
-	assert.Len(t, mounts, 1, "should have exactly 1 lsvd_mount")
-	assert.Equal(t, storage.MNT_MOUNTED, mounts[0].ActualState)
+	mounts := listDiskMounts(t, ctx, h)
+	assert.Len(t, mounts, 1, "should have exactly 1 disk_mount")
+	assert.Equal(t, storage.DM_MOUNTED, mounts[0].ActualState)
 
 	sb := getSandbox(t, ctx, h, sandboxID)
 	assert.Equal(t, compute.RUNNING, sb.Status)
@@ -109,13 +109,13 @@ func TestSandboxStopReleasesLease(t *testing.T) {
 	disk := getDisk(t, ctx, h, diskID)
 	assert.Equal(t, storage.PROVISIONED, disk.Status)
 
-	// Verify the lsvd_mount has been unmounted
-	mounts := listLsvdMounts(t, ctx, h)
+	// Verify the disk_mount has been unmounted
+	mounts := listDiskMounts(t, ctx, h)
 	for _, m := range mounts {
 		// Mount should be detached or deleted
 		assert.True(t,
-			m.ActualState == storage.MNT_DETACHED ||
-				m.DesiredState == storage.MNT_WANT_UNMOUNTED,
+			m.ActualState == storage.DM_DETACHED ||
+				m.DesiredState == storage.DM_WANT_UNMOUNTED,
 			"mount should be detached or want unmounted, got actual=%s desired=%s",
 			m.ActualState, m.DesiredState)
 	}
@@ -242,11 +242,11 @@ func TestDiskProvisioningRace(t *testing.T) {
 	leaseID, err := h.FakeSandbox.AcquireDiskLease(ctx, diskID, sandboxID, "", "/data", false)
 	require.NoError(t, err)
 
-	// Only reconcile disk (not lsvd volumes yet) — disk should still be PROVISIONING
+	// Only reconcile disk (not disk volumes yet) — disk should still be PROVISIONING
 	h.reconcileKind(ctx, storage.KindDisk, h.DiskRC)
 
 	disk := getDisk(t, ctx, h, diskID)
-	// After one reconcile the disk creates the lsvd_volume but stays PROVISIONING
+	// After one reconcile the disk creates the disk_volume but stays PROVISIONING
 	assert.Equal(t, storage.PROVISIONING, disk.Status, "disk should still be PROVISIONING before volume is ready")
 
 	// Lease should still be PENDING because disk isn't provisioned yet
@@ -309,8 +309,8 @@ func TestRapidStopAndRestart(t *testing.T) {
 	assert.Equal(t, storage.BOUND, leaseB.Status, "B's lease should be BOUND")
 	assert.Equal(t, sandboxB, leaseB.SandboxId)
 
-	// Exactly 1 mounted lsvd_mount should exist (B's)
-	assert.Equal(t, 1, countMountedMounts(t, ctx, h), "should have exactly 1 mounted lsvd_mount")
+	// Exactly 1 mounted disk_mount should exist (B's)
+	assert.Equal(t, 1, countMountedMounts(t, ctx, h), "should have exactly 1 mounted disk_mount")
 }
 
 func TestAcquireBlockedByBoundLease(t *testing.T) {
@@ -566,9 +566,9 @@ func TestBoundLeaseSelfHealsAfterMountDeleted(t *testing.T) {
 	require.Equal(t, storage.BOUND, lease.Status)
 	assert.Equal(t, 1, countMountedMounts(t, ctx, h))
 
-	// Find and delete the lsvd_mount entity
+	// Find and delete the disk_mount entity
 	mount := getMountForLease(t, ctx, h, leaseID)
-	require.NotNil(t, mount, "should have an lsvd_mount")
+	require.NotNil(t, mount, "should have a disk_mount")
 	deleteMountEntity(t, ctx, h, mount.ID)
 
 	// Reconcile disk-lease controller — handleBoundLease sees no mount, reverts to PENDING
@@ -642,7 +642,7 @@ func TestPendingLeaseMountError(t *testing.T) {
 	leaseID, err := h.FakeSandbox.AcquireDiskLease(ctx, diskID, sandboxID, "", "/data", false)
 	require.NoError(t, err)
 
-	// ReconcileAll to drive disk to PROVISIONED and create the lsvd_mount entity
+	// ReconcileAll to drive disk to PROVISIONED and create the disk_mount entity
 	h.ReconcileAll(ctx, 20)
 
 	// If the lease is already BOUND, the mount was created and is MNT_MOUNTED.
@@ -655,7 +655,7 @@ func TestPendingLeaseMountError(t *testing.T) {
 
 	// Find the mount and patch it to MNT_ERROR
 	mount := getMountForLease(t, ctx, h, leaseID)
-	require.NotNil(t, mount, "should have an lsvd_mount")
+	require.NotNil(t, mount, "should have a disk_mount")
 	patchMountError(t, ctx, h, mount.ID, "filesystem corruption detected")
 
 	// Reconcile disk-lease — handlePendingLease sees existing mount in MNT_ERROR
@@ -690,22 +690,22 @@ func TestDiskDeletionLifecycle(t *testing.T) {
 	// Patch disk to DELETING
 	patchDiskStatus(t, ctx, h, diskID, storage.DELETING)
 
-	// Reconcile disk controller — should set lsvd_volume desired_state to VOL_ABSENT
+	// Reconcile disk controller — should set disk_volume desired_state to DV_ABSENT
 	h.reconcileKind(ctx, storage.KindDisk, h.DiskRC)
 
 	// Check that volume desired_state is VOL_ABSENT
-	vols := listLsvdVolumes(t, ctx, h)
-	require.NotEmpty(t, vols, "should still have lsvd_volume")
-	assert.Equal(t, storage.VOL_ABSENT, vols[0].DesiredState, "volume desired_state should be VOL_ABSENT")
+	vols := listDiskVolumes(t, ctx, h)
+	require.NotEmpty(t, vols, "should still have disk_volume")
+	assert.Equal(t, storage.DV_ABSENT, vols[0].DesiredState, "volume desired_state should be DV_ABSENT")
 
-	// Reconcile lsvd-volume — volume controller processes deletion
+	// Reconcile disk-volume — volume controller processes deletion
 	nodeId := entity.Id("node/" + testNodeId)
-	h.reconcileByIndex(ctx, entity.Ref(storage.LsvdVolumeNodeIdId, nodeId), h.LsvdVolRC)
+	h.reconcileByIndex(ctx, entity.Ref(storage.DiskVolumeNodeIdId, nodeId), h.DiskVolRC)
 
 	// Volume should now be VOL_DELETED
-	vols = listLsvdVolumes(t, ctx, h)
+	vols = listDiskVolumes(t, ctx, h)
 	require.NotEmpty(t, vols, "volume entity should still exist")
-	assert.Equal(t, storage.VOL_DELETED, vols[0].ActualState, "volume actual_state should be VOL_DELETED")
+	assert.Equal(t, storage.DV_DELETED, vols[0].ActualState, "volume actual_state should be DV_DELETED")
 
 	// Reconcile disk again — should delete the volume entity and then the disk entity
 	h.reconcileKind(ctx, storage.KindDisk, h.DiskRC)
@@ -716,8 +716,8 @@ func TestDiskDeletionLifecycle(t *testing.T) {
 	disks := listDisks(t, ctx, h)
 	assert.Empty(t, disks, "all disks should be deleted")
 
-	vols = listLsvdVolumes(t, ctx, h)
-	assert.Empty(t, vols, "all lsvd_volumes should be deleted")
+	vols = listDiskVolumes(t, ctx, h)
+	assert.Empty(t, vols, "all disk_volumes should be deleted")
 }
 
 func TestDiskErrorBlocksLease(t *testing.T) {
@@ -814,12 +814,12 @@ func TestConvergenceStability(t *testing.T) {
 	lease := getLease(t, ctx, h, leaseID)
 	require.Equal(t, storage.BOUND, lease.Status)
 
-	vols := listLsvdVolumes(t, ctx, h)
+	vols := listDiskVolumes(t, ctx, h)
 	require.Len(t, vols, 1)
 	volState := vols[0].ActualState
 	volDesired := vols[0].DesiredState
 
-	mounts := listLsvdMounts(t, ctx, h)
+	mounts := listDiskMounts(t, ctx, h)
 	require.Len(t, mounts, 1)
 	mountActual := mounts[0].ActualState
 	mountDesired := mounts[0].DesiredState
@@ -834,12 +834,12 @@ func TestConvergenceStability(t *testing.T) {
 	lease2 := getLease(t, ctx, h, leaseID)
 	assert.Equal(t, lease.Status, lease2.Status, "lease status should not change on re-reconcile")
 
-	vols2 := listLsvdVolumes(t, ctx, h)
+	vols2 := listDiskVolumes(t, ctx, h)
 	require.Len(t, vols2, 1)
 	assert.Equal(t, volState, vols2[0].ActualState, "volume actual_state should not change")
 	assert.Equal(t, volDesired, vols2[0].DesiredState, "volume desired_state should not change")
 
-	mounts2 := listLsvdMounts(t, ctx, h)
+	mounts2 := listDiskMounts(t, ctx, h)
 	require.Len(t, mounts2, 1)
 	assert.Equal(t, mountActual, mounts2[0].ActualState, "mount actual_state should not change")
 	assert.Equal(t, mountDesired, mounts2[0].DesiredState, "mount desired_state should not change")

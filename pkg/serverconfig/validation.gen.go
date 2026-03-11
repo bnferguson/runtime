@@ -124,6 +124,19 @@ func (c *ServerConfig) Validate() error {
 		}
 	}
 
+	// Validate disk_mode enum
+	if c.DiskMode != nil {
+		validDiskMode := map[string]bool{
+			"":            true,
+			"auto":        true,
+			"universal":   true,
+			"accelerator": true,
+		}
+		if !validDiskMode[*c.DiskMode] {
+			return fmt.Errorf("invalid disk_mode %q: must be one of [ auto universal accelerator]", *c.DiskMode)
+		}
+	}
+
 	// Validate http_request_timeout minimum
 	if c.HTTPRequestTimeout != nil && *c.HTTPRequestTimeout < 1 {
 		return fmt.Errorf("http_request_timeout must be at least 1, got %d", *c.HTTPRequestTimeout)

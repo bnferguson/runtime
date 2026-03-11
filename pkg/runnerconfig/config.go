@@ -21,6 +21,7 @@ type Config struct {
 	EtcdEndpoints  []string `yaml:"etcd_endpoints,omitempty" json:"etcd_endpoints,omitempty"`
 	EtcdPrefix     string   `yaml:"etcd_prefix,omitempty" json:"etcd_prefix,omitempty"`
 	NetworkBackend string   `yaml:"network_backend,omitempty" json:"network_backend,omitempty"`
+	DiskMode       string   `yaml:"disk_mode,omitempty" json:"disk_mode,omitempty"`
 }
 
 func Load(path string) (*Config, error) {
