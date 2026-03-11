@@ -9,15 +9,16 @@ import (
 
 // ServerInstall is not supported on non-Linux platforms
 func ServerInstall(ctx *Context, opts struct {
-	Address      string            `short:"a" long:"address" description:"Server address to bind to" default:"0.0.0.0:8443"`
-	Verbosity    string            `long:"verbosity" description:"Verbosity level" default:"-vv"`
-	Branch       string            `short:"b" long:"branch" description:"Branch to download if release not found" default:"main"`
-	Force        bool              `short:"f" long:"force" description:"Overwrite existing service file"`
-	NoStart      bool              `long:"no-start" description:"Do not start the service after installation"`
-	WithoutCloud bool              `long:"without-cloud" description:"Skip cloud registration setup"`
-	ClusterName  string            `short:"n" long:"name" description:"Cluster name for cloud registration"`
-	CloudURL     string            `short:"u" long:"url" description:"Cloud URL for registration" default:"https://miren.cloud"`
-	Tags         map[string]string `short:"t" long:"tag" description:"Tags for the cluster (key:value)"`
+	Address         string            `short:"a" long:"address" description:"Server address to bind to" default:"0.0.0.0:8443"`
+	Verbosity       string            `long:"verbosity" description:"Verbosity level" default:"-vv"`
+	Branch          string            `short:"b" long:"branch" description:"Branch to download if release not found" default:"main"`
+	Force           bool              `short:"f" long:"force" description:"Overwrite existing service file"`
+	NoStart         bool              `long:"no-start" description:"Do not start the service after installation"`
+	WithoutCloud    bool              `long:"without-cloud" description:"Skip cloud registration setup"`
+	ClusterName     string            `short:"n" long:"name" description:"Cluster name for cloud registration"`
+	CloudURL        string            `short:"u" long:"url" description:"Cloud URL for registration" default:"https://miren.cloud"`
+	Tags            map[string]string `short:"t" long:"tag" description:"Tags for the cluster (key:value)"`
+	SkipSystemCheck bool              `long:"skip-system-check" description:"Skip minimum system requirements check"`
 }) error {
 	fmt.Println()
 	ctx.Warn("The 'server install' command is only available on Linux.")
