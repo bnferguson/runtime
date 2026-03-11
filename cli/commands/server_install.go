@@ -15,7 +15,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/quic-go/quic-go/http3"
@@ -24,6 +26,118 @@ import (
 	"miren.dev/runtime/pkg/registration"
 	"miren.dev/runtime/version"
 )
+
+const (
+	minMemoryBytes          = 4 * 1024 * 1024 * 1024   // 4 GB
+	recommendedMemoryBytes  = 8 * 1024 * 1024 * 1024   // 8 GB
+	minStorageBytes         = 50 * 1024 * 1024 * 1024  // 50 GB
+	recommendedStorageBytes = 100 * 1024 * 1024 * 1024 // 100 GB
+
+	mirenDataDir = "/var/lib/miren"
+)
+
+// systemRequirements holds detected system resource information
+type systemRequirements struct {
+	totalMemoryBytes   int64
+	availStorageBytes  int64
+	storagePath        string
+	memoryCheckFailed  bool // true if we couldn't read memory info
+	storageCheckFailed bool // true if we couldn't read storage info
+}
+
+// checkSystemRequirements detects system resources for validation
+func checkSystemRequirements() systemRequirements {
+	reqs := systemRequirements{storagePath: mirenDataDir}
+
+	// Read total memory from /proc/meminfo
+	meminfoBytes, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		reqs.memoryCheckFailed = true
+	} else {
+		for _, line := range strings.Split(string(meminfoBytes), "\n") {
+			if strings.HasPrefix(line, "MemTotal:") {
+				fields := strings.Fields(line)
+				if len(fields) >= 2 {
+					if kb, err := strconv.ParseInt(fields[1], 10, 64); err == nil {
+						reqs.totalMemoryBytes = kb * 1024
+					}
+				}
+				break
+			}
+		}
+		if reqs.totalMemoryBytes == 0 {
+			reqs.memoryCheckFailed = true
+		}
+	}
+
+	// Check available disk space at the data directory (or its nearest existing parent)
+	checkPath := mirenDataDir
+	for checkPath != "/" {
+		if _, err := os.Stat(checkPath); err == nil {
+			break
+		}
+		checkPath = filepath.Dir(checkPath)
+	}
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(checkPath, &stat); err != nil {
+		reqs.storageCheckFailed = true
+	} else {
+		reqs.availStorageBytes = int64(stat.Bavail) * int64(stat.Bsize)
+	}
+
+	return reqs
+}
+
+// printSystemRequirementsGuidance prints warnings or errors about system requirements.
+// Returns true if installation should be blocked (below minimum).
+func printSystemRequirementsGuidance(ctx *Context, reqs systemRequirements) bool {
+	belowMinimum := false
+
+	fmt.Println()
+
+	if reqs.memoryCheckFailed {
+		ctx.Warn("Couldn't detect system memory — we recommend at least %s.", formatBytes(minMemoryBytes))
+	} else if reqs.totalMemoryBytes < minMemoryBytes {
+		belowMinimum = true
+		ctx.Warn("This machine has %s of memory, but Miren needs at least %s.",
+			formatBytes(reqs.totalMemoryBytes), formatBytes(minMemoryBytes))
+		fmt.Println("  Under the hood, Miren runs containerd, etcd, buildkit, and more — they use")
+		fmt.Println("  about 600 MB at idle and spike higher during builds. With this little memory,")
+		fmt.Println("  things will start failing when you deploy.")
+		fmt.Println()
+	} else if reqs.totalMemoryBytes < recommendedMemoryBytes {
+		ctx.Warn("This machine has %s of memory — it'll work, but we recommend %s.",
+			formatBytes(reqs.totalMemoryBytes), formatBytes(recommendedMemoryBytes))
+		fmt.Println("  You might run into trouble during builds for memory-hungry apps.")
+		fmt.Println()
+	}
+
+	if reqs.storageCheckFailed {
+		ctx.Warn("Couldn't detect available disk space — we recommend at least %s.", formatBytes(minStorageBytes))
+	} else if reqs.availStorageBytes < minStorageBytes {
+		belowMinimum = true
+		ctx.Warn("Only %s of disk space available at %s, but Miren needs at least %s.",
+			formatBytes(reqs.availStorageBytes), reqs.storagePath, formatBytes(minStorageBytes))
+		fmt.Println("  Container images, build caches, and app data add up fast — a single deploy")
+		fmt.Println("  can use 15-20 GB between images, build cache, and the registry.")
+		fmt.Println()
+	} else if reqs.availStorageBytes < recommendedStorageBytes {
+		ctx.Warn("Disk space is a bit tight: %s available at %s, we recommend %s.",
+			formatBytes(reqs.availStorageBytes), reqs.storagePath, formatBytes(recommendedStorageBytes))
+		fmt.Println("  With multiple apps and version history, storage fills up quicker than you'd expect.")
+		fmt.Println()
+	}
+
+	if belowMinimum {
+		ctx.Warn("This system doesn't meet the minimum requirements to run Miren reliably.")
+		fmt.Println("  More details: https://miren.md/system-requirements")
+		fmt.Println()
+		fmt.Println("  If you know what you're doing, you can skip this check with --skip-system-check")
+	}
+
+	fmt.Println()
+	return belowMinimum
+}
 
 // installPrerequisites holds information about the system's readiness for installation
 type installPrerequisites struct {
@@ -156,15 +270,16 @@ func fixSELinuxContext(ctx *Context, binaryPath string) {
 
 // ServerInstall sets up systemd units to run the miren server
 func ServerInstall(ctx *Context, opts struct {
-	Address      string            `short:"a" long:"address" description:"Server address to bind to" default:"0.0.0.0:8443"`
-	Verbosity    string            `long:"verbosity" description:"Verbosity level" default:"-vv"`
-	Branch       string            `short:"b" long:"branch" description:"Branch to download if release not found"`
-	Force        bool              `short:"f" long:"force" description:"Overwrite existing service file"`
-	NoStart      bool              `long:"no-start" description:"Do not start the service after installation"`
-	WithoutCloud bool              `long:"without-cloud" description:"Skip cloud registration setup"`
-	ClusterName  string            `short:"n" long:"name" description:"Cluster name for cloud registration"`
-	CloudURL     string            `short:"u" long:"url" description:"Cloud URL for registration" default:"https://miren.cloud"`
-	Tags         map[string]string `short:"t" long:"tag" description:"Tags for the cluster (key:value)"`
+	Address         string            `short:"a" long:"address" description:"Server address to bind to" default:"0.0.0.0:8443"`
+	Verbosity       string            `long:"verbosity" description:"Verbosity level" default:"-vv"`
+	Branch          string            `short:"b" long:"branch" description:"Branch to download if release not found"`
+	Force           bool              `short:"f" long:"force" description:"Overwrite existing service file"`
+	NoStart         bool              `long:"no-start" description:"Do not start the service after installation"`
+	WithoutCloud    bool              `long:"without-cloud" description:"Skip cloud registration setup"`
+	ClusterName     string            `short:"n" long:"name" description:"Cluster name for cloud registration"`
+	CloudURL        string            `short:"u" long:"url" description:"Cloud URL for registration" default:"https://miren.cloud"`
+	Tags            map[string]string `short:"t" long:"tag" description:"Tags for the cluster (key:value)"`
+	SkipSystemCheck bool              `long:"skip-system-check" description:"Skip minimum system requirements check"`
 }) error {
 	if opts.Branch == "" {
 		if br := version.Branch(); br != "" {
@@ -186,6 +301,17 @@ func ServerInstall(ctx *Context, opts struct {
 	}
 
 	ctx.Completed("Prerequisites verified (root, systemd)")
+
+	// Check system requirements (memory, disk space)
+	if !opts.SkipSystemCheck {
+		sysReqs := checkSystemRequirements()
+		if printSystemRequirementsGuidance(ctx, sysReqs) {
+			return fmt.Errorf("system does not meet minimum requirements")
+		}
+		ctx.Completed("System requirements verified")
+	} else {
+		ctx.Info("Skipping system requirements check (--skip-system-check specified)")
+	}
 
 	// Check if miren binary exists, download if not
 	mirenPath := "/var/lib/miren/release/miren"

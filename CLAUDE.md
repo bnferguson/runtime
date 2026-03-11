@@ -138,6 +138,7 @@ m app list
 - `cd docs && bun install && bun run build` - Build the documentation site (Docusaurus, uses bun NOT npm)
 - `cd docs && bun run start` - Start local dev server on port 3333
 - Docs source lives in `docs/docs/` as Markdown files; sidebar is configured in `docs/sidebars.ts`
+- **Published docs URL is `https://miren.md/`** (NOT `miren.dev/docs`). Use this when linking to docs from CLI output, error messages, or anywhere user-facing.
 
 ### Other Commands
 - `make image` - Export Docker image
