@@ -43,6 +43,7 @@ const sidebars: SidebarsConfig = {
       label: 'Reference',
       collapsed: false,
       items: [
+        'system-requirements',
         'app-toml',
         'server-config',
         {
