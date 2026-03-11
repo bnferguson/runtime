@@ -3,6 +3,7 @@ package app_v1alpha
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"slices"
 
 	"github.com/fxamacker/cbor/v2"
@@ -1376,10 +1377,11 @@ func (v *ApplicationStatus) UnmarshalJSON(data []byte) error {
 }
 
 type logEntryData struct {
-	Timestamp *standard.Timestamp `cbor:"0,keyasint,omitempty" json:"timestamp,omitempty"`
-	Line      *string             `cbor:"1,keyasint,omitempty" json:"line,omitempty"`
-	Stream    *string             `cbor:"2,keyasint,omitempty" json:"stream,omitempty"`
-	Source    *string             `cbor:"3,keyasint,omitempty" json:"source,omitempty"`
+	Timestamp  *standard.Timestamp `cbor:"0,keyasint,omitempty" json:"timestamp,omitempty"`
+	Line       *string             `cbor:"1,keyasint,omitempty" json:"line,omitempty"`
+	Stream     *string             `cbor:"2,keyasint,omitempty" json:"stream,omitempty"`
+	Source     *string             `cbor:"3,keyasint,omitempty" json:"source,omitempty"`
+	Attributes *map[string]string  `cbor:"4,keyasint,omitempty" json:"attributes,omitempty"`
 }
 
 type LogEntry struct {
@@ -1441,6 +1443,22 @@ func (v *LogEntry) Source() string {
 
 func (v *LogEntry) SetSource(source string) {
 	v.data.Source = &source
+}
+
+func (v *LogEntry) HasAttributes() bool {
+	return v.data.Attributes != nil
+}
+
+func (v *LogEntry) Attributes() map[string]string {
+	if v.data.Attributes == nil {
+		return nil
+	}
+	return *v.data.Attributes
+}
+
+func (v *LogEntry) SetAttributes(attributes map[string]string) {
+	x := maps.Clone(attributes)
+	v.data.Attributes = &x
 }
 
 func (v *LogEntry) MarshalCBOR() ([]byte, error) {
