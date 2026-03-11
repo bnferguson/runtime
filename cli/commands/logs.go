@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -238,11 +239,41 @@ func printLogEntry(ctx *Context, l *app_v1alpha.LogEntry) {
 		}
 		prefix = "[" + source + "] "
 	}
-	ctx.Printf("%s %s: %s%s\n",
+	attrs := ""
+	if l.HasAttributes() {
+		attrs = formatAttributes(l.Attributes())
+	}
+	ctx.Printf("%s %s: %s%s%s\n",
 		streamTypePrefixes[l.Stream()],
 		standard.FromTimestamp(l.Timestamp()).Format("2006-01-02 15:04:05"),
 		prefix,
-		l.Line())
+		l.Line(),
+		attrs)
+}
+
+func formatAttributes(m map[string]string) string {
+	if len(m) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+
+	var b strings.Builder
+	for _, k := range keys {
+		b.WriteByte(' ')
+		b.WriteString(k)
+		b.WriteByte('=')
+		v := m[k]
+		if strings.ContainsAny(v, " \t\"\n\r") {
+			fmt.Fprintf(&b, "%q", v)
+		} else {
+			b.WriteString(v)
+		}
+	}
+	return b.String()
 }
 
 func streamLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *time.Duration, follow bool, filter *logfilter.Filter) error {

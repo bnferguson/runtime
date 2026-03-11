@@ -98,6 +98,24 @@ func TestGenerator(t *testing.T) {
 		r.Equal(string(data), output)
 	})
 
+	t.Run("can generate code for a message with map fields", func(t *testing.T) {
+		r := require.New(t)
+
+		g, err := NewGenerator()
+		r.NoError(err)
+
+		err = g.Read("testdata/map.yml")
+		r.NoError(err)
+
+		output, err := g.Generate("maptype")
+		r.NoError(err)
+
+		data, err := os.ReadFile("testdata/map.go")
+		r.NoError(err)
+
+		r.Equal(string(data), output)
+	})
+
 	t.Run("can generate code for an interface", func(t *testing.T) {
 		r := require.New(t)
 

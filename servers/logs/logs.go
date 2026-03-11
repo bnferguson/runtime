@@ -31,6 +31,18 @@ func toLogEntry(entry observability.LogEntry) *app_v1alpha.LogEntry {
 	if source, ok := entry.Attributes["source"]; ok {
 		le.SetSource(source)
 	}
+	if len(entry.Attributes) > 0 {
+		attrs := make(map[string]string, len(entry.Attributes))
+		for k, v := range entry.Attributes {
+			if k == "source" {
+				continue
+			}
+			attrs[k] = v
+		}
+		if len(attrs) > 0 {
+			le.SetAttributes(attrs)
+		}
+	}
 	return le
 }
 

@@ -292,6 +292,11 @@ types:
       - name: source
         type: string
         index: 3
+      - name: attributes
+        type: map
+        key: string
+        value: string
+        index: 4
 
   - type: LogChunk
     fields:

@@ -279,6 +279,10 @@ func (g *Generator) properType(name string) *j.Statement {
 	return j.Id(name)
 }
 
+func (g *Generator) mapType(field *DescField) *j.Statement {
+	return j.Map(g.properType(field.Key)).Add(g.properType(field.Value))
+}
+
 func (g *Generator) deriveType(base, sub string) string {
 	bracket := strings.IndexByte(base, '[')
 
@@ -324,6 +328,11 @@ func (g *Generator) generateServerStructs(f *j.File, t *DescInterface) error {
 							"json": p.Name + ",omitempty",
 						})
 					}
+				} else if p.Type == "map" {
+					gr.Id(toCamal(p.Name)).Op("*").Map(g.properType(p.Key)).Add(g.properType(p.Value)).Tag(map[string]string{
+						"cbor": fmt.Sprintf("%d,keyasint,omitempty", idx),
+						"json": p.Name + ",omitempty",
+					})
 				} else {
 					gr.Id(capitalize(p.Name)).Op("*").Add(g.properType(p.Type)).Tag(map[string]string{
 						"cbor": fmt.Sprintf("%d,keyasint,omitempty", idx),
@@ -350,6 +359,8 @@ func (g *Generator) generateServerStructs(f *j.File, t *DescInterface) error {
 					Name:    p.Name,
 					Type:    p.Type,
 					Element: p.Element,
+					Key:     p.Key,
+					Value:   p.Value,
 					Index:   idx,
 				},
 			)
@@ -387,6 +398,11 @@ func (g *Generator) generateServerStructs(f *j.File, t *DescInterface) error {
 							"json": p.Name + ",omitempty",
 						})
 					}
+				} else if p.Type == "map" {
+					gr.Id(capitalize(p.Name)).Op("*").Map(g.properType(p.Key)).Add(g.properType(p.Value)).Tag(map[string]string{
+						"cbor": fmt.Sprintf("%d,keyasint,omitempty", idx),
+						"json": p.Name + ",omitempty",
+					})
 				} else {
 					gr.Id(capitalize(p.Name)).Op("*").Add(g.properType(p.Type)).Tag(map[string]string{
 						"cbor": fmt.Sprintf("%d,keyasint,omitempty", idx),
@@ -412,6 +428,8 @@ func (g *Generator) generateServerStructs(f *j.File, t *DescInterface) error {
 					Name:    p.Name,
 					Type:    p.Type,
 					Element: p.Element,
+					Key:     p.Key,
+					Value:   p.Value,
 					Index:   idx,
 				},
 			)
@@ -540,6 +558,25 @@ func (g *Generator) readForField(f *j.File, t *DescType, field *DescField) {
 				j.Return(j.Op("*").Id("v").Dot("data").Dot(name)),
 			)
 		}
+
+		f.Line()
+	case "map":
+		f.Func().Params(
+			j.Id("v").Op("*").Add(recv),
+		).Id("Has" + fname).Params().Bool().Block(
+			j.Return(j.Id("v").Dot("data").Dot(name).Op("!=").Nil()),
+		)
+
+		f.Line()
+
+		f.Func().Params(
+			j.Id("v").Op("*").Add(recv),
+		).Id(fname).Params().Add(g.mapType(field)).Block(
+			j.If(j.Id("v").Dot("data").Dot(name).Op("==").Nil()).Block(
+				j.Return(j.Nil()),
+			),
+			j.Return(j.Op("*").Id("v").Dot("data").Dot(name)),
+		)
 
 		f.Line()
 	default:
@@ -711,6 +748,16 @@ func (g *Generator) writeForField(f *j.File, t *DescType, field *DescField) {
 				j.Id("v").Dot("data").Dot(name).Op("=").Op("&").Id("x"),
 			)
 		}
+
+	case "map":
+		f.Func().Params(
+			j.Id("v").Op("*").Add(recv),
+		).Id("Set"+fname).Params(
+			j.Id(pname).Add(g.mapType(field)),
+		).Block(
+			j.Id("x").Op(":=").Qual("maps", "Clone").Call(j.Id(pname)),
+			j.Id("v").Dot("data").Dot(name).Op("=").Op("&").Id("x"),
+		)
 
 	default:
 		if g.ti(field.Type).isInterface {
@@ -909,6 +956,12 @@ func (g *Generator) generateCompactStruct(f *j.File, t *DescType) error {
 						"json": toSnake(field.Name) + ",omitempty",
 					})
 				}
+
+			case "map":
+				gr.Id(toCamal(field.Name)).Add(g.mapType(field)).Tag(map[string]string{
+					"cbor": fmt.Sprintf("%d,keyasint,omitempty", field.Index),
+					"json": toSnake(field.Name) + ",omitempty",
+				})
 
 			case "union":
 				gr.Id(private(t.Type) + toCamal(field.Name))
@@ -1111,6 +1164,34 @@ func (g *Generator) generateCompactStruct(f *j.File, t *DescType) error {
 					)
 				}
 			}
+		case "map":
+			if t.Readable() {
+				f.Func().Params(
+					j.Id("v").Op("*").Add(recv),
+				).Id("Has" + fname).Params().Bool().Block(
+					j.Return(j.True()),
+				)
+
+				f.Line()
+
+				f.Func().Params(
+					j.Id("v").Op("*").Add(recv),
+				).Id(fname).Params().Add(g.mapType(field)).Block(
+					j.Return(j.Id("v").Dot("data").Dot(name)),
+				)
+
+				f.Line()
+			}
+
+			if t.Writeable() {
+				f.Func().Params(
+					j.Id("v").Op("*").Add(recv),
+				).Id("Set" + fname).Params(
+					j.Id(pname).Add(g.mapType(field)),
+				).Block(
+					j.Id("v").Dot("data").Dot(name).Op("=").Qual("maps", "Clone").Call(j.Id(pname)),
+				)
+			}
 		case "union":
 			f.Func().Params(
 				j.Id("v").Op("*").Add(recv),
@@ -1244,6 +1325,12 @@ func (g *Generator) generateStruct(f *j.File) error {
 							"json": toSnake(field.Name) + ",omitempty",
 						})
 					}
+
+				case "map":
+					gr.Id(toCamal(field.Name)).Op("*").Add(g.mapType(field)).Tag(map[string]string{
+						"cbor": fmt.Sprintf("%d,keyasint,omitempty", field.Index),
+						"json": toSnake(field.Name) + ",omitempty",
+					})
 
 				case "union":
 					gr.Id(private(t.Type) + toCamal(field.Name))
@@ -1464,6 +1551,38 @@ func (g *Generator) generateStruct(f *j.File) error {
 						)
 					}
 				}
+			case "map":
+				if t.Readable() {
+					f.Func().Params(
+						j.Id("v").Op("*").Add(recv),
+					).Id("Has" + fname).Params().Bool().Block(
+						j.Return(j.Id("v").Dot("data").Dot(name).Op("!=").Nil()),
+					)
+
+					f.Line()
+
+					f.Func().Params(
+						j.Id("v").Op("*").Add(recv),
+					).Id(fname).Params().Add(g.mapType(field)).Block(
+						j.If(j.Id("v").Dot("data").Dot(name).Op("==").Nil()).Block(
+							j.Return(j.Nil()),
+						),
+						j.Return(j.Op("*").Id("v").Dot("data").Dot(name)),
+					)
+
+					f.Line()
+				}
+
+				if t.Writeable() {
+					f.Func().Params(
+						j.Id("v").Op("*").Add(recv),
+					).Id("Set"+fname).Params(
+						j.Id(pname).Add(g.mapType(field)),
+					).Block(
+						j.Id("x").Op(":=").Qual("maps", "Clone").Call(j.Id(pname)),
+						j.Id("v").Dot("data").Dot(name).Op("=").Op("&").Id("x"),
+					)
+				}
 			case "union":
 				f.Func().Params(
 					j.Id("v").Op("*").Add(recv),
@@ -1672,6 +1791,8 @@ func (g *Generator) generateClient(f *j.File, i *DescInterface) error {
 						Name:    p.Name,
 						Type:    p.Type,
 						Element: p.Element,
+						Key:     p.Key,
+						Value:   p.Value,
 						Index:   0,
 					})
 			}
@@ -1694,6 +1815,8 @@ func (g *Generator) generateClient(f *j.File, i *DescInterface) error {
 					} else {
 						gr.Id(private(p.Name)).Index().Id(p.Element)
 					}
+				} else if p.Type == "map" {
+					gr.Id(private(p.Name)).Map(g.properType(p.Key)).Add(g.properType(p.Value))
 				} else {
 					gr.Id(private(p.Name)).Add(g.properType(p.Type))
 				}
@@ -1730,6 +1853,9 @@ func (g *Generator) generateClient(f *j.File, i *DescInterface) error {
 					gr.Id("args").Dot("data").Dot(toCamal(p.Name)).Op("=").Id(private(p.Name))
 				} else if p.Type == "list" {
 					gr.Id("x").Op(":=").Qual("slices", "Clone").Call(j.Id(private(p.Name)))
+					gr.Id("args").Dot("data").Dot(toCamal(p.Name)).Op("=").Op("&").Id("x")
+				} else if p.Type == "map" {
+					gr.Id("x").Op(":=").Qual("maps", "Clone").Call(j.Id(private(p.Name)))
 					gr.Id("args").Dot("data").Dot(toCamal(p.Name)).Op("=").Op("&").Id("x")
 				} else {
 					gr.Id("args").Dot("data").Dot(toCamal(p.Name)).Op("=").Op("&").Id(private(p.Name))
@@ -2059,6 +2185,15 @@ func (t *DescType) Validate() error {
 			}
 			seen[field.Index] = struct{}{}
 		}
+
+		if field.Type == "list" && field.Element == "" {
+			return fmt.Errorf("field %q in type %s: list requires element", field.Name, t.Type)
+		}
+		if field.Type == "map" {
+			if field.Key == "" || field.Value == "" {
+				return fmt.Errorf("field %q in type %s: map requires key and value", field.Name, t.Type)
+			}
+		}
 	}
 
 	return nil
@@ -2138,6 +2273,10 @@ func (t *DescType) CalculateOffsets(usertypes map[string]*DescType) {
 			field.wordOffset = wordOffset
 			t.pointers++
 			wordOffset++
+		case "map":
+			field.wordOffset = wordOffset
+			t.pointers++
+			wordOffset++
 		default:
 			if ut, ok := usertypes[field.Type]; ok {
 				field.wordOffset = wordOffset
@@ -2156,6 +2295,8 @@ type DescField struct {
 
 	Element string       `yaml:"element"`
 	Union   []UnionField `yaml:"union,omitempty"`
+	Key     string       `yaml:"key,omitempty"`
+	Value   string       `yaml:"value,omitempty"`
 
 	dataOffset int
 	wordOffset int
@@ -2192,4 +2333,6 @@ type DescParamater struct {
 	Name    string `yaml:"name"`
 	Type    string `yaml:"type"`
 	Element string `yaml:"element,omitempty"`
+	Key     string `yaml:"key,omitempty"`
+	Value   string `yaml:"value,omitempty"`
 }

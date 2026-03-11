@@ -1,0 +1,14 @@
+types:
+- type: Hero
+  fields:
+    - name: age
+      type: int32
+      index: 0
+    - name: name
+      type: string
+      index: 1
+    - name: traits
+      type: map
+      key: string
+      value: string
+      index: 2
