@@ -58,7 +58,7 @@ func (c *AutocertController) Init(ctx context.Context) error {
 		Cache:  autocert.DirCache(certsDir),
 		Email:  c.email,
 		HostPolicy: func(ctx context.Context, host string) error {
-			if _, ok := c.allowedHosts.Load(strings.ToLower(host)); ok {
+			if c.isAllowedHost(strings.ToLower(host)) {
 				return nil
 			}
 			return fmt.Errorf("host %q not in allowed set", host)
@@ -83,6 +83,17 @@ func (c *AutocertController) Reconcile(ctx context.Context, route *ingress_v1alp
 
 	log := c.log.With("domain", domain, "route", routeID)
 
+	// For wildcard routes (*.example.com), eagerly provision the base domain cert.
+	// HTTP-01 challenges can't issue wildcard certs — those require DNS-01. But we
+	// can pre-provision the base domain so it's ready, and let individual subdomains
+	// provision inline when they first arrive via GetCertificate.
+	provisionDomain := domain
+	if strings.HasPrefix(domain, "*.") {
+		provisionDomain = domain[2:] // *.example.com → example.com
+		log.Info("wildcard route: eagerly provisioning base domain cert, subdomains will provision inline",
+			"base_domain", provisionDomain)
+	}
+
 	// Wait for port-80 ACME challenge server to be ready before attempting provisioning
 	select {
 	case <-c.ready:
@@ -91,7 +102,7 @@ func (c *AutocertController) Reconcile(ctx context.Context, route *ingress_v1alp
 	}
 
 	// Eagerly provision the certificate with a synthetic ClientHelloInfo
-	hello := &tls.ClientHelloInfo{ServerName: domain}
+	hello := &tls.ClientHelloInfo{ServerName: provisionDomain}
 	_, err := c.mgr.GetCertificate(hello)
 	if err != nil {
 		log.Warn("eager cert provisioning failed (will retry on next TLS handshake)", "error", err)
@@ -131,7 +142,7 @@ func (c *AutocertController) Delete(ctx context.Context, id entity.Id) error {
 func (c *AutocertController) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	host := strings.ToLower(hello.ServerName)
 
-	if _, ok := c.allowedHosts.Load(host); ok {
+	if c.isAllowedHost(host) {
 		cert, err := c.mgr.GetCertificate(hello)
 		if err == nil {
 			return cert, nil
@@ -146,6 +157,23 @@ func (c *AutocertController) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Ce
 // delegating non-challenge requests to the provided fallback handler.
 func (c *AutocertController) HTTPHandler(fallback http.Handler) http.Handler {
 	return c.mgr.HTTPHandler(fallback)
+}
+
+// isAllowedHost checks whether host is covered by the allowed set, including
+// wildcard entries. For example, if "*.example.com" is in the set, both
+// "foo.example.com" and "example.com" are considered allowed.
+func (c *AutocertController) isAllowedHost(host string) bool {
+	if _, ok := c.allowedHosts.Load(host); ok {
+		return true
+	}
+	// Check if a wildcard covers this host: foo.example.com → *.example.com
+	if idx := strings.IndexByte(host, '.'); idx >= 0 {
+		wildcard := "*" + host[idx:]
+		if _, ok := c.allowedHosts.Load(wildcard); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // SetReady signals that the port-80 ACME challenge server is up and accepting connections.

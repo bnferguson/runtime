@@ -117,6 +117,73 @@ func TestAutocertController_HostPolicy(t *testing.T) {
 	}
 }
 
+func TestAutocertController_Reconcile_WildcardStoresPattern(t *testing.T) {
+	c := newTestAutocertController(t)
+	c.SetReady()
+
+	route, meta := testRouteMeta("wildcard-route", "*.example.com")
+	if err := c.Reconcile(context.Background(), route, meta); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, ok := c.allowedHosts.Load("*.example.com"); !ok {
+		t.Error("expected *.example.com to be in allowed hosts")
+	}
+}
+
+func TestAutocertController_IsAllowedHost_WildcardMatching(t *testing.T) {
+	c := newTestAutocertController(t)
+	c.allowedHosts.Store("*.example.com", struct{}{})
+
+	tests := []struct {
+		host    string
+		allowed bool
+	}{
+		{"foo.example.com", true},
+		{"bar.example.com", true},
+		{"example.com", false},          // bare domain not covered by wildcard alone
+		{"other.com", false},            // unrelated domain
+		{"deep.sub.example.com", false}, // only one level of wildcard
+	}
+
+	for _, tt := range tests {
+		got := c.isAllowedHost(tt.host)
+		if got != tt.allowed {
+			t.Errorf("isAllowedHost(%q) = %v, want %v", tt.host, got, tt.allowed)
+		}
+	}
+}
+
+func TestAutocertController_GetCertificate_WildcardSubdomain(t *testing.T) {
+	c := newTestAutocertController(t)
+	c.allowedHosts.Store("*.example.com", struct{}{})
+
+	// A subdomain covered by the wildcard should attempt autocert (and fall back)
+	hello := &tls.ClientHelloInfo{ServerName: "foo.example.com"}
+	cert, err := c.GetCertificate(hello)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cert == nil {
+		t.Fatal("expected a certificate, got nil")
+	}
+}
+
+func TestAutocertController_HostPolicy_WildcardMatching(t *testing.T) {
+	c := newTestAutocertController(t)
+	c.allowedHosts.Store("*.example.com", struct{}{})
+
+	// Subdomain covered by wildcard should be accepted
+	if err := c.mgr.HostPolicy(context.Background(), "foo.example.com"); err != nil {
+		t.Errorf("expected wildcard to accept foo.example.com, got: %v", err)
+	}
+
+	// Unrelated domain should be rejected
+	if err := c.mgr.HostPolicy(context.Background(), "other.com"); err == nil {
+		t.Error("expected host policy to reject other.com")
+	}
+}
+
 func TestAutocertController_SetReady_Idempotent(t *testing.T) {
 	c := newTestAutocertController(t)
 	c.SetReady()
