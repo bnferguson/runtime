@@ -141,7 +141,7 @@ func TestAutocertController_IsAllowedHost_WildcardMatching(t *testing.T) {
 	}{
 		{"foo.example.com", true},
 		{"bar.example.com", true},
-		{"example.com", false},          // bare domain not covered by wildcard alone
+		{"example.com", false},          // bare domain requires its own route
 		{"other.com", false},            // unrelated domain
 		{"deep.sub.example.com", false}, // only one level of wildcard
 	}

@@ -83,15 +83,12 @@ func (c *AutocertController) Reconcile(ctx context.Context, route *ingress_v1alp
 
 	log := c.log.With("domain", domain, "route", routeID)
 
-	// For wildcard routes (*.example.com), eagerly provision the base domain cert.
-	// HTTP-01 challenges can't issue wildcard certs — those require DNS-01. But we
-	// can pre-provision the base domain so it's ready, and let individual subdomains
-	// provision inline when they first arrive via GetCertificate.
-	provisionDomain := domain
+	// Wildcard routes (*.example.com) can't be eagerly provisioned — HTTP-01 can't
+	// issue wildcard certs and we don't know which subdomains will be requested.
+	// Just add the pattern to allowedHosts so HostPolicy accepts subdomains inline.
 	if strings.HasPrefix(domain, "*.") {
-		provisionDomain = domain[2:] // *.example.com → example.com
-		log.Info("wildcard route: eagerly provisioning base domain cert, subdomains will provision inline",
-			"base_domain", provisionDomain)
+		log.Info("wildcard route: subdomains will provision certs inline on first request")
+		return nil
 	}
 
 	// Wait for port-80 ACME challenge server to be ready before attempting provisioning
@@ -102,7 +99,7 @@ func (c *AutocertController) Reconcile(ctx context.Context, route *ingress_v1alp
 	}
 
 	// Eagerly provision the certificate with a synthetic ClientHelloInfo
-	hello := &tls.ClientHelloInfo{ServerName: provisionDomain}
+	hello := &tls.ClientHelloInfo{ServerName: domain}
 	_, err := c.mgr.GetCertificate(hello)
 	if err != nil {
 		log.Warn("eager cert provisioning failed (will retry on next TLS handshake)", "error", err)
@@ -166,7 +163,7 @@ func (c *AutocertController) isAllowedHost(host string) bool {
 	if _, ok := c.allowedHosts.Load(host); ok {
 		return true
 	}
-	// Check if a wildcard covers this host: foo.example.com → *.example.com
+	// Check if a wildcard covers this subdomain: foo.example.com → *.example.com
 	if idx := strings.IndexByte(host, '.'); idx >= 0 {
 		wildcard := "*" + host[idx:]
 		if _, ok := c.allowedHosts.Load(wildcard); ok {
