@@ -70,12 +70,9 @@ var Meter = spinner.Spinner{
 }
 
 // Data types for UI
-type transfer struct {
-	total, current int64
-}
-
-type transferUpdate struct {
-	transfers map[string]transfer
+type buildProgress struct {
+	total     int
+	completed int
 }
 
 type phaseSummary struct {
@@ -98,9 +95,10 @@ type deployInfo struct {
 	message string
 	update  chan string
 
-	transfers chan transferUpdate
-	prog      progress.Model
-	parts     int
+	buildCh    chan buildProgress
+	prog       progress.Model
+	buildSteps int
+	buildPct   float64
 
 	uploadProgress chan upload.Progress
 	uploadSpin     spinner.Model
@@ -125,7 +123,7 @@ type deployInfo struct {
 	bp           tea.Model
 }
 
-func initialModel(update chan string, transfers chan transferUpdate, uploadProgress chan upload.Progress) *deployInfo {
+func initialModel(update chan string, buildCh chan buildProgress, uploadProgress chan upload.Progress) *deployInfo {
 	s := spinner.New()
 	s.Spinner = Meter
 	s.Style = lipgloss.NewStyle()
@@ -143,7 +141,7 @@ func initialModel(update chan string, transfers chan transferUpdate, uploadProgr
 		spinner:         s,
 		message:         "Reading application data",
 		update:          update,
-		transfers:       transfers,
+		buildCh:         buildCh,
 		prog:            p,
 		uploadProgress:  uploadProgress,
 		uploadSpin:      uploadS,
@@ -173,9 +171,9 @@ func (m *deployInfo) Init() tea.Cmd {
 		})
 	}
 
-	if m.transfers != nil {
+	if m.buildCh != nil {
 		cmds = append(cmds, func() tea.Msg {
-			return <-m.transfers
+			return <-m.buildCh
 		})
 	}
 
@@ -265,6 +263,7 @@ func (m *deployInfo) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Start tracking buildkit phase
 				m.phaseStart = time.Now()
 				m.currentPhase = "buildkit"
+				m.buildkitStarted = true
 			}
 
 		}
@@ -287,22 +286,16 @@ func (m *deployInfo) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				})
 			}
 		}
-	case transferUpdate:
+	case buildProgress:
 		m.lastActivity = time.Now() // Reset activity timer
 
-		// Mark buildkit as started once we receive transfer updates
-		if m.currentPhase == "buildkit" && !m.buildkitStarted {
-			m.buildkitStarted = true
-		}
-
-		// Buildkit transfers mean upload is complete (fallback if no "Launching builder" message)
+		// Build progress means upload is complete (fallback if no "Launching builder" message)
 		if m.isUploading {
 			m.isUploading = false
 			duration := time.Since(m.phaseStart)
 			m.uploadDuration = duration
 
 			// Only create upload summary if we haven't already from "Launching builder" message
-			// Check both that we don't have phases OR the last phase isn't Upload artifacts
 			hasUploadPhase := false
 			for _, phase := range m.completedPhases {
 				if phase.name == "Upload artifacts" {
@@ -330,28 +323,16 @@ func (m *deployInfo) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.phaseStart = time.Now()
 			m.currentPhase = "buildkit"
 		}
+		m.buildkitStarted = true
 
-		var total, current int64
-		for _, t := range msg.transfers {
-			total += t.total
-			current += t.current
+		m.buildSteps = msg.total
+
+		if msg.total > 0 {
+			m.buildPct = float64(msg.completed) / float64(msg.total)
 		}
-
-		m.parts = len(msg.transfers)
-
-		cmd := m.prog.SetPercent(float64(current) / float64(total))
-		cmds = append(cmds,
-			cmd,
-			func() tea.Msg {
-				return <-m.transfers
-			})
-	case progress.FrameMsg:
-		p, cmd := m.prog.Update(msg)
-		m.prog = p.(progress.Model)
-
-		if cmd != nil {
-			cmds = append(cmds, cmd)
-		}
+		cmds = append(cmds, func() tea.Msg {
+			return <-m.buildCh
+		})
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
@@ -386,8 +367,12 @@ func (m *deployInfo) View() string {
 		currentLine = fmt.Sprintf("  %s %s...\n      %s %s",
 			m.uploadSpin.View(), m.message, m.spinner.View(), speedInfo)
 	} else if m.currentPhase != "completed" {
-		fetch := deployPrefixStyle.Render(fmt.Sprintf("Fetching %d items:", m.parts))
-		currentLine = fmt.Sprintf("  %s %s...\n      %s %s", m.spinner.View(), m.message, fetch, m.prog.View())
+		if m.buildSteps > 0 {
+			steps := deployPrefixStyle.Render(fmt.Sprintf("Building %d steps:", m.buildSteps))
+			currentLine = fmt.Sprintf("  %s %s...\n      %s %s", m.spinner.View(), m.message, steps, m.prog.ViewAs(m.buildPct))
+		} else {
+			currentLine = fmt.Sprintf("  %s %s...", m.spinner.View(), m.message)
+		}
 	}
 
 	if currentLine != "" {

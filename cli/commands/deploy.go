@@ -523,7 +523,7 @@ func Deploy(ctx *Context, opts struct {
 			return nil
 		}
 
-		cb = createBuildStatusCallback(buildCtx, nil, nil, nil, &buildErrors, nil, progressHandler)
+		cb = createBuildStatusCallback(buildCtx, nil, nil, &buildErrors, nil, progressHandler)
 
 		results, err = bc.BuildFromTar(buildCtx, name, stream.ServeReader(buildCtx, r), cb, envVars)
 		if err != nil {
@@ -569,9 +569,8 @@ func Deploy(ctx *Context, opts struct {
 	} else {
 		var (
 			updateCh         = make(chan string, 1)
-			transferCh       = make(chan transferUpdate, 1)
+			buildCh          = make(chan buildProgress, 1)
 			uploadProgressCh = make(chan upload.Progress, 1)
-			transfers        = map[string]transfer{}
 			wg               sync.WaitGroup
 		)
 
@@ -589,7 +588,7 @@ func Deploy(ctx *Context, opts struct {
 		deployCtx, cancelDeploy := context.WithCancel(buildCtx)
 		defer cancelDeploy()
 
-		model := initialModel(updateCh, transferCh, uploadProgressCh)
+		model := initialModel(updateCh, buildCh, uploadProgressCh)
 		p := tea.NewProgram(model)
 
 		var finalModel tea.Model
@@ -619,7 +618,7 @@ func Deploy(ctx *Context, opts struct {
 			return nil
 		}
 
-		cb = createBuildStatusCallback(deployCtx, updateCh, transferCh, transfers, &buildErrors, &buildLogs, progressHandler)
+		cb = createBuildStatusCallback(deployCtx, updateCh, buildCh, &buildErrors, &buildLogs, progressHandler)
 
 		results, err = bc.BuildFromTar(deployCtx, name, stream.ServeReader(deployCtx, r), cb, envVars)
 
@@ -634,7 +633,7 @@ func Deploy(ctx *Context, opts struct {
 			buildPhase := phaseSummary{
 				name:     "Build & push image",
 				duration: duration,
-				details:  fmt.Sprintf("%d layers processed", m.parts),
+				details:  buildStepsSummary(m.buildSteps),
 			}
 
 			// Only print the final build phase summary (TEA UI already showed the others)
@@ -771,12 +770,12 @@ func printBuildErrors(ctx *Context, buildErrors []string, buildLogs []string) {
 func createBuildStatusCallback(
 	ctx context.Context,
 	updateCh chan<- string,
-	transferCh chan<- transferUpdate,
-	transfers map[string]transfer,
+	buildCh chan<- buildProgress,
 	buildErrors *[]string,
 	buildLogs *[]string,
 	progressHandler func(*client.SolveStatus) error,
 ) stream.SendStream[*build_v1alpha.Status] {
+	vertices := map[string]bool{} // digest → completed
 	return stream.Callback(func(su *build_v1alpha.Status) error {
 		update := su.Update()
 
@@ -789,24 +788,32 @@ func createBuildStatusCallback(
 				return err
 			}
 
-			// Handle transfers if we have a transfer channel
-			if transferCh != nil {
+			// Track build step progress via vertices
+			if buildCh != nil {
 				var updated bool
-				for _, st := range status.Statuses {
-					if st.Total != 0 {
+				for _, v := range status.Vertexes {
+					d := v.Digest.String()
+					if _, seen := vertices[d]; !seen {
 						updated = true
-						transfers[st.ID] = transfer{total: st.Total, current: st.Current}
 					}
+					done := v.Completed != nil
+					if done != vertices[d] {
+						updated = true
+					}
+					vertices[d] = done
 				}
 
 				if updated {
+					var completed int
+					for _, done := range vertices {
+						if done {
+							completed++
+						}
+					}
 					select {
 					case <-ctx.Done():
-						// UI/operation cancelled, drop the update
-					case transferCh <- transferUpdate{transfers: transfers}:
-						// ok
+					case buildCh <- buildProgress{total: len(vertices), completed: completed}:
 					default:
-						// channel full, drop to avoid blocking
 					}
 				}
 			}
@@ -859,6 +866,16 @@ func createBuildStatusCallback(
 
 		return nil
 	})
+}
+
+func buildStepsSummary(count int) string {
+	if count == 0 {
+		return "cached"
+	}
+	if count == 1 {
+		return "1 step completed"
+	}
+	return fmt.Sprintf("%d steps completed", count)
 }
 
 // displayAccessInfo shows how to access the deployed app using server-provided access info
