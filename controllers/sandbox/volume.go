@@ -132,12 +132,6 @@ func (c *SandboxController) configureMirenVolume(ctx context.Context, sb *comput
 		leaseTimeout = duration
 	}
 
-	// Look up or create Disk entity using instance-specific name
-	diskID, err := c.ensureDisk(ctx, actualDiskName, sizeGB, filesystem)
-	if err != nil {
-		return "", fmt.Errorf("failed to ensure disk exists: %w", err)
-	}
-
 	// Resolve version to app ID if set
 	var appID entity.Id
 	if sb.Spec.Version != "" {
@@ -151,6 +145,12 @@ func (c *SandboxController) configureMirenVolume(ctx context.Context, sb *comput
 			version.Decode(versionResp.Entity().Entity())
 			appID = version.App
 		}
+	}
+
+	// Look up or create Disk entity using instance-specific name
+	diskID, err := c.ensureDisk(ctx, actualDiskName, sizeGB, filesystem, appID)
+	if err != nil {
+		return "", fmt.Errorf("failed to ensure disk exists: %w", err)
 	}
 
 	// Acquire a lease for this disk on this node (creates new or takes over existing)
@@ -174,7 +174,7 @@ func (c *SandboxController) configureMirenVolume(ctx context.Context, sb *comput
 	return diskMountPath, nil
 }
 
-func (c *SandboxController) ensureDisk(ctx context.Context, diskName string, sizeGB int64, filesystem string) (entity.Id, error) {
+func (c *SandboxController) ensureDisk(ctx context.Context, diskName string, sizeGB int64, filesystem string, appID entity.Id) (entity.Id, error) {
 	// Search for existing disk by name using the name index
 	listResp, err := c.EAC.List(ctx, entity.String(storage.DiskNameId, diskName))
 	if err != nil {
@@ -222,6 +222,7 @@ func (c *SandboxController) ensureDisk(ctx context.Context, diskName string, siz
 		SizeGb:     sizeGB,
 		Filesystem: fs,
 		Status:     storage.PROVISIONING,
+		CreatedBy:  appID,
 	}
 
 	name := idgen.GenNS("disk")

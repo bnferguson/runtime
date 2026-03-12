@@ -27,6 +27,7 @@ import (
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/ingress"
+	storage "miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/components/buildkit"
 	"miren.dev/runtime/components/netresolve"
@@ -291,6 +292,28 @@ func validateNodePorts(ctx context.Context, eac *entityserver_v1alpha.EntityAcce
 		}
 	}
 
+	return nil
+}
+
+// validateDiskConfigs checks that disks referenced with size_gb=0 already exist
+// in the entity store. This catches missing disks at deploy time rather than
+// letting sandboxes fail at runtime with retry loops.
+func validateDiskConfigs(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient, spec core_v1alpha.ConfigSpec) error {
+	for _, svc := range spec.Services {
+		for _, disk := range svc.Disks {
+			if disk.SizeGb > 0 || disk.Name == "" {
+				continue
+			}
+			// size_gb == 0 means we expect the disk to already exist
+			listResp, err := eac.List(ctx, entity.String(storage.DiskNameId, disk.Name))
+			if err != nil {
+				return fmt.Errorf("failed to query disk %q: %w", disk.Name, err)
+			}
+			if len(listResp.Values()) == 0 {
+				return fmt.Errorf("disk %q does not exist; set size_gb to auto-create it", disk.Name)
+			}
+		}
+	}
 	return nil
 }
 
@@ -1120,6 +1143,11 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	}
 
 	if err := validateNodePorts(ctx, b.ec.EAC(), appRec.ID, configSpec); err != nil {
+		b.sendErrorStatus(ctx, status, "Deploy failed: %v", err)
+		return err
+	}
+
+	if err := validateDiskConfigs(ctx, b.ec.EAC(), configSpec); err != nil {
 		b.sendErrorStatus(ctx, status, "Deploy failed: %v", err)
 		return err
 	}

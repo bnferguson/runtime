@@ -838,8 +838,18 @@ func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, met
 	}
 }
 
-func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandbox, meta *entity.Meta, recreate bool) error {
+func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandbox, meta *entity.Meta, recreate bool) (err error) {
 	c.Log.Debug("creating sandbox", "id", co.ID)
+
+	// Catch-all: any error during sandbox creation marks it DEAD so the pool
+	// controller's crash-backoff logic kicks in instead of retrying forever.
+	defer func() {
+		if err != nil {
+			c.Log.Error("sandbox boot failed, marking DEAD", "id", co.ID, "err", err)
+			co.Status = compute.DEAD
+			meta.Update(co.Encode())
+		}
+	}()
 
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
@@ -894,7 +904,7 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 
 	defer func() {
 		if err != nil {
-			c.Log.Error("failed to create sandbox, cleaning up", "id", co.ID, "err", err)
+			c.Log.Error("failed to create sandbox, cleaning up container resources", "id", co.ID, "err", err)
 
 			// Be sure we have at least 60 seconds to do this action.
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -908,11 +918,6 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 
 			// Clean up the pause container using the common cleanup function
 			c.cleanupContainer(ctx, container)
-
-			// Update sandbox status to DEAD in entity store
-			co.Status = compute.DEAD
-			meta.Update(co.Encode())
-			c.Log.Info("marked sandbox as DEAD due to boot failure", "id", co.ID)
 		}
 	}()
 

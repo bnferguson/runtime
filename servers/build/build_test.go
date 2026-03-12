@@ -11,6 +11,7 @@ import (
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	storage "miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
@@ -2287,5 +2288,79 @@ func TestValidateNodePortsScaledDownPoolIgnored(t *testing.T) {
 	}
 
 	err = validateNodePorts(ctx, server.EAC, appBID, spec)
+	assert.NoError(t, err)
+}
+
+func TestValidateDiskConfigsMissingDisk(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Deploy with size_gb=0 and no existing disk — should fail
+	spec := core_v1alpha.ConfigSpec{
+		Services: []core_v1alpha.ConfigSpecServices{{
+			Name: "db",
+			Disks: []core_v1alpha.ConfigSpecServicesDisks{{
+				Name:      "data",
+				MountPath: "/data",
+				SizeGb:    0,
+			}},
+		}},
+	}
+
+	err := validateDiskConfigs(ctx, server.EAC, spec)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `disk "data" does not exist`)
+	assert.Contains(t, err.Error(), "size_gb")
+}
+
+func TestValidateDiskConfigsExistingDisk(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Create a disk entity so the lookup succeeds
+	disk := &storage.Disk{
+		Name:   "data",
+		SizeGb: 20,
+		Status: storage.PROVISIONED,
+	}
+	_, err := server.Client.Create(ctx, "data-disk", disk)
+	require.NoError(t, err)
+
+	// Deploy with size_gb=0 referencing an existing disk — should succeed
+	spec := core_v1alpha.ConfigSpec{
+		Services: []core_v1alpha.ConfigSpecServices{{
+			Name: "db",
+			Disks: []core_v1alpha.ConfigSpecServicesDisks{{
+				Name:      "data",
+				MountPath: "/data",
+				SizeGb:    0,
+			}},
+		}},
+	}
+
+	err = validateDiskConfigs(ctx, server.EAC, spec)
+	assert.NoError(t, err)
+}
+
+func TestValidateDiskConfigsAutoCreate(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Deploy with size_gb > 0 — should always succeed (will auto-create)
+	spec := core_v1alpha.ConfigSpec{
+		Services: []core_v1alpha.ConfigSpecServices{{
+			Name: "db",
+			Disks: []core_v1alpha.ConfigSpecServicesDisks{{
+				Name:      "new-disk",
+				MountPath: "/data",
+				SizeGb:    20,
+			}},
+		}},
+	}
+
+	err := validateDiskConfigs(ctx, server.EAC, spec)
 	assert.NoError(t, err)
 }

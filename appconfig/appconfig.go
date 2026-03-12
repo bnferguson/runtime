@@ -1,6 +1,7 @@
 package appconfig
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -97,6 +98,7 @@ func LoadAppConfig() (*AppConfig, error) {
 
 			var ac AppConfig
 			dec := toml.NewDecoder(fi)
+			dec.DisallowUnknownFields()
 			err = dec.Decode(&ac)
 			if err != nil {
 				return nil, err
@@ -124,6 +126,7 @@ func LoadAppConfigUnder(dir string) (*AppConfig, error) {
 
 		var ac AppConfig
 		dec := toml.NewDecoder(fi)
+		dec.DisallowUnknownFields()
 		err = dec.Decode(&ac)
 		if err != nil {
 			return nil, err
@@ -142,7 +145,9 @@ func LoadAppConfigUnder(dir string) (*AppConfig, error) {
 
 func Parse(data []byte) (*AppConfig, error) {
 	var ac AppConfig
-	err := toml.Unmarshal(data, &ac)
+	dec := toml.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	err := dec.Decode(&ac)
 	if err != nil {
 		return nil, err
 	}
