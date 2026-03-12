@@ -328,18 +328,28 @@ func oidcProviderMatches(cached *oidcHandler, current *ingress_v1alpha.OidcProvi
 // creating one on first access. The handler (and its oidc.Client) is reused
 // across requests so that discovery and JWKS caches are effective.
 // If the provider config has changed since the handler was cached, the stale
-// handler is replaced with a new one.
-func (s *Server) getOrCreateOIDCHandler(route *ingress_v1alpha.HttpRoute, baseURL string) (*oidcHandler, error) {
+// handler is replaced with a new one. If the entity store is unreachable but
+// a cached handler exists, the cached handler is returned to avoid failing
+// open (serving requests without authentication).
+func (s *Server) getOrCreateOIDCHandler(ctx context.Context, route *ingress_v1alpha.HttpRoute, baseURL string) (*oidcHandler, error) {
 	// Key by route host; default routes use a sentinel.
 	key := route.Host
 	if route.Default {
 		key = "__default__"
 	}
 
-	// Resolve the OIDC provider entity before checking the cache so we can
-	// detect config changes.
-	resp, err := s.eac.Get(context.Background(), string(route.OidcProvider))
+	// Try to resolve the current provider config from the entity store.
+	resp, err := s.eac.Get(ctx, string(route.OidcProvider))
 	if err != nil {
+		// Entity store unavailable — return cached handler if we have one
+		// to avoid failing open (serving without auth).
+		s.oidcMu.RLock()
+		h, ok := s.oidcHandlers[key]
+		s.oidcMu.RUnlock()
+		if ok {
+			s.Log.Warn("entity store unavailable, using cached OIDC handler", "error", err, "host", key)
+			return h, nil
+		}
 		return nil, fmt.Errorf("failed to get OIDC provider: %w", err)
 	}
 
@@ -393,7 +403,7 @@ func (s *Server) oidcMiddleware(route *ingress_v1alpha.HttpRoute, next http.Hand
 
 		s.oidcSessionManager.SetSecure(scheme == "https")
 
-		handler, err := s.getOrCreateOIDCHandler(route, baseURL)
+		handler, err := s.getOrCreateOIDCHandler(r.Context(), route, baseURL)
 		if err != nil {
 			s.Log.Error("failed to get OIDC handler", "error", err, "host", r.Host)
 			next(w, r)
