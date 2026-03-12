@@ -10,6 +10,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/moby/buildkit/client"
@@ -70,6 +71,12 @@ func (w *buildLogWriter) write(msg string) {
 	}
 }
 
+type buildSession struct {
+	dir        string
+	appName    string
+	cancelFunc context.CancelFunc
+}
+
 type Builder struct {
 	Log           *slog.Logger
 	EAS           *entityserver_v1alpha.EntityAccessClient
@@ -80,6 +87,7 @@ type Builder struct {
 	TempDir       string
 	Registry      string
 	DNSHostname   string // Cloud-provisioned DNS hostname for default route display
+	DataPath      string
 
 	Resolver  netresolve.Resolver
 	LogWriter observability.LogWriter
@@ -87,9 +95,11 @@ type Builder struct {
 	// BuildKit is the persistent BuildKit component for container image builds.
 	// When set, uses the shared daemon instead of launching ephemeral sandboxes.
 	BuildKit *buildkit.Component
+
+	sessions sync.Map // sessionID → *buildSession
 }
 
-func NewBuilder(log *slog.Logger, eas *entityserver_v1alpha.EntityAccessClient, appClient *app.Client, addonsClient *app_v1alpha.AddonsClient, res netresolve.Resolver, tmpdir string, logWriter observability.LogWriter, dnsHostname string, bk *buildkit.Component) *Builder {
+func NewBuilder(log *slog.Logger, eas *entityserver_v1alpha.EntityAccessClient, appClient *app.Client, addonsClient *app_v1alpha.AddonsClient, res netresolve.Resolver, tmpdir string, logWriter observability.LogWriter, dnsHostname string, bk *buildkit.Component, dataPath string) *Builder {
 	return &Builder{
 		Log:           log.With("module", "builder"),
 		EAS:           eas,
@@ -102,6 +112,7 @@ func NewBuilder(log *slog.Logger, eas *entityserver_v1alpha.EntityAccessClient, 
 		LogWriter:     logWriter,
 		DNSHostname:   dnsHostname,
 		BuildKit:      bk,
+		DataPath:      dataPath,
 	}
 }
 
@@ -823,7 +834,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		trace.WithAttributes(attribute.String("miren.app.name", name)))
 	r := stream.ToReader(ctx, td)
 
-	tr, err := tarx.TarFS(r, path)
+	_, err = tarx.TarFS(r, path)
 	if err != nil {
 		recvSpan.RecordError(err)
 		recvSpan.SetStatus(codes.Error, err.Error())
@@ -833,13 +844,180 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	}
 	recvSpan.End()
 
+	// Save source code cache for future delta uploads
+	if b.DataPath != "" {
+		cache := &sourceCache{dataPath: b.DataPath}
+		if err := cache.saveSourceImage(name, path); err != nil {
+			b.Log.Warn("failed to save source code cache", "error", err, "app", name)
+		}
+	}
+
 	if status != nil {
 		so.Update().SetMessage("Launching builder")
 		_, _ = status.Send(ctx, so)
 	}
 
+	result, err := b.buildFromDir(ctx, name, path, status, args.EnvVars())
+	if err != nil {
+		return err
+	}
+
+	state.Results().SetVersion(result.version)
+	state.Results().SetAccessInfo(&result.accessInfo)
+
+	return nil
+}
+
+func (b *Builder) PrepareUpload(ctx context.Context, state *build_v1alpha.BuilderPrepareUpload) error {
+	args := state.Args()
+
+	name := args.Application()
+
+	if !rpc.AllowApp(ctx, name) {
+		return rpc.AppAccessError(ctx, name)
+	}
+
+	if b.DataPath == "" {
+		return fmt.Errorf("data path not configured")
+	}
+
+	manifest := args.Manifest()
+
+	tempDir, err := os.MkdirTemp(b.TempDir, "buildkit-")
+	if err != nil {
+		return err
+	}
+
+	cache := &sourceCache{dataPath: b.DataPath}
+
+	matched, needed, err := cache.stageMatchingFiles(name, tempDir, manifest)
+	if err != nil {
+		os.RemoveAll(tempDir)
+		return fmt.Errorf("staging cached files: %w", err)
+	}
+
+	sessionID := idgen.Gen("s")
+
+	cleanupCtx, cancelCleanup := context.WithCancel(context.Background())
+
+	b.sessions.Store(sessionID, &buildSession{
+		dir:        tempDir,
+		appName:    name,
+		cancelFunc: cancelCleanup,
+	})
+
+	// Cleanup goroutine: remove session after 10 minutes if unused.
+	// When BuildFromPrepared claims the session, it cancels this context
+	// to stop the goroutine and prevent a race where cleanup runs mid-build.
+	go func() {
+		select {
+		case <-time.After(10 * time.Minute):
+			if val, loaded := b.sessions.LoadAndDelete(sessionID); loaded {
+				sess := val.(*buildSession)
+				os.RemoveAll(sess.dir)
+				b.Log.Info("cleaned up expired upload session", "session", sessionID)
+			}
+		case <-cleanupCtx.Done():
+		}
+	}()
+
+	b.Log.Info("prepared upload session",
+		"session", sessionID,
+		"app", name,
+		"cached", matched,
+		"needed", len(needed),
+		"total", len(manifest),
+	)
+
+	result := &build_v1alpha.PrepareUploadResult{}
+	result.SetSessionId(sessionID)
+	result.SetNeededPaths(&needed)
+	result.SetCachedCount(int32(matched))
+
+	state.Results().SetResult(&result)
+
+	return nil
+}
+
+func (b *Builder) BuildFromPrepared(ctx context.Context, state *build_v1alpha.BuilderBuildFromPrepared) error {
+	args := state.Args()
+	sessionID := args.SessionId()
+
+	val, ok := b.sessions.LoadAndDelete(sessionID)
+	if !ok {
+		return fmt.Errorf("unknown or expired upload session: %s", sessionID)
+	}
+
+	sess := val.(*buildSession)
+	sess.cancelFunc()
+	defer os.RemoveAll(sess.dir)
+
+	name := sess.appName
+	status := args.Status()
+
+	// Extract partial tar into the session directory if provided
+	td := args.Tardata()
+	if td != nil {
+		so := new(build_v1alpha.Status)
+		if status != nil {
+			so.Update().SetMessage("Receiving changed files")
+			_, _ = status.Send(ctx, so)
+		}
+
+		r := stream.ToReader(ctx, td)
+		_, err := tarx.TarFS(r, sess.dir)
+		if err != nil {
+			b.sendErrorStatus(ctx, status, "Error extracting changed files: %v", err)
+			return fmt.Errorf("error extracting changed files: %w", err)
+		}
+	}
+
+	// Save source code cache before building
+	if b.DataPath != "" {
+		cache := &sourceCache{dataPath: b.DataPath}
+		if err := cache.saveSourceImage(name, sess.dir); err != nil {
+			b.Log.Warn("failed to save source code cache", "error", err, "app", name)
+		}
+	}
+
+	if status != nil {
+		so := new(build_v1alpha.Status)
+		so.Update().SetMessage("Launching builder")
+		_, _ = status.Send(ctx, so)
+	}
+
+	result, err := b.buildFromDir(ctx, name, sess.dir, status, args.EnvVars())
+	if err != nil {
+		return err
+	}
+
+	state.Results().SetVersion(result.version)
+	state.Results().SetAccessInfo(&result.accessInfo)
+
+	return nil
+}
+
+type buildResult struct {
+	version    string
+	accessInfo *build_v1alpha.AccessInfo
+}
+
+func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
+	status *stream.SendStreamClient[*build_v1alpha.Status],
+	envVars []*build_v1alpha.EnvironmentVariable) (*buildResult, error) {
+
+	so := new(build_v1alpha.Status)
+
 	// -- build.setup span: app config, stack detection, buildkit connect
 	ctx, setupSpan := buildTracer.Start(ctx, "build.setup")
+
+	tr, err := fsutil.NewFS(path)
+	if err != nil {
+		setupSpan.RecordError(err)
+		setupSpan.SetStatus(codes.Error, err.Error())
+		setupSpan.End()
+		return nil, fmt.Errorf("error creating FS from build dir: %w", err)
+	}
 
 	ac, err := b.loadAppConfig(tr)
 	if err != nil {
@@ -892,7 +1070,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 			setupSpan.End()
 			b.Log.Error("stack detection failed", "error", err, "app", name, "codeDir", buildStack.CodeDir)
 			b.sendErrorStatus(ctx, status, "No supported stack detected for app %s: %v", name, err)
-			return fmt.Errorf("no supported stack detected for app %s: %w", name, err)
+			return nil, fmt.Errorf("no supported stack detected for app %s: %w", name, err)
 		}
 		b.Log.Debug("stack detection successful, proceeding with build")
 	}
@@ -906,7 +1084,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		setupSpan.End()
 		b.Log.Error("buildkit component not configured")
 		b.sendErrorStatus(ctx, status, "BuildKit not configured - ensure server is running with BuildKit enabled")
-		return fmt.Errorf("buildkit component not configured")
+		return nil, fmt.Errorf("buildkit component not configured")
 	}
 
 	b.Log.Info("connecting to buildkit daemon")
@@ -917,7 +1095,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		setupSpan.End()
 		b.Log.Error("failed to get buildkit client", "error", err)
 		b.sendErrorStatus(ctx, status, "Failed to connect to BuildKit: %v", err)
-		return err
+		return nil, err
 	}
 	defer bkc.Close()
 
@@ -941,7 +1119,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	if err != nil {
 		b.Log.Error("error getting next version", "error", err)
 		b.sendErrorStatus(ctx, status, "Error getting next version: %v", err)
-		return err
+		return nil, err
 	}
 
 	// Initialize build log writer for persisting build output to VictoriaLogs
@@ -953,7 +1131,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	}
 
 	// Compute env vars to inject into the build process
-	buildEnvVars := computeBuildEnvVars(existingCfg.Variables, ac, args.EnvVars())
+	buildEnvVars := computeBuildEnvVars(existingCfg.Variables, ac, envVars)
 	if len(buildEnvVars) > 0 {
 		b.Log.Info("injecting env vars into build", "count", len(buildEnvVars))
 	}
@@ -1057,7 +1235,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		bkSpan.End()
 		b.Log.Error("error building image", "error", err)
 		b.sendErrorStatus(ctx, status, "Error building image: %v", err)
-		return err
+		return nil, err
 	}
 	bkSpan.End()
 
@@ -1069,7 +1247,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	if res.ManifestDigest == "" {
 		b.Log.Error("build did not return manifest digest")
 		b.sendErrorStatus(ctx, status, "Build did not return manifest digest")
-		return fmt.Errorf("build did not return manifest digest")
+		return nil, fmt.Errorf("build did not return manifest digest")
 	}
 
 	// -- build.locate_artifact span
@@ -1084,7 +1262,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		locateSpan.SetStatus(codes.Error, err.Error())
 		locateSpan.End()
 		b.Log.Error("error locating artifact by digest", "digest", res.ManifestDigest, "error", err)
-		return fmt.Errorf("error locating artifact by digest %s: %w", res.ManifestDigest, err)
+		return nil, fmt.Errorf("error locating artifact by digest %s: %w", res.ManifestDigest, err)
 	}
 	locateSpan.End()
 
@@ -1100,7 +1278,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 
 	procfileServices, err := b.readProcFile(tr)
 	if err != nil {
-		return fmt.Errorf("error reading procfile: %w", err)
+		return nil, fmt.Errorf("error reading procfile: %w", err)
 	} else if procfileServices == nil {
 		b.Log.Debug("no procfile found, using app config")
 	} else {
@@ -1113,14 +1291,14 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		AppConfig:        ac,
 		ProcfileServices: procfileServices,
 		ExistingConfig:   existingCfg,
-		CliEnvVars:       args.EnvVars(),
+		CliEnvVars:       envVars,
 	})
 
 	// Fail the deploy if no services are defined - this prevents deploying an app
 	// that can't serve any traffic
 	if err := validateServicesExist(configSpec); err != nil {
 		b.sendErrorStatus(ctx, status, "%s. See https://miren.md/services", err)
-		return err
+		return nil, err
 	}
 
 	// Fail the deploy if required env vars are missing values.
@@ -1139,21 +1317,21 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	// picture, matching how validateServicesExist works just above.
 	if err := validateRequiredVars(configSpec); err != nil {
 		b.sendErrorStatus(ctx, status, "%s", err)
-		return err
+		return nil, err
 	}
 
 	if err := validateNodePorts(ctx, b.ec.EAC(), appRec.ID, configSpec); err != nil {
 		b.sendErrorStatus(ctx, status, "Deploy failed: %v", err)
-		return err
+		return nil, err
 	}
 
 	if err := validateDiskConfigs(ctx, b.ec.EAC(), configSpec); err != nil {
 		b.sendErrorStatus(ctx, status, "Deploy failed: %v", err)
-		return err
+		return nil, err
 	}
 
-	if len(args.EnvVars()) > 0 {
-		b.Log.Info("applied CLI env vars", "count", len(args.EnvVars()))
+	if len(envVars) > 0 {
+		b.Log.Info("applied CLI env vars", "count", len(envVars))
 	}
 
 	if ac != nil && len(ac.EnvVars) > 0 {
@@ -1177,7 +1355,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		createVerSpan.RecordError(err)
 		createVerSpan.SetStatus(codes.Error, err.Error())
 		createVerSpan.End()
-		return fmt.Errorf("error creating config version: %w", err)
+		return nil, fmt.Errorf("error creating config version: %w", err)
 	}
 	mrv.ConfigVersion = cvid
 	mrv.Config = core_v1alpha.Config{}
@@ -1187,7 +1365,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		createVerSpan.RecordError(err)
 		createVerSpan.SetStatus(codes.Error, err.Error())
 		createVerSpan.End()
-		return fmt.Errorf("error creating app version: %w", err)
+		return nil, fmt.Errorf("error creating app version: %w", err)
 	}
 	createVerSpan.End()
 
@@ -1199,7 +1377,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	// a new AppVersion with addon vars once provisioning completes.
 	if ac != nil && b.addonsClient != nil {
 		if err := b.provisionAddons(ctx, name, ac); err != nil {
-			return fmt.Errorf("addon provisioning failed: %w", err)
+			return nil, fmt.Errorf("addon provisioning failed: %w", err)
 		}
 	}
 
@@ -1209,7 +1387,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		activateSpan.RecordError(err)
 		activateSpan.SetStatus(codes.Error, err.Error())
 		activateSpan.End()
-		return fmt.Errorf("error updating app entity: %w", err)
+		return nil, fmt.Errorf("error updating app entity: %w", err)
 	}
 	activateSpan.End()
 
@@ -1218,17 +1396,12 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	// Log the deployment to the app's logs
 	b.logDeployment(ctx, name, mrv.Version, artifactName)
 
-	// Note: Old version pool cleanup is now handled by the DeploymentLauncher controller
-	// via the referenced_by_versions field. The launcher removes version references and
-	// scales down pools when they're no longer in use.
-
-	state.Results().SetVersion(mrv.Version)
-
-	// Get access info for the deployed app
 	accessInfo := b.getAccessInfo(ctx, name)
-	state.Results().SetAccessInfo(&accessInfo)
 
-	return nil
+	return &buildResult{
+		version:    mrv.Version,
+		accessInfo: accessInfo,
+	}, nil
 }
 
 // getAccessInfo queries routes to determine how the app can be accessed
