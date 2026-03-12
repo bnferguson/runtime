@@ -98,6 +98,7 @@ func LoadAppConfig() (*AppConfig, error) {
 
 			var ac AppConfig
 			dec := toml.NewDecoder(fi)
+			dec.DisallowUnknownFields()
 			err = dec.Decode(&ac)
 			if err != nil {
 				return nil, err
