@@ -77,6 +77,25 @@ func TestParseEnvVarSpecs(t *testing.T) {
 		}
 	})
 
+	t.Run("trims trailing newlines from file value", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		tmpFile := filepath.Join(tmpDir, "secret.txt")
+		if err := os.WriteFile(tmpFile, []byte("file-content\r\n\n"), 0644); err != nil {
+			t.Fatalf("failed to create temp file: %v", err)
+		}
+
+		specs, err := ParseEnvVarSpecs([]string{"VAR=@" + tmpFile}, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(specs) != 1 {
+			t.Fatalf("expected 1 spec, got %d", len(specs))
+		}
+		if specs[0].Value != "file-content" {
+			t.Errorf("expected trimmed value %q, got %q", "file-content", specs[0].Value)
+		}
+	})
+
 	t.Run("returns error for nonexistent file", func(t *testing.T) {
 		_, err := ParseEnvVarSpecs([]string{"VAR=@/nonexistent/file.txt"}, nil)
 		if err == nil {

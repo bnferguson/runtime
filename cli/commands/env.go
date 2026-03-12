@@ -90,7 +90,7 @@ func parseEnvVarSpec(spec string, sensitive bool) (EnvVarSpec, error) {
 				}
 				return EnvVarSpec{}, fmt.Errorf("failed to read env var from file %s: %w", filename, err)
 			}
-			result.Value = string(data)
+			result.Value = strings.TrimRight(string(data), "\r\n")
 			result.FromFile = true
 			result.FromFile_ = filename
 		} else {
