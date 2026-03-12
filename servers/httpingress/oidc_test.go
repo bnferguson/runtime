@@ -1,10 +1,17 @@
 package httpingress
 
 import (
+	"context"
+	"log/slog"
 	"net/http/httptest"
 	"testing"
 
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
+	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/oidc"
+	"miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/servers/entityserver"
 )
 
 func TestInjectClaims(t *testing.T) {
@@ -172,5 +179,201 @@ func TestInjectClaims(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestOidcProviderMatches(t *testing.T) {
+	base := &ingress_v1alpha.OidcProvider{
+		ID:           "provider-1",
+		ClientId:     "client-AAA",
+		ClientSecret: "secret-AAA",
+		ProviderUrl:  "https://auth.example.com",
+		Scopes:       "openid email",
+	}
+
+	handler := &oidcHandler{provider: base}
+
+	t.Run("identical provider matches", func(t *testing.T) {
+		same := &ingress_v1alpha.OidcProvider{
+			ID:           "provider-1",
+			ClientId:     "client-AAA",
+			ClientSecret: "secret-AAA",
+			ProviderUrl:  "https://auth.example.com",
+			Scopes:       "openid email",
+		}
+		if !oidcProviderMatches(handler, same) {
+			t.Error("expected match for identical provider")
+		}
+	})
+
+	t.Run("different client_id does not match", func(t *testing.T) {
+		different := &ingress_v1alpha.OidcProvider{
+			ID:           "provider-1",
+			ClientId:     "client-BBB",
+			ClientSecret: "secret-AAA",
+			ProviderUrl:  "https://auth.example.com",
+			Scopes:       "openid email",
+		}
+		if oidcProviderMatches(handler, different) {
+			t.Error("expected mismatch for different client_id")
+		}
+	})
+
+	t.Run("different provider ID does not match", func(t *testing.T) {
+		different := &ingress_v1alpha.OidcProvider{
+			ID:           "provider-2",
+			ClientId:     "client-AAA",
+			ClientSecret: "secret-AAA",
+			ProviderUrl:  "https://auth.example.com",
+			Scopes:       "openid email",
+		}
+		if oidcProviderMatches(handler, different) {
+			t.Error("expected mismatch for different provider ID")
+		}
+	})
+
+	t.Run("different secret does not match", func(t *testing.T) {
+		different := &ingress_v1alpha.OidcProvider{
+			ID:           "provider-1",
+			ClientId:     "client-AAA",
+			ClientSecret: "secret-BBB",
+			ProviderUrl:  "https://auth.example.com",
+			Scopes:       "openid email",
+		}
+		if oidcProviderMatches(handler, different) {
+			t.Error("expected mismatch for different client_secret")
+		}
+	})
+}
+
+// storeOIDCProvider adds or replaces an OidcProvider entity in the mock store.
+func storeOIDCProvider(store *entity.MockStore, ident, clientID, clientSecret, providerURL, scopes string) {
+	store.AddEntity(entity.Id(ident), entity.New([]entity.Attr{
+		{ID: entity.Ident, Value: entity.KeywordValue(ident)},
+		entity.String(ingress_v1alpha.OidcProviderClientIdId, clientID),
+		entity.String(ingress_v1alpha.OidcProviderClientSecretId, clientSecret),
+		entity.String(ingress_v1alpha.OidcProviderProviderUrlId, providerURL),
+		entity.String(ingress_v1alpha.OidcProviderScopesId, scopes),
+	}))
+}
+
+func TestGetOrCreateOIDCHandlerCacheInvalidation(t *testing.T) {
+	store := entity.NewMockStore()
+	esrv := &entityserver.EntityServer{
+		Log:   slog.Default(),
+		Store: store,
+	}
+	eac := &entityserver_v1alpha.EntityAccessClient{
+		Client: rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(esrv)),
+	}
+
+	signingKey := make([]byte, 32)
+
+	srv := &Server{
+		Log:                slog.Default(),
+		eac:                eac,
+		oidcSessionManager: oidc.NewSessionManager(false, "", signingKey),
+		oidcHandlers:       make(map[string]*oidcHandler),
+	}
+
+	providerIdent := "test/oidc-provider"
+
+	storeOIDCProvider(store, providerIdent,
+		"client-AAA", "secret-AAA", "https://auth.example.com", "openid email")
+
+	route := &ingress_v1alpha.HttpRoute{
+		Host:         "socials.example.com",
+		OidcProvider: entity.Id(providerIdent),
+	}
+
+	// First call: creates and caches a handler
+	h1, err := srv.getOrCreateOIDCHandler(context.Background(), route, "https://socials.example.com")
+	if err != nil {
+		t.Fatalf("first getOrCreateOIDCHandler: %v", err)
+	}
+	if h1.provider.ClientId != "client-AAA" {
+		t.Fatalf("expected client_id=client-AAA, got %s", h1.provider.ClientId)
+	}
+
+	// Second call with same provider: should return cached handler
+	h2, err := srv.getOrCreateOIDCHandler(context.Background(), route, "https://socials.example.com")
+	if err != nil {
+		t.Fatalf("second getOrCreateOIDCHandler: %v", err)
+	}
+	if h1 != h2 {
+		t.Error("expected same handler instance on cache hit")
+	}
+
+	// Update the provider entity with a new client_id
+	storeOIDCProvider(store, providerIdent,
+		"client-BBB", "secret-AAA", "https://auth.example.com", "openid email")
+
+	// Third call: provider changed, should return a new handler
+	h3, err := srv.getOrCreateOIDCHandler(context.Background(), route, "https://socials.example.com")
+	if err != nil {
+		t.Fatalf("third getOrCreateOIDCHandler: %v", err)
+	}
+	if h3.provider.ClientId != "client-BBB" {
+		t.Fatalf("expected client_id=client-BBB after update, got %s", h3.provider.ClientId)
+	}
+	if h1 == h3 {
+		t.Error("expected different handler instance after provider change")
+	}
+}
+
+func TestGetOrCreateOIDCHandlerFailClosed(t *testing.T) {
+	store := entity.NewMockStore()
+	esrv := &entityserver.EntityServer{
+		Log:   slog.Default(),
+		Store: store,
+	}
+	eac := &entityserver_v1alpha.EntityAccessClient{
+		Client: rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(esrv)),
+	}
+
+	signingKey := make([]byte, 32)
+
+	srv := &Server{
+		Log:                slog.Default(),
+		eac:                eac,
+		oidcSessionManager: oidc.NewSessionManager(false, "", signingKey),
+		oidcHandlers:       make(map[string]*oidcHandler),
+	}
+
+	providerIdent := "test/oidc-provider"
+	storeOIDCProvider(store, providerIdent,
+		"client-AAA", "secret-AAA", "https://auth.example.com", "openid email")
+
+	route := &ingress_v1alpha.HttpRoute{
+		Host:         "socials.example.com",
+		OidcProvider: entity.Id(providerIdent),
+	}
+
+	// Warm the cache
+	h1, err := srv.getOrCreateOIDCHandler(context.Background(), route, "https://socials.example.com")
+	if err != nil {
+		t.Fatalf("initial getOrCreateOIDCHandler: %v", err)
+	}
+
+	// Remove the provider entity to simulate entity store being unavailable
+	store.RemoveEntity(entity.Id(providerIdent))
+
+	// Should return cached handler instead of failing open
+	h2, err := srv.getOrCreateOIDCHandler(context.Background(), route, "https://socials.example.com")
+	if err != nil {
+		t.Fatalf("expected cached handler on entity store failure, got error: %v", err)
+	}
+	if h1 != h2 {
+		t.Error("expected same cached handler instance on entity store failure")
+	}
+
+	// With no cache entry and no entity store, should error (not fail open)
+	routeNew := &ingress_v1alpha.HttpRoute{
+		Host:         "newsite.example.com",
+		OidcProvider: entity.Id(providerIdent),
+	}
+	_, err = srv.getOrCreateOIDCHandler(context.Background(), routeNew, "https://newsite.example.com")
+	if err == nil {
+		t.Error("expected error when entity store fails and no cached handler exists")
 	}
 }

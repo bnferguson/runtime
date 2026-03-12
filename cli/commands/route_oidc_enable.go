@@ -68,10 +68,12 @@ func RouteOidcEnable(ctx *Context, opts struct {
 	if providerName == "" {
 		// If no provider name given and provider-url specified, generate a name
 		if opts.ProviderURL != "" {
-			// Use the host from the provider URL as the provider name
-			providerName = strings.ReplaceAll(opts.ProviderURL, "https://", "")
-			providerName = strings.ReplaceAll(providerName, "http://", "")
-			providerName = strings.Split(providerName, "/")[0]
+			// Include the route host to avoid collisions when multiple routes
+			// use the same OIDC provider URL with different credentials.
+			providerHost := strings.ReplaceAll(opts.ProviderURL, "https://", "")
+			providerHost = strings.ReplaceAll(providerHost, "http://", "")
+			providerHost = strings.Split(providerHost, "/")[0]
+			providerName = routeLabel + "/" + providerHost
 		} else {
 			return fmt.Errorf("either --provider or --provider-url must be specified")
 		}
