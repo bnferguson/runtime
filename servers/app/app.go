@@ -356,8 +356,12 @@ func (r *AppInfo) GetConfiguration(ctx context.Context, state *app_v1alpha.CrudG
 	for _, svc := range spec.Services {
 		var sc app_v1alpha.ServiceConfig
 		sc.SetService(svc.Name)
-		sc.SetConcurrencyMode(svc.Concurrency.Mode)
-		sc.SetNumInstances(int32(svc.Concurrency.NumInstances))
+		if svc.Concurrency.Mode != "" {
+			sc.SetConcurrencyMode(svc.Concurrency.Mode)
+		}
+		if svc.Concurrency.NumInstances != 0 {
+			sc.SetNumInstances(int32(svc.Concurrency.NumInstances))
+		}
 
 		// Add service env vars
 		if len(svc.Env) > 0 {
