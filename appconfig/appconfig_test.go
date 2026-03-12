@@ -1136,3 +1136,65 @@ node_port = 443
 		require.Len(t, ac.Services["web"].Ports, 2)
 	})
 }
+
+func TestRejectUnknownFields(t *testing.T) {
+	t.Run("unknown top-level field", func(t *testing.T) {
+		config := `
+name = "test-app"
+unknown_field = "value"
+`
+		_, err := Parse([]byte(config))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "strict mode")
+	})
+
+	t.Run("size instead of size_gb in disk config", func(t *testing.T) {
+		config := `
+name = "test-app"
+
+[services.database.concurrency]
+mode = "fixed"
+num_instances = 1
+
+[[services.database.disks]]
+name = "data"
+mount_path = "/data"
+size = 20
+`
+		_, err := Parse([]byte(config))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "strict mode")
+	})
+
+	t.Run("unknown field in service config", func(t *testing.T) {
+		config := `
+name = "test-app"
+
+[services.web]
+command = "server"
+bogus = true
+`
+		_, err := Parse([]byte(config))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "strict mode")
+	})
+
+	t.Run("valid config still works", func(t *testing.T) {
+		config := `
+name = "test-app"
+
+[services.database.concurrency]
+mode = "fixed"
+num_instances = 1
+
+[[services.database.disks]]
+name = "data"
+mount_path = "/data"
+size_gb = 20
+`
+		ac, err := Parse([]byte(config))
+		require.NoError(t, err)
+		require.NotNil(t, ac)
+		assert.Equal(t, 20, ac.Services["database"].Disks[0].SizeGB)
+	})
+}
