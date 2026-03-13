@@ -112,8 +112,8 @@ require (
 	golang.org/x/net v0.49.0
 	golang.org/x/oauth2 v0.32.0
 	golang.org/x/sync v0.19.0
-	golang.org/x/sys v0.41.0
-	golang.org/x/term v0.40.0
+	golang.org/x/sys v0.42.0
+	golang.org/x/term v0.41.0
 	golang.org/x/text v0.34.0
 	golang.org/x/time v0.14.0
 	golang.org/x/tools v0.41.0
@@ -124,7 +124,7 @@ require (
 	k8s.io/klog/v2 v2.130.1
 	miren.dev/jsonrpc3/go/jsonrpc3 v0.0.0-20260106052505-c98e2702b093
 	miren.dev/lbd v0.0.0-20260224020427-8914d8db2233
-	miren.dev/mflags v0.0.0-20260223221956-2ab5ba72a45d
+	miren.dev/mflags v0.0.0-20260313175018-d9ee90a8bb13
 )
 
 require github.com/aws/aws-sdk-go-v2/service/signin v1.0.5 // indirect
