@@ -125,6 +125,42 @@ types:
         index: 2
         doc: Whether the value should be masked in logs and output
 
+  - type: FileManifestEntry
+    doc: A file entry in the upload manifest with its hash for delta comparison
+    fields:
+      - name: path
+        type: string
+        index: 0
+        doc: Relative file path
+      - name: hash
+        type: string
+        index: 1
+        doc: SHA-256 hash of the file contents
+      - name: size
+        type: int64
+        index: 2
+        doc: File size in bytes
+      - name: mode
+        type: int32
+        index: 3
+        doc: File permission mode
+
+  - type: PrepareUploadResult
+    doc: Result of preparing a delta upload session
+    fields:
+      - name: session_id
+        type: string
+        index: 0
+        doc: Session ID for the subsequent buildFromPrepared call
+      - name: needed_paths
+        type: '[]string'
+        index: 1
+        doc: File paths that need to be uploaded (not found in cache)
+      - name: cached_count
+        type: int32
+        index: 2
+        doc: Number of files reused from the previous deploy cache
+
 interfaces:
   - name: Stream
     methods:
@@ -164,4 +200,34 @@ interfaces:
         results:
           - name: result
             type: '*AnalysisResult'
+
+      - name: prepareUpload
+        doc: Prepare a delta upload session by comparing a file manifest against cached source code
+        parameters:
+          - name: application
+            type: string
+          - name: manifest
+            type: '[]*FileManifestEntry'
+        results:
+          - name: result
+            type: '*PrepareUploadResult'
+
+      - name: buildFromPrepared
+        doc: Build from a prepared upload session with only the changed files
+        parameters:
+          - name: session_id
+            type: string
+          - name: tardata
+            type: stream.RecvStream[[]byte]
+          - name: status
+            type: stream.SendStream[*Status]
+          - name: envVars
+            type: '[]*EnvironmentVariable'
+            doc: Environment variables to set on the app (optional, applied with source=manual)
+        results:
+          - name: version
+            type: string
+          - name: access_info
+            type: '*AccessInfo'
+            doc: Information about how to access the deployed app
 

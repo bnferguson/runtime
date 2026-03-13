@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"sync"
@@ -453,10 +454,61 @@ func Deploy(ctx *Context, opts struct {
 	// Update phase to building
 	updateDeploymentPhase("building")
 
-	// Start upload span covering tar creation + BuildFromTar
+	// Start upload span covering tar creation + build
 	_, uploadSpan := deployTracer.Start(buildCtx, "deploy.upload")
 
-	r, err := tarx.MakeTar(dir, includePatterns)
+	// Try optimized delta upload: compute manifest, ask server what's cached
+	var (
+		sessionID    string
+		useOptimized bool
+		totalFiles   int
+		cachedFiles  int32
+		neededPaths  map[string]bool
+	)
+
+	manifest, manifestErr := tarx.ComputeManifest(dir, includePatterns)
+	if manifestErr == nil {
+		totalFiles = len(manifest)
+
+		// Convert to RPC manifest entries
+		rpcManifest := make([]*build_v1alpha.FileManifestEntry, len(manifest))
+		for i, m := range manifest {
+			entry := &build_v1alpha.FileManifestEntry{}
+			entry.SetPath(m.Path)
+			entry.SetHash(m.Hash)
+			entry.SetSize(m.Size)
+			entry.SetMode(m.Mode)
+			rpcManifest[i] = entry
+		}
+
+		prepResult, prepErr := bc.PrepareUpload(buildCtx, name, rpcManifest)
+		if prepErr == nil && prepResult.Result() != nil {
+			result := prepResult.Result()
+			sessionID = result.SessionId()
+			cachedFiles = result.CachedCount()
+			useOptimized = true
+
+			if result.HasNeededPaths() && result.NeededPaths() != nil {
+				neededPaths = make(map[string]bool)
+				for _, p := range *result.NeededPaths() {
+					neededPaths[p] = true
+				}
+			}
+		} else {
+			ctx.Log.Debug("prepareUpload unavailable, falling back to full upload", "error", prepErr)
+		}
+	} else {
+		ctx.Log.Debug("manifest computation failed, falling back to full upload", "error", manifestErr)
+	}
+
+	var r io.ReadCloser
+	if useOptimized && len(neededPaths) > 0 {
+		r, err = tarx.MakeFilteredTar(dir, includePatterns, neededPaths)
+	} else if useOptimized {
+		r = tarx.MakeEmptyTar()
+	} else {
+		r, err = tarx.MakeTar(dir, includePatterns)
+	}
 	if err != nil {
 		uploadSpan.RecordError(err)
 		uploadSpan.SetStatus(codes.Error, err.Error())
@@ -467,9 +519,23 @@ func Deploy(ctx *Context, opts struct {
 
 	defer r.Close()
 
+	// buildCall wraps either BuildFromTar or BuildFromPrepared
+	type buildResults interface {
+		Version() string
+		HasAccessInfo() bool
+		AccessInfo() *build_v1alpha.AccessInfo
+	}
+	buildCall := func(callCtx context.Context, tarReader io.ReadCloser, cb stream.SendStream[*build_v1alpha.Status]) (buildResults, error) {
+		if useOptimized {
+			tarStream := stream.ServeReader(callCtx, tarReader)
+			return bc.BuildFromPrepared(callCtx, sessionID, tarStream, cb, envVars)
+		}
+		return bc.BuildFromTar(callCtx, name, stream.ServeReader(callCtx, tarReader), cb, envVars)
+	}
+
 	var (
 		cb      stream.SendStream[*build_v1alpha.Status]
-		results *build_v1alpha.BuilderClientBuildFromTarResults
+		results buildResults
 	)
 
 	// Detect if we have a TTY - if not, force explain mode
@@ -477,6 +543,11 @@ func Deploy(ctx *Context, opts struct {
 	useExplainMode := opts.Explain || !isTTY
 
 	if useExplainMode {
+		if useOptimized && cachedFiles > 0 {
+			faintStyle := lipgloss.NewStyle().Faint(true)
+			ctx.Printf("  %s\n", faintStyle.Render(fmt.Sprintf("Reused %d/%d files from previous deploy, uploading %d", cachedFiles, totalFiles, len(neededPaths))))
+		}
+
 		// In explain mode, write to stderr
 		pw, err := progresswriter.NewPrinter(ctx, os.Stderr, opts.ExplainFormat)
 		if err != nil {
@@ -525,7 +596,7 @@ func Deploy(ctx *Context, opts struct {
 
 		cb = createBuildStatusCallback(buildCtx, nil, nil, &buildErrors, nil, progressHandler)
 
-		results, err = bc.BuildFromTar(buildCtx, name, stream.ServeReader(buildCtx, r), cb, envVars)
+		results, err = buildCall(buildCtx, r, cb)
 		if err != nil {
 			uploadSpan.RecordError(err)
 			uploadSpan.SetStatus(codes.Error, err.Error())
@@ -588,7 +659,7 @@ func Deploy(ctx *Context, opts struct {
 		deployCtx, cancelDeploy := context.WithCancel(buildCtx)
 		defer cancelDeploy()
 
-		model := initialModel(updateCh, buildCh, uploadProgressCh)
+		model := initialModel(updateCh, buildCh, uploadProgressCh, cachedFiles, totalFiles)
 		p := tea.NewProgram(model)
 
 		var finalModel tea.Model
@@ -620,7 +691,7 @@ func Deploy(ctx *Context, opts struct {
 
 		cb = createBuildStatusCallback(deployCtx, updateCh, buildCh, &buildErrors, &buildLogs, progressHandler)
 
-		results, err = bc.BuildFromTar(deployCtx, name, stream.ServeReader(deployCtx, r), cb, envVars)
+		results, err = buildCall(deployCtx, r, cb)
 
 		// Ensure the progress UI is shut down before printing
 		p.Quit()
@@ -878,8 +949,14 @@ func buildStepsSummary(count int) string {
 	return fmt.Sprintf("%d steps completed", count)
 }
 
+// deployAccessInfo provides access to build result access info for display purposes.
+type deployAccessInfo interface {
+	HasAccessInfo() bool
+	AccessInfo() *build_v1alpha.AccessInfo
+}
+
 // displayAccessInfo shows how to access the deployed app using server-provided access info
-func displayAccessInfo(ctx *Context, appName string, results *build_v1alpha.BuilderClientBuildFromTarResults) {
+func displayAccessInfo(ctx *Context, appName string, results deployAccessInfo) {
 	// Check if we have access info from the server
 	if !results.HasAccessInfo() {
 		ctx.Log.Debug("No access info returned from server")

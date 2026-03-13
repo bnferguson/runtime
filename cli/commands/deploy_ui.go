@@ -113,6 +113,10 @@ type deployInfo struct {
 	uploadDuration   time.Duration
 	finalUploadSpeed float64
 
+	// Source cache info
+	cachedFiles int32
+	totalFiles  int
+
 	// Timeout and interrupt handling
 	lastActivity    time.Time
 	buildkitTimeout time.Duration
@@ -123,7 +127,7 @@ type deployInfo struct {
 	bp           tea.Model
 }
 
-func initialModel(update chan string, buildCh chan buildProgress, uploadProgress chan upload.Progress) *deployInfo {
+func initialModel(update chan string, buildCh chan buildProgress, uploadProgress chan upload.Progress, cachedFiles int32, totalFiles int) *deployInfo {
 	s := spinner.New()
 	s.Spinner = Meter
 	s.Style = lipgloss.NewStyle()
@@ -149,11 +153,26 @@ func initialModel(update chan string, buildCh chan buildProgress, uploadProgress
 		uploadSpeed:     "calculating...",
 		phaseStart:      time.Now(),
 		currentPhase:    "upload",
+		cachedFiles:     cachedFiles,
+		totalFiles:      totalFiles,
 		lastActivity:    time.Now(),
 		buildkitTimeout: 60 * time.Second, // 60 second timeout for buildkit to start
 		buildkitStarted: false,
 		bp:              progressui.TeaModel(),
 	}
+}
+
+func (m *deployInfo) uploadDetails() string {
+	var parts []string
+	if m.cachedFiles > 0 {
+		parts = append(parts, fmt.Sprintf("reused %d/%d files", m.cachedFiles, m.totalFiles))
+	}
+	if m.uploadBytes > 0 {
+		parts = append(parts, fmt.Sprintf("%s at %s",
+			upload.FormatBytes(m.uploadBytes),
+			upload.FormatSpeed(m.finalUploadSpeed)))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func (m *deployInfo) Init() tea.Cmd {
@@ -244,20 +263,10 @@ func (m *deployInfo) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				duration := time.Since(m.phaseStart)
 				m.uploadDuration = duration
 
-				// Create upload summary
-				var details string
-				if m.uploadBytes > 0 {
-					details = fmt.Sprintf("%s uploaded at %s",
-						upload.FormatBytes(m.uploadBytes),
-						upload.FormatSpeed(m.finalUploadSpeed))
-				} else if m.finalUploadSpeed > 0 {
-					details = fmt.Sprintf("Uploaded at %s", upload.FormatSpeed(m.finalUploadSpeed))
-				}
-
 				m.completedPhases = append(m.completedPhases, phaseSummary{
 					name:     "Upload artifacts",
 					duration: duration,
-					details:  details,
+					details:  m.uploadDetails(),
 				})
 
 				// Start tracking buildkit phase
@@ -305,17 +314,10 @@ func (m *deployInfo) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			if !hasUploadPhase {
-				var details string
-				if m.uploadBytes > 0 {
-					details = fmt.Sprintf("%s uploaded at %s",
-						upload.FormatBytes(m.uploadBytes),
-						upload.FormatSpeed(m.finalUploadSpeed))
-				}
-
 				m.completedPhases = append(m.completedPhases, phaseSummary{
 					name:     "Upload artifacts",
 					duration: duration,
-					details:  details,
+					details:  m.uploadDetails(),
 				})
 			}
 

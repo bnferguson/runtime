@@ -320,10 +320,191 @@ func TestMakeTarGitignoreNegation(t *testing.T) {
 	reader, err := MakeTar(tmpDir, nil)
 	require.NoError(t, err)
 
-	// Extract and verify only important.log and regular.txt are included
+	// Extract and verify only important.log and regular.txt are included.
+	// dir/ is not included because all files inside it are gitignored.
 	entries := extractTarEntries(t, reader)
-	expected := []string{"important.log", "regular.txt", "dir"}
+	expected := []string{"important.log", "regular.txt"}
 	require.ElementsMatch(t, expected, entries)
+}
+
+func TestComputeManifest(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "tarx-manifest-")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	files := map[string]string{
+		"main.go":       "package main",
+		"go.mod":        "module test",
+		"lib/util.go":   "package lib",
+		"ignored.log":   "log data",
+		".git/HEAD":     "ref: refs/heads/main",
+		"dist/build.js": "built",
+	}
+
+	for filename, content := range files {
+		fullPath := filepath.Join(tmpDir, filename)
+		dir := filepath.Dir(fullPath)
+		require.NoError(t, os.MkdirAll(dir, 0755))
+		require.NoError(t, os.WriteFile(fullPath, []byte(content), 0644))
+	}
+
+	// Gitignore excludes *.log and dist
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".gitignore"), []byte("*.log\ndist\n"), 0644))
+
+	manifest, err := ComputeManifest(tmpDir, nil)
+	require.NoError(t, err)
+
+	// Should include main.go, go.mod, lib/util.go (not .gitignore, not .git, not *.log, not dist)
+	paths := make(map[string]bool)
+	for _, m := range manifest {
+		paths[m.Path] = true
+		require.NotEmpty(t, m.Hash, "hash should be set for %s", m.Path)
+		require.True(t, m.Size > 0, "size should be positive for %s", m.Path)
+		require.True(t, m.Mode > 0, "mode should be set for %s", m.Path)
+	}
+
+	require.True(t, paths["main.go"])
+	require.True(t, paths["go.mod"])
+	require.True(t, paths["lib/util.go"])
+	require.False(t, paths["ignored.log"])
+	require.False(t, paths[".git/HEAD"])
+	require.False(t, paths["dist/build.js"])
+}
+
+func TestComputeManifestDeterministic(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "tarx-manifest-det-")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "file.txt"), []byte("hello"), 0644))
+
+	m1, err := ComputeManifest(tmpDir, nil)
+	require.NoError(t, err)
+
+	m2, err := ComputeManifest(tmpDir, nil)
+	require.NoError(t, err)
+
+	require.Equal(t, len(m1), len(m2))
+	require.Equal(t, m1[0].Hash, m2[0].Hash)
+}
+
+func TestMakeFilteredTar(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "tarx-filtered-")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	files := map[string]string{
+		"main.go":     "package main",
+		"go.mod":      "module test",
+		"lib/util.go": "package lib",
+		"lib/db.go":   "package lib",
+	}
+
+	for filename, content := range files {
+		fullPath := filepath.Join(tmpDir, filename)
+		dir := filepath.Dir(fullPath)
+		require.NoError(t, os.MkdirAll(dir, 0755))
+		require.NoError(t, os.WriteFile(fullPath, []byte(content), 0644))
+	}
+
+	// Only include main.go and lib/db.go
+	onlyPaths := map[string]bool{
+		"main.go":   true,
+		"lib/db.go": true,
+	}
+
+	reader, err := MakeFilteredTar(tmpDir, nil, onlyPaths)
+	require.NoError(t, err)
+
+	entries := extractTarEntries(t, reader)
+
+	// Should contain the two requested files and the lib directory
+	require.Contains(t, entries, "main.go")
+	require.Contains(t, entries, "lib/db.go")
+	require.Contains(t, entries, "lib")
+
+	// Should NOT contain the excluded files
+	require.NotContains(t, entries, "go.mod")
+	require.NotContains(t, entries, "lib/util.go")
+}
+
+func TestMakeFilteredTarEmpty(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "tarx-filtered-empty-")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "file.txt"), []byte("hello"), 0644))
+
+	// Empty only-paths set => no files in tar
+	reader, err := MakeFilteredTar(tmpDir, nil, map[string]bool{})
+	require.NoError(t, err)
+
+	entries := extractTarEntries(t, reader)
+	require.Empty(t, entries)
+}
+
+func TestMakeTarOnlyIncludesDirectoriesWithAcceptedFiles(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "tarx-dir-filter-")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	files := map[string]string{
+		"main.go":          "package main",
+		"lib/util.go":      "package lib",
+		"empty/readme.txt": "hello",
+		"deep/a/b/file.go": "package b",
+	}
+
+	for filename, content := range files {
+		fullPath := filepath.Join(tmpDir, filename)
+		require.NoError(t, os.MkdirAll(filepath.Dir(fullPath), 0755))
+		require.NoError(t, os.WriteFile(fullPath, []byte(content), 0644))
+	}
+
+	t.Run("unfiltered includes all directories", func(t *testing.T) {
+		reader, err := MakeTar(tmpDir, nil)
+		require.NoError(t, err)
+
+		entries := extractTarEntries(t, reader)
+		require.Contains(t, entries, "lib")
+		require.Contains(t, entries, "empty")
+		require.Contains(t, entries, "deep")
+		require.Contains(t, entries, "deep/a")
+		require.Contains(t, entries, "deep/a/b")
+	})
+
+	t.Run("filtered excludes directories with no accepted files", func(t *testing.T) {
+		onlyPaths := map[string]bool{
+			"main.go":     true,
+			"lib/util.go": true,
+		}
+
+		reader, err := MakeFilteredTar(tmpDir, nil, onlyPaths)
+		require.NoError(t, err)
+
+		entries := extractTarEntries(t, reader)
+		require.Contains(t, entries, "main.go")
+		require.Contains(t, entries, "lib")
+		require.Contains(t, entries, "lib/util.go")
+
+		// Directories with no accepted files should not appear
+		require.NotContains(t, entries, "empty")
+		require.NotContains(t, entries, "deep")
+		require.NotContains(t, entries, "deep/a")
+		require.NotContains(t, entries, "deep/a/b")
+	})
+
+	t.Run("filtered emits nested parent directories", func(t *testing.T) {
+		onlyPaths := map[string]bool{
+			"deep/a/b/file.go": true,
+		}
+
+		reader, err := MakeFilteredTar(tmpDir, nil, onlyPaths)
+		require.NoError(t, err)
+
+		entries := extractTarEntries(t, reader)
+		require.ElementsMatch(t, []string{"deep", "deep/a", "deep/a/b", "deep/a/b/file.go"}, entries)
+	})
 }
 
 func TestMakeTarWithIncludePatterns(t *testing.T) {

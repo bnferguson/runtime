@@ -545,6 +545,161 @@ func (v *EnvironmentVariable) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type fileManifestEntryData struct {
+	Path *string `cbor:"0,keyasint,omitempty" json:"path,omitempty"`
+	Hash *string `cbor:"1,keyasint,omitempty" json:"hash,omitempty"`
+	Size *int64  `cbor:"2,keyasint,omitempty" json:"size,omitempty"`
+	Mode *int32  `cbor:"3,keyasint,omitempty" json:"mode,omitempty"`
+}
+
+type FileManifestEntry struct {
+	data fileManifestEntryData
+}
+
+func (v *FileManifestEntry) HasPath() bool {
+	return v.data.Path != nil
+}
+
+func (v *FileManifestEntry) Path() string {
+	if v.data.Path == nil {
+		return ""
+	}
+	return *v.data.Path
+}
+
+func (v *FileManifestEntry) SetPath(path string) {
+	v.data.Path = &path
+}
+
+func (v *FileManifestEntry) HasHash() bool {
+	return v.data.Hash != nil
+}
+
+func (v *FileManifestEntry) Hash() string {
+	if v.data.Hash == nil {
+		return ""
+	}
+	return *v.data.Hash
+}
+
+func (v *FileManifestEntry) SetHash(hash string) {
+	v.data.Hash = &hash
+}
+
+func (v *FileManifestEntry) HasSize() bool {
+	return v.data.Size != nil
+}
+
+func (v *FileManifestEntry) Size() int64 {
+	if v.data.Size == nil {
+		return 0
+	}
+	return *v.data.Size
+}
+
+func (v *FileManifestEntry) SetSize(size int64) {
+	v.data.Size = &size
+}
+
+func (v *FileManifestEntry) HasMode() bool {
+	return v.data.Mode != nil
+}
+
+func (v *FileManifestEntry) Mode() int32 {
+	if v.data.Mode == nil {
+		return 0
+	}
+	return *v.data.Mode
+}
+
+func (v *FileManifestEntry) SetMode(mode int32) {
+	v.data.Mode = &mode
+}
+
+func (v *FileManifestEntry) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *FileManifestEntry) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *FileManifestEntry) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *FileManifestEntry) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type prepareUploadResultData struct {
+	SessionId   *string   `cbor:"0,keyasint,omitempty" json:"session_id,omitempty"`
+	NeededPaths *[]string `cbor:"1,keyasint,omitempty" json:"needed_paths,omitempty"`
+	CachedCount *int32    `cbor:"2,keyasint,omitempty" json:"cached_count,omitempty"`
+}
+
+type PrepareUploadResult struct {
+	data prepareUploadResultData
+}
+
+func (v *PrepareUploadResult) HasSessionId() bool {
+	return v.data.SessionId != nil
+}
+
+func (v *PrepareUploadResult) SessionId() string {
+	if v.data.SessionId == nil {
+		return ""
+	}
+	return *v.data.SessionId
+}
+
+func (v *PrepareUploadResult) SetSessionId(session_id string) {
+	v.data.SessionId = &session_id
+}
+
+func (v *PrepareUploadResult) HasNeededPaths() bool {
+	return v.data.NeededPaths != nil
+}
+
+func (v *PrepareUploadResult) NeededPaths() *[]string {
+	return v.data.NeededPaths
+}
+
+func (v *PrepareUploadResult) SetNeededPaths(needed_paths *[]string) {
+	v.data.NeededPaths = needed_paths
+}
+
+func (v *PrepareUploadResult) HasCachedCount() bool {
+	return v.data.CachedCount != nil
+}
+
+func (v *PrepareUploadResult) CachedCount() int32 {
+	if v.data.CachedCount == nil {
+		return 0
+	}
+	return *v.data.CachedCount
+}
+
+func (v *PrepareUploadResult) SetCachedCount(cached_count int32) {
+	v.data.CachedCount = &cached_count
+}
+
+func (v *PrepareUploadResult) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *PrepareUploadResult) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *PrepareUploadResult) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *PrepareUploadResult) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type streamRecvArgsData struct {
 	Count *int32 `cbor:"0,keyasint,omitempty" json:"count,omitempty"`
 }
@@ -882,6 +1037,189 @@ func (v *BuilderAnalyzeAppResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type builderPrepareUploadArgsData struct {
+	Application *string               `cbor:"0,keyasint,omitempty" json:"application,omitempty"`
+	Manifest    *[]*FileManifestEntry `cbor:"1,keyasint,omitempty" json:"manifest,omitempty"`
+}
+
+type BuilderPrepareUploadArgs struct {
+	call rpc.Call
+	data builderPrepareUploadArgsData
+}
+
+func (v *BuilderPrepareUploadArgs) HasApplication() bool {
+	return v.data.Application != nil
+}
+
+func (v *BuilderPrepareUploadArgs) Application() string {
+	if v.data.Application == nil {
+		return ""
+	}
+	return *v.data.Application
+}
+
+func (v *BuilderPrepareUploadArgs) HasManifest() bool {
+	return v.data.Manifest != nil
+}
+
+func (v *BuilderPrepareUploadArgs) Manifest() []*FileManifestEntry {
+	if v.data.Manifest == nil {
+		return nil
+	}
+	return *v.data.Manifest
+}
+
+func (v *BuilderPrepareUploadArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *BuilderPrepareUploadArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *BuilderPrepareUploadArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *BuilderPrepareUploadArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type builderPrepareUploadResultsData struct {
+	Result **PrepareUploadResult `cbor:"0,keyasint,omitempty" json:"result,omitempty"`
+}
+
+type BuilderPrepareUploadResults struct {
+	call rpc.Call
+	data builderPrepareUploadResultsData
+}
+
+func (v *BuilderPrepareUploadResults) SetResult(result **PrepareUploadResult) {
+	v.data.Result = result
+}
+
+func (v *BuilderPrepareUploadResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *BuilderPrepareUploadResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *BuilderPrepareUploadResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *BuilderPrepareUploadResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type builderBuildFromPreparedArgsData struct {
+	SessionId *string                 `cbor:"0,keyasint,omitempty" json:"session_id,omitempty"`
+	Tardata   *rpc.Capability         `cbor:"1,keyasint,omitempty" json:"tardata,omitempty"`
+	Status    *rpc.Capability         `cbor:"2,keyasint,omitempty" json:"status,omitempty"`
+	EnvVars   *[]*EnvironmentVariable `cbor:"3,keyasint,omitempty" json:"envVars,omitempty"`
+}
+
+type BuilderBuildFromPreparedArgs struct {
+	call rpc.Call
+	data builderBuildFromPreparedArgsData
+}
+
+func (v *BuilderBuildFromPreparedArgs) HasSessionId() bool {
+	return v.data.SessionId != nil
+}
+
+func (v *BuilderBuildFromPreparedArgs) SessionId() string {
+	if v.data.SessionId == nil {
+		return ""
+	}
+	return *v.data.SessionId
+}
+
+func (v *BuilderBuildFromPreparedArgs) HasTardata() bool {
+	return v.data.Tardata != nil
+}
+
+func (v *BuilderBuildFromPreparedArgs) Tardata() *stream.RecvStreamClient[[]byte] {
+	if v.data.Tardata == nil {
+		return nil
+	}
+	return &stream.RecvStreamClient[[]byte]{Client: v.call.NewClient(v.data.Tardata)}
+}
+
+func (v *BuilderBuildFromPreparedArgs) HasStatus() bool {
+	return v.data.Status != nil
+}
+
+func (v *BuilderBuildFromPreparedArgs) Status() *stream.SendStreamClient[*Status] {
+	if v.data.Status == nil {
+		return nil
+	}
+	return &stream.SendStreamClient[*Status]{Client: v.call.NewClient(v.data.Status)}
+}
+
+func (v *BuilderBuildFromPreparedArgs) HasEnvVars() bool {
+	return v.data.EnvVars != nil
+}
+
+func (v *BuilderBuildFromPreparedArgs) EnvVars() []*EnvironmentVariable {
+	if v.data.EnvVars == nil {
+		return nil
+	}
+	return *v.data.EnvVars
+}
+
+func (v *BuilderBuildFromPreparedArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *BuilderBuildFromPreparedArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *BuilderBuildFromPreparedArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *BuilderBuildFromPreparedArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type builderBuildFromPreparedResultsData struct {
+	Version    *string      `cbor:"0,keyasint,omitempty" json:"version,omitempty"`
+	AccessInfo **AccessInfo `cbor:"1,keyasint,omitempty" json:"access_info,omitempty"`
+}
+
+type BuilderBuildFromPreparedResults struct {
+	call rpc.Call
+	data builderBuildFromPreparedResultsData
+}
+
+func (v *BuilderBuildFromPreparedResults) SetVersion(version string) {
+	v.data.Version = &version
+}
+
+func (v *BuilderBuildFromPreparedResults) SetAccessInfo(access_info **AccessInfo) {
+	v.data.AccessInfo = access_info
+}
+
+func (v *BuilderBuildFromPreparedResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *BuilderBuildFromPreparedResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *BuilderBuildFromPreparedResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *BuilderBuildFromPreparedResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type BuilderBuildFromTar struct {
 	rpc.Call
 	args    BuilderBuildFromTarArgs
@@ -934,9 +1272,63 @@ func (t *BuilderAnalyzeApp) Results() *BuilderAnalyzeAppResults {
 	return results
 }
 
+type BuilderPrepareUpload struct {
+	rpc.Call
+	args    BuilderPrepareUploadArgs
+	results BuilderPrepareUploadResults
+}
+
+func (t *BuilderPrepareUpload) Args() *BuilderPrepareUploadArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *BuilderPrepareUpload) Results() *BuilderPrepareUploadResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type BuilderBuildFromPrepared struct {
+	rpc.Call
+	args    BuilderBuildFromPreparedArgs
+	results BuilderBuildFromPreparedResults
+}
+
+func (t *BuilderBuildFromPrepared) Args() *BuilderBuildFromPreparedArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *BuilderBuildFromPrepared) Results() *BuilderBuildFromPreparedResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type Builder interface {
 	BuildFromTar(ctx context.Context, state *BuilderBuildFromTar) error
 	AnalyzeApp(ctx context.Context, state *BuilderAnalyzeApp) error
+	PrepareUpload(ctx context.Context, state *BuilderPrepareUpload) error
+	BuildFromPrepared(ctx context.Context, state *BuilderBuildFromPrepared) error
 }
 
 type reexportBuilder struct {
@@ -948,6 +1340,14 @@ func (reexportBuilder) BuildFromTar(ctx context.Context, state *BuilderBuildFrom
 }
 
 func (reexportBuilder) AnalyzeApp(ctx context.Context, state *BuilderAnalyzeApp) error {
+	panic("not implemented")
+}
+
+func (reexportBuilder) PrepareUpload(ctx context.Context, state *BuilderPrepareUpload) error {
+	panic("not implemented")
+}
+
+func (reexportBuilder) BuildFromPrepared(ctx context.Context, state *BuilderBuildFromPrepared) error {
 	panic("not implemented")
 }
 
@@ -973,6 +1373,24 @@ func AdaptBuilder(t Builder) *rpc.Interface {
 			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.AnalyzeApp(ctx, &BuilderAnalyzeApp{Call: call})
+			},
+		},
+		{
+			Name:          "prepareUpload",
+			InterfaceName: "Builder",
+			Index:         0,
+			Public:        false,
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.PrepareUpload(ctx, &BuilderPrepareUpload{Call: call})
+			},
+		},
+		{
+			Name:          "buildFromPrepared",
+			InterfaceName: "Builder",
+			Index:         0,
+			Public:        false,
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.BuildFromPrepared(ctx, &BuilderBuildFromPrepared{Call: call})
 			},
 		},
 	}
@@ -1078,4 +1496,88 @@ func (v BuilderClient) AnalyzeApp(ctx context.Context, tardata stream.RecvStream
 	}
 
 	return &BuilderClientAnalyzeAppResults{client: v.Client, data: ret}, nil
+}
+
+type BuilderClientPrepareUploadResults struct {
+	client rpc.Client
+	data   builderPrepareUploadResultsData
+}
+
+func (v *BuilderClientPrepareUploadResults) HasResult() bool {
+	return v.data.Result != nil
+}
+
+func (v *BuilderClientPrepareUploadResults) Result() *PrepareUploadResult {
+	if v.data.Result == nil {
+		return nil
+	}
+	return *v.data.Result
+}
+
+func (v BuilderClient) PrepareUpload(ctx context.Context, application string, manifest []*FileManifestEntry) (*BuilderClientPrepareUploadResults, error) {
+	args := BuilderPrepareUploadArgs{}
+	args.data.Application = &application
+	args.data.Manifest = &manifest
+
+	var ret builderPrepareUploadResultsData
+
+	err := v.Call(ctx, "prepareUpload", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &BuilderClientPrepareUploadResults{client: v.Client, data: ret}, nil
+}
+
+type BuilderClientBuildFromPreparedResults struct {
+	client rpc.Client
+	data   builderBuildFromPreparedResultsData
+}
+
+func (v *BuilderClientBuildFromPreparedResults) HasVersion() bool {
+	return v.data.Version != nil
+}
+
+func (v *BuilderClientBuildFromPreparedResults) Version() string {
+	if v.data.Version == nil {
+		return ""
+	}
+	return *v.data.Version
+}
+
+func (v *BuilderClientBuildFromPreparedResults) HasAccessInfo() bool {
+	return v.data.AccessInfo != nil
+}
+
+func (v *BuilderClientBuildFromPreparedResults) AccessInfo() *AccessInfo {
+	if v.data.AccessInfo == nil {
+		return nil
+	}
+	return *v.data.AccessInfo
+}
+
+func (v BuilderClient) BuildFromPrepared(ctx context.Context, session_id string, tardata stream.RecvStream[[]byte], status stream.SendStream[*Status], envVars []*EnvironmentVariable) (*BuilderClientBuildFromPreparedResults, error) {
+	args := BuilderBuildFromPreparedArgs{}
+	caps := map[rpc.OID]*rpc.InlineCapability{}
+	args.data.SessionId = &session_id
+	{
+		ic, oid, c := v.NewInlineCapability(stream.AdaptRecvStream[[]byte](tardata), tardata)
+		args.data.Tardata = c
+		caps[oid] = ic
+	}
+	{
+		ic, oid, c := v.NewInlineCapability(stream.AdaptSendStream[*Status](status), status)
+		args.data.Status = c
+		caps[oid] = ic
+	}
+	args.data.EnvVars = &envVars
+
+	var ret builderBuildFromPreparedResultsData
+
+	err := v.CallWithCaps(ctx, "buildFromPrepared", &args, &ret, caps)
+	if err != nil {
+		return nil, err
+	}
+
+	return &BuilderClientBuildFromPreparedResults{client: v.Client, data: ret}, nil
 }
