@@ -83,6 +83,58 @@ func (m *Miren) MustRun(args ...string) *Result {
 	return r
 }
 
+// RunCmd executes an arbitrary command (not miren CLI) in the dev container.
+// In local mode it runs the command directly on the host.
+func (m *Miren) RunCmd(args ...string) *Result {
+	m.t.Helper()
+
+	var cmd *exec.Cmd
+
+	switch m.cluster.Mode {
+	case ModeDev:
+		devExec := filepath.Join(m.cluster.RepoRoot, "hack", "dev-exec")
+		cmd = exec.Command(devExec, args...)
+		cmd.Dir = m.cluster.RepoRoot
+	case ModeLocal:
+		cmd = exec.Command(args[0], args[1:]...)
+	default:
+		m.t.Fatalf("unknown mode: %s", m.cluster.Mode)
+		return nil
+	}
+
+	cmd.Env = append(cmd.Environ(), "TERM=dumb")
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	exitCode := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			m.t.Fatalf("failed to execute command: %v", err)
+		}
+	}
+
+	r := &Result{
+		ExitCode: exitCode,
+		Stdout:   stdout.String(),
+		Stderr:   stderr.String(),
+	}
+
+	m.t.Logf("cmd %s → exit %d", strings.Join(args, " "), exitCode)
+	if r.Stdout != "" {
+		m.t.Logf("stdout: %s", r.Stdout)
+	}
+	if r.Stderr != "" {
+		m.t.Logf("stderr: %s", r.Stderr)
+	}
+
+	return r
+}
+
 // ContainerPath translates a host-side path to a container-internal path.
 // In dev mode, the repo is mounted at /src inside the iso container.
 func (m *Miren) ContainerPath(hostPath string) string {
