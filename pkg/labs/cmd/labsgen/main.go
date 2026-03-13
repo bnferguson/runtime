@@ -159,6 +159,17 @@ func Init(log *slog.Logger, flags []string) {
 		// Normalize to lowercase for lookup
 		name = strings.ToLower(name)
 
+		// Handle the special "all" keyword
+		if name == "all" {
+			for featureName := range featureDefaults {
+				enabledFeatures[featureName] = !disable
+			}
+			if log != nil {
+				log.Info("labs feature configured", "feature", "all", "enabled", !disable)
+			}
+			continue
+		}
+
 		// Check if it's a known feature
 		if _, known := featureDefaults[name]; !known {
 			if log != nil {

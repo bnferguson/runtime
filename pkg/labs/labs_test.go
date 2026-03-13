@@ -196,6 +196,60 @@ func TestEmptyAndWhitespaceFlags(t *testing.T) {
 	}
 }
 
+func TestAllKeywordEnablesAllFeatures(t *testing.T) {
+	Reset()
+
+	Init(nil, []string{"all"})
+
+	for _, name := range AllFeatures() {
+		if !IsEnabled(name) {
+			t.Errorf("Feature %q should be enabled after Init with 'all'", name)
+		}
+	}
+}
+
+func TestAllKeywordWithExclusion(t *testing.T) {
+	Reset()
+
+	Init(nil, []string{"all", "-addons"})
+
+	for _, name := range AllFeatures() {
+		if name == FeatureAddons {
+			if IsEnabled(name) {
+				t.Error("Addons should be disabled after 'all,-addons'")
+			}
+		} else {
+			if !IsEnabled(name) {
+				t.Errorf("Feature %q should be enabled after 'all,-addons'", name)
+			}
+		}
+	}
+}
+
+func TestNegativeAllDisablesAll(t *testing.T) {
+	Reset()
+
+	Init(nil, []string{"globalrouter", "usersubdomains", "-all"})
+
+	for _, name := range AllFeatures() {
+		if IsEnabled(name) {
+			t.Errorf("Feature %q should be disabled after '-all'", name)
+		}
+	}
+}
+
+func TestAllKeywordCaseInsensitive(t *testing.T) {
+	Reset()
+
+	Init(nil, []string{"ALL"})
+
+	for _, name := range AllFeatures() {
+		if !IsEnabled(name) {
+			t.Errorf("Feature %q should be enabled after Init with 'ALL'", name)
+		}
+	}
+}
+
 func TestInitLogsEnabledFeatures(t *testing.T) {
 	Reset()
 
