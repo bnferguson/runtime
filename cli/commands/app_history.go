@@ -154,20 +154,12 @@ func AppHistory(ctx *Context, opts struct {
 	}
 
 	deployments := result.Deployments()
-	if len(deployments) == 0 {
-		printNoDeploymentsMessage(ctx, opts.App, opts.Status, false)
-		return nil
-	}
 
 	// Filter out failed deployments if requested
 	if opts.HideFailed {
 		deployments = filterDeployments(deployments, func(d *deployment_v1alpha.DeploymentInfo) bool {
 			return d.Status() != "failed"
 		})
-		if len(deployments) == 0 {
-			printNoDeploymentsMessage(ctx, opts.App, opts.Status, true)
-			return nil
-		}
 	}
 
 	// Sort by time (most recent first)
@@ -176,6 +168,11 @@ func AppHistory(ctx *Context, opts struct {
 	// JSON output
 	if opts.IsJSON() {
 		return printAppHistoryJSON(deployments, opts.App, ctx.ClusterName)
+	}
+
+	if len(deployments) == 0 {
+		printNoDeploymentsMessage(ctx, opts.App, opts.Status, opts.HideFailed)
+		return nil
 	}
 
 	// Print header

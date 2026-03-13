@@ -399,7 +399,9 @@ func printAppStatusJSON(
 				if kv.HasKey() && kv.HasValue() {
 					value := kv.Value()
 					key := kv.Key()
-					if isSensitiveKey(key) && len(value) > 0 {
+					if kv.Sensitive() {
+						value = "****"
+					} else if isSensitiveKey(key) && len(value) > 0 {
 						value = value[:1] + strings.Repeat("*", len(value)-1)
 					}
 					cfg.EnvVars = append(cfg.EnvVars, envVar{Key: key, Value: value})

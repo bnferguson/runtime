@@ -722,7 +722,9 @@ func printAppJSON(status *app_v1alpha.ApplicationStatus, cfg *app_v1alpha.Config
 	if cfg != nil && cfg.HasEnvVars() {
 		for _, v := range cfg.EnvVars() {
 			value := v.Value()
-			if v.Sensitive() || (isSensitiveKey(v.Key()) && len(value) > 0) {
+			if v.Sensitive() {
+				value = "****"
+			} else if isSensitiveKey(v.Key()) && len(value) > 0 {
 				value = value[:1] + strings.Repeat("*", len(value)-1)
 			}
 			o.EnvVars = append(o.EnvVars, envVarJSON{Key: v.Key(), Value: value})
