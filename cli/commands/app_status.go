@@ -12,6 +12,7 @@ import (
 
 func AppStatus(ctx *Context, opts struct {
 	AppCentric
+	FormatOptions
 }) error {
 	// Connect to app service
 	appCl, err := ctx.RPCClient("dev.miren.runtime/app")
@@ -51,6 +52,17 @@ func AppStatus(ctx *Context, opts struct {
 	if err != nil {
 		// It's okay if there's no active deployment
 		activeDeployment = nil
+	}
+
+	// Get last 5 deployments for recent activity
+	recentResult, err := depClient.ListDeployments(ctx, opts.App, clusterId, "", 5)
+	if err != nil {
+		recentResult = nil
+	}
+
+	// JSON output
+	if opts.IsJSON() {
+		return printAppStatusJSON(appResult, appConfig, activeDeployment, recentResult, opts.App, clusterId)
 	}
 
 	// Define styles
@@ -208,9 +220,7 @@ func AppStatus(ctx *Context, opts struct {
 	// Recent deployments summary
 	ctx.Printf("\n%s\n", labelStyle.Render("Recent Activity:"))
 
-	// Get last 5 deployments
-	recentResult, err := depClient.ListDeployments(ctx, opts.App, clusterId, "", 5)
-	if err == nil && recentResult.HasDeployments() && len(recentResult.Deployments()) > 0 {
+	if recentResult != nil && recentResult.HasDeployments() && len(recentResult.Deployments()) > 0 {
 		for i, dep := range recentResult.Deployments() {
 			if i >= 3 { // Only show top 3
 				break
@@ -257,6 +267,164 @@ func AppStatus(ctx *Context, opts struct {
 	ctx.Printf("\nUse 'miren app history %s' for full deployment history\n", opts.App)
 
 	return nil
+}
+
+func printAppStatusJSON(
+	appResult *app_v1alpha.CrudClientGetConfigurationResults,
+	appConfig *app_v1alpha.Configuration,
+	activeDeployment *deployment_v1alpha.DeploymentClientGetActiveDeploymentResults,
+	recentResult *deployment_v1alpha.DeploymentClientListDeploymentsResults,
+	app, cluster string,
+) error {
+	type envVar struct {
+		Key   string `json:"key"`
+		Value string `json:"value"`
+	}
+	type gitInfo struct {
+		Sha               string `json:"sha,omitempty"`
+		Branch            string `json:"branch,omitempty"`
+		Repository        string `json:"repository,omitempty"`
+		IsDirty           bool   `json:"is_dirty,omitempty"`
+		CommitMessage     string `json:"commit_message,omitempty"`
+		CommitAuthorName  string `json:"commit_author_name,omitempty"`
+		CommitAuthorEmail string `json:"commit_author_email,omitempty"`
+	}
+	type configuration struct {
+		Concurrency int32    `json:"concurrency,omitempty"`
+		EnvVars     []envVar `json:"env_vars,omitempty"`
+	}
+	type deploymentJSON struct {
+		ID           string   `json:"id"`
+		Status       string   `json:"status"`
+		AppVersionID string   `json:"app_version_id,omitempty"`
+		DeployedBy   string   `json:"deployed_by,omitempty"`
+		DeployedAt   string   `json:"deployed_at,omitempty"`
+		Phase        string   `json:"phase,omitempty"`
+		ErrorMessage string   `json:"error_message,omitempty"`
+		GitInfo      *gitInfo `json:"git_info,omitempty"`
+	}
+
+	marshalDeployment := func(dep *deployment_v1alpha.DeploymentInfo) deploymentJSON {
+		d := deploymentJSON{
+			ID:           dep.Id(),
+			Status:       dep.Status(),
+			AppVersionID: dep.AppVersionId(),
+		}
+
+		// Deployed by: prefer username, fall back to email, then user ID
+		if dep.HasDeployedByUserName() && dep.DeployedByUserName() != "" {
+			d.DeployedBy = dep.DeployedByUserName()
+		} else if dep.HasDeployedByUserEmail() && dep.DeployedByUserEmail() != "" &&
+			dep.DeployedByUserEmail() != "unknown@example.com" && dep.DeployedByUserEmail() != "user@example.com" {
+			d.DeployedBy = dep.DeployedByUserEmail()
+		} else if dep.HasDeployedByUserId() && dep.DeployedByUserId() != "" {
+			d.DeployedBy = dep.DeployedByUserId()
+		}
+
+		if dep.HasDeployedAt() && dep.DeployedAt() != nil {
+			d.DeployedAt = time.Unix(dep.DeployedAt().Seconds(), 0).UTC().Format(time.RFC3339)
+		}
+
+		if dep.HasPhase() && dep.Phase() != "" {
+			d.Phase = dep.Phase()
+		}
+
+		if dep.HasErrorMessage() && dep.ErrorMessage() != "" {
+			d.ErrorMessage = dep.ErrorMessage()
+		}
+
+		if dep.HasGitInfo() && dep.GitInfo() != nil {
+			git := dep.GitInfo()
+			gi := &gitInfo{}
+			hasData := false
+			if git.HasSha() && git.Sha() != "" {
+				gi.Sha = git.Sha()
+				hasData = true
+			}
+			if git.HasBranch() && git.Branch() != "" {
+				gi.Branch = git.Branch()
+				hasData = true
+			}
+			if git.HasRepository() && git.Repository() != "" {
+				gi.Repository = git.Repository()
+				hasData = true
+			}
+			if git.HasIsDirty() && git.IsDirty() {
+				gi.IsDirty = true
+				hasData = true
+			}
+			if git.HasCommitMessage() && git.CommitMessage() != "" {
+				gi.CommitMessage = git.CommitMessage()
+				hasData = true
+			}
+			if git.HasCommitAuthorName() && git.CommitAuthorName() != "" {
+				gi.CommitAuthorName = git.CommitAuthorName()
+				hasData = true
+			}
+			if git.HasCommitAuthorEmail() && git.CommitAuthorEmail() != "" {
+				gi.CommitAuthorEmail = git.CommitAuthorEmail()
+				hasData = true
+			}
+			if hasData {
+				d.GitInfo = gi
+			}
+		}
+
+		return d
+	}
+
+	output := struct {
+		App               string           `json:"app"`
+		Cluster           string           `json:"cluster"`
+		CurrentVersion    string           `json:"current_version,omitempty"`
+		Configuration     *configuration   `json:"configuration,omitempty"`
+		ActiveDeployment  *deploymentJSON  `json:"active_deployment,omitempty"`
+		RecentDeployments []deploymentJSON `json:"recent_deployments,omitempty"`
+	}{
+		App:     app,
+		Cluster: cluster,
+	}
+
+	if appResult.HasVersionId() && appResult.VersionId() != "" {
+		output.CurrentVersion = appResult.VersionId()
+	}
+
+	if appConfig != nil {
+		cfg := &configuration{}
+		if appConfig.HasConcurrency() && appConfig.Concurrency() > 0 {
+			cfg.Concurrency = appConfig.Concurrency()
+		}
+		if appConfig.HasEnvVars() && len(appConfig.EnvVars()) > 0 {
+			for _, kv := range appConfig.EnvVars() {
+				if kv.HasKey() && kv.HasValue() {
+					value := kv.Value()
+					key := kv.Key()
+					if kv.Sensitive() {
+						value = "****"
+					} else if isSensitiveKey(key) && len(value) > 0 {
+						value = value[:1] + strings.Repeat("*", len(value)-1)
+					}
+					cfg.EnvVars = append(cfg.EnvVars, envVar{Key: key, Value: value})
+				}
+			}
+		}
+		if cfg.Concurrency > 0 || len(cfg.EnvVars) > 0 {
+			output.Configuration = cfg
+		}
+	}
+
+	if activeDeployment != nil && activeDeployment.HasDeployment() {
+		d := marshalDeployment(activeDeployment.Deployment())
+		output.ActiveDeployment = &d
+	}
+
+	if recentResult != nil && recentResult.HasDeployments() {
+		for _, dep := range recentResult.Deployments() {
+			output.RecentDeployments = append(output.RecentDeployments, marshalDeployment(dep))
+		}
+	}
+
+	return PrintJSON(output)
 }
 
 // isSensitiveKey checks if an environment variable key might contain sensitive data

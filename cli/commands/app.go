@@ -151,6 +151,7 @@ func MinuteLabeler(i int, v float64) string {
 
 func App(ctx *Context, opts struct {
 	AppCentric
+	FormatOptions
 	Watch bool `short:"w" long:"watch" description:"Watch the app stats"`
 	Graph bool `short:"g" long:"graph" description:"Graph the app stats"`
 
@@ -192,6 +193,10 @@ func App(ctx *Context, opts struct {
 	}
 
 	status := res.Status()
+
+	if opts.IsJSON() {
+		return printAppJSON(status, cfgres.Configuration())
+	}
 
 	//spew.Dump(status)
 	//windows := status.Pools()
@@ -629,4 +634,155 @@ func (m Model) View() string {
 	}
 
 	return frame
+}
+
+func printAppJSON(status *app_v1alpha.ApplicationStatus, cfg *app_v1alpha.Configuration) error {
+	type poolJSON struct {
+		Name      string `json:"name"`
+		Instances int    `json:"instances"`
+		Idle      int32  `json:"idle"`
+	}
+
+	type envVarJSON struct {
+		Key   string `json:"key"`
+		Value string `json:"value"`
+	}
+
+	type requestStatJSON struct {
+		Timestamp     string  `json:"timestamp"`
+		Count         int64   `json:"count"`
+		AvgDurationMs float64 `json:"avg_duration_ms"`
+		P95DurationMs float64 `json:"p95_duration_ms,omitempty"`
+		P99DurationMs float64 `json:"p99_duration_ms,omitempty"`
+		ErrorRate     float64 `json:"error_rate"`
+	}
+
+	type pathStatJSON struct {
+		Path          string  `json:"path"`
+		Count         int64   `json:"count"`
+		AvgDurationMs float64 `json:"avg_duration_ms"`
+		ErrorRate     float64 `json:"error_rate"`
+	}
+
+	type errorBreakdownJSON struct {
+		StatusCode int32   `json:"status_code"`
+		Count      int64   `json:"count"`
+		Percentage float64 `json:"percentage"`
+	}
+
+	type output struct {
+		Name              string               `json:"name"`
+		ActiveVersion     string               `json:"active_version,omitempty"`
+		LastDeploy        string               `json:"last_deploy,omitempty"`
+		RequestsPerSecond float64              `json:"requests_per_second,omitempty"`
+		LastMinCPU        float64              `json:"last_min_cpu,omitempty"`
+		LastHourCPU       float64              `json:"last_hour_cpu,omitempty"`
+		Pools             []poolJSON           `json:"pools,omitempty"`
+		EnvVars           []envVarJSON         `json:"env_vars,omitempty"`
+		RequestStats      []requestStatJSON    `json:"request_stats,omitempty"`
+		TopPaths          []pathStatJSON       `json:"top_paths,omitempty"`
+		ErrorBreakdown    []errorBreakdownJSON `json:"error_breakdown,omitempty"`
+	}
+
+	o := output{
+		Name: status.Name(),
+	}
+
+	if status.HasActiveVersion() {
+		o.ActiveVersion = status.ActiveVersion()
+	}
+
+	if status.HasLastDeploy() && status.LastDeploy() != nil {
+		t := standard.FromTimestamp(status.LastDeploy())
+		if !t.IsZero() {
+			o.LastDeploy = t.UTC().Format(time.RFC3339)
+		}
+	}
+
+	if status.HasRequestsPerSecond() {
+		o.RequestsPerSecond = status.RequestsPerSecond()
+	}
+
+	if status.HasLastMinCPU() {
+		o.LastMinCPU = status.LastMinCPU()
+	}
+
+	if status.HasLastHourCPU() {
+		o.LastHourCPU = status.LastHourCPU()
+	}
+
+	for _, ps := range status.Pools() {
+		o.Pools = append(o.Pools, poolJSON{
+			Name:      ps.Name(),
+			Instances: len(ps.Windows()),
+			Idle:      ps.Idle(),
+		})
+	}
+
+	if cfg != nil && cfg.HasEnvVars() {
+		for _, v := range cfg.EnvVars() {
+			value := v.Value()
+			if v.Sensitive() {
+				value = "****"
+			} else if isSensitiveKey(v.Key()) && len(value) > 0 {
+				value = value[:1] + strings.Repeat("*", len(value)-1)
+			}
+			o.EnvVars = append(o.EnvVars, envVarJSON{Key: v.Key(), Value: value})
+		}
+		sort.Slice(o.EnvVars, func(i, j int) bool {
+			return o.EnvVars[i].Key < o.EnvVars[j].Key
+		})
+	}
+
+	if status.HasRequestStats() {
+		// Collect non-zero samples, then keep only the last 5
+		var stats []requestStatJSON
+		for _, s := range status.RequestStats() {
+			if s.Count() == 0 {
+				continue
+			}
+			rs := requestStatJSON{
+				Count:         s.Count(),
+				AvgDurationMs: s.AvgDurationMs(),
+				ErrorRate:     s.ErrorRate(),
+			}
+			if s.HasTimestamp() && s.Timestamp() != nil {
+				rs.Timestamp = standard.FromTimestamp(s.Timestamp()).UTC().Format(time.RFC3339)
+			}
+			if s.HasP95DurationMs() {
+				rs.P95DurationMs = s.P95DurationMs()
+			}
+			if s.HasP99DurationMs() {
+				rs.P99DurationMs = s.P99DurationMs()
+			}
+			stats = append(stats, rs)
+		}
+		if len(stats) > 5 {
+			stats = stats[len(stats)-5:]
+		}
+		o.RequestStats = stats
+	}
+
+	if status.HasTopPaths() {
+		for _, p := range status.TopPaths() {
+			o.TopPaths = append(o.TopPaths, pathStatJSON{
+				Path:          p.Path(),
+				Count:         p.Count(),
+				AvgDurationMs: p.AvgDurationMs(),
+				ErrorRate:     p.ErrorRate(),
+			})
+		}
+	}
+
+	if status.HasErrorBreakdown() {
+		for _, e := range status.ErrorBreakdown() {
+			o.ErrorBreakdown = append(o.ErrorBreakdown, errorBreakdownJSON{
+				StatusCode: e.StatusCode(),
+				Count:      e.Count(),
+				Percentage: e.Percentage(),
+			})
+		}
+	}
+
+	return PrintJSON(o)
 }

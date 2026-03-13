@@ -11,6 +11,104 @@ import (
 	"miren.dev/runtime/pkg/ui"
 )
 
+func printAppHistoryJSON(deployments []*deployment_v1alpha.DeploymentInfo, app, cluster string) error {
+	type gitInfoJSON struct {
+		Sha               string `json:"sha,omitempty"`
+		Branch            string `json:"branch,omitempty"`
+		Repository        string `json:"repository,omitempty"`
+		IsDirty           bool   `json:"is_dirty,omitempty"`
+		CommitMessage     string `json:"commit_message,omitempty"`
+		CommitAuthorName  string `json:"commit_author_name,omitempty"`
+		CommitAuthorEmail string `json:"commit_author_email,omitempty"`
+	}
+	type deploymentJSON struct {
+		ID                 string       `json:"id"`
+		Status             string       `json:"status"`
+		AppVersionID       string       `json:"app_version_id,omitempty"`
+		DeployedAt         string       `json:"deployed_at,omitempty"`
+		DeployedByUserName string       `json:"deployed_by_user_name,omitempty"`
+		Phase              string       `json:"phase,omitempty"`
+		ErrorMessage       string       `json:"error_message,omitempty"`
+		GitInfo            *gitInfoJSON `json:"git_info,omitempty"`
+	}
+
+	var deps []deploymentJSON
+	for _, dep := range deployments {
+		d := deploymentJSON{
+			ID:           dep.Id(),
+			Status:       dep.Status(),
+			AppVersionID: dep.AppVersionId(),
+		}
+
+		if dep.HasDeployedByUserName() && dep.DeployedByUserName() != "" {
+			d.DeployedByUserName = dep.DeployedByUserName()
+		}
+
+		if dep.HasDeployedAt() && dep.DeployedAt() != nil {
+			d.DeployedAt = time.Unix(dep.DeployedAt().Seconds(), 0).UTC().Format(time.RFC3339)
+		}
+
+		if dep.HasPhase() && dep.Phase() != "" {
+			d.Phase = dep.Phase()
+		}
+
+		if dep.HasErrorMessage() && dep.ErrorMessage() != "" {
+			d.ErrorMessage = dep.ErrorMessage()
+		}
+
+		if dep.HasGitInfo() && dep.GitInfo() != nil {
+			git := dep.GitInfo()
+			gi := &gitInfoJSON{}
+			hasData := false
+			if git.HasSha() && git.Sha() != "" {
+				gi.Sha = git.Sha()
+				hasData = true
+			}
+			if git.HasBranch() && git.Branch() != "" {
+				gi.Branch = git.Branch()
+				hasData = true
+			}
+			if git.HasRepository() && git.Repository() != "" {
+				gi.Repository = git.Repository()
+				hasData = true
+			}
+			if git.HasIsDirty() && git.IsDirty() {
+				gi.IsDirty = true
+				hasData = true
+			}
+			if git.HasCommitMessage() && git.CommitMessage() != "" {
+				gi.CommitMessage = git.CommitMessage()
+				hasData = true
+			}
+			if git.HasCommitAuthorName() && git.CommitAuthorName() != "" {
+				gi.CommitAuthorName = git.CommitAuthorName()
+				hasData = true
+			}
+			if git.HasCommitAuthorEmail() && git.CommitAuthorEmail() != "" {
+				gi.CommitAuthorEmail = git.CommitAuthorEmail()
+				hasData = true
+			}
+			if hasData {
+				d.GitInfo = gi
+			}
+		}
+
+		deps = append(deps, d)
+	}
+
+	output := struct {
+		App         string           `json:"app"`
+		Cluster     string           `json:"cluster"`
+		Deployments []deploymentJSON `json:"deployments"`
+	}{
+		App:         app,
+		Cluster:     cluster,
+		Deployments: deps,
+	}
+
+	return PrintJSON(output)
+}
+
 // Deployment status styles
 var statusStyles = map[string]struct {
 	icon  string
@@ -31,6 +129,7 @@ type historyDisplayOpts struct {
 
 func AppHistory(ctx *Context, opts struct {
 	AppCentric
+	FormatOptions
 
 	Limit      int    `short:"n" long:"limit" description:"Maximum number of deployments to show" default:"10"`
 	All        bool   `long:"all" description:"Show all deployments (ignore limit)"`
@@ -55,24 +154,26 @@ func AppHistory(ctx *Context, opts struct {
 	}
 
 	deployments := result.Deployments()
-	if len(deployments) == 0 {
-		printNoDeploymentsMessage(ctx, opts.App, opts.Status, false)
-		return nil
-	}
 
 	// Filter out failed deployments if requested
 	if opts.HideFailed {
 		deployments = filterDeployments(deployments, func(d *deployment_v1alpha.DeploymentInfo) bool {
 			return d.Status() != "failed"
 		})
-		if len(deployments) == 0 {
-			printNoDeploymentsMessage(ctx, opts.App, opts.Status, true)
-			return nil
-		}
 	}
 
 	// Sort by time (most recent first)
 	sortDeployments(deployments)
+
+	// JSON output
+	if opts.IsJSON() {
+		return printAppHistoryJSON(deployments, opts.App, ctx.ClusterName)
+	}
+
+	if len(deployments) == 0 {
+		printNoDeploymentsMessage(ctx, opts.App, opts.Status, opts.HideFailed)
+		return nil
+	}
 
 	// Print header
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
