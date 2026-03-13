@@ -842,6 +842,9 @@ Warning: These commands are intended for advanced users and developers. They may
 	// Internal commands (hidden from help, used by miren internals)
 	d.Dispatch("internal", Section("internal", "Internal commands used by miren components", ""))
 
+	// Help command (registered last so it can reference all other commands)
+	d.Dispatch("help", NewHelpCommand(d))
+
 	addCommands(d)
 }
 
