@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -60,6 +61,7 @@ func buildSystemFilter(component, userFilter string) string {
 // LogsApp shows application logs. This is the default subcommand for `miren logs`.
 func LogsApp(ctx *Context, opts struct {
 	AppCentric
+	FormatOptions
 
 	Last    *time.Duration `short:"l" long:"last" description:"Show logs from the last duration"`
 	Follow  bool           `short:"f" long:"follow" description:"Follow log output (live tail)"`
@@ -78,12 +80,14 @@ func LogsApp(ctx *Context, opts struct {
 		follow:         opts.Follow,
 		rawFilter:      opts.Filter,
 		combinedFilter: combinedFilter,
+		json:           opts.IsJSON(),
 	})
 }
 
 // LogsSandbox shows logs for a specific sandbox.
 func LogsSandbox(ctx *Context, opts struct {
 	ConfigCentric
+	FormatOptions
 
 	SandboxID string         `position:"0" usage:"Sandbox ID" required:"true"`
 	Last      *time.Duration `short:"l" long:"last" description:"Show logs from the last duration"`
@@ -103,12 +107,14 @@ func LogsSandbox(ctx *Context, opts struct {
 		follow:         opts.Follow,
 		rawFilter:      opts.Filter,
 		combinedFilter: opts.Filter,
+		json:           opts.IsJSON(),
 	})
 }
 
 // LogsBuild shows build logs for a specific version.
 func LogsBuild(ctx *Context, opts struct {
 	AppCentric
+	FormatOptions
 
 	Version string         `position:"0" usage:"Build version (e.g., v3)" required:"true"`
 	Last    *time.Duration `short:"l" long:"last" description:"Show logs from the last duration"`
@@ -127,12 +133,14 @@ func LogsBuild(ctx *Context, opts struct {
 		follow:         opts.Follow,
 		rawFilter:      opts.Filter,
 		combinedFilter: combinedFilter,
+		json:           opts.IsJSON(),
 	})
 }
 
 // LogsSystem shows system/server logs, optionally filtered by component.
 func LogsSystem(ctx *Context, opts struct {
 	ConfigCentric
+	FormatOptions
 
 	Component string         `position:"0" usage:"System component to filter by (e.g., 'etcd', 'scheduler')"`
 	Last      *time.Duration `short:"l" long:"last" description:"Show logs from the last duration"`
@@ -159,10 +167,12 @@ func LogsSystem(ctx *Context, opts struct {
 	}
 	// When no --last and no --follow, ts is nil → server returns last 100 lines
 
+	printer := logPrinter(ctx, opts.IsJSON())
+
 	ac := app_v1alpha.LogsClient{Client: cl}
 	callback := stream.Callback(func(chunk *app_v1alpha.LogChunk) error {
 		for _, l := range chunk.Entries() {
-			printLogEntry(ctx, l)
+			printer(l)
 		}
 		return nil
 	})
@@ -180,14 +190,17 @@ type logDispatchArgs struct {
 	follow         bool
 	rawFilter      string
 	combinedFilter string
+	json           bool
 }
 
 // dispatchLogs handles protocol negotiation and dispatches to the appropriate
 // log streaming method based on server capabilities.
 func dispatchLogs(ctx *Context, cl *rpc.NetworkClient, args logDispatchArgs) error {
+	printer := logPrinter(ctx, args.json)
+
 	// Check if server supports streaming (prefer chunked for efficiency)
 	if cl.HasMethod(ctx, "streamLogChunks") {
-		return streamLogChunks(ctx, cl, args.app, args.sandbox, args.last, args.follow, args.combinedFilter)
+		return streamLogChunks(ctx, cl, args.app, args.sandbox, args.last, args.follow, args.combinedFilter, printer)
 	}
 
 	// Older server - warn about upgrade and limited functionality
@@ -211,7 +224,7 @@ func dispatchLogs(ctx *Context, cl *rpc.NetworkClient, args logDispatchArgs) err
 	}
 
 	if cl.HasMethod(ctx, "streamLogs") {
-		return streamLogs(ctx, cl, args.app, args.sandbox, args.last, args.follow, filter)
+		return streamLogs(ctx, cl, args.app, args.sandbox, args.last, args.follow, filter, printer)
 	}
 
 	// Warn if --follow requested but not supported
@@ -220,7 +233,7 @@ func dispatchLogs(ctx *Context, cl *rpc.NetworkClient, args logDispatchArgs) err
 	}
 
 	// Fall back to legacy pagination
-	return legacyLogs(ctx, cl, args.app, args.sandbox, args.last, filter)
+	return legacyLogs(ctx, cl, args.app, args.sandbox, args.last, filter, printer)
 }
 
 var streamTypePrefixes = map[string]string{
@@ -228,6 +241,49 @@ var streamTypePrefixes = map[string]string{
 	"stderr":   "E",
 	"error":    "ERR",
 	"user-oob": "U",
+}
+
+// logPrinter returns a function that prints a log entry in either text or JSON format.
+func logPrinter(ctx *Context, jsonOutput bool) func(*app_v1alpha.LogEntry) {
+	if jsonOutput {
+		return func(l *app_v1alpha.LogEntry) {
+			printLogEntryJSON(ctx, l)
+		}
+	}
+	return func(l *app_v1alpha.LogEntry) {
+		printLogEntry(ctx, l)
+	}
+}
+
+// logEntryJSON is the JSON representation of a log entry.
+type logEntryJSON struct {
+	Timestamp  string            `json:"timestamp"`
+	Stream     string            `json:"stream"`
+	Source     string            `json:"source,omitempty"`
+	Message    string            `json:"message"`
+	Attributes map[string]string `json:"attributes,omitempty"`
+}
+
+func printLogEntryJSON(ctx *Context, l *app_v1alpha.LogEntry) {
+	entry := logEntryJSON{
+		Timestamp: standard.FromTimestamp(l.Timestamp()).Format(time.RFC3339Nano),
+		Stream:    l.Stream(),
+		Message:   l.Line(),
+	}
+	if l.HasSource() && l.Source() != "" {
+		entry.Source = l.Source()
+	}
+	if l.HasAttributes() {
+		attrs := l.Attributes()
+		if len(attrs) > 0 {
+			entry.Attributes = attrs
+		}
+	}
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return
+	}
+	ctx.Printf("%s\n", data)
 }
 
 func printLogEntry(ctx *Context, l *app_v1alpha.LogEntry) {
@@ -276,7 +332,7 @@ func formatAttributes(m map[string]string) string {
 	return b.String()
 }
 
-func streamLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *time.Duration, follow bool, filter *logfilter.Filter) error {
+func streamLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *time.Duration, follow bool, filter *logfilter.Filter, printer func(*app_v1alpha.LogEntry)) error {
 	ac := app_v1alpha.LogsClient{Client: cl}
 
 	// Build target
@@ -303,7 +359,7 @@ func streamLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *
 			return nil
 		}
 
-		printLogEntry(ctx, l)
+		printer(l)
 		return nil
 	})
 
@@ -311,7 +367,7 @@ func streamLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *
 	return err
 }
 
-func streamLogChunks(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *time.Duration, follow bool, filter string) error {
+func streamLogChunks(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *time.Duration, follow bool, filter string, printer func(*app_v1alpha.LogEntry)) error {
 	ac := app_v1alpha.LogsClient{Client: cl}
 
 	// Build target
@@ -334,7 +390,7 @@ func streamLogChunks(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, l
 	// Create callback to print logs as they arrive in chunks
 	callback := stream.Callback(func(chunk *app_v1alpha.LogChunk) error {
 		for _, l := range chunk.Entries() {
-			printLogEntry(ctx, l)
+			printer(l)
 		}
 		return nil
 	})
@@ -343,7 +399,7 @@ func streamLogChunks(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, l
 	return err
 }
 
-func legacyLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *time.Duration, filter *logfilter.Filter) error {
+func legacyLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *time.Duration, filter *logfilter.Filter, printer func(*app_v1alpha.LogEntry)) error {
 	ac := app_v1alpha.LogsClient{Client: cl}
 
 	var ts *standard.Timestamp
@@ -382,7 +438,7 @@ func legacyLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *
 				continue
 			}
 
-			printLogEntry(ctx, l)
+			printer(l)
 		}
 
 		if len(logs) != 100 {

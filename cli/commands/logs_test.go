@@ -1,6 +1,16 @@
 package commands
 
-import "testing"
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+
+	"miren.dev/runtime/api/app/app_v1alpha"
+	"miren.dev/runtime/pkg/rpc/standard"
+)
 
 func TestBuildFilterWithService(t *testing.T) {
 	tests := []struct {
@@ -107,6 +117,89 @@ func TestBuildBuildFilter(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPrintLogEntryJSON(t *testing.T) {
+	ts := time.Date(2026, 3, 13, 16, 30, 0, 0, time.UTC)
+
+	t.Run("full entry", func(t *testing.T) {
+		var buf bytes.Buffer
+		ctx := &Context{Context: context.Background(), Stdout: &buf}
+
+		entry := &app_v1alpha.LogEntry{}
+		entry.SetTimestamp(standard.ToTimestamp(ts))
+		entry.SetStream("stdout")
+		entry.SetSource("sandbox/abc123")
+		entry.SetLine("Hello world")
+		entry.SetAttributes(map[string]string{"service": "web"})
+
+		printLogEntryJSON(ctx, entry)
+
+		var got logEntryJSON
+		if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+			t.Fatalf("invalid JSON output: %v\nraw: %s", err, buf.String())
+		}
+
+		if got.Timestamp != "2026-03-13T16:30:00Z" {
+			t.Errorf("timestamp = %q, want %q", got.Timestamp, "2026-03-13T16:30:00Z")
+		}
+		if got.Stream != "stdout" {
+			t.Errorf("stream = %q, want %q", got.Stream, "stdout")
+		}
+		if got.Source != "sandbox/abc123" {
+			t.Errorf("source = %q, want %q", got.Source, "sandbox/abc123")
+		}
+		if got.Message != "Hello world" {
+			t.Errorf("message = %q, want %q", got.Message, "Hello world")
+		}
+		if got.Attributes["service"] != "web" {
+			t.Errorf("attributes[service] = %q, want %q", got.Attributes["service"], "web")
+		}
+	})
+
+	t.Run("minimal entry omits empty fields", func(t *testing.T) {
+		var buf bytes.Buffer
+		ctx := &Context{Context: context.Background(), Stdout: &buf}
+
+		entry := &app_v1alpha.LogEntry{}
+		entry.SetTimestamp(standard.ToTimestamp(ts))
+		entry.SetStream("stderr")
+		entry.SetLine("error occurred")
+
+		printLogEntryJSON(ctx, entry)
+
+		raw := strings.TrimSpace(buf.String())
+		if strings.Contains(raw, "source") {
+			t.Errorf("expected source to be omitted, got: %s", raw)
+		}
+		if strings.Contains(raw, "attributes") {
+			t.Errorf("expected attributes to be omitted, got: %s", raw)
+		}
+	})
+
+	t.Run("multiple entries produce JSONL", func(t *testing.T) {
+		var buf bytes.Buffer
+		ctx := &Context{Context: context.Background(), Stdout: &buf}
+
+		for i := 0; i < 3; i++ {
+			entry := &app_v1alpha.LogEntry{}
+			entry.SetTimestamp(standard.ToTimestamp(ts))
+			entry.SetStream("stdout")
+			entry.SetLine("line")
+			printLogEntryJSON(ctx, entry)
+		}
+
+		lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+		if len(lines) != 3 {
+			t.Fatalf("expected 3 lines, got %d", len(lines))
+		}
+		for i, line := range lines {
+			var obj map[string]any
+			if err := json.Unmarshal([]byte(line), &obj); err != nil {
+				t.Errorf("line %d is not valid JSON: %v", i, err)
+			}
+		}
+	})
 }
 
 func TestBuildSystemFilter(t *testing.T) {
