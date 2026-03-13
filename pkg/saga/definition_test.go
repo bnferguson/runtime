@@ -103,6 +103,56 @@ func diamondDExec(_ context.Context, in diamondDIn) (diamondDOut, error) {
 }
 func diamondDUndo(_ context.Context, _ diamondDIn, _ diamondDOut) error { return nil }
 
+// Edge-linked action types — the only dependency is an Edge key.
+
+type edgeProducerIn struct {
+	Seed int `saga:"seed"`
+}
+type edgeProducerOut struct {
+	Value int  `saga:"edge_value"`
+	Done  Edge `saga:"producer_done"`
+}
+
+func edgeProducerExec(_ context.Context, in edgeProducerIn) (edgeProducerOut, error) {
+	return edgeProducerOut{Value: in.Seed * 2}, nil
+}
+func edgeProducerUndo(_ context.Context, _ edgeProducerIn, _ edgeProducerOut) error { return nil }
+
+type edgeConsumerIn struct {
+	X    int  `saga:"consumer_x"`
+	Done Edge `saga:"producer_done"`
+}
+type edgeConsumerOut struct {
+	Y int `saga:"consumer_y"`
+}
+
+func edgeConsumerExec(_ context.Context, in edgeConsumerIn) (edgeConsumerOut, error) {
+	return edgeConsumerOut{Y: in.X}, nil
+}
+func edgeConsumerUndo(_ context.Context, _ edgeConsumerIn, _ edgeConsumerOut) error { return nil }
+
+func TestEdge_CreatesDependencyWithoutData(t *testing.T) {
+	// producer outputs an Edge key "producer_done"
+	// consumer reads "producer_done" — this should create a dependency edge
+	// even though no real data flows through it.
+	def, err := Define("edge-test").
+		Action("consumer", edgeConsumerExec).Undo(edgeConsumerUndo).
+		Action("producer", edgeProducerExec).Undo(edgeProducerUndo).
+		Build()
+	require.NoError(t, err)
+
+	order := def.ExecutionOrder()
+	require.Len(t, order, 2)
+
+	// producer must come before consumer because of the Edge dependency
+	assert.Equal(t, "producer", order[0])
+	assert.Equal(t, "consumer", order[1])
+
+	// Verify the dependency is recorded
+	consumerNode := def.Actions["consumer"]
+	assert.Contains(t, consumerNode.Dependencies, "producer")
+}
+
 func TestTopologicalSort_Deterministic(t *testing.T) {
 	t.Run("independent actions are alphabetically sorted", func(t *testing.T) {
 		// Register actions in non-alphabetical order to verify the sort

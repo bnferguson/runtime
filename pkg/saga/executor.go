@@ -533,6 +533,9 @@ func extractOutputs(node *ActionNode, outputBytes []byte, outputs map[string]jso
 	}
 
 	for _, mapping := range typed.outMappings {
+		if mapping.isEdge {
+			continue // Edge fields carry no data
+		}
 		// Look for the field in the output map using the JSON key name
 		// (which accounts for json struct tags)
 		if val, exists := outputMap[mapping.jsonKey]; exists {

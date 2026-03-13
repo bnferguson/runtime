@@ -813,3 +813,76 @@ func TestExecutor_SerializationFailurePlusUndoFailure(t *testing.T) {
 	_, recorded := exec.ExecutedActions["unserializable"]
 	assert.True(t, recorded, "action should be recorded even when immediate undo fails")
 }
+
+// Edge dependency test types
+
+type edgeStepAIn struct {
+	Val int `saga:"val"`
+}
+type edgeStepAOut struct {
+	AResult int  `saga:"a_result"`
+	ADone   Edge `saga:"a_done"`
+}
+
+type edgeStepBIn struct {
+	Val   int  `saga:"val"`
+	ADone Edge `saga:"a_done"`
+}
+type edgeStepBOut struct {
+	BResult int `saga:"b_result"`
+}
+
+type edgeTestController struct {
+	mu    sync.Mutex
+	order []string
+}
+
+func (c *edgeTestController) record(name string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.order = append(c.order, name)
+}
+
+func edgeStepAExec(ctx context.Context, in edgeStepAIn) (edgeStepAOut, error) {
+	Get[*edgeTestController](ctx).record("A")
+	return edgeStepAOut{AResult: in.Val * 10}, nil
+}
+
+func edgeStepAUndo(_ context.Context, _ edgeStepAIn, _ edgeStepAOut) error { return nil }
+
+func edgeStepBExec(ctx context.Context, in edgeStepBIn) (edgeStepBOut, error) {
+	Get[*edgeTestController](ctx).record("B")
+	return edgeStepBOut{BResult: in.Val + 1}, nil
+}
+
+func edgeStepBUndo(_ context.Context, _ edgeStepBIn, _ edgeStepBOut) error { return nil }
+
+func TestExecutor_EdgeDependency(t *testing.T) {
+	registry := NewRegistry()
+
+	ctrl := &edgeTestController{}
+	err := Define("edge-exec").
+		Using(ctrl).
+		Action("step-b", edgeStepBExec).Undo(edgeStepBUndo).
+		Action("step-a", edgeStepAExec).Undo(edgeStepAUndo).
+		RegisterTo(registry)
+	require.NoError(t, err)
+
+	storage := newMemoryStorage()
+	executor := NewExecutor(storage, WithRegistry(registry))
+
+	err = executor.Start("edge-exec").
+		Input("val", 5).
+		WithID("edge-exec-1").
+		Execute(context.Background())
+	require.NoError(t, err)
+
+	// Verify B ran after A (Edge dependency)
+	assert.Equal(t, []string{"A", "B"}, ctrl.order)
+
+	// Verify execution completed
+	exec, err := storage.Get(context.Background(), "edge-exec-1")
+	require.NoError(t, err)
+	assert.Equal(t, StatusCompleted, exec.Status)
+	assert.Equal(t, []string{"step-a", "step-b"}, exec.ExecutionOrder)
+}

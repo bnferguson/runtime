@@ -38,9 +38,11 @@ import (
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/grunge"
+	"miren.dev/runtime/pkg/labs"
 	"miren.dev/runtime/pkg/multierror"
 	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/pkg/saga"
 	"miren.dev/runtime/servers/exec"
 )
 
@@ -153,7 +155,7 @@ type Runner struct {
 
 	namespace string
 
-	sbController *sandbox.SandboxController
+	sbController sandbox.SandboxLifecycle
 
 	// Disk controllers, stored for SetRestartMode propagation
 	dvc *diskio.DiskVolumeController
@@ -552,7 +554,7 @@ func (r *Runner) SetupControllers(
 	cm := controller.NewControllerManager()
 
 	// Create sandbox controller with explicit dependencies
-	sbc, err := sandbox.NewSandboxController(sandbox.SandboxControllerDeps{
+	sbcDeps := sandbox.SandboxControllerDeps{
 		Log:            r.Log,
 		CC:             r.deps.CC,
 		EAC:            eas,
@@ -568,14 +570,31 @@ func (r *Runner) SetupControllers(
 		StatusMon:      r.deps.StatusMon,
 		Resolver:       r.deps.Resolver,
 		Metrics:        r.deps.SandboxMetrics,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create sandbox controller: %w", err)
+	}
+
+	var sbc sandbox.SandboxLifecycle
+	var sbcHandler controller.HandlerFunc
+
+	if labs.Sagas() {
+		sagaStorage := saga.NewEACStorage(eas, r.Log)
+		sagaSbc, sagaErr := sandbox.NewSagaSandboxController(sbcDeps, sagaStorage, r.Log)
+		if sagaErr != nil {
+			return nil, fmt.Errorf("failed to create saga sandbox controller: %w", sagaErr)
+		}
+		sbc = sagaSbc
+		sbcHandler = controller.AdaptController(sagaSbc)
+	} else {
+		origSbc, origErr := sandbox.NewSandboxController(sbcDeps)
+		if origErr != nil {
+			return nil, fmt.Errorf("failed to create sandbox controller: %w", origErr)
+		}
+		sbc = origSbc
+		sbcHandler = controller.AdaptController(origSbc)
 	}
 
 	r.closers = append(r.closers, sbc)
 
-	rs.ExposeValue("dev.miren.runtime/sandbox.metrics", metric_v1alpha.AdaptSandboxMetrics(sbc.Metrics))
+	rs.ExposeValue("dev.miren.runtime/sandbox.metrics", metric_v1alpha.AdaptSandboxMetrics(sbcDeps.Metrics))
 
 	// Create service controller with explicit dependencies
 	serviceController, err := service.NewServiceController(service.ServiceControllerDeps{
@@ -753,8 +772,8 @@ func (r *Runner) SetupControllers(
 		return nil, err
 	}
 
-	r.cc = sbc.CC
-	r.namespace = sbc.Namespace
+	r.cc = r.deps.CC
+	r.namespace = r.deps.Namespace
 	r.sbController = sbc
 
 	sbController := controller.NewReconcileController(
@@ -762,7 +781,7 @@ func (r *Runner) SetupControllers(
 		log,
 		compute_v1alpha.Index(compute_v1alpha.KindSandbox, entity.Id("node/"+r.Id)),
 		eas,
-		controller.AdaptController(sbc),
+		sbcHandler,
 		time.Minute,
 		workers,
 	)

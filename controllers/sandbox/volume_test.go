@@ -395,7 +395,7 @@ func TestReleaseDiskLeases(t *testing.T) {
 		r.Equal(storage.BOUND, storedLease.Status)
 
 		// Act: Release disk leases for the sandbox
-		err = controller.releaseDiskLeases(ctx, sandboxID)
+		err = controller.ReleaseDiskLeases(ctx, sandboxID)
 		r.NoError(err)
 
 		// Assert: Lease should now be RELEASED
@@ -456,7 +456,7 @@ func TestReleaseDiskLeases(t *testing.T) {
 		r.NoError(err)
 
 		// Act: Release leases for sandbox1 only
-		err = controller.releaseDiskLeases(ctx, sandbox1ID)
+		err = controller.ReleaseDiskLeases(ctx, sandbox1ID)
 		r.NoError(err)
 
 		// Assert: sandbox1's lease should be RELEASED

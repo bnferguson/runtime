@@ -10,6 +10,12 @@ import (
 	"time"
 )
 
+// Edge is a zero-size type used to declare ordering dependencies between saga
+// actions without carrying data. Edge fields participate in the dependency
+// graph (via saga struct tags) but are skipped during serialization and
+// deserialization at runtime.
+type Edge struct{}
+
 // Status represents the current state of a saga execution.
 type Status string
 
