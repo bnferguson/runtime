@@ -11,5 +11,5 @@ func (c *SandboxController) configureFirewall(sb *compute.Sandbox, ep *network.E
 	return nil
 }
 
-func (c *SandboxController) unconfigureFirewall(sb *compute.Sandbox) {
+func (c *SandboxController) UnconfigureFirewall(sb *compute.Sandbox) {
 }
