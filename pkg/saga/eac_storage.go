@@ -61,7 +61,7 @@ func (s *EACStorage) Save(ctx context.Context, exec *Execution) error {
 	}
 
 	ent := entity.New(
-		entity.DBId, exec.ID,
+		entity.DBId, entity.Id(exec.ID),
 		sagaEntity.Encode(),
 	)
 
