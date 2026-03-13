@@ -31,6 +31,17 @@ const (
 	UserOOB LogStream = "user-oob"
 )
 
+// isReservedLogField returns true for field names that control log routing
+// and identity in VictoriaLogs. Attributes with these names must not overwrite
+// the corresponding built-in fields set by the log writers.
+func isReservedLogField(key string) bool {
+	switch key {
+	case "_msg", "_time", "entity", "stream", "trace_id":
+		return true
+	}
+	return false
+}
+
 type LogEntry struct {
 	Timestamp  time.Time
 	Stream     LogStream
@@ -86,8 +97,12 @@ func (l *PersistentLogWriter) WriteEntry(entity string, le LogEntry) error {
 		"trace_id": le.TraceID,
 	}
 
-	// Add all attributes as top-level fields
+	// Add attributes as top-level fields, but never overwrite reserved fields
+	// that control log routing and identity.
 	for k, v := range le.Attributes {
+		if isReservedLogField(k) {
+			continue
+		}
 		logData[k] = v
 	}
 
@@ -494,9 +509,10 @@ func (l *LogReader) parseLogLine(line []byte) (LogEntry, error) {
 		entry.TraceID = traceID
 	}
 
-	// Add all other fields as attributes
+	// Add all other fields as attributes, skipping reserved fields and
+	// VictoriaLogs internal fields (prefixed with "_").
 	for k, v := range logData {
-		if k == "_msg" || k == "_time" || k == "stream" || k == "trace_id" || k == "entity" {
+		if strings.HasPrefix(k, "_") || isReservedLogField(k) {
 			continue
 		}
 		if strVal, ok := v.(string); ok {

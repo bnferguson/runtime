@@ -36,6 +36,10 @@ func buildFilterWithService(userFilter, service string) string {
 	return serviceFilter + " " + userFilter
 }
 
+// systemExclusion is a LogsQL filter clause that excludes system logs from
+// app log queries. Applied in dispatchLogs on the streamLogChunks path.
+const systemExclusion = `-source:"system"`
+
 // buildBuildFilter creates a filter for build logs of a specific version.
 // Combines source:build with the version filter.
 func buildBuildFilter(version, userFilter string) string {
@@ -198,9 +202,30 @@ type logDispatchArgs struct {
 func dispatchLogs(ctx *Context, cl *rpc.NetworkClient, args logDispatchArgs) error {
 	printer := logPrinter(ctx, args.json)
 
+	// For app queries, wrap the printer to skip system logs that may have
+	// leaked into app log storage due to entity field collisions.
+	if args.app != "" {
+		inner := printer
+		printer = func(l *app_v1alpha.LogEntry) {
+			if l.HasSource() && l.Source() == "system" {
+				return
+			}
+			inner(l)
+		}
+	}
+
 	// Check if server supports streaming (prefer chunked for efficiency)
 	if cl.HasMethod(ctx, "streamLogChunks") {
-		return streamLogChunks(ctx, cl, args.app, args.sandbox, args.last, args.follow, args.combinedFilter, printer)
+		// Append system exclusion for server-side filtering on app queries
+		filter := args.combinedFilter
+		if args.app != "" {
+			if filter == "" {
+				filter = systemExclusion
+			} else {
+				filter = systemExclusion + " " + filter
+			}
+		}
+		return streamLogChunks(ctx, cl, args.app, args.sandbox, args.last, args.follow, filter, printer)
 	}
 
 	// Older server - warn about upgrade and limited functionality

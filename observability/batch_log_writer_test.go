@@ -117,6 +117,117 @@ func TestBatchLogWriter_FlushOnThreshold(t *testing.T) {
 	bw.Close()
 }
 
+func TestBatchLogWriter_ReservedFieldsProtected(t *testing.T) {
+	var mu sync.Mutex
+	var received []string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		received = append(received, string(body))
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	plw := NewPersistentLogWriter(srv.URL, 5*time.Second)
+	bw := NewBatchLogWriter(plw)
+
+	// Write an entry with attributes that collide with reserved field names
+	err := bw.WriteEntry("correct-entity", LogEntry{
+		Timestamp: time.Now(),
+		Stream:    Stdout,
+		Body:      "test message",
+		Attributes: map[string]string{
+			"entity": "wrong-entity",
+			"stream": "wrong-stream",
+			"source": "my-source",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bw.Close()
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(received) == 0 {
+		t.Fatal("expected flush, got none")
+	}
+
+	var logData map[string]any
+	line := strings.TrimSpace(received[0])
+	if err := json.Unmarshal([]byte(line), &logData); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reserved fields must not be overwritten by attributes
+	if logData["entity"] != "correct-entity" {
+		t.Errorf("entity = %v, want %q (attribute overwrote reserved field)", logData["entity"], "correct-entity")
+	}
+	if logData["stream"] != "stdout" {
+		t.Errorf("stream = %v, want %q (attribute overwrote reserved field)", logData["stream"], "stdout")
+	}
+	// Non-reserved attributes should still be written
+	if logData["source"] != "my-source" {
+		t.Errorf("source = %v, want %q (non-reserved attribute was dropped)", logData["source"], "my-source")
+	}
+}
+
+func TestParseLogLine_FiltersInternalFields(t *testing.T) {
+	lr := &LogReader{}
+
+	input := `{"_msg":"hello","_time":"2026-03-13T16:30:00Z","stream":"stdout","entity":"app/test","trace_id":"abc","_stream":"{}","_stream_id":"0000e934a84adb05","source":"system","module":"etcd","service":"web"}`
+
+	entry, err := lr.parseLogLine([]byte(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Standard fields parsed correctly
+	if entry.Body != "hello" {
+		t.Errorf("Body = %q, want %q", entry.Body, "hello")
+	}
+	if entry.Stream != Stdout {
+		t.Errorf("Stream = %q, want %q", entry.Stream, Stdout)
+	}
+	if entry.TraceID != "abc" {
+		t.Errorf("TraceID = %q, want %q", entry.TraceID, "abc")
+	}
+
+	// VictoriaLogs internal fields must not appear as attributes
+	for _, key := range []string{"_stream", "_stream_id", "_msg", "_time"} {
+		if _, ok := entry.Attributes[key]; ok {
+			t.Errorf("internal field %q leaked into attributes", key)
+		}
+	}
+
+	// Reserved routing fields must not appear as attributes
+	for _, key := range []string{"entity", "stream", "trace_id"} {
+		if _, ok := entry.Attributes[key]; ok {
+			t.Errorf("reserved field %q leaked into attributes", key)
+		}
+	}
+
+	// User attributes must be preserved
+	for _, key := range []string{"source", "module", "service"} {
+		if _, ok := entry.Attributes[key]; !ok {
+			t.Errorf("user attribute %q was incorrectly filtered", key)
+		}
+	}
+	if entry.Attributes["source"] != "system" {
+		t.Errorf("source = %q, want %q", entry.Attributes["source"], "system")
+	}
+	if entry.Attributes["module"] != "etcd" {
+		t.Errorf("module = %q, want %q", entry.Attributes["module"], "etcd")
+	}
+	if entry.Attributes["service"] != "web" {
+		t.Errorf("service = %q, want %q", entry.Attributes["service"], "web")
+	}
+}
+
 func TestBatchLogWriter_CloseFlushesRemaining(t *testing.T) {
 	var mu sync.Mutex
 	var received []string

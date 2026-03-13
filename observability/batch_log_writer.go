@@ -60,6 +60,9 @@ func (b *BatchLogWriter) WriteEntry(entity string, le LogEntry) error {
 		"trace_id": le.TraceID,
 	}
 	for k, v := range le.Attributes {
+		if isReservedLogField(k) {
+			continue
+		}
 		logData[k] = v
 	}
 

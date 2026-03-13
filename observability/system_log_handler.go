@@ -9,6 +9,17 @@ import (
 // SystemLogEntityID is the well-known entity ID for system/server logs.
 const SystemLogEntityID = "system/miren-server"
 
+// safeAttrKey remaps slog attribute keys that would collide with reserved
+// VictoriaLogs fields. For example, the controller framework logs
+// "entity" to identify which entity triggered a reconcile — without
+// remapping, this overwrites the VictoriaLogs "entity" routing field.
+func safeAttrKey(key string) string {
+	if isReservedLogField(key) {
+		return "log_" + key
+	}
+	return key
+}
+
 // SystemLogHandler is an slog.Handler that tees log records to both an
 // underlying handler (typically stderr) and a VictoriaLogs log writer.
 // This enables querying server logs through the same `miren logs system`
@@ -44,14 +55,15 @@ func (h *SystemLogHandler) Handle(ctx context.Context, record slog.Record) error
 	attrs := make(map[string]string)
 	attrs["source"] = "system"
 
-	// Add handler-level attrs (from WithAttrs)
+	// Add handler-level attrs (from WithAttrs), remapping any that would
+	// collide with reserved log fields used for routing in VictoriaLogs.
 	for _, a := range h.attrs {
-		attrs[a.Key] = a.Value.String()
+		attrs[safeAttrKey(a.Key)] = a.Value.String()
 	}
 
 	// Add record-level attrs
 	record.Attrs(func(a slog.Attr) bool {
-		attrs[a.Key] = a.Value.String()
+		attrs[safeAttrKey(a.Key)] = a.Value.String()
 		return true
 	})
 

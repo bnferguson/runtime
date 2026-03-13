@@ -68,6 +68,22 @@ func TestBuildFilterWithService(t *testing.T) {
 	}
 }
 
+// TestBuildFilterWithService_LegacyCompatibility verifies the contract that
+// dispatchLogs depends on: when no --service flag is passed, combinedFilter
+// must equal rawFilter so the legacy capability check (rawFilter != combinedFilter)
+// doesn't falsely trip. If this test fails, older servers without streamLogChunks
+// will reject plain `miren logs` requests.
+func TestBuildFilterWithService_LegacyCompatibility(t *testing.T) {
+	for _, userFilter := range []string{"", "error", `"exact phrase"`, `error -debug /timeout/`} {
+		combined := buildFilterWithService(userFilter, "")
+		if combined != userFilter {
+			t.Errorf("buildFilterWithService(%q, \"\") = %q, want %q — "+
+				"no-service filter must equal rawFilter for legacy server compat",
+				userFilter, combined, userFilter)
+		}
+	}
+}
+
 func TestNormalizeSandboxID(t *testing.T) {
 	tests := []struct {
 		input string

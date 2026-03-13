@@ -98,6 +98,28 @@ func TestSystemLogHandler(t *testing.T) {
 		}
 	})
 
+	t.Run("reserved attr keys are remapped", func(t *testing.T) {
+		writer.entries = nil
+		logger.Info("Processing event", "entity", "app/myapp", "rev", "42")
+
+		if len(writer.entries) != 1 {
+			t.Fatalf("expected 1 entry, got %d", len(writer.entries))
+		}
+
+		attrs := writer.entries[0].entry.Attributes
+		// "entity" collides with VictoriaLogs routing field, should be remapped
+		if _, ok := attrs["entity"]; ok {
+			t.Error("reserved key 'entity' was not remapped")
+		}
+		if attrs["log_entity"] != "app/myapp" {
+			t.Errorf("log_entity = %q, want %q", attrs["log_entity"], "app/myapp")
+		}
+		// Non-reserved keys should pass through unchanged
+		if attrs["rev"] != "42" {
+			t.Errorf("rev = %q, want %q", attrs["rev"], "42")
+		}
+	})
+
 	t.Run("Enabled delegates to inner handler", func(t *testing.T) {
 		if !handler.Enabled(context.Background(), slog.LevelDebug) {
 			t.Error("expected debug to be enabled")
