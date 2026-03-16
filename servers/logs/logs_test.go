@@ -31,21 +31,10 @@ type mockLogEntry struct {
 
 func createMockVictoriaLogs(t *testing.T, entries []mockLogEntry, delay time.Duration) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		query := r.URL.Query().Get("query")
-
-		// Simulate VictoriaLogs returning results in desc order when requested
-		ordered := entries
-		if strings.Contains(query, "desc") {
-			ordered = make([]mockLogEntry, len(entries))
-			for i, e := range entries {
-				ordered[len(entries)-1-i] = e
-			}
-		}
-
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		w.WriteHeader(http.StatusOK)
 
-		for _, entry := range ordered {
+		for _, entry := range entries {
 			if delay > 0 {
 				time.Sleep(delay)
 			}
@@ -69,14 +58,7 @@ func createFilteringMockVictoriaLogs(t *testing.T, entries []mockLogEntry) *http
 		query := r.URL.Query().Get("query")
 		t.Logf("Received query: %s", query)
 
-		descOrder := strings.Contains(query, "desc")
-
-		// Strip pipe operators (like "| sort by (_time)")
-		if pipeIdx := strings.Index(query, " |"); pipeIdx != -1 {
-			query = query[:pipeIdx]
-		}
-
-		// Filter entries first
+		// Filter entries based on query terms
 		var filtered []mockLogEntry
 		for _, entry := range entries {
 			parts := strings.Split(query, " ")
@@ -89,13 +71,6 @@ func createFilteringMockVictoriaLogs(t *testing.T, entries []mockLogEntry) *http
 			}
 			if shouldInclude {
 				filtered = append(filtered, entry)
-			}
-		}
-
-		// Simulate VictoriaLogs returning results in desc order when requested
-		if descOrder {
-			for i, j := 0, len(filtered)-1; i < j; i, j = i+1, j-1 {
-				filtered[i], filtered[j] = filtered[j], filtered[i]
 			}
 		}
 
@@ -889,4 +864,97 @@ func TestStreamLogChunks_FilterWithNegation(t *testing.T) {
 	// Verify the query contains negation
 	r.Contains(capturedQuery, "error")
 	r.Contains(capturedQuery, "-debug")
+}
+
+func TestStreamLogChunks_QueryContract(t *testing.T) {
+	// Verifies that queries sent to VictoriaLogs never contain sort pipes,
+	// and use the limit query parameter for bounded queries. Sort pipes
+	// force VictoriaLogs to buffer and sort all matching entries server-side,
+	// which is extremely slow on large datasets.
+
+	r := require.New(t)
+
+	now := time.Now()
+	entries := []mockLogEntry{
+		{Time: now.Add(-2 * time.Second).Format(time.RFC3339Nano), Msg: "line 1", Stream: "stdout"},
+		{Time: now.Add(-1 * time.Second).Format(time.RFC3339Nano), Msg: "line 2", Stream: "stdout"},
+		{Time: now.Format(time.RFC3339Nano), Msg: "line 3", Stream: "stdout"},
+	}
+
+	var capturedQueries []string
+	var capturedLimits []string
+	var mu sync.Mutex
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		capturedQueries = append(capturedQueries, r.URL.Query().Get("query"))
+		capturedLimits = append(capturedLimits, r.URL.Query().Get("limit"))
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.WriteHeader(http.StatusOK)
+
+		for _, entry := range entries {
+			data, _ := json.Marshal(entry)
+			w.Write(data)
+			w.Write([]byte("\n"))
+		}
+	}))
+	defer mockServer.Close()
+
+	server, ec, cleanup := setupTestServer(t, mockServer)
+	defer cleanup()
+
+	app := &core_v1alpha.App{}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := ec.Create(ctx, "test-app", app)
+	r.NoError(err)
+
+	client := &app_v1alpha.LogsClient{
+		Client: rpc.LocalClient(app_v1alpha.AdaptLogs(server)),
+	}
+
+	noop := stream.Callback(func(chunk *app_v1alpha.LogChunk) error { return nil })
+
+	t.Run("default query uses limit param not sort pipe", func(t *testing.T) {
+		mu.Lock()
+		capturedQueries = nil
+		capturedLimits = nil
+		mu.Unlock()
+
+		target := &app_v1alpha.LogTarget{}
+		target.SetApp("test-app")
+
+		// No from time, no follow → server applies default limit
+		_, err := client.StreamLogChunks(ctx, target, nil, false, "", noop)
+		r.NoError(err)
+
+		mu.Lock()
+		defer mu.Unlock()
+		r.NotEmpty(capturedQueries)
+		r.NotContains(capturedQueries[0], "sort", "query must not contain sort pipe")
+		r.NotContains(capturedQueries[0], "|", "query must not contain pipe operators")
+		r.Equal("100", capturedLimits[0], "default query should set limit=100")
+	})
+
+	t.Run("time-bounded query has no limit param", func(t *testing.T) {
+		mu.Lock()
+		capturedQueries = nil
+		capturedLimits = nil
+		mu.Unlock()
+
+		target := &app_v1alpha.LogTarget{}
+		target.SetApp("test-app")
+
+		fromTime := standard.ToTimestamp(now.Add(-5 * time.Minute))
+		_, err := client.StreamLogChunks(ctx, target, fromTime, false, "", noop)
+		r.NoError(err)
+
+		mu.Lock()
+		defer mu.Unlock()
+		r.NotEmpty(capturedQueries)
+		r.NotContains(capturedQueries[0], "sort", "query must not contain sort pipe")
+		r.Empty(capturedLimits[0], "time-bounded query should not set limit param")
+	})
 }
