@@ -86,8 +86,6 @@ type updateMsg struct {
 	msg string
 }
 
-type timeoutCheckMsg struct{}
-
 // deployInfo is the TEA model for the deploy UI
 type deployInfo struct {
 	spinner spinner.Model
@@ -113,21 +111,22 @@ type deployInfo struct {
 	uploadDuration   time.Duration
 	finalUploadSpeed float64
 
+	// Upload progress estimation
+	uploadPct      float64 // 0.0–1.0 fraction, -1 if unknown
+	uploadEstTotal int64   // estimated compressed total bytes
+
 	// Source cache info
 	cachedFiles int32
 	totalFiles  int
+	cachedBytes int64
 
-	// Timeout and interrupt handling
-	lastActivity    time.Time
-	buildkitTimeout time.Duration
-	buildkitStarted bool // Track if buildkit has shown any activity
-	interrupted     bool
+	interrupted bool
 
 	showProgress bool
 	bp           tea.Model
 }
 
-func initialModel(update chan string, buildCh chan buildProgress, uploadProgress chan upload.Progress, cachedFiles int32, totalFiles int) *deployInfo {
+func initialModel(update chan string, buildCh chan buildProgress, uploadProgress chan upload.Progress, cachedFiles int32, totalFiles int, cachedBytes int64) *deployInfo {
 	s := spinner.New()
 	s.Spinner = Meter
 	s.Style = lipgloss.NewStyle()
@@ -142,35 +141,42 @@ func initialModel(update chan string, buildCh chan buildProgress, uploadProgress
 	uploadS.Style = lipgloss.NewStyle()
 
 	return &deployInfo{
-		spinner:         s,
-		message:         "Reading application data",
-		update:          update,
-		buildCh:         buildCh,
-		prog:            p,
-		uploadProgress:  uploadProgress,
-		uploadSpin:      uploadS,
-		isUploading:     true,
-		uploadSpeed:     "calculating...",
-		phaseStart:      time.Now(),
-		currentPhase:    "upload",
-		cachedFiles:     cachedFiles,
-		totalFiles:      totalFiles,
-		lastActivity:    time.Now(),
-		buildkitTimeout: 60 * time.Second, // 60 second timeout for buildkit to start
-		buildkitStarted: false,
-		bp:              progressui.TeaModel(),
+		spinner:        s,
+		message:        "Reading application data",
+		update:         update,
+		buildCh:        buildCh,
+		prog:           p,
+		uploadProgress: uploadProgress,
+		uploadSpin:     uploadS,
+		isUploading:    true,
+		uploadSpeed:    "calculating...",
+		phaseStart:     time.Now(),
+		currentPhase:   "upload",
+		cachedFiles:    cachedFiles,
+		totalFiles:     totalFiles,
+		cachedBytes:    cachedBytes,
+		bp:             progressui.TeaModel(),
 	}
 }
 
 func (m *deployInfo) uploadDetails() string {
-	var parts []string
-	if m.cachedFiles > 0 {
-		parts = append(parts, fmt.Sprintf("reused %d/%d files", m.cachedFiles, m.totalFiles))
+	// All files cached — special case
+	if m.cachedFiles > 0 && m.cachedFiles == int32(m.totalFiles) {
+		return fmt.Sprintf("all %d files reused from previous deploy", m.totalFiles)
 	}
+
+	var parts []string
 	if m.uploadBytes > 0 {
 		parts = append(parts, fmt.Sprintf("%s at %s",
 			upload.FormatBytes(m.uploadBytes),
 			upload.FormatSpeed(m.finalUploadSpeed)))
+	}
+	if m.cachedFiles > 0 {
+		detail := fmt.Sprintf("reused %d/%d files", m.cachedFiles, m.totalFiles)
+		if m.cachedBytes > 0 {
+			detail += fmt.Sprintf(" (saved %s)", upload.FormatBytes(m.cachedBytes))
+		}
+		parts = append(parts, detail)
 	}
 	return strings.Join(parts, ", ")
 }
@@ -180,7 +186,6 @@ func (m *deployInfo) Init() tea.Cmd {
 		m.bp.Init(),
 		m.spinner.Tick,
 		m.uploadSpin.Tick,
-		m.checkTimeout(), // Start timeout monitoring
 	}
 
 	// Only wait for channels that are expected to have data
@@ -204,12 +209,6 @@ func (m *deployInfo) Init() tea.Cmd {
 	}
 
 	return tea.Batch(cmds...)
-}
-
-func (m *deployInfo) checkTimeout() tea.Cmd {
-	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
-		return timeoutCheckMsg{}
-	})
 }
 
 func (m *deployInfo) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -239,21 +238,9 @@ func (m *deployInfo) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.KeyEnter:
 			m.showProgress = !m.showProgress
 		}
-	case timeoutCheckMsg:
-		// Only check for timeout if buildkit hasn't started yet
-		if m.currentPhase == "buildkit" && !m.buildkitStarted && time.Since(m.lastActivity) > m.buildkitTimeout {
-			m.currentPhase = "timeout"
-			return m, tea.Sequence(
-				tea.Println("\n\n❌ Buildkit failed to start after 60 seconds. This may indicate a server issue."),
-				tea.Quit,
-			)
-		}
-		// Continue checking
-		cmds = append(cmds, m.checkTimeout())
 	case updateMsg:
 		prevMessage := m.message
 		m.message = msg.msg
-		m.lastActivity = time.Now() // Reset activity timer
 
 		// Track phase transitions
 		if prevMessage != msg.msg {
@@ -272,7 +259,6 @@ func (m *deployInfo) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Start tracking buildkit phase
 				m.phaseStart = time.Now()
 				m.currentPhase = "buildkit"
-				m.buildkitStarted = true
 			}
 
 		}
@@ -281,13 +267,13 @@ func (m *deployInfo) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return updateMsg{msg: <-m.update}
 		})
 	case upload.Progress:
-		m.lastActivity = time.Now() // Reset activity timer
 		if m.isUploading {
 			m.uploadSpeed = upload.FormatSpeed(msg.BytesPerSecond)
 			m.uploadBytes = msg.BytesRead
 			m.finalUploadSpeed = msg.BytesPerSecond
+			m.uploadPct = msg.Fraction
+			m.uploadEstTotal = msg.EstimatedTotalBytes
 
-			// Spinner tick is already handled in the Update method
 			// Continue reading upload progress
 			if m.uploadProgress != nil {
 				cmds = append(cmds, func() tea.Msg {
@@ -296,7 +282,6 @@ func (m *deployInfo) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case buildProgress:
-		m.lastActivity = time.Now() // Reset activity timer
 
 		// Build progress means upload is complete (fallback if no "Launching builder" message)
 		if m.isUploading {
@@ -325,8 +310,6 @@ func (m *deployInfo) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.phaseStart = time.Now()
 			m.currentPhase = "buildkit"
 		}
-		m.buildkitStarted = true
-
 		m.buildSteps = msg.total
 
 		if msg.total > 0 {
@@ -364,10 +347,16 @@ func (m *deployInfo) View() string {
 	// Show current progress
 	var currentLine string
 	if m.isUploading {
-		bytesInfo := upload.FormatBytes(m.uploadBytes)
-		speedInfo := deployPrefixStyle.Render(fmt.Sprintf("%s uploaded at %s", bytesInfo, m.uploadSpeed))
-		currentLine = fmt.Sprintf("  %s %s...\n      %s %s",
-			m.uploadSpin.View(), m.message, m.spinner.View(), speedInfo)
+		pct := m.uploadPct
+		if pct < 0 {
+			pct = 0
+		}
+		pctStr := deployPrefixStyle.Render(fmt.Sprintf("%d%% — %s at %s",
+			int(pct*100),
+			upload.FormatBytes(m.uploadBytes),
+			m.uploadSpeed))
+		currentLine = fmt.Sprintf("  %s Uploading artifacts...\n      %s %s",
+			m.uploadSpin.View(), m.prog.ViewAs(pct), pctStr)
 	} else if m.currentPhase != "completed" {
 		if m.buildSteps > 0 {
 			steps := deployPrefixStyle.Render(fmt.Sprintf("Building %d steps:", m.buildSteps))

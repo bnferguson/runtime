@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -501,13 +502,34 @@ func Deploy(ctx *Context, opts struct {
 		ctx.Log.Debug("manifest computation failed, falling back to full upload", "error", manifestErr)
 	}
 
+	// Compute uncompressed totals for progress estimation and cached bytes for the summary.
+	var totalUncompressed int64
+	var cachedBytes int64
+	if manifest != nil {
+		var totalManifestBytes int64
+		for _, m := range manifest {
+			totalManifestBytes += m.Size
+		}
+		if useOptimized && neededPaths != nil {
+			for _, m := range manifest {
+				if neededPaths[m.Path] {
+					totalUncompressed += m.Size
+				}
+			}
+			cachedBytes = totalManifestBytes - totalUncompressed
+		} else {
+			totalUncompressed = totalManifestBytes
+		}
+	}
+
+	var uncompressedWritten atomic.Int64
 	var r io.ReadCloser
 	if useOptimized && len(neededPaths) > 0 {
-		r, err = tarx.MakeFilteredTar(dir, includePatterns, neededPaths)
+		r, err = tarx.MakeFilteredTar(dir, includePatterns, neededPaths, &uncompressedWritten)
 	} else if useOptimized {
 		r = tarx.MakeEmptyTar()
 	} else {
-		r, err = tarx.MakeTar(dir, includePatterns)
+		r, err = tarx.MakeTar(dir, includePatterns, &uncompressedWritten)
 	}
 	if err != nil {
 		uploadSpan.RecordError(err)
@@ -560,13 +582,16 @@ func Deploy(ctx *Context, opts struct {
 		var lastPrintTime time.Time
 
 		progressReader := upload.NewProgressReader(r, func(progress upload.Progress) {
+			enrichUploadProgress(&progress, &uncompressedWritten, totalUncompressed)
 			uploadBytes = progress.BytesRead
 			// Print progress every 500ms to avoid spamming
-			if time.Since(lastPrintTime) >= 500*time.Millisecond {
+			if progress.Fraction > 0 && time.Since(lastPrintTime) >= 500*time.Millisecond {
 				lastPrintTime = time.Now()
 				fmt.Fprintf(os.Stderr, "\r\033[K") // Clear to end of line
-				fmt.Fprintf(os.Stderr, "Uploading artifacts: %s at %s",
+				fmt.Fprintf(os.Stderr, "Uploading artifacts: %d%% — %s / ~%s at %s",
+					int(progress.Fraction*100),
 					upload.FormatBytes(progress.BytesRead),
+					upload.FormatBytes(progress.EstimatedTotalBytes),
 					upload.FormatSpeed(progress.BytesPerSecond))
 			}
 		})
@@ -578,10 +603,17 @@ func Deploy(ctx *Context, opts struct {
 			if uploadBytes > 0 {
 				uploadDuration := time.Since(uploadStartTime)
 				avgSpeed := float64(uploadBytes) / uploadDuration.Seconds()
-				fmt.Fprintf(os.Stderr, "\rUpload complete: %s in %.1fs at %s\n",
+				summary := fmt.Sprintf("\rUpload complete: %s in %.1fs at %s",
 					upload.FormatBytes(uploadBytes),
 					uploadDuration.Seconds(),
 					upload.FormatSpeed(avgSpeed))
+				if useOptimized && cachedFiles > 0 {
+					summary += fmt.Sprintf(", reused %d/%d files", cachedFiles, totalFiles)
+					if cachedBytes > 0 {
+						summary += fmt.Sprintf(" (saved %s)", upload.FormatBytes(cachedBytes))
+					}
+				}
+				fmt.Fprintf(os.Stderr, "%s\n", summary)
 				uploadBytes = 0 // Only print once
 			}
 
@@ -648,6 +680,7 @@ func Deploy(ctx *Context, opts struct {
 		defer wg.Wait()
 
 		progressReader := upload.NewProgressReader(r, func(progress upload.Progress) {
+			enrichUploadProgress(&progress, &uncompressedWritten, totalUncompressed)
 			select {
 			case uploadProgressCh <- progress:
 			default:
@@ -659,7 +692,7 @@ func Deploy(ctx *Context, opts struct {
 		deployCtx, cancelDeploy := context.WithCancel(buildCtx)
 		defer cancelDeploy()
 
-		model := initialModel(updateCh, buildCh, uploadProgressCh, cachedFiles, totalFiles)
+		model := initialModel(updateCh, buildCh, uploadProgressCh, cachedFiles, totalFiles, cachedBytes)
 		p := tea.NewProgram(model)
 
 		var finalModel tea.Model
@@ -670,11 +703,9 @@ func Deploy(ctx *Context, opts struct {
 			defer wg.Done()
 			finalModel, runErr = p.Run()
 			if runErr == nil {
-				// Check if we exited due to interrupt or actual timeout
 				if dm, ok := finalModel.(*deployInfo); ok && dm.interrupted {
-					cancelDeploy() // Cancel the deployment context
+					cancelDeploy()
 				}
-				// Note: we don't cancel on timeout phase anymore as that's handled by the UI
 			} else {
 				// UI died; ensure we don't keep uploading/building
 				cancelDeploy()
@@ -734,13 +765,6 @@ func Deploy(ctx *Context, opts struct {
 					return buildCtx.Err()
 				}
 				return context.Canceled
-			}
-
-			// Check if this was a buildkit startup timeout (handled by UI)
-			if isDeploy && dm.currentPhase == "timeout" {
-				// The UI already printed the timeout message
-				updateDeploymentOnError("Buildkit startup timeout")
-				return fmt.Errorf("buildkit startup timeout")
 			}
 
 			// Check if this was a server panic
@@ -818,6 +842,18 @@ func Deploy(ctx *Context, opts struct {
 	displayAccessInfo(ctx, name, results)
 
 	return nil
+}
+
+// enrichUploadProgress fills in Fraction and EstimatedTotalBytes on a Progress
+// snapshot using the atomic uncompressed-byte counter and the known total.
+func enrichUploadProgress(p *upload.Progress, written *atomic.Int64, totalUncompressed int64) {
+	if totalUncompressed <= 0 {
+		return
+	}
+	p.Fraction = float64(written.Load()) / float64(totalUncompressed)
+	if p.Fraction > 0 {
+		p.EstimatedTotalBytes = int64(float64(p.BytesRead) / p.Fraction)
+	}
 }
 
 // Helper function to print build errors and logs
@@ -1139,7 +1175,7 @@ func analyzeApp(ctx *Context, bc *build_v1alpha.BuilderClient, dir string) error
 		includePatterns = ac.Include
 	}
 
-	r, err := tarx.MakeTar(dir, includePatterns)
+	r, err := tarx.MakeTar(dir, includePatterns, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create tar: %w", err)
 	}

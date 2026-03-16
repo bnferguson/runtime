@@ -176,7 +176,7 @@ func TestMakeTar(t *testing.T) {
 			}
 
 			// Create tar
-			reader, err := MakeTar(tmpDir, nil)
+			reader, err := MakeTar(tmpDir, nil, nil)
 			require.NoError(t, err)
 
 			// Extract and verify contents
@@ -208,7 +208,7 @@ func TestMakeTarWithoutGitignore(t *testing.T) {
 	}
 
 	// Create tar (no .gitignore file)
-	reader, err := MakeTar(tmpDir, nil)
+	reader, err := MakeTar(tmpDir, nil, nil)
 	require.NoError(t, err)
 
 	// Extract and verify all files are included
@@ -224,7 +224,7 @@ func TestMakeTarEmptyDirectory(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	// Create tar of empty directory
-	reader, err := MakeTar(tmpDir, nil)
+	reader, err := MakeTar(tmpDir, nil, nil)
 	require.NoError(t, err)
 
 	// Verify no entries
@@ -271,7 +271,7 @@ func TestMakeTarVerifyContent(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "test.txt"), []byte(testContent), 0644))
 
 	// Create tar
-	reader, err := MakeTar(tmpDir, nil)
+	reader, err := MakeTar(tmpDir, nil, nil)
 	require.NoError(t, err)
 
 	// Extract and verify content
@@ -317,7 +317,7 @@ func TestMakeTarGitignoreNegation(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".gitignore"), []byte(gitignore), 0644))
 
 	// Create tar
-	reader, err := MakeTar(tmpDir, nil)
+	reader, err := MakeTar(tmpDir, nil, nil)
 	require.NoError(t, err)
 
 	// Extract and verify only important.log and regular.txt are included.
@@ -413,7 +413,7 @@ func TestMakeFilteredTar(t *testing.T) {
 		"lib/db.go": true,
 	}
 
-	reader, err := MakeFilteredTar(tmpDir, nil, onlyPaths)
+	reader, err := MakeFilteredTar(tmpDir, nil, onlyPaths, nil)
 	require.NoError(t, err)
 
 	entries := extractTarEntries(t, reader)
@@ -436,7 +436,7 @@ func TestMakeFilteredTarEmpty(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "file.txt"), []byte("hello"), 0644))
 
 	// Empty only-paths set => no files in tar
-	reader, err := MakeFilteredTar(tmpDir, nil, map[string]bool{})
+	reader, err := MakeFilteredTar(tmpDir, nil, map[string]bool{}, nil)
 	require.NoError(t, err)
 
 	entries := extractTarEntries(t, reader)
@@ -462,7 +462,7 @@ func TestMakeTarOnlyIncludesDirectoriesWithAcceptedFiles(t *testing.T) {
 	}
 
 	t.Run("unfiltered includes all directories", func(t *testing.T) {
-		reader, err := MakeTar(tmpDir, nil)
+		reader, err := MakeTar(tmpDir, nil, nil)
 		require.NoError(t, err)
 
 		entries := extractTarEntries(t, reader)
@@ -479,7 +479,7 @@ func TestMakeTarOnlyIncludesDirectoriesWithAcceptedFiles(t *testing.T) {
 			"lib/util.go": true,
 		}
 
-		reader, err := MakeFilteredTar(tmpDir, nil, onlyPaths)
+		reader, err := MakeFilteredTar(tmpDir, nil, onlyPaths, nil)
 		require.NoError(t, err)
 
 		entries := extractTarEntries(t, reader)
@@ -499,7 +499,7 @@ func TestMakeTarOnlyIncludesDirectoriesWithAcceptedFiles(t *testing.T) {
 			"deep/a/b/file.go": true,
 		}
 
-		reader, err := MakeFilteredTar(tmpDir, nil, onlyPaths)
+		reader, err := MakeFilteredTar(tmpDir, nil, onlyPaths, nil)
 		require.NoError(t, err)
 
 		entries := extractTarEntries(t, reader)
@@ -542,7 +542,7 @@ func TestMakeTarWithIncludePatterns(t *testing.T) {
 	// Test with include patterns that override gitignore
 	// Using gitignore-style patterns including the ** pattern
 	includePatterns := []string{"dist", "dist/**", "*.log", "**/*.generated"}
-	reader, err := MakeTar(tmpDir, includePatterns)
+	reader, err := MakeTar(tmpDir, includePatterns, nil)
 	require.NoError(t, err)
 
 	// Extract and verify dist files and log files are included despite gitignore
