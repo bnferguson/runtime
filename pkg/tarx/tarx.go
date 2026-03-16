@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	"github.com/shibumi/go-pathspec"
 	"github.com/tonistiigi/fsutil"
@@ -87,8 +88,8 @@ func ValidatePattern(pattern string) error {
 	return nil
 }
 
-func MakeTar(dir string, includePatterns []string) (io.ReadCloser, error) {
-	return makeTarWithFilter(dir, includePatterns, func(string) bool { return true })
+func MakeTar(dir string, includePatterns []string, uncompressedBytes *atomic.Int64) (io.ReadCloser, error) {
+	return makeTarWithFilter(dir, includePatterns, func(string) bool { return true }, uncompressedBytes)
 }
 
 func TarToMap(r io.Reader) (map[string][]byte, error) {
@@ -240,15 +241,16 @@ func MakeEmptyTar() io.ReadCloser {
 
 // MakeFilteredTar creates a gzipped tar like MakeTar but only includes files
 // whose relative paths are in the onlyPaths set. Directory entries are included
-// as needed to contain the requested files.
-func MakeFilteredTar(dir string, includePatterns []string, onlyPaths map[string]bool) (io.ReadCloser, error) {
-	return makeTarWithFilter(dir, includePatterns, func(rp string) bool { return onlyPaths[rp] })
+// as needed to contain the requested files. If uncompressedBytes is non-nil,
+// each file's uncompressed size is atomically added after it is written.
+func MakeFilteredTar(dir string, includePatterns []string, onlyPaths map[string]bool, uncompressedBytes *atomic.Int64) (io.ReadCloser, error) {
+	return makeTarWithFilter(dir, includePatterns, func(rp string) bool { return onlyPaths[rp] }, uncompressedBytes)
 }
 
 // makeTarWithFilter creates a gzipped tar of dir, applying gitignore/include logic,
 // and only including regular files for which accept returns true. Directory entries
 // are emitted lazily as needed to contain accepted files.
-func makeTarWithFilter(dir string, includePatterns []string, accept func(string) bool) (io.ReadCloser, error) {
+func makeTarWithFilter(dir string, includePatterns []string, accept func(string) bool, uncompressedBytes *atomic.Int64) (io.ReadCloser, error) {
 	r, w, err := os.Pipe()
 	if err != nil {
 		return nil, err
@@ -369,7 +371,7 @@ func makeTarWithFilter(dir string, includePatterns []string, accept func(string)
 					return fErr
 				}
 				defer f.Close()
-				if _, err := io.Copy(tw, f); err != nil {
+				if _, err := io.Copy(tw, &countingReader{r: f, counter: uncompressedBytes}); err != nil {
 					return err
 				}
 			}
@@ -379,6 +381,20 @@ func makeTarWithFilter(dir string, includePatterns []string, accept func(string)
 	}()
 
 	return r, nil
+}
+
+// countingReader wraps an io.Reader and atomically adds bytes read to a counter.
+type countingReader struct {
+	r       io.Reader
+	counter *atomic.Int64
+}
+
+func (cr *countingReader) Read(p []byte) (int, error) {
+	n, err := cr.r.Read(p)
+	if n > 0 && cr.counter != nil {
+		cr.counter.Add(int64(n))
+	}
+	return n, err
 }
 
 func TarFS(r io.Reader, dir string) (fsutil.FS, error) {

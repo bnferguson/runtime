@@ -19,9 +19,11 @@ type ProgressReader struct {
 
 // Progress represents a snapshot of the current upload stats.
 type Progress struct {
-	BytesRead      int64
-	BytesPerSecond float64
-	Duration       time.Duration
+	BytesRead           int64
+	BytesPerSecond      float64
+	Duration            time.Duration
+	Fraction            float64 // 0.0–1.0 upload fraction complete
+	EstimatedTotalBytes int64   // projected total compressed bytes; 0 if unknown
 }
 
 // NewProgressReader creates a new progress tracking reader that wraps the given io.Reader.

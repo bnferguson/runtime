@@ -41,7 +41,7 @@ func TestBuildKitLocal(t *testing.T) {
 
 		r := require.New(t)
 
-		dfr, err := tarx.MakeTar("testdata/df1", nil)
+		dfr, err := tarx.MakeTar("testdata/df1", nil, nil)
 		r.NoError(err)
 
 		datafs, err := tarx.TarFS(dfr, t.TempDir())
