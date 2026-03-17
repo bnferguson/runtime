@@ -6,7 +6,24 @@ All notable changes to Miren Runtime will be documented in this file.
 *main*
 
 **Features**
+- **Disk storage system overhaul** - The disk subsystem has been rewritten with a new Universal mode backed by loop devices, replacing the previous LSVD/NBD architecture. Existing LSVD volumes are migrated automatically on first boot. Includes disk backup/restore support and a new cloud accelerator mode for segment upload/replay. ([#639](https://github.com/mirendev/runtime/pull/639))
+- **System logs accessible from the CLI** - `miren logs system` queries server logs directly from the CLI — same interface as app logs, with `--follow`, `--last`, and `--format json` all working. Under the hood, server logs are ingested into VictoriaLogs through a structured handler, so all attributes (module, level, error fields) are preserved and queryable. `miren logs` is also restructured into proper subcommands (`app`, `sandbox`, `build`, `system`) — bare `miren logs` still works as shorthand for `miren logs app`. ([#645](https://github.com/mirendev/runtime/pull/645), [#662](https://github.com/mirendev/runtime/pull/662), [#679](https://github.com/mirendev/runtime/pull/679))
+- **Delta file transfer for deploys** - The deploy client now sends a file manifest first; the server compares it against the cached source from the previous deploy and the client only uploads what changed. Subsequent deploys of unchanged code upload nothing. ([#670](https://github.com/mirendev/runtime/pull/670))
 - **Wildcard routes** - Route all subdomains of a domain to a single app with `miren route set *.example.com myapp`. Wildcard routes match any subdomain and the bare domain, with exact routes taking priority. TLS certificates are provisioned automatically for each matching subdomain. ([#659](https://github.com/mirendev/runtime/pull/659))
+
+**Improvements**
+- **Upload progress bar and caching summary** - Deploy uploads show a real progress bar with percentage and speed. After upload, a summary shows how many files were cached from the previous deploy and estimated time saved. ([#680](https://github.com/mirendev/runtime/pull/680))
+- **Eager TLS certificate provisioning** - Adding a route now triggers certificate provisioning immediately in the background. HTTPS connections no longer stall 30–90 seconds on first access. ([#661](https://github.com/mirendev/runtime/pull/661), [#664](https://github.com/mirendev/runtime/pull/664))
+- **Deploy progress tracks build steps** - The progress bar now tracks build steps instead of layer downloads, so it stays active on cached-image deploys. ([#665](https://github.com/mirendev/runtime/pull/665))
+- **JSON output for log and app commands** - `miren logs` (all subcommands), `miren app`, `miren app status`, and `miren app history` all support `--format json` for scripting and automation. ([#675](https://github.com/mirendev/runtime/pull/675), [#673](https://github.com/mirendev/runtime/pull/673))
+- **Group help for CLI discovery** - `miren help --commands` lists all commands with synopses (supports `--format json`). `miren help app.list version sandbox.stop` shows help for multiple commands at once using dot notation. ([#676](https://github.com/mirendev/runtime/pull/676))
+- **System requirements check at install** - The installer now verifies at least 4 GB memory and 50 GB storage before proceeding. ([#663](https://github.com/mirendev/runtime/pull/663))
+
+**Bug Fixes**
+- **Fixed rapid deploys causing orphaned sandboxes** - Deploying the same app multiple times in quick succession no longer leaves orphaned sandboxes running or stale routing entries. ([#672](https://github.com/mirendev/runtime/pull/672))
+- **Fixed disk config silent failures** - Using `size` instead of `size_gb` in disk config no longer leaves sandboxes stuck in PENDING forever; unknown fields now surface as errors. ([#666](https://github.com/mirendev/runtime/pull/666))
+- **Fixed app TUI showing wrong concurrency** - The `miren app` details view now correctly shows fixed instance counts instead of "auto" for services with explicit concurrency settings. ([#667](https://github.com/mirendev/runtime/pull/667))
+- **Fixed env var file values including trailing newlines** - `KEY=@filepath` now trims trailing line endings from file contents. ([#671](https://github.com/mirendev/runtime/pull/671))
 
 ---
 
