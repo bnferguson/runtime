@@ -104,8 +104,9 @@ func (a *AppCentric) Validate(glbl *GlobalFlags) error {
 
 // LoadCluster implements per-app cluster pinning. Resolution priority:
 //  1. -C flag (explicit override) — also saves to state
-//  2. Per-app cluster from ~/.config/miren/app-state.toml
-//  3. Global active_cluster from clientconfig (fallback)
+//  2. MIREN_CLUSTER env var
+//  3. Per-app cluster from ~/.config/miren/app-state.toml (handled by ConfigCentric)
+//  4. Global active_cluster from clientconfig (fallback)
 func (a *AppCentric) LoadCluster() (*clientconfig.ClusterConfig, string, error) {
 	// If -C flag was passed, use ConfigCentric's logic and persist the choice.
 	if a.Cluster != "" {
@@ -116,24 +117,7 @@ func (a *AppCentric) LoadCluster() (*clientconfig.ClusterConfig, string, error) 
 		return cc, name, err
 	}
 
-	// Check per-app state.
-	if a.App != "" {
-		state, err := appconfig.LoadAppState(a.App)
-		if err == nil && state != nil && state.Cluster != "" {
-			cfg, err := a.LoadConfig()
-			if err != nil {
-				return nil, "", err
-			}
-
-			cc, err := cfg.GetCluster(state.Cluster)
-			if err == nil && cc != nil {
-				return cc, state.Cluster, nil
-			}
-			// State references an unknown cluster; fall through to global default.
-		}
-	}
-
-	// Fall back to global default.
+	// Delegate to ConfigCentric which now handles per-app state.
 	return a.ConfigCentric.LoadCluster()
 }
 
