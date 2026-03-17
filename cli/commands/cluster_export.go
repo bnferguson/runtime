@@ -10,25 +10,12 @@ import (
 func ClusterExportAddress(ctx *Context, opts struct {
 	ConfigCentric
 }) error {
-	cfg, err := opts.LoadConfig()
+	cc, name, err := opts.LoadCluster()
 	if err != nil {
 		return err
 	}
-
-	name := opts.Cluster
-	if name == "" {
-		name = cfg.ActiveCluster()
-	}
-	if name == "" {
+	if cc == nil || name == "" {
 		return fmt.Errorf("no cluster specified and no active cluster set; use -C to specify one")
-	}
-
-	cc, err := cfg.GetCluster(name)
-	if err != nil {
-		return fmt.Errorf("cluster %q not found: %w", name, err)
-	}
-	if cc == nil {
-		return fmt.Errorf("cluster %q not found", name)
 	}
 
 	block, _ := pem.Decode([]byte(cc.CACert))

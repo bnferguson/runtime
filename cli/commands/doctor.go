@@ -154,11 +154,11 @@ func Doctor(ctx *Context, opts struct {
 	}
 
 	// Configuration info
+	clusterCount := 0
 	if cfg == nil || errors.Is(err, clientconfig.ErrNoConfig) {
 		configuration.ok = false
 		configuration.message = "no clusters configured"
 	} else {
-		clusterCount := 0
 		cfg.IterateClusters(func(_ string, _ *clientconfig.ClusterConfig) error {
 			clusterCount++
 			return nil
@@ -169,15 +169,17 @@ func Doctor(ctx *Context, opts struct {
 			configuration.message = "no clusters configured"
 		} else {
 			configuration.ok = true
-			configuration.message = fmt.Sprintf("%s (%d clusters)", cfg.ActiveCluster(), clusterCount)
+			configuration.message = fmt.Sprintf("%d clusters configured", clusterCount)
 		}
 	}
 
 	// Server and auth info (only if configured)
 	if configuration.ok && cfg != nil {
-		clusterName := cfg.ActiveCluster()
-		cluster, err := cfg.GetCluster(clusterName)
-		if err == nil && cluster != nil {
+		cluster, clusterName, _ := opts.LoadCluster()
+		if clusterName != "" {
+			configuration.message = fmt.Sprintf("%s (%d clusters)", clusterName, clusterCount)
+		}
+		if cluster != nil {
 			// Try to connect
 			client, err := ctx.RPCClient("entities")
 			if err == nil {

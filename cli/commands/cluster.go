@@ -5,7 +5,6 @@ import (
 	"net"
 
 	"github.com/charmbracelet/lipgloss"
-	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/ui"
 )
@@ -48,14 +47,11 @@ func ClusterList(ctx *Context, opts struct {
 	var rows []ui.Row
 	headers := []string{"", "CLUSTER", "ADDRESS", "IDENTITY"}
 
-	// Determine the effective cluster for the current app context.
+	// Determine the effective cluster for the current context.
 	globalCluster := cfg.ActiveCluster()
-	effectiveCluster := globalCluster
-
-	if ac, _ := appconfig.LoadAppConfig(); ac != nil && ac.Name != "" {
-		if state, _ := appconfig.LoadAppState(ac.Name); state != nil && state.Cluster != "" {
-			effectiveCluster = state.Cluster
-		}
+	_, effectiveCluster, _ := opts.LoadCluster()
+	if effectiveCluster == "" {
+		effectiveCluster = globalCluster
 	}
 
 	err = cfg.IterateClusters(func(name string, ccfg *clientconfig.ClusterConfig) error {

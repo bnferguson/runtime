@@ -23,14 +23,13 @@ func DoctorAuth(ctx *Context, opts struct {
 		return err
 	}
 
-	clusterName := cfg.ActiveCluster()
-	if opts.Cluster != "" {
-		clusterName = opts.Cluster
-	}
-
-	cluster, err := cfg.GetCluster(clusterName)
+	cluster, clusterName, err := opts.LoadCluster()
 	if err != nil {
 		return err
+	}
+	if cluster == nil {
+		ctx.Printf("No cluster configured\n")
+		return nil
 	}
 
 	hostname := cluster.Hostname

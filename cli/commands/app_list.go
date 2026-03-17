@@ -26,24 +26,19 @@ func AppList(ctx *Context, opts struct {
 	FormatOptions
 	ConfigCentric
 }) error {
-	cfg, err := opts.LoadConfig()
+	cluster, _, err := opts.LoadCluster()
 	if err != nil {
-		if errors.Is(err, clientconfig.ErrNoConfig) {
+		if errors.Is(err, clientconfig.ErrNoConfig) || errors.Is(err, ErrNoConfig) {
 			ctx.Printf("No cluster configured\n")
 			ctx.Printf("\nUse 'miren cluster add' to add a cluster\n")
 			return nil
 		}
 		return err
 	}
-
-	clusterName := cfg.ActiveCluster()
-	if opts.Cluster != "" {
-		clusterName = opts.Cluster
-	}
-
-	cluster, err := cfg.GetCluster(clusterName)
-	if err != nil {
-		return err
+	if cluster == nil {
+		ctx.Printf("No cluster configured\n")
+		ctx.Printf("\nUse 'miren cluster add' to add a cluster\n")
+		return nil
 	}
 
 	client, err := ctx.RPCClient("entities")

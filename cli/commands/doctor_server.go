@@ -17,9 +17,9 @@ import (
 func DoctorServer(ctx *Context, opts struct {
 	ConfigCentric
 }) error {
-	cfg, err := opts.LoadConfig()
+	cluster, clusterName, err := opts.LoadCluster()
 	if err != nil {
-		if errors.Is(err, clientconfig.ErrNoConfig) {
+		if errors.Is(err, clientconfig.ErrNoConfig) || errors.Is(err, ErrNoConfig) {
 			ctx.Printf("No clusters configured\n")
 			ctx.Printf("\n%s\n", infoLabel.Render("To add a cluster:"))
 			ctx.Printf("  %s\n", infoGray.Render("miren cluster add"))
@@ -27,13 +27,12 @@ func DoctorServer(ctx *Context, opts struct {
 		}
 		return err
 	}
-
-	clusterName := cfg.ActiveCluster()
-	if opts.Cluster != "" {
-		clusterName = opts.Cluster
+	if cluster == nil {
+		ctx.Printf("No clusters configured\n")
+		return nil
 	}
 
-	cluster, err := cfg.GetCluster(clusterName)
+	cfg, err := opts.LoadConfig()
 	if err != nil {
 		return err
 	}
