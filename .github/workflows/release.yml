@@ -134,6 +134,8 @@ jobs:
       env:
         APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
         APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        APPLE_INSTALLER_CERTIFICATE_BASE64: ${{ secrets.APPLE_INSTALLER_CERTIFICATE_BASE64 }}
+        APPLE_INSTALLER_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_INSTALLER_CERTIFICATE_PASSWORD }}
       run: |
         set -x  # Enable command tracing
 
@@ -146,13 +148,20 @@ jobs:
         security default-keychain -s build.keychain
         security unlock-keychain -p "$KEYCHAIN_PWD" build.keychain
 
-        # Import certificate
-        security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+        # Import application signing certificate
+        security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/pkgbuild
 
-        # Allow codesign to access the keychain without prompting
+        # Import installer signing certificate if provided separately
+        if [ -n "$APPLE_INSTALLER_CERTIFICATE_BASE64" ]; then
+          echo "$APPLE_INSTALLER_CERTIFICATE_BASE64" | base64 --decode > installer-certificate.p12
+          security import installer-certificate.p12 -k build.keychain -P "$APPLE_INSTALLER_CERTIFICATE_PASSWORD" -T /usr/bin/pkgbuild -T /usr/bin/codesign
+          rm installer-certificate.p12
+        fi
+
+        # Allow codesign and pkgbuild to access the keychain without prompting
         security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PWD" build.keychain
 
-        # Get the signing identity from the keychain
+        # Get the application signing identity
         IDENTITY=$(security find-identity -v -p codesigning build.keychain | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)".*/\1/')
         echo "Using signing identity: $IDENTITY"
 
@@ -160,6 +169,16 @@ jobs:
           echo "ERROR: No Developer ID Application identity found"
           security find-identity -v -p codesigning build.keychain
           exit 1
+        fi
+
+        # Look up installer signing identity for .pkg signing
+        INSTALLER_IDENTITY=$(security find-identity -v build.keychain | grep "Developer ID Installer" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+        if [ -n "$INSTALLER_IDENTITY" ]; then
+          echo "Found installer identity: $INSTALLER_IDENTITY"
+          echo "INSTALLER_IDENTITY=$INSTALLER_IDENTITY" >> "$GITHUB_ENV"
+        else
+          echo "WARNING: No Developer ID Installer identity found - .pkg will not be signed"
+          security find-identity -v build.keychain
         fi
 
         # Sign the binary with hardened runtime
@@ -174,6 +193,20 @@ jobs:
         # Clean up
         rm certificate.p12
 
+    - name: Build macOS .pkg installer
+      if: matrix.os == 'darwin' && env.INSTALLER_IDENTITY != ''
+      run: |
+        mkdir -p pkg-root/usr/local/bin
+        cp bin/miren pkg-root/usr/local/bin/miren
+        pkgbuild \
+          --root pkg-root \
+          --identifier dev.miren.cli \
+          --version "${{ needs.init.outputs.ref }}" \
+          --install-location / \
+          --sign "$INSTALLER_IDENTITY" \
+          miren-darwin-${{ matrix.arch }}.pkg
+        rm -rf pkg-root
+
     - name: Notarize macOS binary
       if: matrix.os == 'darwin'
       env:
@@ -181,21 +214,42 @@ jobs:
         APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
         APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       run: |
-        # Create a zip for notarization
+        # Create a zip for notarization of the bare binary
         zip -j miren-notarize.zip bin/miren
 
-        # Submit for notarization
+        # Submit bare binary for notarization
         xcrun notarytool submit miren-notarize.zip \
           --apple-id "$APPLE_ID" \
           --password "$APPLE_ID_PASSWORD" \
           --team-id "$APPLE_TEAM_ID" \
           --wait
 
-        # Clean up notarization zip
         rm miren-notarize.zip
 
         # Note: Can't staple bare binaries (only .app/.pkg/.dmg)
         # The binary is still notarized - Gatekeeper checks online on first run
+
+    - name: Notarize and staple macOS .pkg
+      if: matrix.os == 'darwin' && env.INSTALLER_IDENTITY != ''
+      env:
+        APPLE_ID: ${{ secrets.APPLE_ID }}
+        APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+        APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      run: |
+        PKG_NAME="miren-darwin-${{ matrix.arch }}.pkg"
+
+        # Submit .pkg for notarization (no zip wrapper needed for .pkg)
+        xcrun notarytool submit "$PKG_NAME" \
+          --apple-id "$APPLE_ID" \
+          --password "$APPLE_ID_PASSWORD" \
+          --team-id "$APPLE_TEAM_ID" \
+          --wait
+
+        # Staple the notarization ticket to the .pkg
+        xcrun stapler staple "$PKG_NAME"
+
+        # Validate stapling
+        xcrun stapler validate "$PKG_NAME"
 
     - name: Package binary
       run: |
@@ -210,6 +264,14 @@ jobs:
         path: |
           miren-${{ matrix.os }}-${{ matrix.arch }}.tar.gz
           miren-${{ matrix.os }}-${{ matrix.arch }}.zip
+        retention-days: 1
+
+    - name: Upload macOS .pkg artifact
+      if: matrix.os == 'darwin' && env.INSTALLER_IDENTITY != ''
+      uses: actions/upload-artifact@v4
+      with:
+        name: miren-darwin-${{ matrix.arch }}-pkg
+        path: miren-darwin-${{ matrix.arch }}.pkg
         retention-days: 1
 
   build-and-push-docker:
@@ -419,6 +481,18 @@ jobs:
                 "${os}" \
                 "${arch}"
             done
+          done
+
+          # Prepare macOS .pkg installers (if they were built)
+          for arch in amd64 arm64; do
+            pkg_path="artifacts/miren-darwin-${arch}-pkg/miren-darwin-${arch}.pkg"
+            if [ -f "$pkg_path" ]; then
+              prepare_artifact \
+                "$pkg_path" \
+                "miren-darwin-${arch}.pkg" \
+                "darwin" \
+                "${arch}"
+            fi
           done
 
           # Prepare docker-compose configuration
