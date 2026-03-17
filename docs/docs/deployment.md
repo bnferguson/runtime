@@ -132,27 +132,7 @@ Status icons:
 - **⟳** — in progress
 - **⊘** — cancelled
 
-### Filtering and Detail
-
-| Flag | Description |
-|------|-------------|
-| `-n, --limit N` | Maximum deployments to show (default: 10) |
-| `--all` | Show all deployments |
-| `-s, --status STATUS` | Filter by status: `active`, `failed`, `rolled_back` |
-| `--hide-failed` | Hide failed deployments |
-| `--detailed` | Show all columns including git SHA, branch, commit message, and deployment ID |
-
-Add `--detailed` to see the full picture including git provenance:
-
-```bash
-miren app history -a myapp --detailed
-```
-
-JSON output is available for scripting:
-
-```bash
-miren app history -a myapp --format json
-```
+You can filter by status, show full git provenance with `--detailed`, or get JSON output for scripting. See the [`miren app history` reference](/command/app-history) for all options.
 
 ## Cancelling a Deployment
 
