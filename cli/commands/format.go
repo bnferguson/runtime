@@ -9,7 +9,7 @@ import (
 
 // FormatOptions provides common output formatting options
 type FormatOptions struct {
-	Format string `long:"format" description:"Output format (table, json)" default:"table"`
+	Format string `long:"format" description:"Output format (text, json)" default:"text"`
 }
 
 // IsJSON returns true if JSON format is selected (case-insensitive)
