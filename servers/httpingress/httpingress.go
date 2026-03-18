@@ -1166,7 +1166,7 @@ func (h *Server) AcquireTunnel(ctx context.Context, hostname, path string) (*Tun
 	}
 
 	// Acquire a fresh lease
-	actContext, actCancel := context.WithTimeout(context.Background(), leaseAcquisitionTimeout)
+	actContext, actCancel := context.WithTimeout(ctx, leaseAcquisitionTimeout)
 	defer actCancel()
 
 	actLease, err := h.aa.AcquireLease(actContext, &av, "web")
