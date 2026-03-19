@@ -181,7 +181,7 @@ clean: ## Remove built binaries
 # Code Quality
 #
 
-lint: ## Run golangci-lint
+lint: docs-lint ## Run all linters
 	golangci-lint run ./...
 
 lint-fix: ## Run golangci-lint with auto-fix
@@ -189,6 +189,9 @@ lint-fix: ## Run golangci-lint with auto-fix
 
 lint-pr: ## Run golangci-lint on changes from main
 	golangci-lint run --new-from-rev main ./...
+
+docs-lint: ## Lint docs (no JS toolchain needed)
+	@bash hack/docs-lint.sh
 
 generate-check: ## Verify go generate is up to date
 	@echo "Checking if go generate produces any changes..."
@@ -208,7 +211,7 @@ generate-check: ## Verify go generate is up to date
 	fi
 	@echo "✓ go generate is up to date"
 
-.PHONY: lint lint-fix lint-pr generate-check
+.PHONY: lint lint-fix lint-pr docs-lint generate-check
 
 #
 # Release Packaging

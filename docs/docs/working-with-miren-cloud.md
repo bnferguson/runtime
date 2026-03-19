@@ -1,6 +1,3 @@
----
-sidebar_position: 3
----
 
 # Working with Miren Cloud
 

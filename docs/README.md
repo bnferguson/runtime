@@ -4,54 +4,15 @@ This directory contains the Miren documentation site built with [Docusaurus](htt
 
 ## Development Setup
 
-### For Nix Users (Recommended)
-
-If you have Nix installed, the development environment is automatically configured with bun:
+You'll need [bun](https://bun.sh) installed. If you use Nix, `nix develop` from the repo root will set that up for you.
 
 ```bash
-# Enter the Nix development shell (from repo root)
-nix develop
-
-# Navigate to docs directory
 cd docs
-
-# Install dependencies
 bun install
-
-# Start development server
 bun start
 ```
 
 The development server will be available at http://localhost:3333.
-
-### For Non-Nix Users
-
-If you don't use Nix, you'll need to install bun manually:
-
-**Requirements:**
-- Bun 1.0 or later
-
-**Installation:**
-
-1. Install bun from [bun.sh](https://bun.sh):
-   ```bash
-   # Linux/macOS
-   curl -fsSL https://bun.sh/install | bash
-
-   # Windows
-   powershell -c "irm bun.sh/install.ps1 | iex"
-   ```
-
-2. Install dependencies:
-   ```bash
-   cd docs
-   bun install
-   ```
-
-3. Start development server:
-   ```bash
-   bun start
-   ```
 
 ## Available Commands
 
@@ -83,8 +44,7 @@ Runs TypeScript type checking without emitting files.
 docs/
 ├── docs/                  # Documentation markdown files
 │   ├── intro.md          # Home page
-│   ├── getting-started/  # Getting started guides
-│   └── cli/              # CLI reference documentation
+│   └── ...               # Feature, reference, and resource pages
 ├── src/
 │   ├── css/              # Custom CSS and theming
 │   ├── components/       # Custom React components
@@ -108,14 +68,9 @@ docs/
 
 ### Adding New Pages
 
-1. Create a new `.md` or `.mdx` file in the appropriate directory under `docs/`
-2. Add frontmatter at the top:
-   ```md
-   ---
-   sidebar_position: 1
-   ---
-   ```
-3. The sidebar will auto-generate based on the file structure
+1. Create a new `.md` or `.mdx` file in `docs/`
+2. Add the page's doc ID to the appropriate section in `sidebars.ts`
+3. Run `make docs-lint` to verify the sidebar and doc files are in sync
 
 ### Styling
 
