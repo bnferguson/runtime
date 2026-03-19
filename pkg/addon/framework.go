@@ -11,6 +11,7 @@ import (
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/network/network_v1alpha"
+	"miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/idgen"
@@ -154,6 +155,26 @@ func (fw *ProviderFramework) CreateService(ctx context.Context, name string, mat
 	}
 
 	return id, nil
+}
+
+// DeleteDiskByName finds a disk entity by its Name field and deletes it.
+// Returns nil if no disk with that name exists.
+func (fw *ProviderFramework) DeleteDiskByName(ctx context.Context, diskName string) error {
+	listResp, err := fw.EAC.List(ctx, entity.String(storage_v1alpha.DiskNameId, diskName))
+	if err != nil {
+		return fmt.Errorf("querying disks by name %q: %w", diskName, err)
+	}
+
+	for _, e := range listResp.Values() {
+		var disk storage_v1alpha.Disk
+		disk.Decode(e.Entity())
+		if err := fw.EC.Delete(ctx, disk.ID); err != nil {
+			return fmt.Errorf("deleting disk %s: %w", disk.ID, err)
+		}
+		fw.Log.Info("deleted disk", "disk", disk.ID, "name", diskName)
+	}
+
+	return nil
 }
 
 // DeleteService deletes a network Service entity.

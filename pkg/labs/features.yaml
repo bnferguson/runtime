@@ -27,7 +27,7 @@ features:
   - name: addons
     predicate: Addons
     description: Enable the addon system for managed backing services
-    default: false
+    default: true
 
   - name: sagas
     predicate: Sagas

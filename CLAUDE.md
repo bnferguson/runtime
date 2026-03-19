@@ -210,6 +210,14 @@ To get started with iso:
 - Blackbox CLI tests in `blackbox/` directory (run via `make test-blackbox`)
 - Test data in various `testdata/` directories
 
+### Saga Framework (`pkg/saga/`)
+
+The saga framework determines action execution order via **topological sort on data dependencies** (input/output field matching). Actions at the same dependency level are sorted alphabetically. This means registration order does NOT determine execution order.
+
+- **Prefer explicit data passing between actions** to establish ordering. Even if data is available elsewhere (e.g., from a framework dependency or context), pass it through action inputs/outputs so the saga framework infers the correct dependency graph.
+- **Use `saga.Edge` only as a last resort** when there is genuinely no data to pass between two actions but ordering is still required. `Edge` fields participate in dependency resolution but carry no data at runtime.
+- When adding saga tags, use explicit `saga:"key_name"` tags on both the producing output field and the consuming input/Edge field to make the dependency clear and avoid relying on default lowercased field name matching.
+
 ### Code Generation
 
 - Entity schemas → Go structs: `entity/cmd/schemagen`

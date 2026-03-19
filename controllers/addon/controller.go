@@ -2,6 +2,7 @@ package addon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -11,6 +12,7 @@ import (
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/addon"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
 )
@@ -376,6 +378,10 @@ func (c *Controller) removeEnvVars(ctx context.Context, appID entity.Id, variabl
 
 	var app core_v1alpha.App
 	if err := c.ec.GetById(ctx, appID, &app); err != nil {
+		if errors.Is(err, cond.ErrNotFound{}) {
+			c.log.Info("app already deleted, skipping env var removal", "app", appID)
+			return nil
+		}
 		return fmt.Errorf("getting app: %w", err)
 	}
 	if app.ActiveVersion == "" {
@@ -384,6 +390,10 @@ func (c *Controller) removeEnvVars(ctx context.Context, appID entity.Id, variabl
 
 	var version core_v1alpha.AppVersion
 	if err := c.ec.GetById(ctx, app.ActiveVersion, &version); err != nil {
+		if errors.Is(err, cond.ErrNotFound{}) {
+			c.log.Info("app version already deleted, skipping env var removal", "version", app.ActiveVersion)
+			return nil
+		}
 		return fmt.Errorf("getting app version: %w", err)
 	}
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"miren.dev/runtime/api/addon/addon_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
@@ -91,12 +92,18 @@ func DeleteAppTransitive(ctx context.Context, client *entityserver.Client, log *
 
 	// Delete all referencing entities (app_versions, pools, etc.)
 	// Skip addon associations — they'll be deleted by the addon controller after deprovisioning.
+	// Tolerate not-found errors since addon deprovisioning may have already
+	// cleaned up some entities (e.g. pools created for addon infrastructure).
 	for _, id := range referencingEntities {
 		if addonAssocIDs[id] {
 			continue
 		}
 		log.Info("deleting entity", "id", id)
 		if err := client.Delete(ctx, id); err != nil {
+			if strings.Contains(err.Error(), "does not exist") {
+				log.Info("entity already deleted", "id", id)
+				continue
+			}
 			return fmt.Errorf("failed to delete entity %s: %w", id, err)
 		}
 	}

@@ -57,7 +57,7 @@ var featureDefaults = map[string]bool{
 	FeatureUserSubdomains:     false,
 	FeatureAdminAPI:           false,
 	FeatureRouteOIDC:          false,
-	FeatureAddons:             false,
+	FeatureAddons:             true,
 	FeatureSagas:              false,
 }
 

@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+
+# Usage: ./hack/run-blackbox [go test flags...]
+# Example: ./hack/run-blackbox -run TestAddonCreateListDestroy
+# Example: ./hack/run-blackbox -run TestAddon -timeout 15m
+#
+# Runs blackbox tests with the standard flags (build tag, verbose, no cache,
+# serial execution) and passes any additional arguments through to go test.
+
+set -euo pipefail
+
+exec go test -tags blackbox -timeout 10m -v -count=1 -p 1 ./blackbox/... "$@"

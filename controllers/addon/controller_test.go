@@ -246,7 +246,7 @@ func TestProvisionCompensatesOnPostProvisionFailure(t *testing.T) {
 	assert.True(t, provider.deprovisionCalled, "Deprovision should have been called as compensation after post-provision failure")
 }
 
-func TestDeprovisionBlockedByEnvVarRemovalFailure(t *testing.T) {
+func TestDeprovisionCompletesWhenAppDeleted(t *testing.T) {
 	ctx, ctrl, ec, provider := setupControllerTest(t)
 
 	appID, err := ec.Create(ctx, "myapp", &core_v1alpha.App{})
@@ -268,7 +268,8 @@ func TestDeprovisionBlockedByEnvVarRemovalFailure(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Delete the app so removeEnvVars fails when looking it up
+	// Delete the app — removeEnvVars should treat this as a no-op
+	// so that deprovision can complete and the association is cleaned up.
 	require.NoError(t, ec.Delete(ctx, appID))
 
 	var assoc addon_v1alpha.AddonAssociation
@@ -276,14 +277,13 @@ func TestDeprovisionBlockedByEnvVarRemovalFailure(t *testing.T) {
 	require.NoError(t, err)
 
 	reconcileErr := ctrl.Reconcile(ctx, &assoc, meta)
-	require.Error(t, reconcileErr, "reconciliation should fail when env var removal fails")
-	assert.Contains(t, reconcileErr.Error(), "removing addon env vars")
+	require.NoError(t, reconcileErr, "deprovision should succeed when app is already deleted")
 
-	// Provider.Deprovision should have succeeded (step 1)
+	// Provider.Deprovision should have been called
 	assert.True(t, provider.deprovisionCalled)
 
-	// The association should NOT have been deleted
-	var stillExists addon_v1alpha.AddonAssociation
-	err = ec.GetById(ctx, assocID, &stillExists)
-	require.NoError(t, err, "association should still exist after env var removal failure")
+	// The association should have been deleted (cleanup completed)
+	var gone addon_v1alpha.AddonAssociation
+	err = ec.GetById(ctx, assocID, &gone)
+	require.Error(t, err, "association should be deleted after successful deprovision")
 }

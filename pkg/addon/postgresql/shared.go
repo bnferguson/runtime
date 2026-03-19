@@ -2,6 +2,8 @@ package postgresql
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -18,6 +20,7 @@ import (
 
 const (
 	sharedServerName = "pg-shared"
+	sharedDiskName   = "pg-shared-data"
 	poolReadyTimeout = 5 * time.Minute
 )
 
@@ -74,6 +77,15 @@ type CreateSharedPoolOut struct {
 	PoolID entity.Id
 }
 
+// sharedDiskNameForPassword derives a unique disk name from the superuser
+// password. This ensures each shared server instance gets fresh storage,
+// avoiding stale data from a previous instance whose disk hasn't been
+// physically cleaned up yet (disk entity deletion is async).
+func sharedDiskNameForPassword(password string) string {
+	h := sha256.Sum256([]byte(password))
+	return sharedDiskName + "-" + hex.EncodeToString(h[:4])
+}
+
 func CreateSharedPool(ctx context.Context, in CreateSharedPoolIn) (CreateSharedPoolOut, error) {
 	fw := saga.Get[*addon.ProviderFramework](ctx)
 
@@ -90,6 +102,8 @@ func CreateSharedPool(ctx context.Context, in CreateSharedPoolIn) (CreateSharedP
 		"PGDATA=" + mountPath + "/pgdata",
 	}
 
+	diskName := sharedDiskNameForPassword(in.SuperuserPassword)
+
 	poolID, err := fw.CreateSandboxPool(ctx, addon.CreateSandboxPoolSpec{
 		Name:             sharedServerName,
 		Image:            DefaultImage,
@@ -105,7 +119,7 @@ func CreateSharedPool(ctx context.Context, in CreateSharedPoolIn) (CreateSharedP
 			{
 				Name:         "pgdata",
 				Provider:     "miren",
-				DiskName:     "pg-shared-data",
+				DiskName:     diskName,
 				MountPath:    mountPath,
 				SizeGb:       sharedDefaultStorageGb,
 				Filesystem:   "ext4",
@@ -266,6 +280,31 @@ type FindOrCreateSharedServerOut struct {
 	ServiceHost       string
 }
 
+// cleanupStaleSharedServer removes a shared server and its infrastructure
+// (pool, service, entity) so a fresh one can be created. Errors from pool
+// and service deletion are logged but not fatal — the entities may have
+// already been cleaned up.
+func cleanupStaleSharedServer(fw *addon.ProviderFramework, ctx context.Context, server *addon_v1alpha.PostgresServer) error {
+	if server.Service != "" {
+		if err := fw.DeleteService(ctx, server.Service); err != nil {
+			fw.Log.Warn("failed to delete stale shared service", "service", server.Service, "error", err)
+		}
+	}
+	if server.SandboxPool != "" {
+		if err := fw.DeleteSandboxPool(ctx, server.SandboxPool); err != nil {
+			fw.Log.Warn("failed to delete stale shared pool", "pool", server.SandboxPool, "error", err)
+		}
+	}
+	// Delete the data disk so PostgreSQL initializes fresh with the new password.
+	if server.SuperuserPassword != "" {
+		diskName := sharedDiskNameForPassword(server.SuperuserPassword)
+		if err := fw.DeleteDiskByName(ctx, diskName); err != nil {
+			fw.Log.Warn("failed to delete stale shared data disk", "name", diskName, "error", err)
+		}
+	}
+	return fw.EC.Delete(ctx, server.ID)
+}
+
 func FindOrCreateSharedServer(ctx context.Context, in FindOrCreateSharedServerIn) (FindOrCreateSharedServerOut, error) {
 	fw := saga.Get[*addon.ProviderFramework](ctx)
 
@@ -277,7 +316,16 @@ func FindOrCreateSharedServer(ctx context.Context, in FindOrCreateSharedServerIn
 		case "active":
 			serviceHost, err := fw.GetServiceAddress(ctx, server.Service)
 			if err != nil {
-				return FindOrCreateSharedServerOut{}, fmt.Errorf("resolving existing shared service address: %w", err)
+				// Server entity exists but its infrastructure is gone or
+				// unreachable. Remove everything (pool, service, entity) so
+				// the nested saga creates fresh infrastructure with a new
+				// password matching the new data directory.
+				fw.Log.Warn("shared server active but service unreachable, cleaning up stale server",
+					"server", server.ID, "error", err)
+				if delErr := cleanupStaleSharedServer(fw, ctx, &server); delErr != nil {
+					return FindOrCreateSharedServerOut{}, fmt.Errorf("cleaning up stale shared server: %w", delErr)
+				}
+				break
 			}
 			return FindOrCreateSharedServerOut{
 				ServerID:          server.ID,
@@ -285,15 +333,19 @@ func FindOrCreateSharedServer(ctx context.Context, in FindOrCreateSharedServerIn
 				ServiceHost:       serviceHost,
 			}, nil
 		default:
-			return FindOrCreateSharedServerOut{}, fmt.Errorf("shared server exists but has status %q; retry later", server.Status)
+			// Server stuck in a non-terminal state (e.g. "provisioning" from
+			// a previous failed attempt). Remove everything so we start fresh.
+			fw.Log.Warn("shared server in unexpected state, cleaning up stale server",
+				"server", server.ID, "status", server.Status)
+			if delErr := cleanupStaleSharedServer(fw, ctx, &server); delErr != nil {
+				return FindOrCreateSharedServerOut{}, fmt.Errorf("cleaning up stale shared server: %w", delErr)
+			}
 		}
-	}
-
-	if !errors.Is(err, cond.ErrNotFound{}) {
+	} else if !errors.Is(err, cond.ErrNotFound{}) {
 		return FindOrCreateSharedServerOut{}, fmt.Errorf("looking up shared server: %w", err)
 	}
 
-	// No shared server found — run the EnsureSharedServerSaga as a nested saga.
+	// No shared server found (or stale one was removed) — create via nested saga.
 	superuserPassword := idgen.Gen("su")
 
 	result, err := saga.RunNested(ctx, "ensure-shared-server",
@@ -736,10 +788,11 @@ func UndoDecrementAssociationCount(ctx context.Context, in DecrementAssociationC
 }
 
 type CleanupSharedServerIn struct {
-	SharedServerRef  entity.Id
-	SharedServiceRef entity.Id
-	SharedPoolRef    entity.Id
-	RemainingCount   int64
+	SharedServerRef        entity.Id
+	SharedServiceRef       entity.Id
+	SharedPoolRef          entity.Id
+	SharedSuperuserPassword string
+	RemainingCount         int64
 }
 
 type CleanupSharedServerOut struct {
@@ -762,6 +815,14 @@ func CleanupSharedServer(ctx context.Context, in CleanupSharedServerIn) (Cleanup
 	if in.SharedPoolRef != "" {
 		if err := fw.DeleteSandboxPool(ctx, in.SharedPoolRef); err != nil {
 			return CleanupSharedServerOut{}, fmt.Errorf("deleting shared pool: %w", err)
+		}
+	}
+
+	// Delete the data disk so that a future shared server starts fresh.
+	if in.SharedSuperuserPassword != "" {
+		diskName := sharedDiskNameForPassword(in.SharedSuperuserPassword)
+		if err := fw.DeleteDiskByName(ctx, diskName); err != nil {
+			fw.Log.Warn("failed to delete shared data disk", "name", diskName, "error", err)
 		}
 	}
 

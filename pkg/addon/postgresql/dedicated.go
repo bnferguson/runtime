@@ -6,6 +6,7 @@ import (
 
 	"miren.dev/runtime/api/addon/addon_v1alpha"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
+	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/pkg/addon"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
@@ -357,8 +358,9 @@ type LookupDedicatedServerIn struct {
 }
 
 type LookupDedicatedServerOut struct {
-	DedicatedServiceID entity.Id
-	DedicatedPoolID    entity.Id
+	DedicatedServiceID   entity.Id
+	DedicatedPoolID      entity.Id
+	DedicatedServerName  string
 }
 
 func LookupDedicatedServer(ctx context.Context, in LookupDedicatedServerIn) (LookupDedicatedServerOut, error) {
@@ -369,9 +371,16 @@ func LookupDedicatedServer(ctx context.Context, in LookupDedicatedServerIn) (Loo
 		return LookupDedicatedServerOut{}, fmt.Errorf("looking up postgres server: %w", err)
 	}
 
+	// Get the entity name (used to derive the disk name for cleanup)
+	var meta core_v1alpha.Metadata
+	if err := fw.EC.GetById(ctx, in.DedicatedServerID, &meta); err != nil {
+		return LookupDedicatedServerOut{}, fmt.Errorf("looking up server metadata: %w", err)
+	}
+
 	return LookupDedicatedServerOut{
-		DedicatedServiceID: server.Service,
-		DedicatedPoolID:    server.SandboxPool,
+		DedicatedServiceID:  server.Service,
+		DedicatedPoolID:     server.SandboxPool,
+		DedicatedServerName: meta.Name,
 	}, nil
 }
 
@@ -409,7 +418,7 @@ type DeleteDedicatedPoolIn struct {
 }
 
 type DeleteDedicatedPoolOut struct {
-	PoolDeleted bool
+	PoolDeleted bool `saga:"dedicated_pool_deleted"`
 }
 
 func DeleteDedicatedPool(ctx context.Context, in DeleteDedicatedPoolIn) (DeleteDedicatedPoolOut, error) {
@@ -430,7 +439,12 @@ func UndoDeleteDedicatedPool(ctx context.Context, in DeleteDedicatedPoolIn, out 
 }
 
 type DeleteDedicatedServerEntityIn struct {
-	DedicatedServerID entity.Id
+	DedicatedServerID   entity.Id
+	DedicatedServerName string
+
+	// PoolCleanedUp forces this action to run after DeleteDedicatedPool,
+	// ensuring the server entity is deleted last.
+	PoolCleanedUp saga.Edge `saga:"dedicated_pool_deleted"`
 }
 
 type DeleteDedicatedServerEntityOut struct {
@@ -439,6 +453,14 @@ type DeleteDedicatedServerEntityOut struct {
 
 func DeleteDedicatedServerEntity(ctx context.Context, in DeleteDedicatedServerEntityIn) (DeleteDedicatedServerEntityOut, error) {
 	fw := saga.Get[*addon.ProviderFramework](ctx)
+
+	// Delete the data disk before removing the server entity
+	if in.DedicatedServerName != "" {
+		diskName := fmt.Sprintf("pg-%s-data", in.DedicatedServerName)
+		if err := fw.DeleteDiskByName(ctx, diskName); err != nil {
+			fw.Log.Warn("failed to delete dedicated data disk", "name", diskName, "error", err)
+		}
+	}
 
 	if err := fw.EC.Delete(ctx, in.DedicatedServerID); err != nil {
 		return DeleteDedicatedServerEntityOut{}, fmt.Errorf("deleting postgres server: %w", err)
