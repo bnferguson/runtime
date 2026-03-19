@@ -22,6 +22,7 @@ const sidebars: SidebarsConfig = {
       label: 'Features',
       collapsed: false,
       items: [
+        'deployment',
         'app-configuration',
         'languages',
         'services',
