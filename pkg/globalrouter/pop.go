@@ -245,12 +245,6 @@ func (m *POPManager) newForwardingHandler(popXID string) http.Handler {
 			hostname = fwdHost
 		}
 
-		m.log.Debug("forwarding POP request",
-			"pop_xid", popXID,
-			"method", r.Method,
-			"host", hostname,
-			"path", r.URL.Path)
-
 		if m.ingress == nil {
 			http.Error(w, "no ingress configured", http.StatusBadGateway)
 			return
@@ -547,8 +541,8 @@ func isNonPublicIP(ip net.IP) bool {
 func normalizeAddr(addr string) string {
 	addr = strings.TrimPrefix(addr, "https://")
 	addr = strings.TrimPrefix(addr, "http://")
-	if !strings.Contains(addr, ":") {
-		addr += ":8443"
+	if _, _, err := net.SplitHostPort(addr); err != nil {
+		addr = net.JoinHostPort(addr, "8443")
 	}
 	return addr
 }

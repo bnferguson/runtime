@@ -82,9 +82,16 @@ func (c *Client) Run(ctx context.Context) error {
 	backoff := initialBackoff
 
 	for {
+		start := time.Now()
 		err := c.runOnce(ctx)
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+
+		// If the connection was up for a while, reset backoff so the
+		// next reconnect attempt starts fast.
+		if time.Since(start) >= 30*time.Second {
+			backoff = initialBackoff
 		}
 
 		c.log.Warn("websocket disconnected, reconnecting",
@@ -176,12 +183,8 @@ func (c *Client) readLoop(ctx context.Context, conn *websocket.Conn) error {
 			return fmt.Errorf("read: %w", err)
 		}
 
-		c.log.Info("received message from cloud", "type", env.Type, "data_len", len(env.Data))
-
 		if err := c.router.Dispatch(ctx, env); err != nil {
 			c.log.Warn("dispatch error", "type", env.Type, "error", err)
-		} else {
-			c.log.Info("message dispatched successfully", "type", env.Type)
 		}
 	}
 }
@@ -192,7 +195,6 @@ func (c *Client) writeLoop(ctx context.Context, conn *websocket.Conn) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case env := <-c.outbox:
-			c.log.Info("sending message to cloud", "type", env.Type)
 			writeCtx, cancel := context.WithTimeout(ctx, writeTimeout)
 			err := wsjson.Write(writeCtx, conn, env)
 			cancel()

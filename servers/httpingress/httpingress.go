@@ -1087,8 +1087,8 @@ func (tc *TunnelConn) Release() {
 // If the route requires OIDC authentication, the tunnel is rejected since
 // OIDC flows cannot be performed over tunneled connections.
 func (h *Server) AcquireTunnel(ctx context.Context, hostname, path string) (*TunnelConn, error) {
-	// Block access to admin endpoints
-	if path == "/.well-known/miren/admin" {
+	// Block access to internal miren endpoints (admin, OIDC callbacks, etc.)
+	if strings.HasPrefix(path, "/.well-known/miren/") {
 		return nil, fmt.Errorf("access to %s is not allowed via tunnel", path)
 	}
 
