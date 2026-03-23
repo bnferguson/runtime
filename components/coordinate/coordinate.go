@@ -7,13 +7,16 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -53,6 +56,7 @@ import (
 	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/schema"
+	"miren.dev/runtime/pkg/globalrouter"
 	"miren.dev/runtime/pkg/labs"
 	"miren.dev/runtime/pkg/oidcauth"
 	"miren.dev/runtime/pkg/rpc"
@@ -277,6 +281,12 @@ type Coordinator struct {
 
 	authClient        *cloudauth.AuthClient // For status reporting to cloud
 	oidcAuthenticator *oidcauth.OIDCAuthenticator
+
+	netcheckMu        sync.RWMutex
+	netcheckResult    *cloudauth.NetcheckResponse
+	netcheckCheckedAt time.Time
+
+	logAddressesOnce sync.Once
 
 	debugServer *debugsrv.Server
 }
@@ -1030,7 +1040,161 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		go c.reportStatusPeriodically(ctx)
 	}
 
+	// Start global router for NAT traversal when enabled
+	if labs.GlobalRouter() && c.CloudAuth.Enabled && c.authClient != nil {
+		cloudURL := c.CloudAuth.CloudURL
+		if cloudURL == "" {
+			cloudURL = DefaultCloudURL
+		}
+
+		gr := globalrouter.New(globalrouter.Config{
+			CloudURL:   cloudURL,
+			ClusterXID: c.CloudAuth.ClusterID,
+			AuthClient: c.authClient,
+			Ingress:    c.hs,
+			Log:        c.Log.With("component", "globalrouter"),
+		})
+
+		go func() {
+			if err := gr.Run(ctx); err != nil && ctx.Err() == nil {
+				c.Log.Error("global router exited with error", "error", err)
+			}
+		}()
+	}
+
 	return nil
+}
+
+// runNetcheck calls the cloud's netcheck endpoint to determine public reachability.
+func (c *Coordinator) runNetcheck(ctx context.Context) {
+	cloudURL := c.CloudAuth.CloudURL
+	if cloudURL == "" {
+		cloudURL = DefaultCloudURL
+	}
+
+	ports := []cloudauth.NetcheckPort{
+		{Port: 8443, Protocol: "https"},
+		{Port: 8443, Protocol: "http3"},
+	}
+
+	result, err := cloudauth.Netcheck(ctx, cloudURL, ports)
+	if err != nil {
+		if errors.Is(err, cloudauth.ErrPrivateAddress) {
+			c.Log.Info("netcheck: cluster is not publicly reachable (private IP)")
+		} else {
+			c.Log.Warn("netcheck: failed to check public reachability", "error", err)
+		}
+		c.netcheckMu.Lock()
+		c.netcheckResult = nil
+		c.netcheckCheckedAt = time.Now()
+		c.netcheckMu.Unlock()
+		return
+	}
+
+	// Validate that the source address is a global unicast IP — if not,
+	// the netcheck response is unreliable (e.g. proxy or misconfigured endpoint).
+	sourceIP := net.ParseIP(result.SourceAddress)
+	if sourceIP == nil || !sourceIP.IsGlobalUnicast() || sourceIP.IsPrivate() {
+		c.Log.Warn("netcheck: source address is not a public IP, ignoring result",
+			"source_address", result.SourceAddress)
+		c.netcheckMu.Lock()
+		c.netcheckResult = nil
+		c.netcheckCheckedAt = time.Now()
+		c.netcheckMu.Unlock()
+		return
+	}
+
+	c.netcheckMu.Lock()
+	c.netcheckResult = result
+	c.netcheckCheckedAt = time.Now()
+	c.netcheckMu.Unlock()
+
+	var reachable []string
+	for _, r := range result.Results {
+		if r.Reachable {
+			reachable = append(reachable, fmt.Sprintf("%s/%d", r.Protocol, r.Port))
+		}
+	}
+	c.Log.Info("netcheck: public reachability determined",
+		"source_ip", result.SourceAddress,
+		"reachable", reachable,
+		"duration_ms", result.DurationMs,
+	)
+}
+
+// publicAddresses returns addresses derived from the cached netcheck result.
+// Returns nil if no netcheck has been done or the cluster isn't publicly reachable.
+func (c *Coordinator) publicAddresses() []string {
+	c.netcheckMu.RLock()
+	result := c.netcheckResult
+	c.netcheckMu.RUnlock()
+
+	if result == nil || result.SourceAddress == "" {
+		return nil
+	}
+
+	if net.ParseIP(result.SourceAddress) == nil {
+		return nil
+	}
+
+	seen := make(map[string]struct{})
+	var addrs []string
+	for _, r := range result.Results {
+		if !r.Reachable {
+			continue
+		}
+		hp := net.JoinHostPort(result.SourceAddress, strconv.Itoa(r.Port))
+		if _, ok := seen[hp]; ok {
+			continue
+		}
+		seen[hp] = struct{}{}
+		addrs = append(addrs, hp)
+	}
+
+	return addrs
+}
+
+// apiAddresses builds the list of API addresses for status reports.
+// When netcheck has been run, public IPs from AdditionalIPs are filtered out
+// in favor of the netcheck-determined public addresses.
+func (c *Coordinator) apiAddresses() []string {
+	var addrs []string
+
+	// Only include c.Address if it contains a valid IP host.
+	if host, _, err := net.SplitHostPort(c.Address); err == nil && net.ParseIP(host) != nil {
+		addrs = append(addrs, c.Address)
+	}
+
+	// Add localhost addresses
+	addrs = append(addrs, "127.0.0.1:8443", "[::1]:8443")
+
+	c.netcheckMu.RLock()
+	hasNetcheck := c.netcheckResult != nil
+	c.netcheckMu.RUnlock()
+
+	for _, ip := range c.AdditionalIPs {
+		// When netcheck has run, skip public IPs — netcheck results replace them
+		if hasNetcheck && !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsLinkLocalUnicast() {
+			continue
+		}
+
+		addrs = append(addrs, net.JoinHostPort(ip.String(), "8443")) // Ensure proper formatting for IPv6 addresses
+	}
+
+	if pubAddrs := c.publicAddresses(); len(pubAddrs) > 0 {
+		addrs = append(addrs, pubAddrs...)
+	}
+
+	c.logAddressesOnce.Do(func() {
+		additional := []string{}
+		for _, ip := range c.AdditionalIPs {
+			additional = append(additional, ip.String())
+		}
+
+		c.Log.Info("reporting API addresses", "listen", c.Address, "discovered", additional, "result", addrs)
+	})
+
+	return addrs
 }
 
 // ReportStatus reports the current cluster status to miren.cloud
@@ -1058,29 +1222,14 @@ func (c *Coordinator) ReportStartupStatus(ctx context.Context) error {
 		}
 	}
 
-	// Build list of API addresses
-	apiAddresses := []string{c.Address}
-
-	// Add localhost addresses
-	apiAddresses = append(apiAddresses, "127.0.0.1:8443", "[::1]:8443")
-
-	// Add additional IPs
-	for _, ip := range c.AdditionalIPs {
-		// Format the IP address with port
-		if ip.To4() != nil {
-			apiAddresses = append(apiAddresses, fmt.Sprintf("%s:8443", ip.String()))
-		} else {
-			apiAddresses = append(apiAddresses, fmt.Sprintf("[%s]:8443", ip.String()))
-		}
-	}
+	// Run netcheck to determine public reachability
+	c.runNetcheck(ctx)
 
 	// Build status report
 	status := &cloudauth.StatusReport{
 		ClusterID:         c.CloudAuth.ClusterID,
-		APIAddresses:      apiAddresses,
+		APIAddresses:      c.apiAddresses(),
 		CACertFingerprint: caFingerprint,
-		// TODO: Add more fields as they become available:
-		// - Version (from build info)
 	}
 
 	return c.authClient.ReportClusterStatus(ctx, status)
@@ -1108,6 +1257,14 @@ func (c *Coordinator) ReportStatus(ctx context.Context) error {
 		workloadCount = len(appList.Values())
 	}
 
+	// Re-run netcheck if the cached result is older than 60 minutes
+	c.netcheckMu.RLock()
+	netcheckAge := time.Since(c.netcheckCheckedAt)
+	c.netcheckMu.RUnlock()
+	if netcheckAge > 60*time.Minute {
+		c.runNetcheck(ctx)
+	}
+
 	// Collect resource usage metrics
 	resourceUsage := c.collectResourceUsage()
 
@@ -1119,6 +1276,7 @@ func (c *Coordinator) ReportStatus(ctx context.Context) error {
 		NodeCount:     1, // Static value for now
 		WorkloadCount: workloadCount,
 		ResourceUsage: resourceUsage,
+		APIAddresses:  c.apiAddresses(),
 	}
 
 	return c.authClient.ReportClusterStatus(ctx, status)

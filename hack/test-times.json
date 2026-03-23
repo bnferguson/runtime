@@ -1,9 +1,9 @@
 {
   "summary": {
     "harness_overhead_s": 1.93,
-    "total_test_time_s": 589.02,
-    "package_count": 95,
-    "passed": 95,
+    "total_test_time_s": 604.75,
+    "package_count": 98,
+    "passed": 98,
     "failed": 0
   },
   "packages": [
@@ -86,6 +86,12 @@
       "returncode": 0
     },
     {
+      "package": "miren.dev/runtime/controllers/certificate",
+      "elapsed_s": 8.16,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
       "package": "miren.dev/runtime/pkg/rpc",
       "elapsed_s": 6.57,
       "status": "pass",
@@ -146,6 +152,12 @@
       "returncode": 0
     },
     {
+      "package": "miren.dev/runtime/pkg/globalrouter",
+      "elapsed_s": 4.11,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
       "package": "miren.dev/runtime/pkg/entity",
       "elapsed_s": 3.83,
       "status": "pass",
@@ -166,6 +178,12 @@
     {
       "package": "miren.dev/runtime/pkg/cloudauth",
       "elapsed_s": 3.47,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/oidcauth",
+      "elapsed_s": 3.46,
       "status": "pass",
       "returncode": 0
     },

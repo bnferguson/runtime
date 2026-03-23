@@ -1058,6 +1058,136 @@ func (h *Server) DoRequest(ctx context.Context, req *httpingress_v1alpha.Interna
 	return h.buildInternalResponse(resp, httpResp, appId, method, path, startTime)
 }
 
+// TunnelConn represents a resolved connection to an app sandbox. The caller
+// is responsible for calling Release when done to return the lease.
+type TunnelConn struct {
+	// URL is the base URL of the sandbox (e.g., "http://10.0.0.5:8080").
+	URL   string
+	AppID string
+
+	server *Server
+	lease  *lease
+}
+
+// Release returns the lease to the pool.
+func (tc *TunnelConn) Release() {
+	if tc.lease != nil {
+		tc.server.releaseLease(context.Background(), tc.lease)
+		tc.lease = nil
+	}
+}
+
+// AcquireTunnel resolves a hostname to an app, acquires a lease to a running
+// sandbox, and returns the sandbox URL. This is similar to DoRequest but
+// doesn't execute a request — it gives the caller direct access to the
+// sandbox URL for protocols that need custom connection handling (e.g.,
+// WebSocket tunneling).
+//
+// The path parameter is checked against blocked paths (e.g., admin endpoints).
+// If the route requires OIDC authentication, the tunnel is rejected since
+// OIDC flows cannot be performed over tunneled connections.
+func (h *Server) AcquireTunnel(ctx context.Context, hostname, path string) (*TunnelConn, error) {
+	// Block access to internal miren endpoints (admin, OIDC callbacks, etc.)
+	if strings.HasPrefix(path, "/.well-known/miren/") {
+		return nil, fmt.Errorf("access to %s is not allowed via tunnel", path)
+	}
+
+	onlyHost, _, err := net.SplitHostPort(hostname)
+	if err != nil {
+		onlyHost = hostname
+	}
+
+	// Resolve hostname → app ID via ingress routes
+	route, err := h.ingressClient.LookupWithWildcard(ctx, onlyHost)
+	if err != nil {
+		return nil, fmt.Errorf("route lookup failed for %s: %w", onlyHost, err)
+	}
+
+	var targetAppId entity.Id
+	if route != nil {
+		targetAppId = route.App
+
+		// Reject tunnels to apps that require OIDC authentication.
+		// OIDC auth flows require browser redirects which can't work
+		// over a tunneled WebSocket connection.
+		if !entity.Empty(route.OidcProvider) {
+			return nil, fmt.Errorf("tunneling not supported for OIDC-protected routes (host: %s)", onlyHost)
+		}
+	} else {
+		defaultRoute, err := h.ingressClient.LookupDefault(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("default route lookup failed: %w", err)
+		}
+		if defaultRoute == nil {
+			return nil, fmt.Errorf("no route found for %s", onlyHost)
+		}
+		if !entity.Empty(defaultRoute.OidcProvider) {
+			return nil, fmt.Errorf("tunneling not supported for OIDC-protected routes (host: %s)", onlyHost)
+		}
+		targetAppId = defaultRoute.App
+	}
+
+	appId := targetAppId.String()
+
+	// Look up the app and its active version
+	gr, err := h.eac.Get(ctx, appId)
+	if err != nil {
+		return nil, fmt.Errorf("app lookup failed for %s: %w", appId, err)
+	}
+
+	var appEntity core_v1alpha.App
+	appEntity.Decode(gr.Entity().Entity())
+
+	if appEntity.ActiveVersion == "" {
+		return nil, fmt.Errorf("no active version for app %s", appId)
+	}
+
+	vr, err := h.eac.Get(ctx, appEntity.ActiveVersion.String())
+	if err != nil {
+		return nil, fmt.Errorf("app version lookup failed: %w", err)
+	}
+
+	var av core_v1alpha.AppVersion
+	av.Decode(vr.Entity().Entity())
+
+	// Try cached lease first
+	curLease, err := h.useLease(ctx, appId)
+	if err != nil {
+		return nil, fmt.Errorf("lease lookup failed: %w", err)
+	}
+
+	if curLease != nil {
+		return &TunnelConn{
+			URL:    curLease.Lease.URL,
+			AppID:  appId,
+			server: h,
+			lease:  curLease,
+		}, nil
+	}
+
+	// Acquire a fresh lease
+	actContext, actCancel := context.WithTimeout(ctx, leaseAcquisitionTimeout)
+	defer actCancel()
+
+	actLease, err := h.aa.AcquireLease(actContext, &av, "web")
+	if err != nil {
+		return nil, fmt.Errorf("lease acquisition failed: %w", err)
+	}
+
+	if actLease == nil {
+		return nil, fmt.Errorf("no lease available for app %s", appId)
+	}
+
+	retained := h.retainLease(ctx, appId, actLease)
+
+	return &TunnelConn{
+		URL:    actLease.URL,
+		AppID:  appId,
+		server: h,
+		lease:  retained,
+	}, nil
+}
+
 // buildInternalResponse populates the InternalHttpResponse from the HTTP response.
 func (h *Server) buildInternalResponse(
 	resp *httpingress_v1alpha.InternalHttpResponse,

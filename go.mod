@@ -14,6 +14,7 @@ require (
 	github.com/charmbracelet/bubbletea v1.2.4
 	github.com/charmbracelet/lipgloss v1.0.0
 	github.com/cilium/ebpf v0.16.0
+	github.com/coder/websocket v1.8.14
 	github.com/containerd/cgroups/v3 v3.0.5
 	github.com/containerd/console v1.0.4
 	github.com/containerd/containerd v1.7.23
