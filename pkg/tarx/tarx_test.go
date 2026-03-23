@@ -2,6 +2,7 @@ package tarx
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"io"
 	"os"
@@ -505,6 +506,43 @@ func TestMakeTarOnlyIncludesDirectoriesWithAcceptedFiles(t *testing.T) {
 		entries := extractTarEntries(t, reader)
 		require.ElementsMatch(t, []string{"deep", "deep/a", "deep/a/b", "deep/a/b/file.go"}, entries)
 	})
+}
+
+func TestTarFS_PreExistingDirectory(t *testing.T) {
+	dir := t.TempDir()
+
+	// Pre-create directories that also appear in the tar, simulating the
+	// delta deploy case where stageMatchingFiles already created them.
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "db", "migrations"), 0755))
+
+	// Build a gzipped tar containing the same directory entries plus a file.
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+
+	require.NoError(t, tw.WriteHeader(&tar.Header{Name: "db/", Typeflag: tar.TypeDir, Mode: 0755}))
+	require.NoError(t, tw.WriteHeader(&tar.Header{Name: "db/migrations/", Typeflag: tar.TypeDir, Mode: 0755}))
+
+	content := []byte("CREATE TABLE test;")
+	require.NoError(t, tw.WriteHeader(&tar.Header{
+		Name:     "db/migrations/001_init.sql",
+		Typeflag: tar.TypeReg,
+		Mode:     0644,
+		Size:     int64(len(content)),
+	}))
+	_, err := tw.Write(content)
+	require.NoError(t, err)
+
+	require.NoError(t, tw.Close())
+	require.NoError(t, gw.Close())
+
+	// TarFS should succeed despite the directories already existing.
+	_, err = TarFS(&buf, dir)
+	require.NoError(t, err, "TarFS should tolerate pre-existing directories")
+
+	got, err := os.ReadFile(filepath.Join(dir, "db", "migrations", "001_init.sql"))
+	require.NoError(t, err)
+	require.Equal(t, string(content), string(got))
 }
 
 func TestMakeTarWithIncludePatterns(t *testing.T) {

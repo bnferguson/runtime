@@ -416,7 +416,7 @@ func TarFS(r io.Reader, dir string) (fsutil.FS, error) {
 
 		path := filepath.Join(dir, th.Name)
 		if th.Typeflag == tar.TypeDir {
-			if err := os.Mkdir(path, 0755); err != nil {
+			if err := os.Mkdir(path, 0755); err != nil && !os.IsExist(err) {
 				return nil, err
 			}
 		}
