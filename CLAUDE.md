@@ -216,6 +216,18 @@ To get started with iso:
 - RPC interfaces → implementations: `pkg/rpc/cmd/rpcgen`
 - Generated files have `.gen.go` suffix
 
+### CLI JSON Output Pattern (FormatOptions)
+
+Commands that output lists or tables should support `--format json` using the `FormatOptions` pattern:
+
+1. Embed `FormatOptions` in the opts struct
+2. Check `opts.IsJSON()` before table rendering
+3. Define a command-specific JSON struct with `json:"snake_case"` tags (don't serialize internal types directly)
+4. Build a slice of the JSON structs and return `PrintJSON(items)`
+5. Use raw/machine-readable values in JSON (e.g., RFC3339 timestamps, numeric percentages) rather than human-formatted strings
+
+See `cli/commands/route_list.go` for a reference implementation.
+
 ### Code Style & Formatting
 
 - **ALWAYS run `make lint` before committing** - This runs golangci-lint on the entire codebase

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
+	"time"
 
 	"miren.dev/runtime/api/debug/debug_v1alpha"
 	"miren.dev/runtime/pkg/rpc/standard"
@@ -12,6 +13,7 @@ import (
 
 // DebugNetDBList lists all IP leases from the netdb
 func DebugNetDBList(ctx *Context, opts struct {
+	FormatOptions
 	ConfigCentric
 	Subnet   string `short:"s" long:"subnet" description:"Filter by subnet CIDR"`
 	Reserved bool   `short:"r" long:"reserved" description:"Show only reserved (in-use) IPs"`
@@ -41,6 +43,38 @@ func DebugNetDBList(ctx *Context, opts struct {
 		addrB, _ := netip.ParseAddr(b.Ip())
 		return addrA.Compare(addrB)
 	})
+
+	if opts.IsJSON() {
+		type LeaseJSON struct {
+			IP         string `json:"ip"`
+			Subnet     string `json:"subnet"`
+			Status     string `json:"status"`
+			SandboxID  string `json:"sandbox_id,omitempty"`
+			ReleasedAt string `json:"released_at,omitempty"`
+		}
+
+		items := make([]LeaseJSON, len(leases))
+		for i, lease := range leases {
+			status := "released"
+			if lease.Reserved() {
+				status = "reserved"
+			}
+
+			item := LeaseJSON{
+				IP:     lease.Ip(),
+				Subnet: lease.Subnet(),
+				Status: status,
+			}
+			if lease.HasSandboxId() {
+				item.SandboxID = lease.SandboxId()
+			}
+			if lease.HasReleasedAt() {
+				item.ReleasedAt = standard.FromTimestamp(lease.ReleasedAt()).Format(time.RFC3339)
+			}
+			items[i] = item
+		}
+		return PrintJSON(items)
+	}
 
 	headers := []string{"IP", "SUBNET", "STATUS", "SANDBOX", "RELEASED"}
 	rows := make([]ui.Row, len(leases))
@@ -78,6 +112,7 @@ func DebugNetDBList(ctx *Context, opts struct {
 
 // DebugNetDBStatus shows subnet utilization stats
 func DebugNetDBStatus(ctx *Context, opts struct {
+	FormatOptions
 	ConfigCentric
 }) error {
 	client, err := ctx.RPCClient("dev.miren.runtime/debug-netdb")
@@ -96,6 +131,34 @@ func DebugNetDBStatus(ctx *Context, opts struct {
 	if len(subnets) == 0 {
 		ctx.Info("No subnets found")
 		return nil
+	}
+
+	if opts.IsJSON() {
+		type SubnetJSON struct {
+			Subnet       string  `json:"subnet"`
+			Capacity     int32   `json:"capacity"`
+			Reserved     int32   `json:"reserved"`
+			Released     int32   `json:"released"`
+			UsagePercent float64 `json:"usage_percent"`
+		}
+
+		items := make([]SubnetJSON, len(subnets))
+		for i, subnet := range subnets {
+			capacity := subnet.Capacity()
+			reserved := subnet.Reserved()
+			usage := float64(0)
+			if capacity > 0 {
+				usage = float64(reserved) / float64(capacity) * 100
+			}
+			items[i] = SubnetJSON{
+				Subnet:       subnet.Subnet(),
+				Capacity:     capacity,
+				Reserved:     reserved,
+				Released:     subnet.Released(),
+				UsagePercent: usage,
+			}
+		}
+		return PrintJSON(items)
 	}
 
 	headers := []string{"SUBNET", "CAPACITY", "RESERVED", "RELEASED", "USAGE"}

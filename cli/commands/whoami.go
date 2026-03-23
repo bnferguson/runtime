@@ -1,7 +1,6 @@
 package commands
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -12,8 +11,8 @@ import (
 
 // Whoami displays information about the current authenticated user
 func Whoami(ctx *Context, opts struct {
+	FormatOptions
 	ConfigCentric
-	JSON bool `long:"json" description:"Output as JSON"`
 }) error {
 	// Check if we have a configured cluster
 	if ctx.ClusterConfig == nil {
@@ -112,10 +111,8 @@ func Whoami(ctx *Context, opts struct {
 	}
 
 	// Output results
-	if opts.JSON {
-		encoder := json.NewEncoder(ctx.Stdout)
-		encoder.SetIndent("", "  ")
-		return encoder.Encode(output)
+	if opts.IsJSON() {
+		return PrintJSON(output)
 	}
 
 	// Human-readable output

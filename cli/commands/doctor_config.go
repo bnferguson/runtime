@@ -27,6 +27,7 @@ type clusterInfo struct {
 
 // DoctorConfig shows configuration file information
 func DoctorConfig(ctx *Context, opts struct {
+	FormatOptions
 	ConfigCentric
 }) error {
 	cfg, err := opts.LoadConfig()
@@ -62,6 +63,29 @@ func DoctorConfig(ctx *Context, opts struct {
 		}
 		return nil
 	})
+
+	if opts.IsJSON() {
+		type ClusterJSON struct {
+			Name    string `json:"name"`
+			Address string `json:"address"`
+			Source  string `json:"source"`
+			Active  bool   `json:"active"`
+			Local   bool   `json:"local"`
+		}
+
+		allClusters := append(localClusters, remoteClusters...)
+		items := make([]ClusterJSON, len(allClusters))
+		for i, c := range allClusters {
+			items[i] = ClusterJSON{
+				Name:    c.name,
+				Address: c.cluster.Hostname,
+				Source:  c.source,
+				Active:  c.name == activeCluster,
+				Local:   isLocalCluster(c.cluster.Hostname),
+			}
+		}
+		return PrintJSON(items)
+	}
 
 	// Shorten paths for display
 	homeDir, _ := os.UserHomeDir()

@@ -9,12 +9,13 @@ import (
 
 // FormatOptions provides common output formatting options
 type FormatOptions struct {
-	Format string `long:"format" description:"Output format (table, json)" default:"table"`
+	Format string `long:"format" description:"Output format (text, json)" default:"text"`
+	JSON   bool   `long:"json" description:"Shorthand for --format json"`
 }
 
 // IsJSON returns true if JSON format is selected (case-insensitive)
 func (f *FormatOptions) IsJSON() bool {
-	return strings.EqualFold(f.Format, "json")
+	return f.JSON || strings.EqualFold(f.Format, "json")
 }
 
 // PrintJSON prints data as formatted JSON to stdout
