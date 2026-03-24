@@ -7,6 +7,22 @@ All notable changes to Miren Runtime will be documented in this file.
 
 ---
 
+## v0.6.1
+*2026-03-24*
+
+**Improvements**
+- **Faster system log queries** - `miren logs system` now returns results in under a second instead of ~10 seconds by using VictoriaLogs' native `limit` parameter instead of server-side sorting. ([#681](https://github.com/mirendev/runtime/pull/681))
+- **JSON output for more CLI commands** - `debug netdb list`, `debug netdb status`, and `doctor config` now support `--format json`. Added `--json` as a shorthand for `--format json` on all commands that support it. ([#687](https://github.com/mirendev/runtime/pull/687))
+
+**Bug Fixes**
+- **Fixed delta deploys failing when cached and changed files share directories** - Deploying after a cached delta could fail with `mkdir: file exists` when both the cached and changed file sets contained the same directory. ([#689](https://github.com/mirendev/runtime/pull/689))
+- **Fixed CLI commands ignoring per-app cluster selection** - Commands like `route list`, `sandbox list`, and `app list` now respect the cluster chosen via `cluster switch` in an app directory, instead of silently falling back to the global active cluster. ([#683](https://github.com/mirendev/runtime/pull/683))
+
+**Documentation**
+- Added a top-level Deployment docs page covering the full deploy lifecycle. ([#684](https://github.com/mirendev/runtime/pull/684))
+
+---
+
 ## v0.6.0
 *2026-03-17*
 
