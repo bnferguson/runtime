@@ -9,7 +9,7 @@ You can claim subdomains under two base domains:
 
 | Domain | Notes |
 |--------|-------|
-| `run.garden` | General-purpose, no special browser restrictions |
+| `run.garden` | Great for running your [garden server](https://miren.dev/blog/garden-server) |
 | `miren.app` | `.app` TLD — browsers enforce HTTPS automatically |
 
 Both come with wildcard DNS, so once you claim `mycluster.run.garden`, requests to `*.mycluster.run.garden` are routed to your cluster too. This is handy for giving each app its own hostname or building multi-tenant setups.
