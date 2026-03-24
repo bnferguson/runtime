@@ -13,7 +13,7 @@ A Miren server instance that runs your applications. A cluster can be standalone
 
 ## Miren Cloud
 
-A central control plane that connects and manages your Miren clusters. Provides team management, access control, automatic data backup, and multi-environment workflows. See [Working with Miren Cloud](/working-with-miren-cloud).
+A central control plane that connects and manages your Miren clusters. Provides team management, access control, automatic data backup, and multi-environment workflows. See [Miren Cloud](/miren-cloud/overview).
 
 ## Miren Runtime
 

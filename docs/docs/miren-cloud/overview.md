@@ -1,10 +1,11 @@
 
-# Working with Miren Cloud
+# Miren Cloud
 
 Miren Cloud is a central control plane that connects and manages your Miren clusters. While Miren runs fully standalone on your own infrastructure, connecting to Miren Cloud gives you:
 - Team management and access control
 - Automatic data backup and sync
 - Multi-environment workflows
+- [Custom subdomains](/miren-cloud/subdomains) for your apps (e.g. `mycluster.run.garden`)
 
 ## Miren Server Installation (with Cloud)
 

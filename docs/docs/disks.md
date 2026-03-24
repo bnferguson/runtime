@@ -232,4 +232,4 @@ Disks use exclusive leasing - only one app instance can mount a disk at a time. 
 - [Services](/services) — Define services that use persistent storage
 - [Getting Started](/getting-started) — Deploy your first app
 - [CLI Reference - Disk Commands](/command/debug-disk) — Complete disk CLI reference
-- [Working with Miren Cloud](/working-with-miren-cloud) — Set up cloud features
+- [Miren Cloud](/miren-cloud/overview) — Set up cloud features

@@ -5,7 +5,8 @@
   "scripts": {
     "docusaurus": "docusaurus",
     "gen-commands": "cd .. && make bin/miren && hack/gen-command-docs --skip-build",
-    "start": "bun run gen-commands && docusaurus start --port 3333",
+    "dev": "bun run gen-commands && docusaurus start --port 3333",
+    "start": "bun run dev",
     "build": "bun run gen-commands && docusaurus build",
     "swizzle": "docusaurus swizzle",
     "deploy": "docusaurus deploy",
