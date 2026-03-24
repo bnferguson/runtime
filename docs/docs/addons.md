@@ -85,11 +85,15 @@ miren addon variants miren-postgresql
 | `small` | Dedicated PostgreSQL server (1 GB storage) | Production apps needing isolation |
 | `shared` | Multi-app shared PostgreSQL server | Development, staging, or small apps |
 
-**Dedicated** (`small`): Each app gets its own PostgreSQL instance with dedicated storage. Best for production workloads where you need isolation and predictable performance.
+**Dedicated** (`small`): Each app gets its own PostgreSQL instance with dedicated storage. Best for production workloads where you need isolation and predictable performance. Start here if your app might grow.
 
-**Shared** (`shared`): Multiple apps share a single PostgreSQL server, each with their own database and credentials. Cost-effective for development or apps with light database usage.
+**Shared** (`shared`): Multiple apps share a single PostgreSQL server, each with their own database and credentials. The shared server does not isolate workloads — a heavy query in one app can affect others on the same server. This variant is designed for small internal tools, staging environments, and apps you know will stay lightweight.
 
 If no variant is specified, the default (`small`) is used.
+
+:::note Changing variants
+There is currently no way to migrate between variants (e.g. upgrading from `shared` to `small`). If you need to switch, you would need to back up your data, destroy the addon, recreate it with the new variant, and restore. We plan to add in-place variant upgrades in a future release.
+:::
 
 ## Addon Lifecycle
 
