@@ -173,3 +173,79 @@ miren deploy
 ```
 
 Miren provisions PostgreSQL, injects `DATABASE_URL`, and starts your app once the database is ready.
+
+## Backing Up and Restoring
+
+:::info Early Version
+Addon backup and restore uses the general-purpose disk backup system. We plan to add addon-aware backup commands in a future release that will simplify this workflow. For now, the steps below work reliably for PostgreSQL addon data.
+
+The `disk backup` and `disk restore` commands must be run directly on the server (via SSH or `miren ssh`), not from your local machine. Remote backup support is planned.
+:::
+
+Each PostgreSQL addon stores its data on a Miren disk. You can back up and restore this disk using the `miren disk backup` and `miren disk restore` commands.
+
+### Finding the Disk Name
+
+List disks to find the one belonging to your addon:
+
+```bash
+miren debug disk list
+```
+
+Addon disks are named with a `pg-` prefix. For dedicated (`small`) addons, the name includes your app name (e.g. `pg-pg-myapp-s...-data`). For shared addons, it starts with `pg-shared-data-`.
+
+### Creating a Backup
+
+Back up the disk to a compressed snapshot file. This must be run on the server:
+
+```bash
+miren disk backup -n <disk-name>
+```
+
+This creates a timestamped `.miren.zst` file in the current directory. If the disk is currently in use, the backup will be crash-consistent (safe for PostgreSQL, which uses write-ahead logging).
+
+Example:
+
+```bash
+miren disk backup -n pg-pg-myapp-sCZDabc123-data
+# Output: pg-pg-myapp-sCZDabc123-data-20260324-120000.miren.zst
+```
+
+You can specify a custom output path with `-o`:
+
+```bash
+miren disk backup -n pg-pg-myapp-sCZDabc123-data -o /backups/myapp-db.miren.zst
+```
+
+### Restoring from a Backup
+
+To restore, provide the snapshot file. This must also be run on the server:
+
+```bash
+miren disk restore -s <snapshot-file>
+```
+
+The restore recreates the disk with the original name. If the disk already exists, use `--force` to overwrite:
+
+```bash
+miren disk restore -s myapp-db.miren.zst --force
+```
+
+To restore to a different disk name:
+
+```bash
+miren disk restore -s myapp-db.miren.zst -n new-disk-name
+```
+
+After restoring, restart your app to pick up the restored data:
+
+```bash
+miren app restart myapp
+```
+
+### Backup Recommendations
+
+- **Schedule regular backups** for production databases, especially before destructive operations like `addon destroy`
+- **Store backups off-server** — copy snapshot files to external storage
+- **Test restores periodically** to verify your backups are valid
+- Backups are compressed with zstd and include checksum verification
