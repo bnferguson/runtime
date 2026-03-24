@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -170,19 +171,39 @@ func (m *POPManager) servePOP(ctx context.Context, pc *popConnection, cr Connect
 	req.Header.Set("X-Cluster-XID", m.clusterXID)
 
 	resp, err := (&http.Client{Transport: controlH3}).Do(req)
-	controlH3.Close()
 	if err != nil {
+		controlH3.Close()
 		controlConn.CloseWithError(0, "handshake failed")
 		m.log.Error("POP connect handshake failed", "pop_xid", pc.popXID, "error", err)
 		return
 	}
-	io.Copy(io.Discard, resp.Body)
+
+	// Read the full response body before closing the transport.
+	respBody, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
+	controlH3.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		controlConn.CloseWithError(0, "rejected")
 		m.log.Error("POP connect rejected",
 			"pop_xid", pc.popXID, "status", resp.StatusCode)
+		return
+	}
+
+	// Parse the data-plane token from the /connect response.
+	var connectResp struct {
+		DataPlaneToken string `json:"data_plane_token"`
+	}
+	if err := json.Unmarshal(respBody, &connectResp); err != nil {
+		controlConn.CloseWithError(0, "bad response")
+		m.log.Error("failed to parse connect response",
+			"pop_xid", pc.popXID, "error", err)
+		return
+	}
+	if connectResp.DataPlaneToken == "" {
+		controlConn.CloseWithError(0, "no data plane token")
+		m.log.Error("connect response missing data_plane_token",
+			"pop_xid", pc.popXID)
 		return
 	}
 
@@ -204,6 +225,24 @@ func (m *POPManager) servePOP(ctx context.Context, pc *popConnection, cr Connect
 			"pop_xid", pc.popXID, "address", addr, "error", err)
 		return
 	}
+
+	// Send the data-plane token on a unidirectional stream to authenticate.
+	tokenStream, err := dataConn.OpenUniStream()
+	if err != nil {
+		dataConn.CloseWithError(0, "failed to open token stream")
+		controlConn.CloseWithError(0, "data plane setup failed")
+		m.log.Error("failed to open data plane token stream",
+			"pop_xid", pc.popXID, "error", err)
+		return
+	}
+	if _, err := tokenStream.Write([]byte(connectResp.DataPlaneToken)); err != nil {
+		dataConn.CloseWithError(0, "failed to send token")
+		controlConn.CloseWithError(0, "data plane setup failed")
+		m.log.Error("failed to send data plane token",
+			"pop_xid", pc.popXID, "error", err)
+		return
+	}
+	tokenStream.Close()
 
 	m.log.Info("data plane connected, serving requests",
 		"pop_xid", pc.popXID, "address", addr)
