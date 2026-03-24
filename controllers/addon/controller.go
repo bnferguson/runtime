@@ -103,7 +103,8 @@ func (c *Controller) provision(ctx context.Context, assoc *addon_v1alpha.AddonAs
 
 	// Steps 3-6: Complete provisioning. If any post-provision step fails,
 	// compensate by calling Deprovision to clean up the resources that were
-	// just created.
+	// just created. If compensation also fails, return the error without
+	// setting terminal "error" status so the controller retries.
 	if err := c.completeProvision(ctx, assoc, meta, provider, result); err != nil {
 		depErr := provider.Deprovision(ctx, addon.AddonAssociation{
 			ID:      assoc.ID,
@@ -113,7 +114,9 @@ func (c *Controller) provision(ctx context.Context, assoc *addon_v1alpha.AddonAs
 			Entity:  meta.Entity,
 		})
 		if depErr != nil {
-			c.log.Error("compensation deprovision failed", "error", depErr)
+			c.log.Error("compensation deprovision failed, will retry",
+				"provision_error", err, "deprovision_error", depErr)
+			return fmt.Errorf("provision failed: %v; compensation failed: %w", err, depErr)
 		}
 		return c.setError(meta, err)
 	}
@@ -166,7 +169,9 @@ func (c *Controller) completeProvision(
 		return fmt.Errorf("creating version with addon vars: %w", err)
 	}
 
-	// Store variables on the association for later removal
+	// Step 5b: Persist variables on the association immediately so that
+	// compensation (deprovision → removeEnvVars) can find the keys to
+	// remove even if step 6 fails.
 	variables := make([]addon_v1alpha.Variables, len(envVars))
 	for i, v := range envVars {
 		variables[i] = addon_v1alpha.Variables{
@@ -175,11 +180,15 @@ func (c *Controller) completeProvision(
 			Sensitive: v.Sensitive,
 		}
 	}
+	if err := meta.Update((&addon_v1alpha.AddonAssociation{
+		Variables: variables,
+	}).Encode()); err != nil {
+		return fmt.Errorf("persisting addon variables: %w", err)
+	}
 
 	// Step 6: Set status to active
 	if err := meta.Update((&addon_v1alpha.AddonAssociation{
-		Status:    "active",
-		Variables: variables,
+		Status: "active",
 	}).Encode()); err != nil {
 		return fmt.Errorf("setting status to active: %w", err)
 	}

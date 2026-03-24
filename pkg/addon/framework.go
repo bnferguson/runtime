@@ -166,12 +166,11 @@ func (fw *ProviderFramework) DeleteDiskByName(ctx context.Context, diskName stri
 	}
 
 	for _, e := range listResp.Values() {
-		var disk storage_v1alpha.Disk
-		disk.Decode(e.Entity())
-		if err := fw.EC.Delete(ctx, disk.ID); err != nil {
-			return fmt.Errorf("deleting disk %s: %w", disk.ID, err)
+		id := entity.Id(e.Id())
+		if err := fw.EC.Delete(ctx, id); err != nil {
+			return fmt.Errorf("deleting disk %s: %w", id, err)
 		}
-		fw.Log.Info("deleted disk", "disk", disk.ID, "name", diskName)
+		fw.Log.Info("deleted disk", "disk", id, "name", diskName)
 	}
 
 	return nil

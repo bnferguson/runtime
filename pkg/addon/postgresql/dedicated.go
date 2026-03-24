@@ -454,11 +454,13 @@ type DeleteDedicatedServerEntityOut struct {
 func DeleteDedicatedServerEntity(ctx context.Context, in DeleteDedicatedServerEntityIn) (DeleteDedicatedServerEntityOut, error) {
 	fw := saga.Get[*addon.ProviderFramework](ctx)
 
-	// Delete the data disk before removing the server entity
+	// Delete the data disk before removing the server entity. If this fails,
+	// abort so the saga retries — once the server entity is gone we lose the
+	// stable name needed to derive the disk name.
 	if in.DedicatedServerName != "" {
 		diskName := fmt.Sprintf("pg-%s-data", in.DedicatedServerName)
 		if err := fw.DeleteDiskByName(ctx, diskName); err != nil {
-			fw.Log.Warn("failed to delete dedicated data disk", "name", diskName, "error", err)
+			return DeleteDedicatedServerEntityOut{}, fmt.Errorf("deleting dedicated data disk %s: %w", diskName, err)
 		}
 	}
 

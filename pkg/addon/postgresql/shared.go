@@ -280,26 +280,30 @@ type FindOrCreateSharedServerOut struct {
 	ServiceHost       string
 }
 
+// isNotExist returns true if the error indicates the entity doesn't exist.
+func isNotExist(err error) bool {
+	return errors.Is(err, cond.ErrNotFound{})
+}
+
 // cleanupStaleSharedServer removes a shared server and its infrastructure
-// (pool, service, entity) so a fresh one can be created. Errors from pool
-// and service deletion are logged but not fatal — the entities may have
-// already been cleaned up.
+// (pool, service, disk, entity) so a fresh one can be created. Not-found
+// errors are ignored (the resource may already be gone); other errors abort
+// cleanup to preserve the server entity for retry.
 func cleanupStaleSharedServer(fw *addon.ProviderFramework, ctx context.Context, server *addon_v1alpha.PostgresServer) error {
 	if server.Service != "" {
-		if err := fw.DeleteService(ctx, server.Service); err != nil {
-			fw.Log.Warn("failed to delete stale shared service", "service", server.Service, "error", err)
+		if err := fw.DeleteService(ctx, server.Service); err != nil && !isNotExist(err) {
+			return fmt.Errorf("deleting stale shared service: %w", err)
 		}
 	}
 	if server.SandboxPool != "" {
-		if err := fw.DeleteSandboxPool(ctx, server.SandboxPool); err != nil {
-			fw.Log.Warn("failed to delete stale shared pool", "pool", server.SandboxPool, "error", err)
+		if err := fw.DeleteSandboxPool(ctx, server.SandboxPool); err != nil && !isNotExist(err) {
+			return fmt.Errorf("deleting stale shared pool: %w", err)
 		}
 	}
-	// Delete the data disk so PostgreSQL initializes fresh with the new password.
 	if server.SuperuserPassword != "" {
 		diskName := sharedDiskNameForPassword(server.SuperuserPassword)
 		if err := fw.DeleteDiskByName(ctx, diskName); err != nil {
-			fw.Log.Warn("failed to delete stale shared data disk", "name", diskName, "error", err)
+			return fmt.Errorf("deleting stale shared data disk: %w", err)
 		}
 	}
 	return fw.EC.Delete(ctx, server.ID)
@@ -316,11 +320,14 @@ func FindOrCreateSharedServer(ctx context.Context, in FindOrCreateSharedServerIn
 		case "active":
 			serviceHost, err := fw.GetServiceAddress(ctx, server.Service)
 			if err != nil {
-				// Server entity exists but its infrastructure is gone or
-				// unreachable. Remove everything (pool, service, entity) so
-				// the nested saga creates fresh infrastructure with a new
-				// password matching the new data directory.
-				fw.Log.Warn("shared server active but service unreachable, cleaning up stale server",
+				if !errors.Is(err, cond.ErrNotFound{}) {
+					// Transient error (e.g. no IP assigned yet) — return so the
+					// controller retries rather than destroying a live server.
+					return FindOrCreateSharedServerOut{}, fmt.Errorf("resolving existing shared service address: %w", err)
+				}
+				// Service entity is gone — clean up the stale server so the
+				// nested saga creates fresh infrastructure.
+				fw.Log.Warn("shared server active but service gone, cleaning up stale server",
 					"server", server.ID, "error", err)
 				if delErr := cleanupStaleSharedServer(fw, ctx, &server); delErr != nil {
 					return FindOrCreateSharedServerOut{}, fmt.Errorf("cleaning up stale shared server: %w", delErr)
@@ -333,10 +340,19 @@ func FindOrCreateSharedServer(ctx context.Context, in FindOrCreateSharedServerIn
 				ServiceHost:       serviceHost,
 			}, nil
 		default:
-			// Server stuck in a non-terminal state (e.g. "provisioning" from
-			// a previous failed attempt). Remove everything so we start fresh.
-			fw.Log.Warn("shared server in unexpected state, cleaning up stale server",
-				"server", server.ID, "status", server.Status)
+			// Server in a non-terminal state (e.g. "provisioning"). This could
+			// be a concurrent provision in progress or a stuck previous attempt.
+			// Only clean up if the entity is old enough to be considered stale.
+			resp, lookupErr := fw.EAC.Get(ctx, server.ID.String())
+			if lookupErr != nil {
+				return FindOrCreateSharedServerOut{}, fmt.Errorf("looking up shared server entity: %w", lookupErr)
+			}
+			age := time.Since(resp.Entity().Entity().GetCreatedAt())
+			if age < 10*time.Minute {
+				return FindOrCreateSharedServerOut{}, fmt.Errorf("shared server exists but has status %q (age %s); retry later", server.Status, age.Truncate(time.Second))
+			}
+			fw.Log.Warn("shared server stale, cleaning up",
+				"server", server.ID, "status", server.Status, "age", age.Truncate(time.Second))
 			if delErr := cleanupStaleSharedServer(fw, ctx, &server); delErr != nil {
 				return FindOrCreateSharedServerOut{}, fmt.Errorf("cleaning up stale shared server: %w", delErr)
 			}
@@ -819,10 +835,12 @@ func CleanupSharedServer(ctx context.Context, in CleanupSharedServerIn) (Cleanup
 	}
 
 	// Delete the data disk so that a future shared server starts fresh.
+	// If this fails, abort so the saga retries — once the server entity is
+	// gone we lose the password needed to derive the disk name.
 	if in.SharedSuperuserPassword != "" {
 		diskName := sharedDiskNameForPassword(in.SharedSuperuserPassword)
 		if err := fw.DeleteDiskByName(ctx, diskName); err != nil {
-			fw.Log.Warn("failed to delete shared data disk", "name", diskName, "error", err)
+			return CleanupSharedServerOut{}, fmt.Errorf("deleting shared data disk %s: %w", diskName, err)
 		}
 	}
 

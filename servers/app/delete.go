@@ -2,13 +2,14 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 
 	"miren.dev/runtime/api/addon/addon_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 )
 
@@ -100,7 +101,7 @@ func DeleteAppTransitive(ctx context.Context, client *entityserver.Client, log *
 		}
 		log.Info("deleting entity", "id", id)
 		if err := client.Delete(ctx, id); err != nil {
-			if strings.Contains(err.Error(), "does not exist") {
+			if errors.Is(err, cond.ErrNotFound{}) {
 				log.Info("entity already deleted", "id", id)
 				continue
 			}

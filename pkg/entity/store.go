@@ -1158,7 +1158,7 @@ func (s *EtcdStore) DeleteEntity(ctx context.Context, id Id) error {
 	}
 
 	if !txnResp.Succeeded {
-		return errors.New("entity does not exist")
+		return cond.NotFound("entity", id)
 	}
 
 	return nil
