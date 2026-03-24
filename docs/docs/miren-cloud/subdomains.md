@@ -1,7 +1,7 @@
 
 # Subdomains
 
-Every Miren cluster needs a way for the outside world to reach it. You can always bring your own domain and point DNS at your server, but if you'd rather skip the DNS busywork, Miren Cloud can give you a subdomain that just works — claim a name like `mycluster.run.garden`, assign it to your cluster, and you're live.
+You've got a Miren cluster running your stuff — now give it an address people can actually visit. You can always bring your own domain, but if you'd rather skip the DNS busywork, Miren Cloud lets you claim a subdomain like `mycluster.run.garden`, point it at your cluster, and you're live.
 
 ## Available Base Domains
 
@@ -10,17 +10,17 @@ You can claim subdomains under two base domains:
 | Domain | Notes |
 |--------|-------|
 | `run.garden` | Great for running your [garden server](https://miren.dev/blog/garden-server) |
-| `miren.app` | `.app` TLD — browsers enforce HTTPS automatically |
+| `miren.app` | A clean, professional option for your projects |
 
-Both come with wildcard DNS, so once you claim `mycluster.run.garden`, requests to `*.mycluster.run.garden` are routed to your cluster too. This is handy for giving each app its own hostname or building multi-tenant setups.
+Both come with wildcard DNS — once you claim `mycluster.run.garden`, requests to `*.mycluster.run.garden` are routed to your cluster too. That means each of your apps can get its own hostname without any extra setup.
 
 ## Claiming a Subdomain
 
-Head to your organization in [miren.cloud](https://miren.cloud), find the **Subdomains** section, and click **Claim Subdomain**.
+Head to your organization in [miren.cloud](https://miren.cloud), find the **Subdomains** section, and pick a name.
 
 ![Claim subdomain dialog](/img/miren-cloud/claim-subdomain.png)
 
-Names need to be 3–63 characters, lowercase alphanumeric with hyphens, and start/end with a letter or number. A handful of common names (`www`, `api`, `admin`, etc.) are reserved.
+Names are 3–63 characters — lowercase letters, numbers, and hyphens. A handful of common names like `www` and `api` are reserved.
 
 ## Assigning to a Cluster
 
@@ -34,7 +34,7 @@ With the subdomain assigned to your cluster, the last step is telling Miren whic
 miren route set mycluster.run.garden myapp
 ```
 
-You can also route wildcard subdomains to an app:
+You can also route wildcard subdomains to an app — handy if you want each app on its own sub-subdomain:
 
 ```bash
 miren route set '*.mycluster.run.garden' myapp
@@ -44,10 +44,16 @@ See [Traffic Routing](/traffic-routing) for more on how routes work.
 
 ## Good to Know
 
-**HTTPS on `.app` domains** — The `.app` TLD is on browser HSTS preload lists, so all `.app` domains require HTTPS. Miren provisions TLS certificates automatically via [Let's Encrypt](/tls), so this works out of the box.
+**Wildcard DNS** — When you assign a subdomain, Miren provisions both the base name and a wildcard (`*.mycluster.run.garden`), so you can give every app its own hostname or build multi-tenant setups without touching DNS again.
 
-**Wildcard DNS** — When you assign `mycluster.run.garden`, Miren provisions both `mycluster.run.garden` and `*.mycluster.run.garden` pointing at your cluster. Your apps can handle sub-subdomains (e.g. for per-tenant routing) without any additional DNS setup.
+**TLS certificates** — Miren provisions certificates automatically for your subdomains via [Let's Encrypt](/tls). This is especially relevant for `miren.app` subdomains, since the `.app` TLD requires HTTPS in all browsers.
 
-**DNS propagation** — Records are provisioned automatically on assignment. It typically takes 1–5 minutes, though in rare cases it can take up to an hour.
+**DNS propagation** — Records are provisioned on assignment and usually resolve within a few minutes, though in rare cases it can take up to an hour.
 
 **Limits** — During Developer Preview, each organization can claim up to 10 subdomains.
+
+## Next Steps
+
+- [Traffic Routing](/traffic-routing) — Set up routes to direct traffic to your apps
+- [TLS Certificates](/tls) — How Miren handles HTTPS
+- [Miren Cloud Overview](/miren-cloud/overview) — Cluster registration, login, and team management
