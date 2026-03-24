@@ -5,6 +5,11 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *main*
 
+---
+
+## v0.6.1
+*2026-03-24*
+
 **Improvements**
 - **Faster system log queries** - `miren logs system` now returns results in under a second instead of ~10 seconds by using VictoriaLogs' native `limit` parameter instead of server-side sorting. ([#681](https://github.com/mirendev/runtime/pull/681))
 - **JSON output for more CLI commands** - `debug netdb list`, `debug netdb status`, and `doctor config` now support `--format json`. Added `--json` as a shorthand for `--format json` on all commands that support it. ([#687](https://github.com/mirendev/runtime/pull/687))
