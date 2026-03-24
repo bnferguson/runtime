@@ -1,6 +1,6 @@
-# Miren Cloud Updates
+# Updates
 
-Updates to Miren Cloud, the hosted management service for Miren clusters.
+What's new in Miren Cloud.
 
 ## March 2026
 
