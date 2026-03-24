@@ -249,16 +249,22 @@ lease_timeout = "30s"
 
 ## `[addons.<name>]` — Addons {#addons}
 
-Configures add-on services managed by Miren.
+Configures managed backing services. The `<name>` is the addon identifier (e.g. `miren-postgresql`). See [Addons](/addons) for a full guide.
+
+When you deploy, Miren provisions declared addons and injects connection credentials as environment variables before starting your app.
 
 ```toml
-[addons.storage]
-variant = "minio"
+[addons.miren-postgresql]
+variant = "small"
 ```
 
 | Field | Type | Description | Default |
 |-------|------|-------------|---------|
-| `variant` | string | Addon variant to use | — |
+| `variant` | string | Addon variant (e.g. `small`, `shared`) | Addon's default variant |
+
+Run `miren addon variants <addon-name>` to see available variants.
+
+Addons removed from app.toml are automatically deprovisioned on the next deploy.
 
 ## Duration Format
 

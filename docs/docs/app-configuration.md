@@ -30,7 +30,7 @@ Create `.miren/app.toml` when you need to:
 - **Tune scaling** — adjust concurrency thresholds or use fixed instance counts
 - **Attach persistent disks** — for databases or file storage
 - **Customize builds** — specify a Dockerfile, language version, or extra build steps
-- **Configure addons** — like object storage
+- **Configure addons** — managed databases and other backing services (see [Addons](/addons))
 
 ## Configuration Sections
 

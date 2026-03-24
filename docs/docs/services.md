@@ -108,6 +108,10 @@ command = "celery -A myapp beat --loglevel=info"
 
 ### Different Images
 
+:::tip Use addons for databases
+If you just need a PostgreSQL database, consider using an [addon](/addons) instead of running it as a service. Addons are fully managed — Miren provisions the database, injects credentials, and handles cleanup. Use a service when you need full control over the database configuration.
+:::
+
 For services that need entirely different software—like a database—specify an `image`:
 
 ```toml
