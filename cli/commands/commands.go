@@ -842,6 +842,9 @@ Warning: These commands are intended for advanced users and developers. They may
 	// Internal commands (hidden from help, used by miren internals)
 	d.Dispatch("internal", Section("internal", "Internal commands used by miren components", ""))
 
+	// Alias commands
+	d.Dispatch("alias list", Infer("alias list", "List configured CLI aliases", AliasList))
+
 	// Help command (registered last so it can reference all other commands)
 	d.Dispatch("help", NewHelpCommand(d))
 	d.Dispatch("help alias", Infer("help alias", "Learn how to define and use CLI aliases", HelpAlias))

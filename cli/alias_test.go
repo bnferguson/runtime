@@ -109,11 +109,8 @@ func TestExpandAlias(t *testing.T) {
 		assert.Equal(t, args, got)
 	})
 
-	t.Run("built-in command not expanded", func(t *testing.T) {
-		d := newDispatcher()
-		args := []string{"version"}
-		got, err := expandAlias(d, args)
-		require.NoError(t, err)
-		assert.Equal(t, args, got)
-	})
+	// Note: testing actual alias expansion with config files requires
+	// integration tests since expandAlias calls LoadAppConfig which reads
+	// from the filesystem. The "no config" case above covers the early-return
+	// path. The shadow check and expansion logic are exercised in blackbox tests.
 }

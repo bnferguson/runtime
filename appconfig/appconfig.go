@@ -10,6 +10,7 @@ import (
 	"time"
 
 	toml "github.com/pelletier/go-toml/v2"
+	tomlast "github.com/pelletier/go-toml/v2/unstable"
 )
 
 var aliasWordRegexp = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
@@ -90,9 +91,16 @@ type AppConfig struct {
 const AppConfigPath = ".miren/app.toml"
 
 func LoadAppConfig() (*AppConfig, error) {
+	ac, _, err := LoadAppConfigWithPath()
+	return ac, err
+}
+
+// LoadAppConfigWithPath loads the app config and returns the file path it was loaded from.
+// Returns (nil, "", nil) if no config file is found.
+func LoadAppConfigWithPath() (*AppConfig, string, error) {
 	dir, err := os.Getwd()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	for dir != "/" {
@@ -106,21 +114,21 @@ func LoadAppConfig() (*AppConfig, error) {
 			dec.DisallowUnknownFields()
 			err = dec.Decode(&ac)
 			if err != nil {
-				return nil, err
+				return nil, "", err
 			}
 
 			// Validate the configuration
 			if err := ac.Validate(); err != nil {
-				return nil, err
+				return nil, "", err
 			}
 
-			return &ac, nil
+			return &ac, path, nil
 		}
 
 		dir = filepath.Dir(dir)
 	}
 
-	return nil, nil
+	return nil, "", nil
 }
 
 func LoadAppConfigUnder(dir string) (*AppConfig, error) {
@@ -370,4 +378,54 @@ func GetDefaultsForServices(serviceNames []string) *AppConfig {
 	ac := &AppConfig{}
 	ac.ResolveDefaults(serviceNames)
 	return ac
+}
+
+// AliasLineNumbers parses the TOML file at configPath and returns a map from
+// alias name to the line number where it is defined. Uses the go-toml/v2 AST
+// parser for accurate source locations.
+func AliasLineNumbers(configPath string) map[string]int {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil
+	}
+
+	var p tomlast.Parser
+	p.Reset(data)
+
+	result := make(map[string]int)
+
+	for p.NextExpression() {
+		node := p.Expression()
+		if node.Kind != tomlast.Table {
+			continue
+		}
+
+		// Check if this is the [aliases] table
+		keyIter := node.Key()
+		if !keyIter.Next() {
+			continue
+		}
+		if string(keyIter.Node().Data) != "aliases" {
+			continue
+		}
+
+		// Iterate subsequent KeyValue expressions under [aliases]
+		for p.NextExpression() {
+			kv := p.Expression()
+			if kv.Kind != tomlast.KeyValue {
+				break
+			}
+			keyIter := kv.Key()
+			if !keyIter.Next() {
+				continue
+			}
+			keyNode := keyIter.Node()
+			name := string(keyNode.Data)
+			shape := p.Shape(keyNode.Raw)
+			result[name] = shape.Start.Line
+		}
+		break
+	}
+
+	return result
 }
