@@ -2203,3 +2203,129 @@ func TestCreateEntity_UniqueValueCollisionRetry(t *testing.T) {
 	require.Len(t, resp.Kvs, 1)
 	assert.Equal(t, entityId, string(resp.Kvs[0].Value))
 }
+
+func TestCreateEntity_AllocatesShortId(t *testing.T) {
+	client := setupTestEtcd(t)
+
+	prefix := "/test-shortid-alloc"
+	_, err := client.Delete(t.Context(), prefix, clientv3.WithPrefix())
+	require.NoError(t, err)
+
+	store, err := NewEtcdStore(t.Context(), slog.Default(), client, prefix)
+	require.NoError(t, err)
+
+	// Create a kind entity
+	kind, err := store.CreateEntity(t.Context(), New(
+		Any(Ident, KeywordValue("test/sandboxkind")),
+	))
+	require.NoError(t, err)
+
+	// Create an entity with entity/kind — should get a short-id automatically
+	e, err := store.CreateEntity(t.Context(), New(
+		Ref(EntityKind, kind.Id()),
+	))
+	require.NoError(t, err)
+
+	shortId := e.ShortId()
+	require.NotEmpty(t, shortId, "entity with kind should get a short-id")
+
+	// Verify unique key was written
+	attr := String(DBShortId, shortId)
+	uniqueKey := store.BuildUniqueKeyForTest(attr)
+	resp, err := client.Get(t.Context(), uniqueKey)
+	require.NoError(t, err)
+	require.Len(t, resp.Kvs, 1)
+	assert.Equal(t, string(e.Id()), string(resp.Kvs[0].Value))
+}
+
+func TestCreateEntity_NoShortIdForSystemEntities(t *testing.T) {
+	client := setupTestEtcd(t)
+
+	prefix := "/test-shortid-system"
+	_, err := client.Delete(t.Context(), prefix, clientv3.WithPrefix())
+	require.NoError(t, err)
+
+	store, err := NewEtcdStore(t.Context(), slog.Default(), client, prefix)
+	require.NoError(t, err)
+
+	// Create an entity without entity/kind — should NOT get a short-id
+	e, err := store.CreateEntity(t.Context(), New(
+		Any(Ident, KeywordValue("test/plainattr")),
+		String(Doc, "a plain attribute"),
+	))
+	require.NoError(t, err)
+	assert.Empty(t, e.ShortId(), "entity without kind should not get a short-id")
+}
+
+func TestDeleteEntity_CleansUpUniqueKey(t *testing.T) {
+	client := setupTestEtcd(t)
+
+	prefix := "/test-shortid-delete"
+	_, err := client.Delete(t.Context(), prefix, clientv3.WithPrefix())
+	require.NoError(t, err)
+
+	store, err := NewEtcdStore(t.Context(), slog.Default(), client, prefix)
+	require.NoError(t, err)
+
+	kind, err := store.CreateEntity(t.Context(), New(
+		Any(Ident, KeywordValue("test/delkind")),
+	))
+	require.NoError(t, err)
+
+	e, err := store.CreateEntity(t.Context(), New(
+		Ref(EntityKind, kind.Id()),
+	))
+	require.NoError(t, err)
+
+	shortId := e.ShortId()
+	require.NotEmpty(t, shortId)
+
+	// Verify unique key exists
+	attr := String(DBShortId, shortId)
+	uniqueKey := store.BuildUniqueKeyForTest(attr)
+	resp, err := client.Get(t.Context(), uniqueKey)
+	require.NoError(t, err)
+	require.Len(t, resp.Kvs, 1)
+
+	// Delete the entity
+	err = store.DeleteEntity(t.Context(), e.Id())
+	require.NoError(t, err)
+
+	// Unique key should be gone
+	resp, err = client.Get(t.Context(), uniqueKey)
+	require.NoError(t, err)
+	assert.Len(t, resp.Kvs, 0, "unique key should be deleted with entity")
+}
+
+func TestGetOneIndex(t *testing.T) {
+	client := setupTestEtcd(t)
+
+	prefix := "/test-getoneindex"
+	_, err := client.Delete(t.Context(), prefix, clientv3.WithPrefix())
+	require.NoError(t, err)
+
+	store, err := NewEtcdStore(t.Context(), slog.Default(), client, prefix)
+	require.NoError(t, err)
+
+	kind, err := store.CreateEntity(t.Context(), New(
+		Any(Ident, KeywordValue("test/idxkind")),
+	))
+	require.NoError(t, err)
+
+	e, err := store.CreateEntity(t.Context(), New(
+		Ref(EntityKind, kind.Id()),
+	))
+	require.NoError(t, err)
+
+	shortId := e.ShortId()
+	require.NotEmpty(t, shortId)
+
+	// GetOneIndex should resolve the short-id back to the entity
+	resolvedId, err := store.GetOneIndex(t.Context(), String(DBShortId, shortId))
+	require.NoError(t, err)
+	assert.Equal(t, e.Id(), resolvedId)
+
+	// GetOneIndex with non-existent value should return not found
+	_, err = store.GetOneIndex(t.Context(), String(DBShortId, "nonexistent"))
+	assert.Error(t, err)
+}
