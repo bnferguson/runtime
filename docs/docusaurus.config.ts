@@ -71,6 +71,14 @@ const config: Config = {
 
   plugins: [filterAncestorWatchesPlugin],
 
+  scripts: [
+    {
+      src: 'https://cdn.usefathom.com/script.js',
+      'data-site': 'MEHJPZGQ',
+      defer: true,
+    },
+  ],
+
   onBrokenLinks: 'throw',
 
   // Even if you don't use internationalization, you can use this field to set
