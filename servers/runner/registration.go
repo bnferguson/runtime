@@ -212,7 +212,6 @@ func (s *RegistrationServer) Join(ctx context.Context, req *runner_v1alpha.Runne
 
 	node := &compute_v1alpha.Node{
 		RunnerId:     runnerID,
-		Status:       compute_v1alpha.READY,
 		ApiAddress:   listenAddr,
 		Version:      version,
 		RegisteredAt: time.Now(),
