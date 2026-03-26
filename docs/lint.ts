@@ -1,0 +1,123 @@
+/**
+ * Docs lint script — validates that sidebars.ts and the docs filesystem are in sync.
+ *
+ * Checks:
+ * 1. No sidebar_position frontmatter (ordering is controlled by sidebars.ts)
+ * 2. Every hand-written doc file appears in sidebars.ts
+ * 3. Every sidebar doc entry has a matching file on disk
+ *
+ * Generated docs (commands, command/*) are excluded — they come from
+ * command-sidebar.json which is populated at build time.
+ */
+
+import {existsSync, readdirSync, readFileSync, writeFileSync} from 'fs';
+import {join, relative} from 'path';
+
+// sidebars.ts imports command-sidebar.json which is generated at build time.
+// Create an empty stub if it doesn't exist so the import succeeds.
+const commandSidebarPath = join(import.meta.dirname, 'command-sidebar.json');
+if (!existsSync(commandSidebarPath)) {
+  writeFileSync(commandSidebarPath, '[]');
+}
+
+const sidebars = (await import('./sidebars')).default;
+
+const docsDir = join(import.meta.dirname, 'docs');
+let errors = 0;
+
+function fail(msg: string) {
+  console.error(msg);
+  errors++;
+}
+
+// --- Collect doc IDs from the filesystem ---
+
+function walkDir(dir: string): string[] {
+  const ids: string[] = [];
+  for (const entry of readdirSync(dir, {withFileTypes: true})) {
+    const fullPath = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      ids.push(...walkDir(fullPath));
+    } else if (entry.name.endsWith('.md')) {
+      ids.push(relative(docsDir, fullPath).replace(/\.md$/, ''));
+    }
+  }
+  return ids;
+}
+
+const fsIds = new Set(walkDir(docsDir));
+
+// --- Collect doc IDs from sidebars.ts ---
+
+const generatedPrefixes = ['commands', 'command/'];
+
+function isGenerated(id: string): boolean {
+  return generatedPrefixes.some((p) => id === p || id.startsWith(p));
+}
+
+type SidebarItem =
+  | string
+  | {type: 'doc'; id: string; [k: string]: unknown}
+  | {type: 'category'; items: SidebarItem[]; link?: {type: 'doc'; id: string}; [k: string]: unknown}
+  | {type: 'link'; [k: string]: unknown}
+  | {type: 'ref'; id: string; [k: string]: unknown};
+
+function extractDocIds(items: SidebarItem[]): string[] {
+  const ids: string[] = [];
+  for (const item of items) {
+    if (typeof item === 'string') {
+      ids.push(item);
+    } else if (item.type === 'doc') {
+      ids.push(item.id);
+    } else if (item.type === 'ref') {
+      ids.push(item.id);
+    } else if (item.type === 'category') {
+      if (item.link?.type === 'doc') {
+        ids.push(item.link.id);
+      }
+      ids.push(...extractDocIds(item.items));
+    }
+    // 'link' type (external URLs) — skip
+  }
+  return ids;
+}
+
+const sidebarIds = new Set<string>();
+for (const [, items] of Object.entries(sidebars)) {
+  for (const id of extractDocIds(items as SidebarItem[])) {
+    if (!isGenerated(id)) {
+      sidebarIds.add(id);
+    }
+  }
+}
+
+// --- Check 1: No sidebar_position frontmatter ---
+
+for (const id of fsIds) {
+  const content = readFileSync(join(docsDir, `${id}.md`), 'utf-8');
+  if (content.includes('sidebar_position')) {
+    fail(`ERROR: sidebar_position found in docs/${id}.md — ordering is controlled by sidebars.ts`);
+  }
+}
+
+// --- Check 2: Orphaned doc files (in filesystem but not in sidebar) ---
+
+const orphaned = [...fsIds].filter((id) => !sidebarIds.has(id) && !isGenerated(id)).sort();
+if (orphaned.length > 0) {
+  fail(`ERROR: Doc files not listed in sidebars.ts:\n${orphaned.map((id) => `  ${id}`).join('\n')}`);
+}
+
+// --- Check 3: Missing doc files (in sidebar but not on filesystem) ---
+
+const missing = [...sidebarIds].filter((id) => !fsIds.has(id)).sort();
+if (missing.length > 0) {
+  fail(`ERROR: Sidebar entries with no matching doc file:\n${missing.map((id) => `  ${id}`).join('\n')}`);
+}
+
+// --- Result ---
+
+if (errors === 0) {
+  console.log('✓ docs lint passed');
+} else {
+  process.exit(1);
+}

@@ -31,6 +31,12 @@ jobs:
       with:
         ref: ${{ inputs.ref }}
 
+    - name: Set up Bun
+      uses: oven-sh/setup-bun@v2
+    - name: Docs lint
+      run: bun run lint
+      working-directory: docs
+
     - name: Set up Go
       uses: actions/setup-go@v6
       with:
