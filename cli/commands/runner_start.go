@@ -7,18 +7,20 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
 	"golang.org/x/sync/errgroup"
 	"miren.dev/runtime/clientconfig"
+	containerdcomp "miren.dev/runtime/components/containerd"
 	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/components/runner"
 	"miren.dev/runtime/controllers/sandbox"
 	"miren.dev/runtime/observability"
-	"miren.dev/runtime/pkg/containerdx"
 	"miren.dev/runtime/pkg/runnerconfig"
 )
 
@@ -50,19 +52,55 @@ func RunnerStart(ctx *Context, opts struct {
 	})
 	clientCfg.SetActiveCluster("coordinator")
 
-	// Determine containerd socket
-	containerdSocket := opts.ContainerdSocket
-	if containerdSocket == "" {
-		containerdSocket = containerdx.DefaultSocket
-	}
+	var cc *containerd.Client
 
-	// Initialize containerd client
-	cc, err := containerd.New(containerdSocket,
-		containerd.WithDefaultNamespace("miren"))
-	if err != nil {
-		return fmt.Errorf("failed to connect to containerd: %w", err)
+	if opts.ContainerdSocket != "" {
+		// Explicit socket provided — connect to external containerd
+		ctx.Log.Info("connecting to external containerd", "socket", opts.ContainerdSocket)
+		cc, err = containerd.New(opts.ContainerdSocket,
+			containerd.WithDefaultNamespace("miren"))
+		if err != nil {
+			return fmt.Errorf("failed to connect to containerd: %w", err)
+		}
+		defer cc.Close()
+	} else {
+		// Start embedded containerd (same as server standalone mode)
+		containerdBinary, err := exec.LookPath("containerd")
+		if err != nil {
+			return fmt.Errorf("containerd binary not found in PATH: %w", err)
+		}
+
+		containerdComponent := containerdcomp.NewContainerdComponent(ctx.Log, opts.DataPath)
+
+		baseDir := filepath.Join(opts.DataPath, "containerd")
+		containerdConfig := &containerdcomp.Config{
+			BinaryPath: containerdBinary,
+			BaseDir:    baseDir,
+			SocketPath: filepath.Join(baseDir, "containerd.sock"),
+			Env:        []string{"PATH=" + os.Getenv("PATH")},
+		}
+
+		if err := containerdComponent.Start(ctx, containerdConfig); err != nil {
+			return fmt.Errorf("failed to start embedded containerd: %w", err)
+		}
+		defer func() {
+			ctx.Log.Info("stopping embedded containerd")
+			stopCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := containerdComponent.Stop(stopCtx); err != nil {
+				ctx.Log.Error("failed to stop embedded containerd", "error", err)
+			}
+		}()
+
+		cc, err = containerd.New(containerdComponent.SocketPath(),
+			containerd.WithDefaultNamespace("miren"))
+		if err != nil {
+			return fmt.Errorf("failed to connect to embedded containerd: %w", err)
+		}
+		defer cc.Close()
+
+		ctx.Log.Info("embedded containerd started", "socket", containerdComponent.SocketPath())
 	}
-	defer cc.Close()
 
 	// Ensure data directory exists
 	if err := os.MkdirAll(opts.DataPath, 0755); err != nil {
