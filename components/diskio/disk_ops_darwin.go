@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 )
 
 type stubDiskVolumeOps struct{}
@@ -19,6 +20,13 @@ func (s *stubDiskVolumeOps) CreateVolumeDir(path string) error {
 
 func (s *stubDiskVolumeOps) RemoveVolumeDir(path string) error {
 	return os.RemoveAll(path)
+}
+
+func (s *stubDiskVolumeOps) MoveVolumeDir(src, dst string) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		return fmt.Errorf("failed to create parent directory for %s: %w", dst, err)
+	}
+	return os.Rename(src, dst)
 }
 
 func (s *stubDiskVolumeOps) VolumePathExists(path string) bool {

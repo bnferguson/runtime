@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -36,6 +37,13 @@ func (r *realDiskVolumeOps) CreateVolumeDir(path string) error {
 
 func (r *realDiskVolumeOps) RemoveVolumeDir(path string) error {
 	return os.RemoveAll(path)
+}
+
+func (r *realDiskVolumeOps) MoveVolumeDir(src, dst string) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		return fmt.Errorf("failed to create parent directory for %s: %w", dst, err)
+	}
+	return os.Rename(src, dst)
 }
 
 func (r *realDiskVolumeOps) VolumePathExists(path string) bool {

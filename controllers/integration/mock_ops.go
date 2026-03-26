@@ -31,6 +31,12 @@ func (m *mockDiskVolumeOps) RemoveVolumeDir(path string) error {
 	return nil
 }
 
+func (m *mockDiskVolumeOps) MoveVolumeDir(src, dst string) error {
+	delete(m.existingPaths, src)
+	m.existingPaths[dst] = true
+	return nil
+}
+
 func (m *mockDiskVolumeOps) VolumePathExists(path string) bool {
 	return m.existingPaths[path]
 }

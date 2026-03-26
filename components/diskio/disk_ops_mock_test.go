@@ -7,15 +7,22 @@ import (
 )
 
 // mockDiskVolumeOps implements DiskVolumeOps for testing
+type mockDirMove struct {
+	src string
+	dst string
+}
+
 type mockDiskVolumeOps struct {
 	createdDirs   []string
 	removedDirs   []string
+	movedDirs     []mockDirMove
 	existingPaths map[string]bool
 	createdImages []mockDiskImage
 	removedImages []string
 
 	createDirErr   error
 	removeDirErr   error
+	moveDirErr     error
 	createImageErr error
 	removeImageErr error
 }
@@ -46,6 +53,16 @@ func (m *mockDiskVolumeOps) RemoveVolumeDir(path string) error {
 	}
 	m.removedDirs = append(m.removedDirs, path)
 	delete(m.existingPaths, path)
+	return nil
+}
+
+func (m *mockDiskVolumeOps) MoveVolumeDir(src, dst string) error {
+	if m.moveDirErr != nil {
+		return m.moveDirErr
+	}
+	m.movedDirs = append(m.movedDirs, mockDirMove{src: src, dst: dst})
+	delete(m.existingPaths, src)
+	m.existingPaths[dst] = true
 	return nil
 }
 

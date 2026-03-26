@@ -99,15 +99,19 @@ func TestDiskVolumeControllerReconcileVolumeAbsent(t *testing.T) {
 	state := NewState()
 	ops := newMockDiskVolumeOps()
 
-	// Pre-populate state with existing volume
+	// Pre-populate state with existing volume using a real temp directory
+	// so that metadata can be written before the move.
+	volDir := filepath.Join(dataPath, "volumes", "vol-456")
+	require.NoError(t, os.MkdirAll(volDir, 0755))
+
 	state.SetVolume("disk_volume/vol-456", &VolumeState{
 		EntityId:   "disk_volume/vol-456",
 		VolumeId:   "vol-456",
-		DiskPath:   "/data/volumes/vol-456",
+		DiskPath:   volDir,
 		SizeBytes:  5 * 1024 * 1024 * 1024,
 		Filesystem: "xfs",
 	})
-	ops.existingPaths["/data/volumes/vol-456"] = true
+	ops.existingPaths[volDir] = true
 
 	vc := newTestDiskVolumeController(log, dataPath, nodeId, es.EAC, state, ops)
 
@@ -124,9 +128,10 @@ func TestDiskVolumeControllerReconcileVolumeAbsent(t *testing.T) {
 	err := vc.ReconcileWithEntities(ctx)
 	require.NoError(t, err)
 
-	// Verify volume directory was removed
-	assert.Len(t, ops.removedDirs, 1)
-	assert.Equal(t, "/data/volumes/vol-456", ops.removedDirs[0])
+	// Verify volume directory was soft-deleted (moved, not removed)
+	assert.Len(t, ops.movedDirs, 1)
+	assert.Equal(t, volDir, ops.movedDirs[0].src)
+	assert.Contains(t, ops.movedDirs[0].dst, "deleted-volumes")
 
 	// Verify state was cleaned up
 	assert.Nil(t, state.GetVolume("disk_volume/vol-456"))
@@ -1333,11 +1338,14 @@ func TestDiskVolumeControllerUniversalUnmountOnDelete(t *testing.T) {
 	volOps := newMockDiskVolumeOps()
 	mntOps := newMockDiskMountOps()
 
+	volDir := filepath.Join(dataPath, "volumes", "vol-del")
+	require.NoError(t, os.MkdirAll(volDir, 0755))
+
 	mountPath := filepath.Join(dataPath, "vol-del")
 	state.SetVolume("disk_volume/vol-del", &VolumeState{
 		EntityId:   "disk_volume/vol-del",
 		VolumeId:   "vol-del",
-		DiskPath:   "/data/volumes/vol-del",
+		DiskPath:   volDir,
 		SizeBytes:  10 * 1024 * 1024 * 1024,
 		Filesystem: "ext4",
 		Mode:       storage_v1alpha.VM_UNIVERSAL,
@@ -1345,7 +1353,7 @@ func TestDiskVolumeControllerUniversalUnmountOnDelete(t *testing.T) {
 		MountPath:  mountPath,
 		Mounted:    true,
 	})
-	volOps.existingPaths["/data/volumes/vol-del"] = true
+	volOps.existingPaths[volDir] = true
 	mntOps.mountedPaths[mountPath] = true
 
 	vc := NewDiskVolumeController(log, dataPath, nodeId, state, volOps, mntOps)
@@ -1369,8 +1377,10 @@ func TestDiskVolumeControllerUniversalUnmountOnDelete(t *testing.T) {
 	assert.Contains(t, mntOps.unmounts, mountPath)
 	// Verify loop detach was called
 	assert.Contains(t, mntOps.detachedLoops, "/dev/loop3")
-	// Verify volume directory was removed
-	assert.Contains(t, volOps.removedDirs, "/data/volumes/vol-del")
+	// Verify volume directory was soft-deleted (moved, not removed)
+	require.Len(t, volOps.movedDirs, 1)
+	assert.Equal(t, volDir, volOps.movedDirs[0].src)
+	assert.Contains(t, volOps.movedDirs[0].dst, "deleted-volumes")
 }
 
 func TestDiskVolumeControllerShutdown(t *testing.T) {

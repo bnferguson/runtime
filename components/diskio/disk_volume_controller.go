@@ -523,9 +523,13 @@ func (c *DiskVolumeController) deleteVolume(ctx context.Context, volume *storage
 	}
 
 	if volState.DiskPath != "" {
-		if err := c.ops.RemoveVolumeDir(volState.DiskPath); err != nil {
-			if !os.IsNotExist(err) {
-				return fmt.Errorf("failed to remove volume directory %s: %w", volState.DiskPath, err)
+		if err := c.softDeleteVolume(ctx, volume, volState); err != nil {
+			c.log.Warn("soft-delete failed, falling back to hard delete",
+				"entity_id", entityId, "error", err)
+			if err := c.ops.RemoveVolumeDir(volState.DiskPath); err != nil {
+				if !os.IsNotExist(err) {
+					return fmt.Errorf("failed to remove volume directory %s: %w", volState.DiskPath, err)
+				}
 			}
 		}
 	}
@@ -540,6 +544,63 @@ func (c *DiskVolumeController) deleteVolume(ctx context.Context, volume *storage
 	if err := c.updateVolumeState(ctx, volume.ID, storage_v1alpha.DV_DELETED, "", ""); err != nil {
 		c.log.Warn("failed to update volume state to deleted", "error", err)
 	}
+
+	return nil
+}
+
+// softDeleteVolume moves the volume directory to the deleted-volumes holding area
+// and writes metadata so it can be restored later. Metadata is written into the
+// source directory before the move so the rename carries both data and metadata
+// atomically.
+func (c *DiskVolumeController) softDeleteVolume(ctx context.Context, volume *storage_v1alpha.DiskVolume, volState *VolumeState) error {
+	diskPath := volState.DiskPath
+	dirName := filepath.Base(diskPath)
+	destPath := filepath.Join(c.dataPath, deletedVolumesDir, dirName)
+
+	// Avoid collision if the destination already exists (e.g., from a prior failed attempt)
+	if _, err := os.Stat(destPath); err == nil {
+		destPath = fmt.Sprintf("%s-%d", destPath, time.Now().UnixMilli())
+	}
+
+	meta := &DeletedVolumeMetadata{
+		DiskID:     string(volume.DiskId),
+		DiskName:   volume.Name,
+		SizeGb:     volume.SizeGb,
+		Filesystem: volume.Filesystem,
+		VolumeID:   volState.VolumeId,
+		VolumeMode: string(volume.VolumeMode),
+		NodeID:     string(volume.NodeId),
+		DeletedAt:  time.Now(),
+	}
+
+	// Try to enrich metadata from the disk entity
+	if c.eac != nil && volume.DiskId != "" {
+		result, err := c.eac.Get(ctx, string(volume.DiskId))
+		if err == nil && result.Entity() != nil {
+			var disk storage_v1alpha.Disk
+			disk.Decode(result.Entity().Entity())
+			meta.DiskName = disk.Name
+			meta.CreatedBy = string(disk.CreatedBy)
+		}
+	}
+
+	// Write metadata before the move so the rename carries both the volume
+	// data and the metadata atomically (same filesystem).  If the write
+	// fails we abort — moving without metadata would leave an invisible,
+	// un-restorable directory.
+	if err := SaveDeletedVolumeMetadata(diskPath, meta); err != nil {
+		return fmt.Errorf("writing deleted volume metadata: %w", err)
+	}
+
+	if err := c.ops.MoveVolumeDir(diskPath, destPath); err != nil {
+		_ = os.Remove(filepath.Join(diskPath, metadataFilename))
+		return fmt.Errorf("moving volume to deleted-volumes: %w", err)
+	}
+
+	c.log.Info("volume soft-deleted",
+		"from", diskPath,
+		"to", destPath,
+		"disk_name", meta.DiskName)
 
 	return nil
 }

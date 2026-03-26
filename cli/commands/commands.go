@@ -813,6 +813,8 @@ Warning: These commands are intended for advanced users and developers. They may
 	// Disk commands
 	d.Dispatch("disk backup", Infer("disk backup", "Backup a disk to a snapshot file", DiskBackup))
 	d.Dispatch("disk restore", Infer("disk restore", "Restore a disk from a snapshot file", DiskRestore))
+	d.Dispatch("disk undelete", Infer("disk undelete", "Restore a recently deleted disk", DiskUndelete))
+	d.Dispatch("disk list-deleted", Infer("disk list-deleted", "List deleted disks available for recovery", DiskListDeleted))
 
 	// Debug disk commands
 	d.Dispatch("debug disk", Section("debug disk", "Disk entity debug commands", "", WithSectionDescription(diskSectionDescription)))

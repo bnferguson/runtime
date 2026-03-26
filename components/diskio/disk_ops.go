@@ -10,6 +10,7 @@ import (
 type DiskVolumeOps interface {
 	CreateVolumeDir(path string) error
 	RemoveVolumeDir(path string) error
+	MoveVolumeDir(src, dst string) error
 	VolumePathExists(path string) bool
 	CreateDiskImage(path string, sizeBytes int64) error
 	RemoveDiskImage(path string) error
