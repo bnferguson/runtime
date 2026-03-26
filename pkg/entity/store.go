@@ -668,6 +668,9 @@ func (s *EtcdStore) UpdateEntity(
 		return nil, cond.Conflict("entity", entity.Id())
 	}
 
+	// Snapshot original entity for unique-value diffing
+	originalEntity := entity.Clone()
+
 	// Keep track of original indexed attributes for removal (including nested ones)
 	originalIndexedAttrs, err := s.collectIndexedAttributes(ctx, entity.attrs)
 	if err != nil {
@@ -750,6 +753,13 @@ func (s *EtcdStore) UpdateEntity(
 		}
 	}
 
+	// Build unique-value update operations (release old, claim new)
+	uniqueOps, uniqueConditions, err := s.buildUniqueUpdateOps(ctx, entity.Id(), originalEntity, entity)
+	if err != nil {
+		return nil, err
+	}
+	coltxopt = append(coltxopt, uniqueOps...)
+
 	entity.attrs = primary
 
 	// Build entity save operations
@@ -763,15 +773,20 @@ func (s *EtcdStore) UpdateEntity(
 
 	var txnResp *clientv3.TxnResponse
 
-	// When using 0 as the from rev, we skip the revision check
-	if o.fromRevision == 0 {
+	// Build conditions: revision check + unique-value constraints
+	var conditions []clientv3.Cmp
+	if o.fromRevision != 0 {
+		conditions = append(conditions, clientv3.Compare(clientv3.ModRevision(key), "=", rev))
+	}
+	conditions = append(conditions, uniqueConditions...)
+
+	if len(conditions) > 0 {
 		txnResp, err = s.client.Txn(ctx).
+			If(conditions...).
 			Then(txopt...).
 			Commit()
 	} else {
-		// Use Txn to check that the key exists before updating
 		txnResp, err = s.client.Txn(ctx).
-			If(clientv3.Compare(clientv3.ModRevision(key), "=", rev)).
 			Then(txopt...).
 			Commit()
 	}
@@ -896,6 +911,50 @@ func (s *EtcdStore) buildCollectionOps(entity *Entity, originalIndexedAttrs, new
 	return ops
 }
 
+// buildUniqueUpdateOps compares the old and new unique-value attributes and
+// returns operations to release old unique keys and claim new ones, along with
+// conditions that ensure the new keys don't already exist.
+func (s *EtcdStore) buildUniqueUpdateOps(ctx context.Context, entityId Id, oldEntity, newEntity *Entity) (ops []clientv3.Op, conditions []clientv3.Cmp, err error) {
+	oldUnique, err := s.collectUniqueAttrs(ctx, oldEntity)
+	if err != nil {
+		return nil, nil, err
+	}
+	newUnique, err := s.collectUniqueAttrs(ctx, newEntity)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Build maps for comparison
+	oldByID := make(map[Id]Attr)
+	for _, attr := range oldUnique {
+		oldByID[attr.ID] = attr
+	}
+	newByID := make(map[Id]Attr)
+	for _, attr := range newUnique {
+		newByID[attr.ID] = attr
+	}
+
+	// Release old unique keys for values that changed or were removed
+	for id, oldAttr := range oldByID {
+		newAttr, exists := newByID[id]
+		if !exists || !oldAttr.Equal(newAttr) {
+			ops = append(ops, s.deleteUniqueOp(oldAttr))
+		}
+	}
+
+	// Claim new unique keys for values that changed or were added
+	for id, newAttr := range newByID {
+		oldAttr, exists := oldByID[id]
+		if !exists || !oldAttr.Equal(newAttr) {
+			uniqueKey := s.buildUniqueKey(newAttr)
+			conditions = append(conditions, clientv3.Compare(clientv3.CreateRevision(uniqueKey), "=", 0))
+			ops = append(ops, s.addUniqueOp(newAttr, entityId))
+		}
+	}
+
+	return ops, conditions, nil
+}
+
 // buildEntitySaveOps builds etcd operations for saving entity data (primary and session attributes)
 func (s *EtcdStore) buildEntitySaveOps(entity *Entity, key string, primary, session []Attr, o *entityOpts) ([]clientv3.Op, error) {
 	var ops []clientv3.Op
@@ -956,12 +1015,13 @@ func (s *EtcdStore) ReplaceEntity(
 		return nil, err
 	}
 
-	// Get current entity to check revision
+	// Get current entity to check revision and snapshot for unique-value diffing
 	entity, err := s.GetEntity(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 
+	originalEntity := entity.Clone()
 	rev := entity.GetRevision()
 
 	repl := current.Clone()
@@ -1008,6 +1068,13 @@ func (s *EtcdStore) ReplaceEntity(
 	}
 	coltxopt := s.buildCollectionOps(repl, originalIndexedAttrs, newIndexedAttrs, sessPart, sid)
 
+	// Build unique-value update operations (release old, claim new)
+	uniqueOps, uniqueConditions, err := s.buildUniqueUpdateOps(ctx, repl.Id(), originalEntity, repl)
+	if err != nil {
+		return nil, err
+	}
+	coltxopt = append(coltxopt, uniqueOps...)
+
 	// Build entity save operations
 	key := s.buildKey(repl.Id())
 	txopt, err := s.buildEntitySaveOps(repl, key, primary, session, &o)
@@ -1019,15 +1086,20 @@ func (s *EtcdStore) ReplaceEntity(
 
 	var txnResp *clientv3.TxnResponse
 
-	// When using 0 as the from rev, we skip the revision check
-	if o.fromRevision == 0 {
+	// Build conditions: revision check + unique-value constraints
+	var conditions []clientv3.Cmp
+	if o.fromRevision != 0 {
+		conditions = append(conditions, clientv3.Compare(clientv3.ModRevision(key), "=", rev))
+	}
+	conditions = append(conditions, uniqueConditions...)
+
+	if len(conditions) > 0 {
 		txnResp, err = s.client.Txn(ctx).
+			If(conditions...).
 			Then(txopt...).
 			Commit()
 	} else {
-		// Use Txn to check that the entity hasn't changed
 		txnResp, err = s.client.Txn(ctx).
-			If(clientv3.Compare(clientv3.ModRevision(key), "=", rev)).
 			Then(txopt...).
 			Commit()
 	}
@@ -1066,11 +1138,13 @@ func (s *EtcdStore) PatchEntity(
 		return nil, err
 	}
 
-	// Get current entity
+	// Get current entity and snapshot for unique-value diffing
 	entity, err := s.GetEntity(ctx, id)
 	if err != nil {
 		return nil, err
 	}
+
+	originalEntity := entity.Clone()
 
 	// Check revision if specified
 	if err := s.checkRevisionConflict(entity, o.fromRevision); err != nil {
@@ -1131,6 +1205,13 @@ func (s *EtcdStore) PatchEntity(
 	}
 	coltxopt := s.buildCollectionOps(entity, originalIndexedAttrs, newIndexedAttrs, sessPart, sid)
 
+	// Build unique-value update operations (release old, claim new)
+	uniqueOps, uniqueConditions, err := s.buildUniqueUpdateOps(ctx, entity.Id(), originalEntity, entity)
+	if err != nil {
+		return nil, err
+	}
+	coltxopt = append(coltxopt, uniqueOps...)
+
 	entity.attrs = primary
 
 	// Build entity save operations
@@ -1144,15 +1225,20 @@ func (s *EtcdStore) PatchEntity(
 
 	var txnResp *clientv3.TxnResponse
 
-	// When using 0 as the from rev, we skip the revision check
-	if o.fromRevision == 0 {
+	// Build conditions: revision check + unique-value constraints
+	var conditions []clientv3.Cmp
+	if o.fromRevision != 0 {
+		conditions = append(conditions, clientv3.Compare(clientv3.ModRevision(key), "=", rev))
+	}
+	conditions = append(conditions, uniqueConditions...)
+
+	if len(conditions) > 0 {
 		txnResp, err = s.client.Txn(ctx).
+			If(conditions...).
 			Then(txopt...).
 			Commit()
 	} else {
-		// Use Txn to check that the key exists before updating
 		txnResp, err = s.client.Txn(ctx).
-			If(clientv3.Compare(clientv3.ModRevision(key), "=", rev)).
 			Then(txopt...).
 			Commit()
 	}
