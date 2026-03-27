@@ -55,6 +55,12 @@ mount_path = "/var/lib/postgresql/data"
 - **Shared access**: All containers in your app can read/write simultaneously—your application needs to handle concurrent access (SQLite handles this well when configured with `PRAGMA journal_mode=WAL`).
 - **Node affinity**: Apps with any disk (local or miren) are pinned to the coordinator and won't be scheduled to distributed runners.
 
+### Migrating from Automatic Local Storage
+
+Previously, Miren automatically mounted `/miren/data/local` for every app. This is now opt-in via the disk config above.
+
+If any of your environment variables reference `/miren/data/local`, Miren will automatically add the local storage volume for you — so most apps will keep working without changes. You'll see a log message when this happens, and we recommend adding the explicit disk config when convenient.
+
 ---
 
 ## Miren Disks
