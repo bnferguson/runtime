@@ -156,6 +156,17 @@ func (d *DiskController) handleProvisioning(ctx context.Context, disk *storage_v
 	}
 
 	if existingVolume != nil {
+		// If the volume belongs to a different node, don't touch it
+		myNodeId := entity.Id("node/" + strings.TrimPrefix(d.NodeId, "node/"))
+		if existingVolume.NodeId != "" && existingVolume.NodeId != myNodeId {
+			d.Log.Debug("disk_volume belongs to another node, skipping",
+				"disk", disk.ID,
+				"disk_volume", existingVolume.ID,
+				"volume_node", existingVolume.NodeId,
+				"my_node", myNodeId)
+			return nil
+		}
+
 		d.Log.Debug("found existing disk_volume for disk",
 			"disk", disk.ID,
 			"disk_volume", existingVolume.ID,

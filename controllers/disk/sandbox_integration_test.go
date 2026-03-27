@@ -167,7 +167,7 @@ func TestSandboxDiskIntegration(t *testing.T) {
 				ReadOnly: false,
 			},
 			AcquiredAt: now,
-			NodeId:     entity.Id("node/worker-1"),
+			NodeId:     entity.Id("node/test-node"),
 		}
 
 		// Process lease binding - creates disk_mount entity, stays PENDING
@@ -205,7 +205,7 @@ func TestSandboxDiskIntegration(t *testing.T) {
 				Path: "/mnt/data",
 			},
 			AcquiredAt: now,
-			NodeId:     entity.Id("node/worker-2"),
+			NodeId:     entity.Id("node/test-node"),
 		}
 
 		conflictMeta := &entity.Meta{}
@@ -232,7 +232,7 @@ func TestSandboxDiskIntegration(t *testing.T) {
 				Path: "/mnt/data",
 			},
 			AcquiredAt: time.Now(),
-			NodeId:     entity.Id("node/worker-2"),
+			NodeId:     entity.Id("node/test-node"),
 		}
 
 		newMeta := &entity.Meta{}
@@ -370,7 +370,7 @@ func TestSandboxDiskIntegration(t *testing.T) {
 					ReadOnly: false,
 				},
 				AcquiredAt: now,
-				NodeId:     entity.Id("node/multi-disk-node"),
+				NodeId:     entity.Id("node/test-node"),
 			}
 
 			meta := &entity.Meta{}

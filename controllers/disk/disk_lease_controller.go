@@ -162,6 +162,12 @@ func (d *DiskLeaseController) cleanupDiskMountForLease(ctx context.Context, leas
 
 // reconcileLease reconciles the lease state
 func (d *DiskLeaseController) reconcileLease(ctx context.Context, lease *storage_v1alpha.DiskLease, meta *entity.Meta) error {
+	// Only reconcile leases assigned to this node
+	myNodeId := entity.Id("node/" + d.NodeId)
+	if lease.NodeId != "" && lease.NodeId != myNodeId {
+		return nil
+	}
+
 	var err error
 
 	switch lease.Status {

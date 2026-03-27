@@ -15,18 +15,20 @@ import (
 // the disk controller creates a disk_volume and needs to know when the
 // volume controller finishes provisioning it.
 type DiskVolumeWatchController struct {
-	Log *slog.Logger
-	EAC *entityserver_v1alpha.EntityAccessClient
+	Log    *slog.Logger
+	EAC    *entityserver_v1alpha.EntityAccessClient
+	NodeId string
 
 	DiskController *controller.ReconcileController
 }
 
 // NewDiskVolumeWatchController creates a new disk volume watch controller.
-func NewDiskVolumeWatchController(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, diskController *controller.ReconcileController) *DiskVolumeWatchController {
+func NewDiskVolumeWatchController(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, diskController *controller.ReconcileController, nodeId string) *DiskVolumeWatchController {
 	return &DiskVolumeWatchController{
 		Log:            log.With("module", "disk-volume-watch"),
 		EAC:            eac,
 		DiskController: diskController,
+		NodeId:         nodeId,
 	}
 }
 
@@ -39,6 +41,9 @@ func (v *DiskVolumeWatchController) Create(ctx context.Context, vol *storage_v1a
 }
 
 func (v *DiskVolumeWatchController) Update(ctx context.Context, vol *storage_v1alpha.DiskVolume, meta *entity.Meta) error {
+	if vol.NodeId != "" && vol.NodeId != entity.Id("node/"+v.NodeId) {
+		return nil
+	}
 	if vol.DiskId == "" {
 		return nil
 	}

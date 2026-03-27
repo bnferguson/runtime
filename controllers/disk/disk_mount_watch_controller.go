@@ -15,18 +15,20 @@ import (
 // the disk lease controller creates a disk_mount and needs to know when the
 // mount controller finishes mounting it.
 type DiskMountWatchController struct {
-	Log *slog.Logger
-	EAC *entityserver_v1alpha.EntityAccessClient
+	Log    *slog.Logger
+	EAC    *entityserver_v1alpha.EntityAccessClient
+	NodeId string
 
 	LeaseController *controller.ReconcileController
 }
 
 // NewDiskMountWatchController creates a new disk mount watch controller.
-func NewDiskMountWatchController(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, leaseController *controller.ReconcileController) *DiskMountWatchController {
+func NewDiskMountWatchController(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, leaseController *controller.ReconcileController, nodeId string) *DiskMountWatchController {
 	return &DiskMountWatchController{
 		Log:             log.With("module", "disk-mount-watch"),
 		EAC:             eac,
 		LeaseController: leaseController,
+		NodeId:          nodeId,
 	}
 }
 
@@ -39,6 +41,10 @@ func (m *DiskMountWatchController) Create(ctx context.Context, mount *storage_v1
 }
 
 func (m *DiskMountWatchController) Update(ctx context.Context, mount *storage_v1alpha.DiskMount, meta *entity.Meta) error {
+	// Only process mounts assigned to this node
+	if mount.NodeId != "" && mount.NodeId != entity.Id("node/"+m.NodeId) {
+		return nil
+	}
 	if mount.DiskLeaseId == "" {
 		return nil
 	}
