@@ -5,6 +5,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -151,8 +152,14 @@ func RunnerStart(ctx *Context, opts struct {
 		DiskMode:      cfg.DiskMode,
 	}
 
-	// Create resolver for network operations
-	resolver, _ := netresolve.NewLocalResolver()
+	// Create resolver for network operations and map cluster.local to the
+	// coordinator so the runner can pull images from the coordinator's registry.
+	resolver, hostMapper := netresolve.NewLocalResolver()
+	coordinatorHost, _, _ := net.SplitHostPort(cfg.CoordinatorAddress)
+	if addr, err := netip.ParseAddr(coordinatorHost); err == nil {
+		hostMapper.SetHost("cluster.local", addr)
+		ctx.Log.Info("mapped cluster.local to coordinator", "addr", addr)
+	}
 
 	// Build runner dependencies
 	// Note: Some deps like NetServ require entity access client which we get after connecting
