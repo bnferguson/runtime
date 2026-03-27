@@ -33,7 +33,7 @@ func (c *SandboxController) ConfigureVolumes(ctx context.Context, sb *compute.Sa
 				return nil, err
 			}
 			volumeMounts[volume.Name] = path
-		case "miren":
+		case "miren", "":
 			path, err := c.configureMirenVolume(ctx, sb, volume, meta)
 			if err != nil {
 				return nil, err
