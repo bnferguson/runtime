@@ -300,6 +300,9 @@ func (ac *AppConfig) Validate() error {
 			if disk.MountPath == "" {
 				return fmt.Errorf("service %s: disk[%d] (%s) must have a mount_path", serviceName, i, disk.Name)
 			}
+			if !filepath.IsAbs(disk.MountPath) {
+				return fmt.Errorf("service %s: disk[%d] (%s) mount_path must be an absolute path", serviceName, i, disk.Name)
+			}
 			if disk.Provider == "local" {
 				if disk.SizeGB != 0 {
 					return fmt.Errorf("service %s: disk[%d] (%s) size_gb is not supported for local disks", serviceName, i, disk.Name)
