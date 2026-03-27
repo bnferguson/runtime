@@ -937,6 +937,17 @@ func (l *Launcher) updatePool(ctx context.Context, poolWithEntity *PoolWithEntit
 		newAttrs = append(newAttrs, entity.Int64(compute_v1alpha.SandboxPoolReadyInstancesId, 0))
 	}
 
+	// Always include crash cooldown fields when zeroed (e.g. after deploy reset)
+	if pool.ConsecutiveCrashCount == 0 {
+		newAttrs = append(newAttrs, entity.Int64(compute_v1alpha.SandboxPoolConsecutiveCrashCountId, 0))
+	}
+	if pool.LastCrashTime.IsZero() {
+		newAttrs = append(newAttrs, entity.Time(compute_v1alpha.SandboxPoolLastCrashTimeId, time.Time{}))
+	}
+	if pool.CooldownUntil.IsZero() {
+		newAttrs = append(newAttrs, entity.Time(compute_v1alpha.SandboxPoolCooldownUntilId, time.Time{}))
+	}
+
 	// Build the final attribute list: metadata from existing + new pool attrs
 	finalAttrs := make([]entity.Attr, 0, len(ent.Attrs())+len(newAttrs))
 

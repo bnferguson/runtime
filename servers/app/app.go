@@ -496,7 +496,7 @@ func (r *AppInfo) Restart(ctx context.Context, state *app_v1alpha.CrudRestart) e
 	var configSpec *core_v1alpha.ConfigSpec
 	if appRec.ActiveVersion != "" {
 		var ver core_v1alpha.AppVersion
-		if err := r.EC.Get(ctx, appRec.ActiveVersion.String(), &ver); err != nil {
+		if err := r.EC.GetById(ctx, appRec.ActiveVersion, &ver); err != nil {
 			r.Log.Warn("failed to get active version, skipping desired instance restore",
 				"version", appRec.ActiveVersion, "error", err)
 		} else {
@@ -573,8 +573,17 @@ func (r *AppInfo) Restart(ctx context.Context, state *app_v1alpha.CrudRestart) e
 		}
 
 		// Restore DesiredInstances for fixed-mode pools that were capped to 1
-		// during crash cooldown
-		if configSpec != nil {
+		// during crash cooldown. Only do this for pools that reference the
+		// active version — stale pools from old deployments were intentionally
+		// scaled to 0 and should not be resurrected.
+		isActivePool := false
+		for _, ref := range pool.ReferencedByVersions {
+			if ref == appRec.ActiveVersion {
+				isActivePool = true
+				break
+			}
+		}
+		if isActivePool && configSpec != nil {
 			svcConc, err := coreutil.GetServiceConcurrency(configSpec, pool.Service)
 			if err == nil && svcConc.Mode == "fixed" && svcConc.NumInstances > 0 {
 				if pool.DesiredInstances != svcConc.NumInstances {
