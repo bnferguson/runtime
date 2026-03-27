@@ -44,8 +44,9 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 
 	// Setup runner config
 	runnerCfg := RunnerConfig{
-		Id:      "test-runner",
-		Workers: 2,
+		Id:            "test-runner",
+		ListenAddress: "localhost:0",
+		Workers:       2,
 	}
 
 	// Create contexts

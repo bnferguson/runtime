@@ -72,18 +72,18 @@ func RunnerStart(ctx *Context, opts struct {
 		)
 
 		if releasePath := FindReleasePath(); releasePath != "" {
-			binDir = releasePath
-			containerdBinary = filepath.Join(releasePath, "containerd")
-		} else {
+			candidate := filepath.Join(releasePath, "containerd")
+			if _, err := os.Stat(candidate); err == nil {
+				binDir = releasePath
+				containerdBinary = candidate
+			}
+		}
+		if containerdBinary == "" {
 			var err error
 			containerdBinary, err = exec.LookPath("containerd")
 			if err != nil {
 				return fmt.Errorf("containerd binary not found in PATH or release directory: %w", err)
 			}
-		}
-
-		if _, err := os.Stat(containerdBinary); err != nil {
-			return fmt.Errorf("containerd binary not found at %s: %w", containerdBinary, err)
 		}
 
 		containerdComponent := containerdcomp.NewContainerdComponent(ctx.Log, opts.DataPath)
@@ -142,13 +142,12 @@ func RunnerStart(ctx *Context, opts struct {
 	listenAddr := opts.ListenAddr
 	if listenAddr == "" {
 		port := "8444"
-		if ip, err := discoverOutboundIP(cfg.CoordinatorAddress); err == nil {
-			listenAddr = net.JoinHostPort(ip.String(), port)
-			ctx.Log.Info("discovered listen address", "addr", listenAddr)
-		} else {
-			listenAddr = ":" + port
-			ctx.Log.Warn("could not discover outbound IP, using bind-all address", "addr", listenAddr, "error", err)
+		ip, err := discoverOutboundIP(cfg.CoordinatorAddress)
+		if err != nil {
+			return fmt.Errorf("could not discover outbound IP for listen address (use --listen to set manually): %w", err)
 		}
+		listenAddr = net.JoinHostPort(ip.String(), port)
+		ctx.Log.Info("discovered listen address", "addr", listenAddr)
 	}
 
 	// Build runner configuration
@@ -276,5 +275,9 @@ func discoverOutboundIP(remoteAddr string) (netip.Addr, error) {
 	if !ok {
 		return netip.Addr{}, fmt.Errorf("unexpected local address type")
 	}
-	return netip.AddrFrom4([4]byte(addr.IP.To4())), nil
+	ip4 := addr.IP.To4()
+	if ip4 == nil {
+		return netip.Addr{}, fmt.Errorf("discovered non-IPv4 address: %s", addr.IP)
+	}
+	return netip.AddrFrom4([4]byte(ip4)), nil
 }

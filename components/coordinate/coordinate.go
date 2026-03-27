@@ -209,8 +209,16 @@ func SetupEtcdTLS(log *slog.Logger, dataPath string, extraDNSNames []string, ext
 						"server_expires", existing.NotAfter.Format(time.RFC3339),
 						"sans_ips", existing.IPAddresses)
 
-					clientPEM, _ := os.ReadFile(clientCertFile)
-					clientKey, _ := os.ReadFile(clientKeyFile)
+					clientPEM, err := os.ReadFile(clientCertFile)
+					if err != nil {
+						log.Info("etcd client cert unreadable, regenerating", "error", err)
+						goto regenerate
+					}
+					clientKey, err := os.ReadFile(clientKeyFile)
+					if err != nil {
+						log.Info("etcd client key unreadable, regenerating", "error", err)
+						goto regenerate
+					}
 					caCert := ca.GetCACertificate()
 
 					return &EtcdTLSSetupResult{
@@ -231,6 +239,7 @@ func SetupEtcdTLS(log *slog.Logger, dataPath string, extraDNSNames []string, ext
 		}
 	}
 
+regenerate:
 	log.Info("generating etcd TLS certificates", "dns_names", dnsNames, "ips", ips)
 
 	// Issue etcd server certificate
