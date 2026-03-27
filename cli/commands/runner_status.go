@@ -24,15 +24,14 @@ func RunnerStatus(ctx *Context, opts struct {
 	}
 
 	ctx.Printf("Runner ID:    %s\n", cfg.RunnerID)
-	ctx.Printf("Coordinator:  %s\n", cfg.CoordinatorAddress)
 
 	// Check coordinator reachability
 	conn, err := net.DialTimeout("tcp", cfg.CoordinatorAddress, 3*time.Second)
 	if err != nil {
-		ctx.Printf("Coordinator:  unreachable (%s)\n", err)
+		ctx.Printf("Coordinator:  %s (unreachable)\n", cfg.CoordinatorAddress)
 	} else {
 		conn.Close()
-		ctx.Printf("Coordinator:  reachable\n")
+		ctx.Printf("Coordinator:  %s (reachable)\n", cfg.CoordinatorAddress)
 	}
 
 	// Check containerd

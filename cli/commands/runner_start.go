@@ -276,5 +276,9 @@ func discoverOutboundIP(remoteAddr string) (netip.Addr, error) {
 	if !ok {
 		return netip.Addr{}, fmt.Errorf("unexpected local address type")
 	}
-	return netip.AddrFrom4([4]byte(addr.IP.To4())), nil
+	ip4 := addr.IP.To4()
+	if ip4 == nil {
+		return netip.Addr{}, fmt.Errorf("discovered non-IPv4 address: %s", addr.IP)
+	}
+	return netip.AddrFrom4([4]byte(ip4)), nil
 }
