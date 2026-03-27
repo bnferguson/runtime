@@ -1,44 +1,46 @@
 
 # Persistent Storage
 
-Miren provides two options for persistent storage: **Local Shared Storage** (recommended for most use cases) and **Miren Disks** (experimental, for advanced scenarios).
+Miren provides two options for persistent storage: **Local Storage** (simple, node-local) and **Miren Disks** (experimental, cloud-synced). Both are configured as disks in your `app.toml`.
 
-## Local Shared Storage
+## Local Storage
 
-Every Miren app automatically gets persistent storage at `/miren/data/local`. This is the simplest way to persist data across restarts and deployments.
+Local storage gives your app a persistent directory on the server's filesystem. Data survives container restarts and redeployments.
+
+### Configuration
+
+Add a disk with `provider = "local"` to your service in `.miren/app.toml`:
+
+```toml
+[services.web]
+command = "node server.js"
+
+[[services.web.disks]]
+name = "data"
+provider = "local"
+mount_path = "/miren/data/local"
+```
+
+You can mount to any path — for example, directly to a database's data directory:
+
+```toml
+[services.db]
+image = "postgres:16"
+
+[[services.db.disks]]
+name = "pgdata"
+provider = "local"
+mount_path = "/var/lib/postgresql/data"
+```
 
 ### How It Works
 
-- **Automatic**: No configuration needed—just write to `/miren/data/local`
 - **Persistent**: Data survives container restarts and redeployments
 - **Shared**: All containers within your app share the same storage
 - **Host-local**: Data lives on the server's filesystem
+- **Node-pinned**: Apps with local storage are scheduled to the coordinator node
 
-### Example: SQLite Database
-
-```javascript
-const sqlite3 = require('sqlite3');
-const path = require('path');
-
-// Database persists at /miren/data/local/app.db
-const dbPath = path.join('/miren/data/local', 'app.db');
-const db = new sqlite3.Database(dbPath);
-```
-
-### Example: File Uploads
-
-```python
-import os
-
-UPLOAD_DIR = '/miren/data/local/uploads'
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-
-def save_upload(file):
-    path = os.path.join(UPLOAD_DIR, file.filename)
-    file.save(path)
-```
-
-### When to Use Local Shared Storage
+### When to Use Local Storage
 
 - SQLite databases
 - File uploads and user content
@@ -51,6 +53,13 @@ def save_upload(file):
 - **Host-local**: Data is tied to the server. If you move your app to a different server, you'll need to migrate the data manually.
 - **No automatic backups**: Unlike Miren Disks, local storage isn't replicated to Miren Cloud.
 - **Shared access**: All containers in your app can read/write simultaneously—your application needs to handle concurrent access (SQLite handles this well when configured with `PRAGMA journal_mode=WAL`).
+- **Node affinity**: Apps with any disk (local or miren) are pinned to the coordinator and won't be scheduled to distributed runners.
+
+### Migrating from Automatic Local Storage
+
+Previously, Miren automatically mounted `/miren/data/local` for every app. This is now opt-in via the disk config above.
+
+If any of your environment variables reference `/miren/data/local`, Miren will automatically add the local storage volume for you — so most apps will keep working without changes. You'll see a log message when this happens, and we recommend adding the explicit disk config when convenient.
 
 ---
 

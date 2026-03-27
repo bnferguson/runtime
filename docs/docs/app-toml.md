@@ -222,33 +222,38 @@ node_port = 7000
 
 ### `[[services.<name>.disks]]` — Persistent Disks {#disks}
 
-Attaches persistent storage to a service. See [Persistent Storage](/disks) for details on local shared storage vs. Miren Disks.
+Attaches persistent storage to a service. See [Persistent Storage](/disks) for details on local storage vs. Miren Disks.
 
 ```toml
+# Local storage (simple, node-local)
+[[services.web.disks]]
+name = "data"
+provider = "local"
+mount_path = "/miren/data/local"
+
+# Miren Disk (cloud-synced, experimental)
 [[services.db.disks]]
 name = "pgdata"
 mount_path = "/var/lib/postgresql/data"
 size_gb = 20
 filesystem = "ext4"
-read_only = false
-lease_timeout = "30s"
 ```
 
 | Field | Type | Description | Default |
 |-------|------|-------------|---------|
 | `name` | string | Unique disk name. **Required.** | — |
+| `provider` | string | `"miren"` for cloud-synced disks, `"local"` for node-local storage | `"miren"` |
 | `mount_path` | string | Mount point inside the container. **Required.** | — |
-| `size_gb` | int | Disk size in gigabytes (required for new disks, ignored for existing) | — |
-| `filesystem` | string | `"ext4"`, `"xfs"`, or `"btrfs"` | `"ext4"` |
+| `size_gb` | int | Disk size in gigabytes (required for new miren disks, ignored for local) | — |
+| `filesystem` | string | `"ext4"`, `"xfs"`, or `"btrfs"` (miren disks only) | `"ext4"` |
 | `read_only` | bool | Mount as read-only | `false` |
-| `lease_timeout` | duration | How long to wait when acquiring the exclusive disk lease | — |
+| `lease_timeout` | duration | How long to wait when acquiring the exclusive disk lease (miren disks only) | — |
 
 :::note Validation
 - `name` and `mount_path` are required.
-- `filesystem` must be `ext4`, `xfs`, or `btrfs`.
-- `size_gb` must be non-negative.
+- `provider` must be `"miren"` (default) or `"local"`.
+- For miren disks: `filesystem` must be `ext4`, `xfs`, or `btrfs`; `size_gb` must be non-negative; services **must** use `mode = "fixed"` and `num_instances = 1`.
 - `lease_timeout` must be a valid Go duration (e.g. `"30s"`, `"2m"`).
-- Services with disks **must** use `mode = "fixed"` and `num_instances = 1`.
 :::
 
 ## `[addons.<name>]` — Addons {#addons}

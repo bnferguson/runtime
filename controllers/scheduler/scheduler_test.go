@@ -456,7 +456,7 @@ func TestIsStatefulDetection(t *testing.T) {
 			expected: false,
 		},
 		{
-			name: "stateless - volume with different provider",
+			name: "stateful - volume with local provider",
 			sandbox: &compute_v1alpha.Sandbox{
 				Spec: compute_v1alpha.SandboxSpec{
 					Volume: []compute_v1alpha.SandboxSpecVolume{
@@ -464,7 +464,7 @@ func TestIsStatefulDetection(t *testing.T) {
 					},
 				},
 			},
-			expected: false,
+			expected: true,
 		},
 		{
 			name: "stateful - mixed volumes with one miren",

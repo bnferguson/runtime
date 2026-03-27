@@ -621,7 +621,15 @@ func (l *Launcher) buildSandboxSpec(
 	// Add disk volumes and mounts for this service
 	for _, svc := range cfgSpec.Services {
 		if svc.Name == serviceName {
-			if len(svc.Disks) > 0 {
+			// Check concurrency constraints for miren disk volumes
+			hasMirenDisks := false
+			for _, disk := range svc.Disks {
+				if disk.Provider == "" || disk.Provider == core_v1alpha.ConfigSpecServicesDisksMIREN {
+					hasMirenDisks = true
+					break
+				}
+			}
+			if hasMirenDisks {
 				svcConcurrency, err := coreutil.GetServiceConcurrency(cfgSpec, serviceName)
 				if err != nil {
 					return nil, fmt.Errorf("failed to get service concurrency: %w", err)
@@ -636,9 +644,14 @@ func (l *Launcher) buildSandboxSpec(
 			}
 
 			for _, disk := range svc.Disks {
+				provider := string(disk.Provider)
+				if provider == "" {
+					provider = "miren"
+				}
+
 				sbSpec.Volume = append(sbSpec.Volume, compute_v1alpha.SandboxSpecVolume{
 					Name:         disk.Name,
-					Provider:     "miren",
+					Provider:     provider,
 					DiskName:     disk.Name,
 					MountPath:    disk.MountPath,
 					ReadOnly:     disk.ReadOnly,
@@ -653,6 +666,35 @@ func (l *Launcher) buildSandboxSpec(
 				})
 			}
 			break
+		}
+	}
+
+	// Auto-add local storage volume if any env var references /miren/data/local
+	// but no local disk is explicitly configured. This eases migration from the
+	// old automatic mount behavior.
+	hasLocalDisk := false
+	for _, vol := range sbSpec.Volume {
+		if vol.Provider == "local" {
+			hasLocalDisk = true
+			break
+		}
+	}
+	if !hasLocalDisk {
+		for _, v := range envMap {
+			if strings.Contains(v, "/miren/data/local") {
+				l.Log.Info("auto-adding local storage volume (env var references /miren/data/local)",
+					"service", serviceName)
+				sbSpec.Volume = append(sbSpec.Volume, compute_v1alpha.SandboxSpecVolume{
+					Name:      "local-data",
+					Provider:  "local",
+					MountPath: "/miren/data/local",
+				})
+				appCont.Mount = append(appCont.Mount, compute_v1alpha.SandboxSpecContainerMount{
+					Source:      "local-data",
+					Destination: "/miren/data/local",
+				})
+				break
+			}
 		}
 	}
 

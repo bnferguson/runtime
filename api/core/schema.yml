@@ -178,7 +178,11 @@ kinds:
               attrs:
                 name:
                   type: string
-                  doc: The name of the disk entity to attach
+                  doc: The name of the disk
+                provider:
+                  type: enum
+                  choices: [miren, local]
+                  doc: "Disk provider: 'miren' (default) for network disks, 'local' for node-local persistent storage"
                 mount_path:
                   type: string
                   doc: The path inside the container where the disk will be mounted
@@ -503,7 +507,11 @@ components:
           attrs:
             name:
               type: string
-              doc: The name of the disk entity to attach
+              doc: The name of the disk
+            provider:
+              type: enum
+              choices: [miren, local]
+              doc: "Disk provider: 'miren' (default) for network disks, 'local' for node-local persistent storage"
             mount_path:
               type: string
               doc: The path inside the container where the disk will be mounted

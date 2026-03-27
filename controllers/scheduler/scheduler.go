@@ -124,24 +124,12 @@ func (c *Controller) Reconcile(ctx context.Context, sandbox *compute_v1alpha.San
 	return nil
 }
 
-// isStateful determines if a sandbox is stateful based on its volume configuration.
-// A sandbox is considered stateful if it has volumes with provider="miren" (disk volumes).
+// isStateful determines if a sandbox requires node affinity.
+// Any sandbox with volumes is considered stateful because all current volume
+// types (miren disks, local storage, host bind mounts) are node-local and
+// can't float between runners.
 func (c *Controller) isStateful(sandbox *compute_v1alpha.Sandbox) bool {
-	// Check volumes in spec (new-style sandboxes)
-	for _, vol := range sandbox.Spec.Volume {
-		if vol.Provider == "miren" {
-			return true
-		}
-	}
-
-	// Check legacy volume field (old-style sandboxes)
-	for _, vol := range sandbox.Volume {
-		if vol.Provider == "miren" {
-			return true
-		}
-	}
-
-	return false
+	return len(sandbox.Spec.Volume) > 0 || len(sandbox.Volume) > 0
 }
 
 // findCoordinatorNode finds the coordinator node among the available nodes.

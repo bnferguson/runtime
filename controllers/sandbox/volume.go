@@ -27,7 +27,13 @@ func (c *SandboxController) ConfigureVolumes(ctx context.Context, sb *compute.Sa
 				return nil, err
 			}
 			volumeMounts[volume.Name] = path
-		case "miren":
+		case "local":
+			path, err := c.configureLocalVolume(ctx, sb, volume)
+			if err != nil {
+				return nil, err
+			}
+			volumeMounts[volume.Name] = path
+		case "miren", "":
 			path, err := c.configureMirenVolume(ctx, sb, volume, meta)
 			if err != nil {
 				return nil, err
@@ -85,6 +91,39 @@ func (c *SandboxController) configureHostVolume(sb *compute.Sandbox, volume comp
 	}
 
 	return path, nil
+}
+
+func (c *SandboxController) configureLocalVolume(ctx context.Context, sb *compute.Sandbox, volume compute.SandboxSpecVolume) (string, error) {
+	if volume.MountPath == "" {
+		return "", fmt.Errorf("missing mount_path for local volume %q", volume.Name)
+	}
+
+	// Resolve app ID from sandbox version for per-app isolation
+	appKey := volume.Name
+	if sb.Spec.Version != "" {
+		res, err := c.EAC.Get(ctx, sb.Spec.Version.String())
+		if err != nil {
+			return "", fmt.Errorf("resolve app version %s for local volume %q: %w", sb.Spec.Version, volume.Name, err)
+		}
+		var appVer core_v1alpha.AppVersion
+		appVer.Decode(res.Entity().Entity())
+		if appVer.App == "" {
+			return "", fmt.Errorf("app version %s has empty app reference for local volume %q", sb.Spec.Version, volume.Name)
+		}
+		appKey = appVer.App.String()
+	}
+
+	localPath := filepath.Join(c.DataPath, "data", "local", appKey)
+	if err := os.MkdirAll(localPath, 0777); err != nil {
+		return "", fmt.Errorf("failed to create local storage directory: %w", err)
+	}
+	// Explicitly chmod since MkdirAll respects umask
+	if err := os.Chmod(localPath, 0777); err != nil {
+		c.Log.Warn("failed to set permissions on local storage directory", "path", localPath, "error", err)
+	}
+
+	c.Log.Info("configured local storage volume", "volume", volume.Name, "path", localPath)
+	return localPath, nil
 }
 
 func (c *SandboxController) configureMirenVolume(ctx context.Context, sb *compute.Sandbox, volume compute.SandboxSpecVolume, meta *entity.Meta) (string, error) {

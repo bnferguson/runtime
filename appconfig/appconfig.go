@@ -40,9 +40,12 @@ type ServiceConcurrencyConfig struct {
 	ShutdownTimeout     string `toml:"shutdown_timeout"` // e.g. "10s", "30s" - time to wait for graceful shutdown
 }
 
-// DiskConfig represents a disk attachment for a service
+// DiskConfig represents a disk attachment for a service.
+// Provider defaults to "miren" (network disk) when empty.
+// Use provider = "local" for node-local persistent storage.
 type DiskConfig struct {
 	Name         string `toml:"name"`
+	Provider     string `toml:"provider"`
 	MountPath    string `toml:"mount_path"`
 	ReadOnly     bool   `toml:"read_only"`
 	SizeGB       int    `toml:"size_gb"`
@@ -283,24 +286,34 @@ func (ac *AppConfig) Validate() error {
 		}
 
 		// Validate disk configurations
-		if len(svcConfig.Disks) > 0 {
-			// Services with disks must use fixed concurrency mode
-			if svcConfig.Concurrency == nil || svcConfig.Concurrency.Mode != "fixed" {
-				return fmt.Errorf("service %s: disks can only be attached to services with fixed concurrency mode", serviceName)
+		hasMirenDisks := false
+		for i, disk := range svcConfig.Disks {
+			if disk.Provider != "" && disk.Provider != "miren" && disk.Provider != "local" {
+				return fmt.Errorf("service %s: disk[%d] (%s) has invalid provider %q, must be \"miren\" or \"local\"", serviceName, i, disk.Name, disk.Provider)
 			}
-
-			// TODO: It's too unpredictable to allow multiple instances with disks for now
-			if svcConfig.Concurrency.NumInstances != 1 {
-				return fmt.Errorf("service %s: disks can only be attached to services with fixed concurrency mode and num_instances=1", serviceName)
+			if disk.Provider == "" || disk.Provider == "miren" {
+				hasMirenDisks = true
 			}
-
-			for i, disk := range svcConfig.Disks {
-				if disk.Name == "" {
-					return fmt.Errorf("service %s: disk[%d] must have a name", serviceName, i)
+			if disk.Name == "" {
+				return fmt.Errorf("service %s: disk[%d] must have a name", serviceName, i)
+			}
+			if disk.MountPath == "" {
+				return fmt.Errorf("service %s: disk[%d] (%s) must have a mount_path", serviceName, i, disk.Name)
+			}
+			if !filepath.IsAbs(disk.MountPath) {
+				return fmt.Errorf("service %s: disk[%d] (%s) mount_path must be an absolute path", serviceName, i, disk.Name)
+			}
+			if disk.Provider == "local" {
+				if disk.SizeGB != 0 {
+					return fmt.Errorf("service %s: disk[%d] (%s) size_gb is not supported for local disks", serviceName, i, disk.Name)
 				}
-				if disk.MountPath == "" {
-					return fmt.Errorf("service %s: disk[%d] (%s) must have a mount_path", serviceName, i, disk.Name)
+				if disk.Filesystem != "" {
+					return fmt.Errorf("service %s: disk[%d] (%s) filesystem is not supported for local disks", serviceName, i, disk.Name)
 				}
+				if disk.LeaseTimeout != "" {
+					return fmt.Errorf("service %s: disk[%d] (%s) lease_timeout is not supported for local disks", serviceName, i, disk.Name)
+				}
+			} else {
 				if disk.Filesystem != "" && disk.Filesystem != "ext4" && disk.Filesystem != "xfs" && disk.Filesystem != "btrfs" {
 					return fmt.Errorf("service %s: disk[%d] (%s) has invalid filesystem %q, must be ext4, xfs, or btrfs", serviceName, i, disk.Name, disk.Filesystem)
 				}
@@ -312,6 +325,16 @@ func (ac *AppConfig) Validate() error {
 						return fmt.Errorf("service %s: disk[%d] (%s) invalid lease_timeout %q: %v", serviceName, i, disk.Name, disk.LeaseTimeout, err)
 					}
 				}
+			}
+		}
+
+		// Miren disks require fixed concurrency with a single instance
+		if hasMirenDisks {
+			if svcConfig.Concurrency == nil || svcConfig.Concurrency.Mode != "fixed" {
+				return fmt.Errorf("service %s: miren disks can only be attached to services with fixed concurrency mode", serviceName)
+			}
+			if svcConfig.Concurrency.NumInstances != 1 {
+				return fmt.Errorf("service %s: miren disks can only be attached to services with fixed concurrency mode and num_instances=1", serviceName)
 			}
 		}
 	}
