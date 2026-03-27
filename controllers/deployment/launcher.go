@@ -624,7 +624,7 @@ func (l *Launcher) buildSandboxSpec(
 			// Check concurrency constraints for miren disk volumes
 			hasMirenDisks := false
 			for _, disk := range svc.Disks {
-				if disk.Provider == "" || disk.Provider == "miren" {
+				if disk.Provider == "" || disk.Provider == core_v1alpha.ConfigSpecServicesDisksMIREN {
 					hasMirenDisks = true
 					break
 				}
@@ -644,7 +644,7 @@ func (l *Launcher) buildSandboxSpec(
 			}
 
 			for _, disk := range svc.Disks {
-				provider := disk.Provider
+				provider := string(disk.Provider)
 				if provider == "" {
 					provider = "miren"
 				}

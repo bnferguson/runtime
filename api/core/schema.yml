@@ -180,7 +180,8 @@ kinds:
                   type: string
                   doc: The name of the disk
                 provider:
-                  type: string
+                  type: enum
+                  choices: [miren, local]
                   doc: "Disk provider: 'miren' (default) for network disks, 'local' for node-local persistent storage"
                 mount_path:
                   type: string
@@ -508,7 +509,8 @@ components:
               type: string
               doc: The name of the disk
             provider:
-              type: string
+              type: enum
+              choices: [miren, local]
               doc: "Disk provider: 'miren' (default) for network disks, 'local' for node-local persistent storage"
             mount_path:
               type: string

@@ -102,13 +102,15 @@ func (c *SandboxController) configureLocalVolume(ctx context.Context, sb *comput
 	appKey := volume.Name
 	if sb.Spec.Version != "" {
 		res, err := c.EAC.Get(ctx, sb.Spec.Version.String())
-		if err == nil {
-			var appVer core_v1alpha.AppVersion
-			appVer.Decode(res.Entity().Entity())
-			if appVer.App != "" {
-				appKey = appVer.App.String()
-			}
+		if err != nil {
+			return "", fmt.Errorf("resolve app version %s for local volume %q: %w", sb.Spec.Version, volume.Name, err)
 		}
+		var appVer core_v1alpha.AppVersion
+		appVer.Decode(res.Entity().Entity())
+		if appVer.App == "" {
+			return "", fmt.Errorf("app version %s has empty app reference for local volume %q", sb.Spec.Version, volume.Name)
+		}
+		appKey = appVer.App.String()
 	}
 
 	localPath := filepath.Join(c.DataPath, "data", "local", appKey)

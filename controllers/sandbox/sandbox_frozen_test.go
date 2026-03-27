@@ -25,7 +25,7 @@ import (
 func TestSandboxControllerFrozen(t *testing.T) {
 	frozen := map[string]string{
 		"sandbox.go":  "15532b2466be230e3b450ed4602265bdc44db7c7985b4f7cfedb5aca76de8563",
-		"volume.go":   "28e668016a394c28cb9b6b8264d6e4a3e8e6d4b14176e57c4d98b76d9255f6f5",
+		"volume.go":   "557aa11271dce8d000fe8912bbcdb7407f91518742ae9b1a25f8d9bebf2ee926",
 		"firewall.go": "802cb47113ab3c3710451ded4c203922d750d3ab42124d92d31f7c62acc2e73c",
 	}
 
