@@ -35,6 +35,9 @@ type ContainerWatchdog struct {
 	EAC *entityserver_v1alpha.EntityAccessClient
 
 	Namespace string
+	// NodeId scopes sandbox lookups to this node so we only consider
+	// sandboxes that are scheduled here when building the valid set.
+	NodeId string
 	// CheckInterval is how often to check for orphaned containers
 	CheckInterval time.Duration
 	// GraceWindow is how long to wait before removing containers from non-running sandboxes
@@ -120,10 +123,10 @@ func (w *ContainerWatchdog) CleanupOrphanedContainers(ctx context.Context) (*Cle
 		return result, fmt.Errorf("failed to list containers: %w", err)
 	}
 
-	// Build a set of valid container IDs from Running sandboxes
+	// Build a set of valid container IDs from sandboxes scheduled to this node.
 	validContainers := make(map[string]bool)
 
-	resp, err := w.EAC.List(cleanupCtx, entity.Ref(entity.EntityKind, compute.KindSandbox))
+	resp, err := w.EAC.List(cleanupCtx, compute.Index(compute.KindSandbox, entity.Id("node/"+w.NodeId)))
 	if err != nil {
 		return result, fmt.Errorf("failed to list sandboxes: %w", err)
 	}

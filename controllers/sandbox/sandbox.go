@@ -280,8 +280,11 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
-	// List all sandboxes
-	resp, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, compute.KindSandbox))
+	// List sandboxes scheduled to this node only. Using the same node-scoped
+	// index as the controller watch (see runner.go) ensures we don't
+	// accidentally mark sandboxes on other nodes as unhealthy because their
+	// containers don't exist in our local containerd.
+	resp, err := c.EAC.List(ctx, compute.Index(compute.KindSandbox, entity.Id("node/"+c.NodeId)))
 	if err != nil {
 		return fmt.Errorf("failed to list sandboxes: %w", err)
 	}
@@ -435,6 +438,7 @@ func (c *SandboxController) Init(ctx context.Context) error {
 		CC:            c.CC,
 		EAC:           c.EAC,
 		Namespace:     c.Namespace,
+		NodeId:        c.NodeId,
 		CheckInterval: 5 * time.Minute,
 		Subnet:        c.Subnet,
 	}
@@ -2434,8 +2438,9 @@ func (c *SandboxController) ReleaseDiskLeases(ctx context.Context, sandboxID ent
 func (c *SandboxController) Periodic(ctx context.Context, timeHorizon time.Duration) error {
 	c.Log.Info("running periodic cleanup of dead sandboxes", "time_horizon", timeHorizon)
 
-	// List all sandboxes
-	resp, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, compute.KindSandbox))
+	// List sandboxes scheduled to this node only so we don't delete
+	// sandbox entities that belong to other runners.
+	resp, err := c.EAC.List(ctx, compute.Index(compute.KindSandbox, entity.Id("node/"+c.NodeId)))
 	if err != nil {
 		return fmt.Errorf("failed to list sandboxes: %w", err)
 	}
