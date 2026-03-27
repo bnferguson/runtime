@@ -121,6 +121,28 @@ types:
       - name: current_version
         type: VersionInfo
         index: 2
+      - name: health
+        type: string
+        index: 3
+      - name: ready_instances
+        type: int32
+        index: 4
+      - name: desired_instances
+        type: int32
+        index: 5
+      - name: scaling_mode
+        type: string
+        index: 6
+      - name: routes
+        type: list
+        element: string
+        index: 7
+      - name: crash_count
+        type: int64
+        index: 8
+      - name: cooldown_seconds
+        type: int32
+        index: 9
 
   - type: CpuUsage
     fields:

@@ -556,9 +556,16 @@ func (v *VersionInfo) UnmarshalJSON(data []byte) error {
 }
 
 type appInfoData struct {
-	Name           *string             `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
-	CreatedAt      *standard.Timestamp `cbor:"1,keyasint,omitempty" json:"created_at,omitempty"`
-	CurrentVersion *VersionInfo        `cbor:"2,keyasint,omitempty" json:"current_version,omitempty"`
+	Name             *string             `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+	CreatedAt        *standard.Timestamp `cbor:"1,keyasint,omitempty" json:"created_at,omitempty"`
+	CurrentVersion   *VersionInfo        `cbor:"2,keyasint,omitempty" json:"current_version,omitempty"`
+	Health           *string             `cbor:"3,keyasint,omitempty" json:"health,omitempty"`
+	ReadyInstances   *int32              `cbor:"4,keyasint,omitempty" json:"ready_instances,omitempty"`
+	DesiredInstances *int32              `cbor:"5,keyasint,omitempty" json:"desired_instances,omitempty"`
+	ScalingMode      *string             `cbor:"6,keyasint,omitempty" json:"scaling_mode,omitempty"`
+	Routes           *[]string           `cbor:"7,keyasint,omitempty" json:"routes,omitempty"`
+	CrashCount       *int64              `cbor:"8,keyasint,omitempty" json:"crash_count,omitempty"`
+	CooldownSeconds  *int32              `cbor:"9,keyasint,omitempty" json:"cooldown_seconds,omitempty"`
 }
 
 type AppInfo struct {
@@ -602,6 +609,112 @@ func (v *AppInfo) CurrentVersion() *VersionInfo {
 
 func (v *AppInfo) SetCurrentVersion(current_version *VersionInfo) {
 	v.data.CurrentVersion = current_version
+}
+
+func (v *AppInfo) HasHealth() bool {
+	return v.data.Health != nil
+}
+
+func (v *AppInfo) Health() string {
+	if v.data.Health == nil {
+		return ""
+	}
+	return *v.data.Health
+}
+
+func (v *AppInfo) SetHealth(health string) {
+	v.data.Health = &health
+}
+
+func (v *AppInfo) HasReadyInstances() bool {
+	return v.data.ReadyInstances != nil
+}
+
+func (v *AppInfo) ReadyInstances() int32 {
+	if v.data.ReadyInstances == nil {
+		return 0
+	}
+	return *v.data.ReadyInstances
+}
+
+func (v *AppInfo) SetReadyInstances(ready_instances int32) {
+	v.data.ReadyInstances = &ready_instances
+}
+
+func (v *AppInfo) HasDesiredInstances() bool {
+	return v.data.DesiredInstances != nil
+}
+
+func (v *AppInfo) DesiredInstances() int32 {
+	if v.data.DesiredInstances == nil {
+		return 0
+	}
+	return *v.data.DesiredInstances
+}
+
+func (v *AppInfo) SetDesiredInstances(desired_instances int32) {
+	v.data.DesiredInstances = &desired_instances
+}
+
+func (v *AppInfo) HasScalingMode() bool {
+	return v.data.ScalingMode != nil
+}
+
+func (v *AppInfo) ScalingMode() string {
+	if v.data.ScalingMode == nil {
+		return ""
+	}
+	return *v.data.ScalingMode
+}
+
+func (v *AppInfo) SetScalingMode(scaling_mode string) {
+	v.data.ScalingMode = &scaling_mode
+}
+
+func (v *AppInfo) HasRoutes() bool {
+	return v.data.Routes != nil
+}
+
+func (v *AppInfo) Routes() []string {
+	if v.data.Routes == nil {
+		return nil
+	}
+	return *v.data.Routes
+}
+
+func (v *AppInfo) SetRoutes(routes []string) {
+	x := slices.Clone(routes)
+	v.data.Routes = &x
+}
+
+func (v *AppInfo) HasCrashCount() bool {
+	return v.data.CrashCount != nil
+}
+
+func (v *AppInfo) CrashCount() int64 {
+	if v.data.CrashCount == nil {
+		return 0
+	}
+	return *v.data.CrashCount
+}
+
+func (v *AppInfo) SetCrashCount(crash_count int64) {
+	v.data.CrashCount = &crash_count
+}
+
+func (v *AppInfo) HasCooldownSeconds() bool {
+	return v.data.CooldownSeconds != nil
+}
+
+func (v *AppInfo) CooldownSeconds() int32 {
+	if v.data.CooldownSeconds == nil {
+		return 0
+	}
+	return *v.data.CooldownSeconds
+}
+
+func (v *AppInfo) SetCooldownSeconds(cooldown_seconds int32) {
+	v.data.CooldownSeconds = &cooldown_seconds
 }
 
 func (v *AppInfo) MarshalCBOR() ([]byte, error) {

@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	appclient "miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/app/app_v1alpha"
+	"miren.dev/runtime/api/compute/compute_v1alpha"
 	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
@@ -18,6 +20,7 @@ import (
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/pkg/ui"
 )
 
 // TODO: Removed broken go:generate directive - no rpc.yml file exists in servers/app/
@@ -96,35 +99,149 @@ func (r *AppInfo) List(ctx context.Context, state *app_v1alpha.CrudList) error {
 		return err
 	}
 
-	var ai []*app_v1alpha.AppInfo
+	// Collect apps and resolve their active versions
+	type appEntry struct {
+		name          string
+		app           core_v1alpha.App
+		activeVersion *core_v1alpha.AppVersion
+	}
+
+	var apps []appEntry
+	specMap := make(map[string]*core_v1alpha.ConfigSpec)
 
 	for list.Next() {
 		var app core_v1alpha.App
 		list.Read(&app)
-
 		md := list.Metadata()
 
-		var a app_v1alpha.AppInfo
-
-		a.SetName(md.Name)
-		//a.SetCreatedAt(standard.ToTimestamp(list.Entity().CreatedAt))
+		entry := appEntry{name: md.Name, app: app}
 
 		if app.ActiveVersion != "" {
 			var appVer core_v1alpha.AppVersion
-			err = r.EC.GetById(ctx, app.ActiveVersion, &appVer)
-			if err != nil {
-				return err
+			if err := r.EC.GetById(ctx, app.ActiveVersion, &appVer); err == nil {
+				entry.activeVersion = &appVer
+				if resolvedCfg, err := coreutil.ResolveConfig(ctx, r.EC.EAC(), &appVer); err == nil {
+					specMap[appVer.ID.String()] = resolvedCfg
+				}
 			}
+		}
 
+		apps = append(apps, entry)
+	}
+
+	// Aggregate sandbox pool state per app
+	type appPoolState struct {
+		ready        int
+		desired      int
+		inCooldown   bool
+		crashCount   int64
+		cooldownLeft time.Duration
+		isAutoscale  bool
+	}
+	poolStateMap := make(map[string]*appPoolState)
+
+	poolList, err := r.EC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool))
+	if err != nil {
+		return err
+	}
+
+	now := time.Now()
+	for poolList.Next() {
+		var pool compute_v1alpha.SandboxPool
+		poolList.Read(&pool)
+
+		appName := ui.CleanEntityID(pool.App.String())
+		if poolStateMap[appName] == nil {
+			poolStateMap[appName] = &appPoolState{isAutoscale: true}
+		}
+		ps := poolStateMap[appName]
+		ps.ready += int(pool.ReadyInstances)
+		ps.desired += int(pool.DesiredInstances)
+		if !pool.CooldownUntil.IsZero() && pool.CooldownUntil.After(now) {
+			ps.inCooldown = true
+			ps.crashCount = pool.ConsecutiveCrashCount
+			ps.cooldownLeft = pool.CooldownUntil.Sub(now)
+		}
+
+		if spec, ok := specMap[pool.SandboxSpec.Version.String()]; ok {
+			for _, svc := range spec.Services {
+				if svc.Name == pool.Service && svc.Concurrency.Mode == "fixed" {
+					ps.isAutoscale = false
+				}
+			}
+		}
+	}
+
+	// Collect routes per app
+	routeMap := make(map[string][]string)
+
+	routeList, err := r.EC.List(ctx, entity.Ref(entity.EntityKind, ingress_v1alpha.KindHttpRoute))
+	if err != nil {
+		return err
+	}
+
+	for routeList.Next() {
+		var route ingress_v1alpha.HttpRoute
+		routeList.Read(&route)
+
+		appName := ui.CleanEntityID(route.App.String())
+		if route.Host != "" {
+			routeMap[appName] = append(routeMap[appName], route.Host)
+		} else if route.Default {
+			routeMap[appName] = append(routeMap[appName], "")
+		}
+	}
+
+	// Build response
+	var results []*app_v1alpha.AppInfo
+
+	for _, entry := range apps {
+		var a app_v1alpha.AppInfo
+		a.SetName(entry.name)
+
+		if entry.activeVersion != nil {
 			var vi app_v1alpha.VersionInfo
-			vi.SetVersion(appVer.Version)
+			vi.SetVersion(entry.activeVersion.Version)
 			a.SetCurrentVersion(&vi)
 		}
 
-		ai = append(ai, &a)
+		// Pool state → health, instances, scaling
+		if ps, ok := poolStateMap[entry.name]; ok {
+			a.SetReadyInstances(int32(ps.ready))
+			a.SetDesiredInstances(int32(ps.desired))
+
+			if ps.isAutoscale {
+				a.SetScalingMode("auto")
+			} else {
+				a.SetScalingMode("fixed")
+			}
+
+			if ps.inCooldown {
+				a.SetHealth("crashed")
+				a.SetCrashCount(ps.crashCount)
+				a.SetCooldownSeconds(int32(ps.cooldownLeft.Seconds()))
+			} else if ps.desired == 0 {
+				a.SetHealth("idle")
+			} else if ps.ready == ps.desired {
+				a.SetHealth("healthy")
+			} else if ps.ready > 0 {
+				a.SetHealth("degraded")
+			} else {
+				a.SetHealth("starting")
+			}
+		} else {
+			a.SetHealth("unknown")
+		}
+
+		// Routes
+		if routes, ok := routeMap[entry.name]; ok {
+			a.SetRoutes(routes)
+		}
+
+		results = append(results, &a)
 	}
 
-	state.Results().SetApps(ai)
+	state.Results().SetApps(results)
 
 	return nil
 }
