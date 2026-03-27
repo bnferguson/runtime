@@ -452,6 +452,18 @@ interfaces:
           - name: deletedSource
             type: string
             doc: "The source of the deleted variable (config or manual)"
+      - name: restart
+        parameters:
+          - name: app
+            type: string
+          - name: service
+            type: string
+            doc: "Optional service name to restart only a specific service. Empty restarts all services."
+        results:
+          - name: restarted_pools
+            type: int32
+          - name: stopped_sandboxes
+            type: int32
 
   - name: UserQuery
     methods:

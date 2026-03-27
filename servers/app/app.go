@@ -598,6 +598,145 @@ func (r *AppInfo) DeleteEnvVar(ctx context.Context, state *app_v1alpha.CrudDelet
 	return nil
 }
 
+func (r *AppInfo) Restart(ctx context.Context, state *app_v1alpha.CrudRestart) error {
+	args := state.Args()
+	name := args.App()
+	service := args.Service()
+
+	var appRec core_v1alpha.App
+	if err := r.EC.Get(ctx, name, &appRec); err != nil {
+		return fmt.Errorf("app %q not found: %w", name, err)
+	}
+
+	// Resolve the config to restore DesiredInstances for fixed-mode pools.
+	// During crash cooldown the pool manager resets DesiredInstances to 1;
+	// we need to restore the configured value so fixed-mode pools come back
+	// at the right scale.
+	var configSpec *core_v1alpha.ConfigSpec
+	if appRec.ActiveVersion != "" {
+		var ver core_v1alpha.AppVersion
+		if err := r.EC.GetById(ctx, appRec.ActiveVersion, &ver); err != nil {
+			r.Log.Warn("failed to get active version, skipping desired instance restore",
+				"version", appRec.ActiveVersion, "error", err)
+		} else {
+			spec, err := coreutil.ResolveConfig(ctx, r.EC.EAC(), &ver)
+			if err != nil {
+				r.Log.Warn("failed to resolve config, skipping desired instance restore", "error", err)
+			} else {
+				configSpec = spec
+			}
+		}
+	}
+
+	// Find all sandbox pools for this app
+	poolList, err := r.EC.List(ctx, entity.Ref(compute_v1alpha.SandboxPoolAppId, appRec.ID))
+	if err != nil {
+		return fmt.Errorf("listing pools: %w", err)
+	}
+
+	var restartedPools int32
+	var stoppedSandboxes int32
+
+	for poolList.Next() {
+		var pool compute_v1alpha.SandboxPool
+		if err := poolList.Read(&pool); err != nil {
+			continue
+		}
+
+		// Filter by service if specified
+		if service != "" && pool.Service != service {
+			continue
+		}
+
+		// Find and stop all RUNNING/PENDING sandboxes for this pool
+		sbList, err := r.EC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox))
+		if err != nil {
+			r.Log.Warn("failed to list sandboxes", "pool", pool.ID, "error", err)
+			continue
+		}
+
+		for sbList.Next() {
+			var sb compute_v1alpha.Sandbox
+			if err := sbList.Read(&sb); err != nil {
+				continue
+			}
+
+			// Filter by pool label
+			md := sbList.Metadata()
+			if md == nil {
+				continue
+			}
+			poolLabel, _ := md.Labels.Get("pool")
+			if poolLabel != pool.ID.String() {
+				continue
+			}
+
+			if sb.Status != compute_v1alpha.RUNNING && sb.Status != compute_v1alpha.PENDING {
+				continue
+			}
+
+			if err := r.EC.Patch(ctx, sb.ID, 0,
+				entity.Ref(compute_v1alpha.SandboxStatusId, entity.Id(compute_v1alpha.STOPPED)),
+			); err != nil {
+				r.Log.Warn("failed to stop sandbox", "sandbox", sb.ID, "error", err)
+				continue
+			}
+			stoppedSandboxes++
+		}
+
+		// Build patch attrs: always reset crash cooldown fields
+		patchAttrs := []entity.Attr{
+			entity.Int64(compute_v1alpha.SandboxPoolConsecutiveCrashCountId, 0),
+			entity.Time(compute_v1alpha.SandboxPoolLastCrashTimeId, time.Time{}),
+			entity.Time(compute_v1alpha.SandboxPoolCooldownUntilId, time.Time{}),
+		}
+
+		// Restore DesiredInstances for fixed-mode pools that were capped to 1
+		// during crash cooldown. Only do this for pools that reference the
+		// active version — stale pools from old deployments were intentionally
+		// scaled to 0 and should not be resurrected.
+		isActivePool := false
+		for _, ref := range pool.ReferencedByVersions {
+			if ref == appRec.ActiveVersion {
+				isActivePool = true
+				break
+			}
+		}
+		if isActivePool && configSpec != nil {
+			svcConc, err := coreutil.GetServiceConcurrency(configSpec, pool.Service)
+			if err == nil && svcConc.Mode == "fixed" && svcConc.NumInstances > 0 {
+				if pool.DesiredInstances != svcConc.NumInstances {
+					patchAttrs = append(patchAttrs,
+						entity.Int64(compute_v1alpha.SandboxPoolDesiredInstancesId, svcConc.NumInstances))
+				}
+			}
+		}
+
+		if err := r.EC.Patch(ctx, pool.ID, 0, patchAttrs...); err != nil {
+			r.Log.Warn("failed to patch pool", "pool", pool.ID, "error", err)
+		}
+
+		restartedPools++
+	}
+
+	if restartedPools == 0 {
+		if service != "" {
+			return fmt.Errorf("no pools found for service %q of app %q", service, name)
+		}
+		return fmt.Errorf("no pools found for app %q", name)
+	}
+
+	r.Log.Info("app restarted",
+		"app", name,
+		"service", service,
+		"pools", restartedPools,
+		"sandboxes_stopped", stoppedSandboxes)
+
+	state.Results().SetRestartedPools(restartedPools)
+	state.Results().SetStoppedSandboxes(stoppedSandboxes)
+	return nil
+}
+
 // createConfigVersion creates a ConfigVersion entity from a ConfigSpec.
 func (r *AppInfo) createConfigVersion(ctx context.Context, spec *core_v1alpha.ConfigSpec, appID entity.Id, versionName string) (entity.Id, error) {
 	configVer := &core_v1alpha.ConfigVersion{

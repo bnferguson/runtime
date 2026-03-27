@@ -2547,6 +2547,88 @@ func (v *CrudDeleteEnvVarResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type crudRestartArgsData struct {
+	App     *string `cbor:"0,keyasint,omitempty" json:"app,omitempty"`
+	Service *string `cbor:"1,keyasint,omitempty" json:"service,omitempty"`
+}
+
+type CrudRestartArgs struct {
+	call rpc.Call
+	data crudRestartArgsData
+}
+
+func (v *CrudRestartArgs) HasApp() bool {
+	return v.data.App != nil
+}
+
+func (v *CrudRestartArgs) App() string {
+	if v.data.App == nil {
+		return ""
+	}
+	return *v.data.App
+}
+
+func (v *CrudRestartArgs) HasService() bool {
+	return v.data.Service != nil
+}
+
+func (v *CrudRestartArgs) Service() string {
+	if v.data.Service == nil {
+		return ""
+	}
+	return *v.data.Service
+}
+
+func (v *CrudRestartArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *CrudRestartArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *CrudRestartArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *CrudRestartArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type crudRestartResultsData struct {
+	RestartedPools   *int32 `cbor:"0,keyasint,omitempty" json:"restarted_pools,omitempty"`
+	StoppedSandboxes *int32 `cbor:"1,keyasint,omitempty" json:"stopped_sandboxes,omitempty"`
+}
+
+type CrudRestartResults struct {
+	call rpc.Call
+	data crudRestartResultsData
+}
+
+func (v *CrudRestartResults) SetRestartedPools(restarted_pools int32) {
+	v.data.RestartedPools = &restarted_pools
+}
+
+func (v *CrudRestartResults) SetStoppedSandboxes(stopped_sandboxes int32) {
+	v.data.StoppedSandboxes = &stopped_sandboxes
+}
+
+func (v *CrudRestartResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *CrudRestartResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *CrudRestartResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *CrudRestartResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type CrudNew struct {
 	rpc.Call
 	args    CrudNewArgs
@@ -2781,6 +2863,32 @@ func (t *CrudDeleteEnvVar) Results() *CrudDeleteEnvVarResults {
 	return results
 }
 
+type CrudRestart struct {
+	rpc.Call
+	args    CrudRestartArgs
+	results CrudRestartResults
+}
+
+func (t *CrudRestart) Args() *CrudRestartArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *CrudRestart) Results() *CrudRestartResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type Crud interface {
 	New(ctx context.Context, state *CrudNew) error
 	SetConfiguration(ctx context.Context, state *CrudSetConfiguration) error
@@ -2791,6 +2899,7 @@ type Crud interface {
 	SetEnvVar(ctx context.Context, state *CrudSetEnvVar) error
 	SetEnvVars(ctx context.Context, state *CrudSetEnvVars) error
 	DeleteEnvVar(ctx context.Context, state *CrudDeleteEnvVar) error
+	Restart(ctx context.Context, state *CrudRestart) error
 }
 
 type reexportCrud struct {
@@ -2830,6 +2939,10 @@ func (reexportCrud) SetEnvVars(ctx context.Context, state *CrudSetEnvVars) error
 }
 
 func (reexportCrud) DeleteEnvVar(ctx context.Context, state *CrudDeleteEnvVar) error {
+	panic("not implemented")
+}
+
+func (reexportCrud) Restart(ctx context.Context, state *CrudRestart) error {
 	panic("not implemented")
 }
 
@@ -2918,6 +3031,15 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.DeleteEnvVar(ctx, &CrudDeleteEnvVar{Call: call})
+			},
+		},
+		{
+			Name:          "restart",
+			InterfaceName: "Crud",
+			Index:         0,
+			Public:        false,
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.Restart(ctx, &CrudRestart{Call: call})
 			},
 		},
 	}
@@ -3212,6 +3334,48 @@ func (v CrudClient) DeleteEnvVar(ctx context.Context, app string, key string, se
 	}
 
 	return &CrudClientDeleteEnvVarResults{client: v.Client, data: ret}, nil
+}
+
+type CrudClientRestartResults struct {
+	client rpc.Client
+	data   crudRestartResultsData
+}
+
+func (v *CrudClientRestartResults) HasRestartedPools() bool {
+	return v.data.RestartedPools != nil
+}
+
+func (v *CrudClientRestartResults) RestartedPools() int32 {
+	if v.data.RestartedPools == nil {
+		return 0
+	}
+	return *v.data.RestartedPools
+}
+
+func (v *CrudClientRestartResults) HasStoppedSandboxes() bool {
+	return v.data.StoppedSandboxes != nil
+}
+
+func (v *CrudClientRestartResults) StoppedSandboxes() int32 {
+	if v.data.StoppedSandboxes == nil {
+		return 0
+	}
+	return *v.data.StoppedSandboxes
+}
+
+func (v CrudClient) Restart(ctx context.Context, app string, service string) (*CrudClientRestartResults, error) {
+	args := CrudRestartArgs{}
+	args.data.App = &app
+	args.data.Service = &service
+
+	var ret crudRestartResultsData
+
+	err := v.Call(ctx, "restart", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CrudClientRestartResults{client: v.Client, data: ret}, nil
 }
 
 type userQueryWhoAmIArgsData struct{}

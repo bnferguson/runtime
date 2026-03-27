@@ -241,6 +241,16 @@ miren deploy --analyze
 			Body: "miren app history --status active --limit 5",
 		}),
 	))
+	d.Dispatch("app restart", Infer("app restart", "Restart an application", AppRestart,
+		WithExample(mflags.Example{
+			Name: "Restart the current app",
+			Body: "miren app restart",
+		}),
+		WithExample(mflags.Example{
+			Name: "Restart a specific service",
+			Body: "miren app restart -s web",
+		}),
+	))
 	d.Dispatch("app delete", Infer("app delete", "Delete an application and all its resources", AppDelete,
 		WithExample(mflags.Example{
 			Name: "Delete an app (with confirmation prompt)",

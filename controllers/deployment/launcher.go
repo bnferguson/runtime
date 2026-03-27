@@ -358,6 +358,18 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 			needsUpdate = true
 		}
 
+		// A deploy is an explicit operator action — reset crash cooldown so
+		// stale backoff from a previous version doesn't block the new one.
+		if poolWithEntity.Pool.ConsecutiveCrashCount > 0 || !poolWithEntity.Pool.CooldownUntil.IsZero() {
+			l.Log.Info("resetting crash cooldown on pool reuse",
+				"pool", poolWithEntity.Pool.ID,
+				"previous_crash_count", poolWithEntity.Pool.ConsecutiveCrashCount)
+			poolWithEntity.Pool.ConsecutiveCrashCount = 0
+			poolWithEntity.Pool.LastCrashTime = time.Time{}
+			poolWithEntity.Pool.CooldownUntil = time.Time{}
+			needsUpdate = true
+		}
+
 		// For fixed mode services, update desired instances if they've changed
 		// For auto mode, the activator manages desired instances - don't touch it
 		if fixedMode && poolWithEntity.Pool.DesiredInstances != desiredInstances {
@@ -923,6 +935,17 @@ func (l *Launcher) updatePool(ctx context.Context, poolWithEntity *PoolWithEntit
 	// Always include ReadyInstances, even when 0
 	if pool.ReadyInstances == 0 {
 		newAttrs = append(newAttrs, entity.Int64(compute_v1alpha.SandboxPoolReadyInstancesId, 0))
+	}
+
+	// Always include crash cooldown fields when zeroed (e.g. after deploy reset)
+	if pool.ConsecutiveCrashCount == 0 {
+		newAttrs = append(newAttrs, entity.Int64(compute_v1alpha.SandboxPoolConsecutiveCrashCountId, 0))
+	}
+	if pool.LastCrashTime.IsZero() {
+		newAttrs = append(newAttrs, entity.Time(compute_v1alpha.SandboxPoolLastCrashTimeId, time.Time{}))
+	}
+	if pool.CooldownUntil.IsZero() {
+		newAttrs = append(newAttrs, entity.Time(compute_v1alpha.SandboxPoolCooldownUntilId, time.Time{}))
 	}
 
 	// Build the final attribute list: metadata from existing + new pool attrs
