@@ -209,6 +209,10 @@ func (c *Client) Create(ctx context.Context, name string, sc SchemaEncoder, opts
 // CreateOrReplace creates a new entity or fully replaces an existing one.
 // Unlike CreateOrUpdate which merges attrs (appending to "many" component
 // fields), this method replaces all attrs atomically when the entity exists.
+// Note: not safe for concurrent use on the same entity — the Replace will
+// fail with a revision mismatch if another writer updates between Get and
+// Replace. This is fine for startup-time initialization but callers needing
+// concurrent safety should add retry logic.
 func (c *Client) CreateOrReplace(ctx context.Context, name string, sc SchemaEncoder, opts ...CreateOptions) (entity.Id, error) {
 	var op createOp
 	for _, opt := range opts {
