@@ -114,9 +114,13 @@ func AllocateOnBridge(name string, subnet *netdb.Subnet) (*EndpointConfig, error
 	return ec, nil
 }
 
-func SetupOnBridge(name string, subnet *netdb.Subnet, prefix []netip.Prefix) (*EndpointConfig, error) {
+func SetupOnBridge(name string, subnet *netdb.Subnet, prefixes []netip.Prefix) (*EndpointConfig, error) {
 	if name == "" {
 		return nil, fmt.Errorf("bridge name must be provided")
+	}
+
+	if len(prefixes) == 0 {
+		return nil, fmt.Errorf("at least one prefix must be provided")
 	}
 
 	_, err := netlink.LinkByName(name)
@@ -126,13 +130,18 @@ func SetupOnBridge(name string, subnet *netdb.Subnet, prefix []netip.Prefix) (*E
 
 	bridge := subnet.Router()
 
-	ep, err := subnet.Reserve()
-	if err != nil {
-		return nil, err
+	// Re-reserve the provided IPs to ensure they are marked as allocated in the netdb
+	var addresses []netip.Prefix
+	for _, p := range prefixes {
+		if err := subnet.ReserveSpecificAddr(p.Addr()); err != nil {
+			return nil, fmt.Errorf("failed to re-reserve IP %s: %w", p.Addr(), err)
+		}
+		// Use the subnet's bit length for consistency
+		addresses = append(addresses, netip.PrefixFrom(p.Addr(), subnet.Prefix().Bits()))
 	}
 
 	ec := &EndpointConfig{
-		Addresses: []netip.Prefix{ep},
+		Addresses: addresses,
 		Bridge: &BridgeConfig{
 			Name:      name,
 			Addresses: []netip.Prefix{bridge},
