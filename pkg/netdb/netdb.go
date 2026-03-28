@@ -82,6 +82,10 @@ func New(path string) (*NetDB, error) {
 			name TEXT PRIMARY KEY,
 			reserved INTEGER DEFAULT 1
 		);
+		CREATE TABLE IF NOT EXISTS metadata (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL
+		);
 	`)
 	if err != nil {
 		return nil, err
@@ -111,6 +115,29 @@ func (n *NetDB) Subnet(cidr string) (*Subnet, error) {
 		db:    n.db,
 		net:   prefix,
 	}, nil
+}
+
+// GetLeasedSubnet returns the previously persisted flannel subnet lease, if any.
+// Returns an invalid prefix if no lease has been saved.
+func (n *NetDB) GetLeasedSubnet() netip.Prefix {
+	var value string
+	err := n.db.QueryRow("SELECT value FROM metadata WHERE key = 'leased_subnet'").Scan(&value)
+	if err != nil {
+		return netip.Prefix{}
+	}
+	prefix, err := netip.ParsePrefix(value)
+	if err != nil {
+		return netip.Prefix{}
+	}
+	return prefix
+}
+
+// SetLeasedSubnet persists the flannel subnet lease so it can be reused on restart.
+func (n *NetDB) SetLeasedSubnet(prefix netip.Prefix) error {
+	_, err := n.db.Exec(
+		"INSERT INTO metadata (key, value) VALUES ('leased_subnet', ?) ON CONFLICT(key) DO UPDATE SET value = ?",
+		prefix.String(), prefix.String())
+	return err
 }
 
 func (s *Subnet) Router() netip.Prefix {
@@ -344,6 +371,25 @@ func (s *Subnet) Reserve() (netip.Prefix, error) {
 	}
 
 	return netip.Prefix{}, net.InvalidAddrError("no available IPs in subnet")
+}
+
+// ReserveSpecificAddr reserves a specific IP address in the subnet.
+// This is idempotent: it succeeds whether the IP is new, already reserved, or was released.
+// Returns an error if the address is not within the subnet.
+func (s *Subnet) ReserveSpecificAddr(addr netip.Addr) error {
+	if !s.net.Contains(addr) {
+		return fmt.Errorf("address %s is not within subnet %s", addr, s.net)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, err := s.db.Exec(`
+		INSERT INTO ips (ip, subnet, reserved, released_at)
+		VALUES (?, ?, 1, NULL)
+		ON CONFLICT(ip) DO UPDATE SET reserved = 1, released_at = NULL`,
+		addr.String(), s.net.String())
+	return err
 }
 
 func (s *Subnet) Release(prefix netip.Prefix) error {

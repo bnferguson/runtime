@@ -350,6 +350,33 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 			unhealthySandboxes = append(unhealthySandboxes, sb.ID)
 		} else {
 			reattachedCount++
+
+			// Re-register IPs for healthy surviving sandboxes to ensure netdb
+			// tracks them as reserved. This prevents duplicate IP allocation
+			// if the netdb state was lost during the crash/restart.
+			if c.Subnet != nil {
+				for _, net := range sb.Network {
+					ipStr, err := netutil.ParseNetworkAddress(net.Address)
+					if err != nil {
+						c.Log.Warn("failed to parse sandbox IP during boot reconciliation",
+							"sandbox_id", sb.ID, "address", net.Address, "error", err)
+						continue
+					}
+					addr, err := netip.ParseAddr(ipStr)
+					if err != nil {
+						c.Log.Warn("failed to parse IP addr during boot reconciliation",
+							"sandbox_id", sb.ID, "ip", ipStr, "error", err)
+						continue
+					}
+					if err := c.Subnet.ReserveSpecificAddr(addr); err != nil {
+						c.Log.Warn("failed to re-reserve IP during boot reconciliation",
+							"sandbox_id", sb.ID, "ip", addr, "error", err)
+					} else {
+						c.Log.Debug("re-reserved IP for surviving sandbox",
+							"sandbox_id", sb.ID, "ip", addr)
+					}
+				}
+			}
 		}
 	}
 

@@ -2,6 +2,7 @@ package netdb
 
 import (
 	"fmt"
+	"net/netip"
 	"path/filepath"
 	"testing"
 	"time"
@@ -129,6 +130,99 @@ func TestNetDB(t *testing.T) {
 		r.Equal("172.16.1.2/24", ip.String())
 	})
 
+	t.Run("reserves a specific address", func(t *testing.T) {
+		r := require.New(t)
+
+		n, err := New(filepath.Join(t.TempDir(), "net.db"))
+		r.NoError(err)
+
+		subnet, err := n.Subnet("172.16.8.0/24")
+		r.NoError(err)
+
+		// Reserve a specific IP
+		addr, _ := netip.ParseAddr("172.16.8.50")
+		err = subnet.ReserveSpecificAddr(addr)
+		r.NoError(err)
+
+		// Normal Reserve should skip the specifically reserved IP
+		for i := 0; i < 48; i++ {
+			ip, err := subnet.Reserve()
+			r.NoError(err)
+			r.NotEqual("172.16.8.50/24", ip.String(), "should not allocate specifically reserved IP")
+		}
+
+		// Verify .50 is skipped (next Reserve after .49 should be .51)
+		ip, err := subnet.Reserve()
+		r.NoError(err)
+		r.Equal("172.16.8.51/24", ip.String())
+	})
+
+	t.Run("re-reserves an already reserved address", func(t *testing.T) {
+		r := require.New(t)
+
+		n, err := New(filepath.Join(t.TempDir(), "net.db"))
+		r.NoError(err)
+
+		subnet, err := n.Subnet("172.16.8.0/24")
+		r.NoError(err)
+
+		// Reserve via normal path
+		ip1, err := subnet.Reserve()
+		r.NoError(err)
+		r.Equal("172.16.8.2/24", ip1.String())
+
+		// Re-reserve the same IP specifically (idempotent)
+		addr, _ := netip.ParseAddr("172.16.8.2")
+		err = subnet.ReserveSpecificAddr(addr)
+		r.NoError(err)
+
+		// Next Reserve should still give .3
+		ip2, err := subnet.Reserve()
+		r.NoError(err)
+		r.Equal("172.16.8.3/24", ip2.String())
+	})
+
+	t.Run("re-reserves a released address", func(t *testing.T) {
+		r := require.New(t)
+
+		n, err := New(filepath.Join(t.TempDir(), "net.db"))
+		r.NoError(err)
+
+		subnet, err := n.Subnet("172.16.8.0/24")
+		r.NoError(err)
+
+		// Reserve and release
+		ip1, err := subnet.Reserve()
+		r.NoError(err)
+		err = subnet.Release(ip1)
+		r.NoError(err)
+
+		// Re-reserve the released IP
+		addr, _ := netip.ParseAddr("172.16.8.2")
+		err = subnet.ReserveSpecificAddr(addr)
+		r.NoError(err)
+
+		// Normal Reserve should skip .2 (it's now reserved again)
+		ip2, err := subnet.Reserve()
+		r.NoError(err)
+		r.Equal("172.16.8.3/24", ip2.String())
+	})
+
+	t.Run("rejects address outside subnet", func(t *testing.T) {
+		r := require.New(t)
+
+		n, err := New(filepath.Join(t.TempDir(), "net.db"))
+		r.NoError(err)
+
+		subnet, err := n.Subnet("172.16.8.0/24")
+		r.NoError(err)
+
+		addr, _ := netip.ParseAddr("10.0.0.1")
+		err = subnet.ReserveSpecificAddr(addr)
+		r.Error(err)
+		r.Contains(err.Error(), "not within subnet")
+	})
+
 	t.Run("can reserve an interface", func(t *testing.T) {
 		r := require.New(t)
 
@@ -152,5 +246,42 @@ func TestNetDB(t *testing.T) {
 		r.NoError(err)
 
 		r.Equal("rt1", iface3)
+	})
+
+	t.Run("persists and retrieves leased subnet", func(t *testing.T) {
+		r := require.New(t)
+
+		dbPath := filepath.Join(t.TempDir(), "net.db")
+
+		n, err := New(dbPath)
+		r.NoError(err)
+
+		// No previous lease
+		prev := n.GetLeasedSubnet()
+		r.False(prev.IsValid())
+
+		// Save a lease
+		subnet := netip.MustParsePrefix("10.8.95.0/24")
+		err = n.SetLeasedSubnet(subnet)
+		r.NoError(err)
+
+		// Read it back
+		got := n.GetLeasedSubnet()
+		r.Equal(subnet, got)
+
+		// Update to a different lease
+		subnet2 := netip.MustParsePrefix("10.8.96.0/24")
+		err = n.SetLeasedSubnet(subnet2)
+		r.NoError(err)
+		r.Equal(subnet2, n.GetLeasedSubnet())
+
+		// Survives close and reopen
+		n.Close()
+
+		n2, err := New(dbPath)
+		r.NoError(err)
+		defer n2.Close()
+
+		r.Equal(subnet2, n2.GetLeasedSubnet())
 	})
 }
