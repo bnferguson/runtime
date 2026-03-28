@@ -83,7 +83,7 @@ func (r *Registry) EnsureEntities(ctx context.Context, ec *entityserver.Client) 
 			Variants:       variants,
 		}
 
-		_, err := ec.CreateOrUpdate(ctx, name, addonEntity)
+		_, err := ec.CreateOrReplace(ctx, name, addonEntity)
 		if err != nil {
 			return fmt.Errorf("ensuring addon entity %q: %w", name, err)
 		}

@@ -206,6 +206,61 @@ func (c *Client) Create(ctx context.Context, name string, sc SchemaEncoder, opts
 	return entity.Id(pr.Id()), nil
 }
 
+// CreateOrReplace creates a new entity or fully replaces an existing one.
+// Unlike CreateOrUpdate which merges attrs (appending to "many" component
+// fields), this method replaces all attrs atomically when the entity exists.
+func (c *Client) CreateOrReplace(ctx context.Context, name string, sc SchemaEncoder, opts ...CreateOptions) (entity.Id, error) {
+	var op createOp
+	for _, opt := range opts {
+		opt(&op)
+	}
+
+	gr, err := c.eac.Get(ctx, sc.ShortKind()+"/"+name)
+	if err == nil {
+		// Entity exists — build full attrs including metadata and identity,
+		// then replace atomically.
+		fullAttrs := entity.New(
+			(&core_v1alpha.Metadata{
+				Name:   name,
+				Labels: op.labels,
+			}).Encode,
+			sc.Encode,
+			entity.DBId, entity.Id(gr.Entity().Id()),
+			entity.Ident, types.Keyword(sc.ShortKind()+"/"+name),
+		).Attrs()
+
+		rr, err := c.eac.Replace(ctx, fullAttrs, gr.Entity().Revision())
+		if err != nil {
+			return "", err
+		}
+
+		return entity.Id(rr.Id()), nil
+	}
+
+	if !errors.Is(err, cond.ErrNotFound{}) {
+		return "", err
+	}
+
+	// Entity does not exist — create it.
+	var rpcE entityserver_v1alpha.Entity
+	rpcE.SetAttrs(
+		entity.New(
+			(&core_v1alpha.Metadata{
+				Name:   name,
+				Labels: op.labels,
+			}).Encode,
+			sc.Encode,
+			entity.Ident, types.Keyword(sc.ShortKind()+"/"+name),
+		).Attrs())
+
+	pr, err := c.eac.Put(ctx, &rpcE)
+	if err != nil {
+		return "", err
+	}
+
+	return entity.Id(pr.Id()), nil
+}
+
 func (c *Client) CreateOrUpdate(ctx context.Context, name string, sc SchemaEncoder, opts ...CreateOptions) (entity.Id, error) {
 	var op createOp
 	for _, opt := range opts {

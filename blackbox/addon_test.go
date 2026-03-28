@@ -16,6 +16,7 @@ func TestAddonListAvailable(t *testing.T) {
 
 	r := m.MustRun("addon", "list-available")
 	r.RequireContains(t, "miren-postgresql")
+	r.RequireContains(t, "miren-mysql")
 }
 
 func TestAddonVariants(t *testing.T) {
@@ -23,6 +24,10 @@ func TestAddonVariants(t *testing.T) {
 	m := harness.NewMiren(t, c)
 
 	r := m.MustRun("addon", "variants", "miren-postgresql")
+	r.RequireContains(t, "small")
+	r.RequireContains(t, "shared")
+
+	r = m.MustRun("addon", "variants", "miren-mysql")
 	r.RequireContains(t, "small")
 	r.RequireContains(t, "shared")
 }
@@ -110,6 +115,83 @@ func TestAddonDeployWithAppToml(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("expected status 200, got %d: %s", code, body)
 	}
+}
+
+func TestMysqlAddonDeployWithAppToml(t *testing.T) {
+	c := harness.NewCluster(t)
+	m := harness.NewMiren(t, c)
+
+	name := harness.UniqueAppName(t, "bun-mysql")
+
+	hostDir := filepath.Join(c.TestdataDir, "bun-mysql")
+	containerDir := m.ContainerPath(hostDir)
+
+	t.Cleanup(func() {
+		t.Logf("cleaning up app %s", name)
+		m.Run("app", "delete", name, "-f")
+	})
+
+	// Deploy without waiting for healthy — the app depends on DATABASE_URL
+	// which is only injected after addon provisioning completes.
+	m.MustRun("deploy", "-a", name, "-d", containerDir, "-f")
+
+	// Wait for addon provisioning to complete.
+	harness.WaitForAddonReady(t, m, name, "miren-mysql", 30*time.Second)
+	harness.WaitForEnvVar(t, m, name, "DATABASE_URL", 5*time.Minute)
+
+	// Now wait for the app to become healthy
+	harness.WaitForAppReady(t, m, name, 3*time.Minute)
+
+	// Verify addon is listed
+	r := m.MustRun("addon", "list", "-a", name, "--format", "json")
+	r.RequireContains(t, "miren-mysql")
+
+	// Set a route and verify the app responds with DB connectivity
+	host := name + ".test.local"
+	m.MustRun("route", "set", host, name)
+
+	harness.Poll(t, "app responds via route", 30*time.Second, 2*time.Second, func() (bool, string) {
+		code, body, err := harness.HTTPGet(m, host, "/health")
+		if err != nil {
+			return false, err.Error()
+		}
+		if code != 200 {
+			return false, "status " + body
+		}
+		return true, ""
+	})
+
+	// Verify the root endpoint works (exercises DB writes/reads)
+	code, body, err := harness.HTTPGet(m, host, "/")
+	if err != nil {
+		t.Fatalf("HTTP GET / failed: %v", err)
+	}
+	if code != 200 {
+		t.Fatalf("expected status 200, got %d: %s", code, body)
+	}
+}
+
+func TestMysqlAddonCreateListDestroy(t *testing.T) {
+	c := harness.NewCluster(t)
+	m := harness.NewMiren(t, c)
+
+	name := harness.DeployApp(t, m, harness.AppOptions{
+		Testdata: "go-server",
+	})
+
+	// Create a small (dedicated) MySQL addon on the app
+	m.MustRun("addon", "create", "miren-mysql:small", "-a", name)
+
+	// Wait for addon to appear and provisioning to complete.
+	harness.WaitForAddonReady(t, m, name, "miren-mysql", 30*time.Second)
+	harness.WaitForEnvVar(t, m, name, "DATABASE_URL", 5*time.Minute)
+
+	// Verify MySQL-specific env vars are injected
+	harness.WaitForEnvVar(t, m, name, "MYSQL_HOST", 30*time.Second)
+	harness.WaitForEnvVar(t, m, name, "MYSQL_DATABASE", 30*time.Second)
+
+	// Destroy the addon
+	m.MustRun("addon", "destroy", "miren-mysql", "-a", name, "--force")
 }
 
 func TestAddonUnknownAddon(t *testing.T) {

@@ -1,0 +1,7 @@
+name = "bun-mysql"
+
+[services.web]
+command = "bun run index.ts"
+
+[addons.miren-mysql]
+variant = "shared"
