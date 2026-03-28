@@ -41,6 +41,7 @@ func TestSanitizeIdentifier(t *testing.T) {
 		{"APP-NAME", "app_name"},
 		{"", "app"},
 		{"a", "a"},
+		{"a-very-long-application-name-that-exceeds-the-postgres-identifier-limit-of-63-chars", "a_very_long_application_name_that_exceeds_the_postgres_identifi"},
 	}
 
 	for _, tt := range tests {

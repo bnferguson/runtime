@@ -487,6 +487,9 @@ func RegisterDeprovisionDedicatedSaga(registry *saga.Registry, fw *addon.Provide
 		RegisterTo(registry)
 }
 
+// maxPgIdentLen is the maximum length of a PostgreSQL identifier (NAMEDATALEN-1).
+const maxPgIdentLen = 63
+
 // sanitizeIdentifier ensures a name is safe for use as a PostgreSQL identifier.
 func sanitizeIdentifier(name string) string {
 	result := make([]byte, 0, len(name))
@@ -505,6 +508,9 @@ func sanitizeIdentifier(name string) string {
 	}
 	if result[0] >= '0' && result[0] <= '9' {
 		result = append([]byte{'a'}, result...)
+	}
+	if len(result) > maxPgIdentLen {
+		result = result[:maxPgIdentLen]
 	}
 	return string(result)
 }
