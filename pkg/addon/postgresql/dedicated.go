@@ -8,6 +8,7 @@ import (
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/pkg/addon"
+	"miren.dev/runtime/pkg/addon/dbsaga"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/idgen"
@@ -116,7 +117,7 @@ func CreateDedicatedPool(ctx context.Context, in CreateDedicatedPoolIn) (CreateD
 		"server", in.ServerName,
 	)
 
-	sizeGb := parseStorageGb(in.VariantConfig[ConfigStorage])
+	sizeGb := addon.ParseStorageGb(in.VariantConfig[ConfigStorage])
 	diskName := fmt.Sprintf("pg-%s-data", in.ServerName)
 	mountPath := "/var/lib/postgresql/data"
 
@@ -160,83 +161,6 @@ func CreateDedicatedPool(ctx context.Context, in CreateDedicatedPoolIn) (CreateD
 func UndoCreateDedicatedPool(ctx context.Context, in CreateDedicatedPoolIn, out CreateDedicatedPoolOut) error {
 	fw := saga.Get[*addon.ProviderFramework](ctx)
 	return fw.DeleteSandboxPool(ctx, out.PoolID)
-}
-
-type WaitForDedicatedPoolIn struct {
-	PoolID entity.Id
-}
-
-type WaitForDedicatedPoolOut struct {
-	Ready bool
-}
-
-func WaitForDedicatedPool(ctx context.Context, in WaitForDedicatedPoolIn) (WaitForDedicatedPoolOut, error) {
-	fw := saga.Get[*addon.ProviderFramework](ctx)
-
-	if err := fw.WaitForPool(ctx, in.PoolID, poolReadyTimeout); err != nil {
-		return WaitForDedicatedPoolOut{}, fmt.Errorf("waiting for postgres pool: %w", err)
-	}
-
-	return WaitForDedicatedPoolOut{Ready: true}, nil
-}
-
-func UndoWaitForDedicatedPool(ctx context.Context, in WaitForDedicatedPoolIn, out WaitForDedicatedPoolOut) error {
-	return nil
-}
-
-type CreateDedicatedServiceIn struct {
-	ServiceName string
-	AppName     string
-	ServerName  string
-}
-
-type CreateDedicatedServiceOut struct {
-	ServiceID entity.Id
-}
-
-func CreateDedicatedService(ctx context.Context, in CreateDedicatedServiceIn) (CreateDedicatedServiceOut, error) {
-	fw := saga.Get[*addon.ProviderFramework](ctx)
-
-	labels := types.LabelSet(
-		"addon", AddonName,
-		"app", in.AppName,
-		"server", in.ServerName,
-	)
-
-	svcID, err := fw.CreateService(ctx, in.ServiceName, labels, postgresPort)
-	if err != nil {
-		return CreateDedicatedServiceOut{}, fmt.Errorf("creating service: %w", err)
-	}
-
-	return CreateDedicatedServiceOut{ServiceID: svcID}, nil
-}
-
-func UndoCreateDedicatedService(ctx context.Context, in CreateDedicatedServiceIn, out CreateDedicatedServiceOut) error {
-	fw := saga.Get[*addon.ProviderFramework](ctx)
-	return fw.DeleteService(ctx, out.ServiceID)
-}
-
-type WaitForDedicatedServiceIn struct {
-	ServiceID entity.Id
-}
-
-type WaitForDedicatedServiceOut struct {
-	ServiceHost string
-}
-
-func WaitForDedicatedService(ctx context.Context, in WaitForDedicatedServiceIn) (WaitForDedicatedServiceOut, error) {
-	fw := saga.Get[*addon.ProviderFramework](ctx)
-
-	serviceHost, err := fw.WaitForServiceAddress(ctx, in.ServiceID, poolReadyTimeout)
-	if err != nil {
-		return WaitForDedicatedServiceOut{}, fmt.Errorf("waiting for dedicated service address: %w", err)
-	}
-
-	return WaitForDedicatedServiceOut{ServiceHost: serviceHost}, nil
-}
-
-func UndoWaitForDedicatedService(ctx context.Context, in WaitForDedicatedServiceIn, out WaitForDedicatedServiceOut) error {
-	return nil
 }
 
 type UpdateDedicatedServerIn struct {
@@ -312,15 +236,17 @@ func UndoBuildDedicatedResult(ctx context.Context, in BuildDedicatedResultIn, ou
 
 // RegisterDedicatedSaga registers the dedicated PostgreSQL provisioning saga.
 func RegisterDedicatedSaga(registry *saga.Registry, fw *addon.ProviderFramework, rc *resultCapture) error {
+	cfg := &dbsaga.AddonConfig{AddonName: AddonName, Port: postgresPort, ReadyTimeout: poolReadyTimeout}
 	return saga.Define("provision-dedicated-postgresql").
 		Using(fw).
 		Using(rc).
+		Using(cfg).
 		Action(GenerateCredentials).Undo(UndoGenerateCredentials).
 		Action(CreatePostgresServer).Undo(UndoCreatePostgresServer).
 		Action(CreateDedicatedPool).Undo(UndoCreateDedicatedPool).
-		Action(WaitForDedicatedPool).Undo(UndoWaitForDedicatedPool).
-		Action(CreateDedicatedService).Undo(UndoCreateDedicatedService).
-		Action(WaitForDedicatedService).Undo(UndoWaitForDedicatedService).
+		Action(dbsaga.WaitForDedicatedPool).Undo(dbsaga.UndoWaitForDedicatedPool).
+		Action(dbsaga.CreateDedicatedService).Undo(dbsaga.UndoCreateDedicatedService).
+		Action(dbsaga.WaitForDedicatedService).Undo(dbsaga.UndoWaitForDedicatedService).
 		Action(UpdateDedicatedServer).Undo(UndoUpdateDedicatedServer).
 		Action(BuildDedicatedResult).Undo(UndoBuildDedicatedResult).
 		RegisterTo(registry)
@@ -388,56 +314,6 @@ func UndoLookupDedicatedServer(ctx context.Context, in LookupDedicatedServerIn, 
 	return nil
 }
 
-type DeleteDedicatedServiceIn struct {
-	DedicatedServiceID entity.Id
-}
-
-type DeleteDedicatedServiceOut struct {
-	ServiceDeleted bool
-}
-
-func DeleteDedicatedService(ctx context.Context, in DeleteDedicatedServiceIn) (DeleteDedicatedServiceOut, error) {
-	if in.DedicatedServiceID == "" {
-		return DeleteDedicatedServiceOut{ServiceDeleted: false}, nil
-	}
-
-	fw := saga.Get[*addon.ProviderFramework](ctx)
-	if err := fw.DeleteService(ctx, in.DedicatedServiceID); err != nil {
-		return DeleteDedicatedServiceOut{}, fmt.Errorf("deleting service: %w", err)
-	}
-
-	return DeleteDedicatedServiceOut{ServiceDeleted: true}, nil
-}
-
-func UndoDeleteDedicatedService(ctx context.Context, in DeleteDedicatedServiceIn, out DeleteDedicatedServiceOut) error {
-	return nil
-}
-
-type DeleteDedicatedPoolIn struct {
-	DedicatedPoolID entity.Id
-}
-
-type DeleteDedicatedPoolOut struct {
-	PoolDeleted bool `saga:"dedicated_pool_deleted"`
-}
-
-func DeleteDedicatedPool(ctx context.Context, in DeleteDedicatedPoolIn) (DeleteDedicatedPoolOut, error) {
-	if in.DedicatedPoolID == "" {
-		return DeleteDedicatedPoolOut{PoolDeleted: false}, nil
-	}
-
-	fw := saga.Get[*addon.ProviderFramework](ctx)
-	if err := fw.DeleteSandboxPool(ctx, in.DedicatedPoolID); err != nil {
-		return DeleteDedicatedPoolOut{}, fmt.Errorf("deleting sandbox pool: %w", err)
-	}
-
-	return DeleteDedicatedPoolOut{PoolDeleted: true}, nil
-}
-
-func UndoDeleteDedicatedPool(ctx context.Context, in DeleteDedicatedPoolIn, out DeleteDedicatedPoolOut) error {
-	return nil
-}
-
 type DeleteDedicatedServerEntityIn struct {
 	DedicatedServerID   entity.Id
 	DedicatedServerName string
@@ -481,8 +357,8 @@ func RegisterDeprovisionDedicatedSaga(registry *saga.Registry, fw *addon.Provide
 		Using(fw).
 		Action(DecodeDedicatedAttrs).Undo(UndoDecodeDedicatedAttrs).
 		Action(LookupDedicatedServer).Undo(UndoLookupDedicatedServer).
-		Action(DeleteDedicatedService).Undo(UndoDeleteDedicatedService).
-		Action(DeleteDedicatedPool).Undo(UndoDeleteDedicatedPool).
+		Action(dbsaga.DeleteDedicatedService).Undo(dbsaga.UndoDeleteDedicatedService).
+		Action(dbsaga.DeleteDedicatedPool).Undo(dbsaga.UndoDeleteDedicatedPool).
 		Action(DeleteDedicatedServerEntity).Undo(UndoDeleteDedicatedServerEntity).
 		RegisterTo(registry)
 }
@@ -490,45 +366,24 @@ func RegisterDeprovisionDedicatedSaga(registry *saga.Registry, fw *addon.Provide
 // maxPgIdentLen is the maximum length of a PostgreSQL identifier (NAMEDATALEN-1).
 const maxPgIdentLen = 63
 
-// sanitizeIdentifier ensures a name is safe for use as a PostgreSQL identifier.
 func sanitizeIdentifier(name string) string {
-	result := make([]byte, 0, len(name))
-	for i := 0; i < len(name); i++ {
-		c := name[i]
-		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' {
-			result = append(result, c)
-		} else if c >= 'A' && c <= 'Z' {
-			result = append(result, c+32) // lowercase
-		} else if c == '-' {
-			result = append(result, '_')
-		}
-	}
-	if len(result) == 0 {
-		return "app"
-	}
-	if result[0] >= '0' && result[0] <= '9' {
-		result = append([]byte{'a'}, result...)
-	}
-	if len(result) > maxPgIdentLen {
-		result = result[:maxPgIdentLen]
-	}
-	return string(result)
+	return addon.SanitizeIdentifier(name, maxPgIdentLen)
 }
 
 func (p *Provider) provisionDedicated(ctx context.Context, app addon.App, variant addon.Variant) (*addon.ProvisionResult, error) {
-	p.log.Info("provisioning dedicated PostgreSQL",
+	p.Log.Info("provisioning dedicated PostgreSQL",
 		"app", app.Name,
 		"variant", variant.Name)
 
 	rc := &resultCapture{}
 	registry := saga.NewRegistry()
 
-	if err := RegisterDedicatedSaga(registry, p.fw, rc); err != nil {
+	if err := RegisterDedicatedSaga(registry, p.Fw, rc); err != nil {
 		return nil, fmt.Errorf("registering dedicated saga: %w", err)
 	}
 
-	storage := p.fw.Storage
-	executor := saga.NewExecutor(storage, saga.WithRegistry(registry), saga.WithLogger(p.log))
+	storage := p.Fw.Storage
+	executor := saga.NewExecutor(storage, saga.WithRegistry(registry), saga.WithLogger(p.Log))
 
 	err := executor.Start("provision-dedicated-postgresql").
 		Input("appname", app.Name).
@@ -543,21 +398,21 @@ func (p *Provider) provisionDedicated(ctx context.Context, app addon.App, varian
 		return nil, fmt.Errorf("saga completed but no result was captured")
 	}
 
-	p.log.Info("dedicated PostgreSQL provisioned", "app", app.Name)
+	p.Log.Info("dedicated PostgreSQL provisioned", "app", app.Name)
 	return rc.Result, nil
 }
 
 func (p *Provider) deprovisionDedicated(ctx context.Context, assoc addon.AddonAssociation) error {
-	p.log.Info("deprovisioning dedicated PostgreSQL", "assoc", assoc.ID)
+	p.Log.Info("deprovisioning dedicated PostgreSQL", "assoc", assoc.ID)
 
 	registry := saga.NewRegistry()
 
-	if err := RegisterDeprovisionDedicatedSaga(registry, p.fw); err != nil {
+	if err := RegisterDeprovisionDedicatedSaga(registry, p.Fw); err != nil {
 		return fmt.Errorf("registering deprovision saga: %w", err)
 	}
 
-	storage := p.fw.Storage
-	executor := saga.NewExecutor(storage, saga.WithRegistry(registry), saga.WithLogger(p.log))
+	storage := p.Fw.Storage
+	executor := saga.NewExecutor(storage, saga.WithRegistry(registry), saga.WithLogger(p.Log))
 
 	err := executor.Start("deprovision-dedicated-postgresql").
 		Input("assocentity", assoc.Entity).
@@ -566,6 +421,6 @@ func (p *Provider) deprovisionDedicated(ctx context.Context, assoc addon.AddonAs
 		return err
 	}
 
-	p.log.Info("dedicated PostgreSQL deprovisioned", "assoc", assoc.ID)
+	p.Log.Info("dedicated PostgreSQL deprovisioned", "assoc", assoc.ID)
 	return nil
 }

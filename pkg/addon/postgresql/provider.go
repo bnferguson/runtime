@@ -3,28 +3,25 @@ package postgresql
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/url"
 
 	"miren.dev/runtime/pkg/addon"
+	"miren.dev/runtime/pkg/addon/dbsaga"
 )
 
 // Provider implements the AddonProvider interface for PostgreSQL.
 type Provider struct {
-	fw  *addon.ProviderFramework
-	log *slog.Logger
+	dbsaga.BaseProvider
 }
 
 // NewProvider creates a new PostgreSQL addon provider.
 func NewProvider(fw *addon.ProviderFramework) *Provider {
 	return &Provider{
-		fw:  fw,
-		log: fw.Log.With("addon", AddonName),
+		BaseProvider: dbsaga.BaseProvider{
+			Fw:  fw,
+			Log: fw.Log.With("addon", AddonName),
+		},
 	}
-}
-
-func (p *Provider) LocalityMode() addon.LocalityMode {
-	return addon.OnCluster
 }
 
 func (p *Provider) Provision(ctx context.Context, app addon.App, variant addon.Variant) (*addon.ProvisionResult, error) {
@@ -32,13 +29,6 @@ func (p *Provider) Provision(ctx context.Context, app addon.App, variant addon.V
 		return p.provisionShared(ctx, app, variant)
 	}
 	return p.provisionDedicated(ctx, app, variant)
-}
-
-func (p *Provider) AdjustEnvVars(ctx context.Context, result *addon.ProvisionResult, assoc addon.AddonAssociation, collisions []string) ([]addon.Variable, error) {
-	// For PostgreSQL, we don't adjust variable names on collision.
-	// The addon's vars take priority and the user should rename their
-	// conflicting manual vars instead.
-	return result.EnvVars, nil
 }
 
 func (p *Provider) Deprovision(ctx context.Context, assoc addon.AddonAssociation) error {

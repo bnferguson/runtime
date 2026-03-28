@@ -1,9 +1,6 @@
 package postgresql
 
 import (
-	"strconv"
-	"strings"
-
 	"miren.dev/runtime/pkg/addon"
 )
 
@@ -54,20 +51,7 @@ func Definition() addon.AddonDefinition {
 
 const sharedDefaultStorageGb int64 = 10
 
-// parseStorageGb converts a Kubernetes-style size string (e.g. "1Gi", "50Gi")
-// to an int64 value in gigabytes. Returns 1 if the string cannot be parsed.
-func parseStorageGb(s string) int64 {
-	s = strings.TrimSpace(s)
-	if strings.HasSuffix(s, "Gi") {
-		n, err := strconv.ParseInt(strings.TrimSuffix(s, "Gi"), 10, 64)
-		if err == nil && n > 0 {
-			return n
-		}
-	}
-	return 1
-}
-
 // IsSharedVariant returns true if the variant is a shared-server variant.
 func IsSharedVariant(variantName string) bool {
-	return variantName == "shared"
+	return addon.IsSharedVariant(variantName)
 }
