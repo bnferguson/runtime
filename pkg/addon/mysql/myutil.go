@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	_ "github.com/go-sql-driver/mysql"
+
+	"miren.dev/runtime/pkg/addon"
 )
 
 const (
@@ -18,27 +20,7 @@ const (
 const maxMysqlIdentLen = 32
 
 func sanitizeIdentifier(name string) string {
-	result := make([]byte, 0, len(name))
-	for i := 0; i < len(name); i++ {
-		c := name[i]
-		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' {
-			result = append(result, c)
-		} else if c >= 'A' && c <= 'Z' {
-			result = append(result, c+32) // lowercase
-		} else if c == '-' {
-			result = append(result, '_')
-		}
-	}
-	if len(result) == 0 {
-		return "app"
-	}
-	if result[0] >= '0' && result[0] <= '9' {
-		result = append([]byte{'a'}, result...)
-	}
-	if len(result) > maxMysqlIdentLen {
-		result = result[:maxMysqlIdentLen]
-	}
-	return string(result)
+	return addon.SanitizeIdentifier(name, maxMysqlIdentLen)
 }
 
 // quoteIdentifier wraps a MySQL identifier in backticks, escaping any

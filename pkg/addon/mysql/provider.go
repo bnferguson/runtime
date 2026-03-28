@@ -3,26 +3,23 @@ package mysql
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/url"
 
 	"miren.dev/runtime/pkg/addon"
+	"miren.dev/runtime/pkg/addon/dbsaga"
 )
 
 type Provider struct {
-	fw  *addon.ProviderFramework
-	log *slog.Logger
+	dbsaga.BaseProvider
 }
 
 func NewProvider(fw *addon.ProviderFramework) *Provider {
 	return &Provider{
-		fw:  fw,
-		log: fw.Log.With("addon", AddonName),
+		BaseProvider: dbsaga.BaseProvider{
+			Fw:  fw,
+			Log: fw.Log.With("addon", AddonName),
+		},
 	}
-}
-
-func (p *Provider) LocalityMode() addon.LocalityMode {
-	return addon.OnCluster
 }
 
 func (p *Provider) Provision(ctx context.Context, app addon.App, variant addon.Variant) (*addon.ProvisionResult, error) {
@@ -30,10 +27,6 @@ func (p *Provider) Provision(ctx context.Context, app addon.App, variant addon.V
 		return p.provisionShared(ctx, app, variant)
 	}
 	return p.provisionDedicated(ctx, app, variant)
-}
-
-func (p *Provider) AdjustEnvVars(ctx context.Context, result *addon.ProvisionResult, assoc addon.AddonAssociation, collisions []string) ([]addon.Variable, error) {
-	return result.EnvVars, nil
 }
 
 func (p *Provider) Deprovision(ctx context.Context, assoc addon.AddonAssociation) error {
@@ -46,10 +39,10 @@ func (p *Provider) Deprovision(ctx context.Context, assoc addon.AddonAssociation
 
 func buildDatabaseURL(host string, port int, user, password, database string) string {
 	u := &url.URL{
-		Scheme:   "mysql",
-		User:     url.UserPassword(user, password),
-		Host:     fmt.Sprintf("%s:%d", host, port),
-		Path:     database,
+		Scheme: "mysql",
+		User:   url.UserPassword(user, password),
+		Host:   fmt.Sprintf("%s:%d", host, port),
+		Path:   database,
 	}
 	return u.String()
 }

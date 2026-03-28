@@ -870,19 +870,19 @@ func RegisterDeprovisionSharedSaga(registry *saga.Registry, fw *addon.ProviderFr
 }
 
 func (p *Provider) provisionShared(ctx context.Context, app addon.App, variant addon.Variant) (*addon.ProvisionResult, error) {
-	p.log.Info("provisioning shared PostgreSQL",
+	p.Log.Info("provisioning shared PostgreSQL",
 		"app", app.Name,
 		"variant", variant.Name)
 
 	rc := &resultCapture{}
 	registry := saga.NewRegistry()
 
-	if err := RegisterSharedSaga(registry, p.fw, rc); err != nil {
+	if err := RegisterSharedSaga(registry, p.Fw, rc); err != nil {
 		return nil, fmt.Errorf("registering shared saga: %w", err)
 	}
 
-	storage := p.fw.Storage
-	executor := saga.NewExecutor(storage, saga.WithRegistry(registry), saga.WithLogger(p.log))
+	storage := p.Fw.Storage
+	executor := saga.NewExecutor(storage, saga.WithRegistry(registry), saga.WithLogger(p.Log))
 
 	err := executor.Start("provision-shared-postgresql").
 		Input("appname", app.Name).
@@ -895,21 +895,21 @@ func (p *Provider) provisionShared(ctx context.Context, app addon.App, variant a
 		return nil, fmt.Errorf("saga completed but no result was captured")
 	}
 
-	p.log.Info("shared PostgreSQL provisioned", "app", app.Name)
+	p.Log.Info("shared PostgreSQL provisioned", "app", app.Name)
 	return rc.Result, nil
 }
 
 func (p *Provider) deprovisionShared(ctx context.Context, assoc addon.AddonAssociation) error {
-	p.log.Info("deprovisioning shared PostgreSQL", "assoc", assoc.ID)
+	p.Log.Info("deprovisioning shared PostgreSQL", "assoc", assoc.ID)
 
 	registry := saga.NewRegistry()
 
-	if err := RegisterDeprovisionSharedSaga(registry, p.fw); err != nil {
+	if err := RegisterDeprovisionSharedSaga(registry, p.Fw); err != nil {
 		return fmt.Errorf("registering deprovision saga: %w", err)
 	}
 
-	storage := p.fw.Storage
-	executor := saga.NewExecutor(storage, saga.WithRegistry(registry), saga.WithLogger(p.log))
+	storage := p.Fw.Storage
+	executor := saga.NewExecutor(storage, saga.WithRegistry(registry), saga.WithLogger(p.Log))
 
 	err := executor.Start("deprovision-shared-postgresql").
 		Input("assocentity", assoc.Entity).
@@ -918,6 +918,6 @@ func (p *Provider) deprovisionShared(ctx context.Context, assoc addon.AddonAssoc
 		return err
 	}
 
-	p.log.Info("shared PostgreSQL deprovisioned", "assoc", assoc.ID)
+	p.Log.Info("shared PostgreSQL deprovisioned", "assoc", assoc.ID)
 	return nil
 }
