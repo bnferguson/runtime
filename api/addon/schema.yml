@@ -84,3 +84,32 @@ kinds:
   postgresql_dedicated_data:
     postgres_server:
       type: ref
+
+  mysql_server:
+    addon_name:
+      type: string
+      indexed: true
+    variant:
+      type: string
+    sandbox_pool:
+      type: ref
+    service:
+      type: ref
+    status:
+      type: string
+    association_count:
+      type: int
+    root_password:
+      type: string
+
+  mysql_shared_data:
+    mysql_server:
+      type: ref
+    database_name:
+      type: string
+    username:
+      type: string
+
+  mysql_dedicated_data:
+    mysql_server:
+      type: ref

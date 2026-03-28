@@ -1,0 +1,868 @@
+package mysql
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"time"
+
+	"miren.dev/runtime/api/addon/addon_v1alpha"
+	"miren.dev/runtime/api/compute/compute_v1alpha"
+	"miren.dev/runtime/pkg/addon"
+	"miren.dev/runtime/pkg/cond"
+	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/entity/types"
+	"miren.dev/runtime/pkg/idgen"
+	"miren.dev/runtime/pkg/saga"
+)
+
+const (
+	sharedServerName = "my-shared"
+	sharedDiskName   = "my-shared-data"
+	poolReadyTimeout = 5 * time.Minute
+)
+
+// --- EnsureSharedServerSaga Actions ---
+
+type CreateSharedServerEntityIn struct {
+	RootPassword string
+}
+
+type CreateSharedServerEntityOut struct {
+	ServerID entity.Id
+}
+
+func CreateSharedServerEntity(ctx context.Context, in CreateSharedServerEntityIn) (CreateSharedServerEntityOut, error) {
+	fw := saga.Get[*addon.ProviderFramework](ctx)
+
+	server := &addon_v1alpha.MysqlServer{
+		AddonName:        AddonName,
+		Variant:          "shared",
+		Status:           "provisioning",
+		AssociationCount: 0,
+		RootPassword:     in.RootPassword,
+	}
+
+	serverID, err := fw.EC.Create(ctx, sharedServerName, server)
+	if err != nil {
+		return CreateSharedServerEntityOut{}, fmt.Errorf("creating shared server entity: %w", err)
+	}
+
+	return CreateSharedServerEntityOut{ServerID: serverID}, nil
+}
+
+func UndoCreateSharedServerEntity(ctx context.Context, in CreateSharedServerEntityIn, out CreateSharedServerEntityOut) error {
+	fw := saga.Get[*addon.ProviderFramework](ctx)
+	return fw.EC.Delete(ctx, out.ServerID)
+}
+
+type CreateSharedPoolIn struct {
+	RootPassword string
+}
+
+type CreateSharedPoolOut struct {
+	PoolID entity.Id
+}
+
+func sharedDiskNameForPassword(password string) string {
+	h := sha256.Sum256([]byte(password))
+	return sharedDiskName + "-" + hex.EncodeToString(h[:4])
+}
+
+func CreateSharedPool(ctx context.Context, in CreateSharedPoolIn) (CreateSharedPoolOut, error) {
+	fw := saga.Get[*addon.ProviderFramework](ctx)
+
+	labels := types.LabelSet(
+		"addon", AddonName,
+		"server", sharedServerName,
+		"shared", "true",
+	)
+
+	mountPath := "/var/lib/mysql"
+
+	env := []string{
+		"MYSQL_ROOT_PASSWORD=" + in.RootPassword,
+	}
+
+	diskName := sharedDiskNameForPassword(in.RootPassword)
+
+	poolID, err := fw.CreateSandboxPool(ctx, addon.CreateSandboxPoolSpec{
+		Name:             sharedServerName,
+		Image:            DefaultImage,
+		Env:              env,
+		Ports:            mysqlContainerPorts(),
+		DesiredInstances: 1,
+		Labels:           labels,
+		SandboxPrefix:    "my-shared",
+		Mounts: []compute_v1alpha.SandboxSpecContainerMount{
+			{Source: "mydata", Destination: mountPath},
+		},
+		Volumes: []compute_v1alpha.SandboxSpecVolume{
+			{
+				Name:         "mydata",
+				Provider:     "miren",
+				DiskName:     diskName,
+				MountPath:    mountPath,
+				SizeGb:       sharedDefaultStorageGb,
+				Filesystem:   "ext4",
+				LeaseTimeout: "5m",
+			},
+		},
+	})
+	if err != nil {
+		return CreateSharedPoolOut{}, fmt.Errorf("creating shared pool: %w", err)
+	}
+
+	return CreateSharedPoolOut{PoolID: poolID}, nil
+}
+
+func UndoCreateSharedPool(ctx context.Context, in CreateSharedPoolIn, out CreateSharedPoolOut) error {
+	fw := saga.Get[*addon.ProviderFramework](ctx)
+	return fw.DeleteSandboxPool(ctx, out.PoolID)
+}
+
+type WaitForSharedPoolIn struct {
+	PoolID entity.Id
+}
+
+type WaitForSharedPoolOut struct {
+	PoolReady bool
+}
+
+func WaitForSharedPool(ctx context.Context, in WaitForSharedPoolIn) (WaitForSharedPoolOut, error) {
+	fw := saga.Get[*addon.ProviderFramework](ctx)
+
+	if err := fw.WaitForPool(ctx, in.PoolID, poolReadyTimeout); err != nil {
+		return WaitForSharedPoolOut{}, fmt.Errorf("waiting for shared pool: %w", err)
+	}
+
+	return WaitForSharedPoolOut{PoolReady: true}, nil
+}
+
+func UndoWaitForSharedPool(ctx context.Context, in WaitForSharedPoolIn, out WaitForSharedPoolOut) error {
+	return nil
+}
+
+type CreateSharedServiceIn struct{}
+
+type CreateSharedServiceOut struct {
+	ServiceID entity.Id
+}
+
+func CreateSharedService(ctx context.Context, in CreateSharedServiceIn) (CreateSharedServiceOut, error) {
+	fw := saga.Get[*addon.ProviderFramework](ctx)
+
+	labels := types.LabelSet(
+		"addon", AddonName,
+		"server", sharedServerName,
+		"shared", "true",
+	)
+
+	serviceName := sharedServerName + "-mysql"
+	svcID, err := fw.CreateService(ctx, serviceName, labels, mysqlPort)
+	if err != nil {
+		return CreateSharedServiceOut{}, fmt.Errorf("creating shared service: %w", err)
+	}
+
+	return CreateSharedServiceOut{ServiceID: svcID}, nil
+}
+
+func UndoCreateSharedService(ctx context.Context, in CreateSharedServiceIn, out CreateSharedServiceOut) error {
+	fw := saga.Get[*addon.ProviderFramework](ctx)
+	return fw.DeleteService(ctx, out.ServiceID)
+}
+
+type WaitForSharedServiceIn struct {
+	ServiceID entity.Id
+}
+
+type WaitForSharedServiceOut struct {
+	ServiceHost string
+}
+
+func WaitForSharedService(ctx context.Context, in WaitForSharedServiceIn) (WaitForSharedServiceOut, error) {
+	fw := saga.Get[*addon.ProviderFramework](ctx)
+
+	serviceHost, err := fw.WaitForServiceAddress(ctx, in.ServiceID, poolReadyTimeout)
+	if err != nil {
+		return WaitForSharedServiceOut{}, fmt.Errorf("waiting for shared service address: %w", err)
+	}
+
+	return WaitForSharedServiceOut{ServiceHost: serviceHost}, nil
+}
+
+func UndoWaitForSharedService(ctx context.Context, in WaitForSharedServiceIn, out WaitForSharedServiceOut) error {
+	return nil
+}
+
+type ActivateSharedServerIn struct {
+	ServerID     entity.Id
+	PoolID       entity.Id
+	ServiceID    entity.Id
+	RootPassword string
+	ServiceHost  string
+}
+
+type ActivateSharedServerOut struct {
+	Activated bool
+}
+
+func ActivateSharedServer(ctx context.Context, in ActivateSharedServerIn) (ActivateSharedServerOut, error) {
+	fw := saga.Get[*addon.ProviderFramework](ctx)
+
+	server := &addon_v1alpha.MysqlServer{
+		AddonName:        AddonName,
+		Variant:          "shared",
+		Status:           "active",
+		AssociationCount: 0,
+		RootPassword:     in.RootPassword,
+		SandboxPool:      in.PoolID,
+		Service:          in.ServiceID,
+	}
+	server.ID = in.ServerID
+
+	if err := fw.EC.Update(ctx, server); err != nil {
+		return ActivateSharedServerOut{}, fmt.Errorf("activating shared server: %w", err)
+	}
+
+	return ActivateSharedServerOut{Activated: true}, nil
+}
+
+func UndoActivateSharedServer(ctx context.Context, in ActivateSharedServerIn, out ActivateSharedServerOut) error {
+	return nil
+}
+
+func RegisterEnsureSharedServerSaga(registry *saga.Registry, fw *addon.ProviderFramework) error {
+	return saga.Define("ensure-shared-mysql-server").
+		Using(fw).
+		Action(CreateSharedServerEntity).Undo(UndoCreateSharedServerEntity).
+		Action(CreateSharedPool).Undo(UndoCreateSharedPool).
+		Action(WaitForSharedPool).Undo(UndoWaitForSharedPool).
+		Action(CreateSharedService).Undo(UndoCreateSharedService).
+		Action(WaitForSharedService).Undo(UndoWaitForSharedService).
+		Action(ActivateSharedServer).Undo(UndoActivateSharedServer).
+		RegisterTo(registry)
+}
+
+// --- Shared Provisioning Saga Actions ---
+
+type FindOrCreateSharedServerIn struct {
+	AppName string
+}
+
+type FindOrCreateSharedServerOut struct {
+	ServerID     entity.Id
+	RootPassword string
+	ServiceHost  string
+}
+
+func isNotExist(err error) bool {
+	return errors.Is(err, cond.ErrNotFound{})
+}
+
+func cleanupStaleSharedServer(fw *addon.ProviderFramework, ctx context.Context, server *addon_v1alpha.MysqlServer) error {
+	if server.Service != "" {
+		if err := fw.DeleteService(ctx, server.Service); err != nil && !isNotExist(err) {
+			return fmt.Errorf("deleting stale shared service: %w", err)
+		}
+	}
+	if server.SandboxPool != "" {
+		if err := fw.DeleteSandboxPool(ctx, server.SandboxPool); err != nil && !isNotExist(err) {
+			return fmt.Errorf("deleting stale shared pool: %w", err)
+		}
+	}
+	if server.RootPassword != "" {
+		diskName := sharedDiskNameForPassword(server.RootPassword)
+		if err := fw.DeleteDiskByName(ctx, diskName); err != nil {
+			return fmt.Errorf("deleting stale shared data disk: %w", err)
+		}
+	}
+	return fw.EC.Delete(ctx, server.ID)
+}
+
+func FindOrCreateSharedServer(ctx context.Context, in FindOrCreateSharedServerIn) (FindOrCreateSharedServerOut, error) {
+	fw := saga.Get[*addon.ProviderFramework](ctx)
+
+	var server addon_v1alpha.MysqlServer
+	err := fw.EC.Get(ctx, sharedServerName, &server)
+	if err == nil {
+		switch server.Status {
+		case "active":
+			serviceHost, err := fw.GetServiceAddress(ctx, server.Service)
+			if err != nil {
+				if !errors.Is(err, cond.ErrNotFound{}) {
+					return FindOrCreateSharedServerOut{}, fmt.Errorf("resolving existing shared service address: %w", err)
+				}
+				fw.Log.Warn("shared server active but service gone, cleaning up stale server",
+					"server", server.ID, "error", err)
+				if delErr := cleanupStaleSharedServer(fw, ctx, &server); delErr != nil {
+					return FindOrCreateSharedServerOut{}, fmt.Errorf("cleaning up stale shared server: %w", delErr)
+				}
+				break
+			}
+			return FindOrCreateSharedServerOut{
+				ServerID:     server.ID,
+				RootPassword: server.RootPassword,
+				ServiceHost:  serviceHost,
+			}, nil
+		default:
+			resp, lookupErr := fw.EAC.Get(ctx, server.ID.String())
+			if lookupErr != nil {
+				return FindOrCreateSharedServerOut{}, fmt.Errorf("looking up shared server entity: %w", lookupErr)
+			}
+			age := time.Since(resp.Entity().Entity().GetCreatedAt())
+			if age < 10*time.Minute {
+				return FindOrCreateSharedServerOut{}, fmt.Errorf("shared server exists but has status %q (age %s); retry later", server.Status, age.Truncate(time.Second))
+			}
+			fw.Log.Warn("shared server stale, cleaning up",
+				"server", server.ID, "status", server.Status, "age", age.Truncate(time.Second))
+			if delErr := cleanupStaleSharedServer(fw, ctx, &server); delErr != nil {
+				return FindOrCreateSharedServerOut{}, fmt.Errorf("cleaning up stale shared server: %w", delErr)
+			}
+		}
+	} else if !errors.Is(err, cond.ErrNotFound{}) {
+		return FindOrCreateSharedServerOut{}, fmt.Errorf("looking up shared server: %w", err)
+	}
+
+	rootPassword := idgen.Gen("rt")
+
+	result, err := saga.RunNested(ctx, "ensure-shared-mysql-server",
+		saga.WithNestedInput("rootpassword", rootPassword),
+	)
+	if err != nil {
+		return FindOrCreateSharedServerOut{}, fmt.Errorf("ensuring shared server: %w", err)
+	}
+
+	var serverID entity.Id
+	if err := result.Get("serverid", &serverID); err != nil {
+		return FindOrCreateSharedServerOut{}, fmt.Errorf("reading server ID from nested result: %w", err)
+	}
+
+	var serviceHost string
+	if err := result.Get("servicehost", &serviceHost); err != nil {
+		return FindOrCreateSharedServerOut{}, fmt.Errorf("reading service host from nested result: %w", err)
+	}
+
+	return FindOrCreateSharedServerOut{
+		ServerID:     serverID,
+		RootPassword: rootPassword,
+		ServiceHost:  serviceHost,
+	}, nil
+}
+
+func UndoFindOrCreateSharedServer(ctx context.Context, in FindOrCreateSharedServerIn, out FindOrCreateSharedServerOut) error {
+	return nil
+}
+
+type GenerateSharedCredentialsIn struct {
+	AppName string
+}
+
+type GenerateSharedCredentialsOut struct {
+	SharedPassword          string
+	SharedDatabaseName      string
+	GeneratedSharedUsername string
+}
+
+func GenerateSharedCredentials(ctx context.Context, in GenerateSharedCredentialsIn) (GenerateSharedCredentialsOut, error) {
+	return GenerateSharedCredentialsOut{
+		SharedPassword:          idgen.Gen("pw"),
+		SharedDatabaseName:      sanitizeIdentifier(in.AppName),
+		GeneratedSharedUsername: sanitizeIdentifier(in.AppName),
+	}, nil
+}
+
+func UndoGenerateSharedCredentials(ctx context.Context, in GenerateSharedCredentialsIn, out GenerateSharedCredentialsOut) error {
+	return nil
+}
+
+type CreateSharedUserIn struct {
+	ServiceHost             string
+	RootPassword            string
+	GeneratedSharedUsername string
+	SharedPassword          string
+}
+
+type CreateSharedUserOut struct {
+	SharedUsername string
+}
+
+func CreateSharedUser(ctx context.Context, in CreateSharedUserIn) (CreateSharedUserOut, error) {
+	db, err := connectAsRoot(ctx, in.ServiceHost, in.RootPassword)
+	if err != nil {
+		return CreateSharedUserOut{}, fmt.Errorf("connecting to shared server: %w", err)
+	}
+	defer db.Close()
+
+	if err := createMysqlUser(ctx, db, in.GeneratedSharedUsername, in.SharedPassword); err != nil {
+		return CreateSharedUserOut{}, err
+	}
+
+	return CreateSharedUserOut{SharedUsername: in.GeneratedSharedUsername}, nil
+}
+
+func UndoCreateSharedUser(ctx context.Context, in CreateSharedUserIn, out CreateSharedUserOut) error {
+	if out.SharedUsername == "" {
+		return nil
+	}
+
+	db, err := connectAsRoot(ctx, in.ServiceHost, in.RootPassword)
+	if err != nil {
+		return fmt.Errorf("connecting for user cleanup: %w", err)
+	}
+	defer db.Close()
+
+	return dropMysqlUser(ctx, db, in.GeneratedSharedUsername)
+}
+
+type CreateSharedDatabaseIn struct {
+	ServiceHost        string
+	RootPassword       string
+	SharedDatabaseName string
+	SharedUsername     string
+}
+
+type CreateSharedDatabaseOut struct {
+	DatabaseCreated bool
+}
+
+func CreateSharedDatabase(ctx context.Context, in CreateSharedDatabaseIn) (CreateSharedDatabaseOut, error) {
+	db, err := connectAsRoot(ctx, in.ServiceHost, in.RootPassword)
+	if err != nil {
+		return CreateSharedDatabaseOut{}, fmt.Errorf("connecting to shared server: %w", err)
+	}
+	defer db.Close()
+
+	if err := createMysqlDatabase(ctx, db, in.SharedDatabaseName, in.SharedUsername); err != nil {
+		return CreateSharedDatabaseOut{}, err
+	}
+
+	return CreateSharedDatabaseOut{DatabaseCreated: true}, nil
+}
+
+func UndoCreateSharedDatabase(ctx context.Context, in CreateSharedDatabaseIn, out CreateSharedDatabaseOut) error {
+	if !out.DatabaseCreated {
+		return nil
+	}
+
+	db, err := connectAsRoot(ctx, in.ServiceHost, in.RootPassword)
+	if err != nil {
+		return fmt.Errorf("connecting for database cleanup: %w", err)
+	}
+	defer db.Close()
+
+	return dropMysqlDatabase(ctx, db, in.SharedDatabaseName)
+}
+
+type IncrementAssociationCountIn struct {
+	ServerID entity.Id
+}
+
+type IncrementAssociationCountOut struct {
+	Incremented bool
+}
+
+func IncrementAssociationCount(ctx context.Context, in IncrementAssociationCountIn) (IncrementAssociationCountOut, error) {
+	fw := saga.Get[*addon.ProviderFramework](ctx)
+
+	var server addon_v1alpha.MysqlServer
+	ent, err := fw.EC.GetByIdWithEntity(ctx, in.ServerID, &server)
+	if err != nil {
+		return IncrementAssociationCountOut{}, fmt.Errorf("getting server for count increment: %w", err)
+	}
+
+	newCount := server.AssociationCount + 1
+	if err := fw.EC.Patch(ctx, in.ServerID, ent.Revision(),
+		entity.Int64(addon_v1alpha.MysqlServerAssociationCountId, newCount),
+	); err != nil {
+		return IncrementAssociationCountOut{}, fmt.Errorf("updating association count: %w", err)
+	}
+
+	return IncrementAssociationCountOut{Incremented: true}, nil
+}
+
+func UndoIncrementAssociationCount(ctx context.Context, in IncrementAssociationCountIn, out IncrementAssociationCountOut) error {
+	if !out.Incremented {
+		return nil
+	}
+
+	fw := saga.Get[*addon.ProviderFramework](ctx)
+
+	var server addon_v1alpha.MysqlServer
+	ent, err := fw.EC.GetByIdWithEntity(ctx, in.ServerID, &server)
+	if err != nil {
+		return err
+	}
+
+	newCount := server.AssociationCount - 1
+	if newCount < 0 {
+		newCount = 0
+	}
+	return fw.EC.Patch(ctx, in.ServerID, ent.Revision(),
+		entity.Int64(addon_v1alpha.MysqlServerAssociationCountId, newCount),
+	)
+}
+
+type BuildSharedResultIn struct {
+	ServerID           entity.Id
+	ServiceHost        string
+	SharedDatabaseName string
+	SharedUsername     string
+	SharedPassword     string
+}
+
+type BuildSharedResultOut struct {
+	Done bool
+}
+
+func BuildSharedResult(ctx context.Context, in BuildSharedResultIn) (BuildSharedResultOut, error) {
+	rc := saga.Get[*resultCapture](ctx)
+
+	envVars := buildEnvVars(in.ServiceHost, mysqlPort, in.SharedUsername, in.SharedPassword, in.SharedDatabaseName)
+
+	sharedData := &addon_v1alpha.MysqlSharedData{
+		MysqlServer:  in.ServerID,
+		DatabaseName: in.SharedDatabaseName,
+		Username:     in.SharedUsername,
+	}
+
+	rc.Result = &addon.ProvisionResult{
+		EnvVars: envVars,
+		Attrs:   sharedData.Encode(),
+	}
+
+	return BuildSharedResultOut{Done: true}, nil
+}
+
+func UndoBuildSharedResult(ctx context.Context, in BuildSharedResultIn, out BuildSharedResultOut) error {
+	return nil
+}
+
+func RegisterSharedSaga(registry *saga.Registry, fw *addon.ProviderFramework, rc *resultCapture) error {
+	if err := RegisterEnsureSharedServerSaga(registry, fw); err != nil {
+		return err
+	}
+
+	return saga.Define("provision-shared-mysql").
+		Using(fw).
+		Using(rc).
+		Action(FindOrCreateSharedServer).Undo(UndoFindOrCreateSharedServer).
+		Action(GenerateSharedCredentials).Undo(UndoGenerateSharedCredentials).
+		Action(CreateSharedUser).Undo(UndoCreateSharedUser).
+		Action(CreateSharedDatabase).Undo(UndoCreateSharedDatabase).
+		Action(IncrementAssociationCount).Undo(UndoIncrementAssociationCount).
+		Action(BuildSharedResult).Undo(UndoBuildSharedResult).
+		RegisterTo(registry)
+}
+
+// --- Shared Deprovisioning Saga Actions ---
+
+type DecodeSharedAttrsIn struct {
+	AssocEntity *entity.Entity `saga:"assocentity"`
+}
+
+type DecodeSharedAttrsOut struct {
+	SharedServerRef entity.Id
+	SharedDbName    string
+	SharedUserName  string
+}
+
+func DecodeSharedAttrs(ctx context.Context, in DecodeSharedAttrsIn) (DecodeSharedAttrsOut, error) {
+	var data addon_v1alpha.MysqlSharedData
+	if in.AssocEntity != nil {
+		data.Decode(in.AssocEntity)
+	}
+
+	if data.MysqlServer == "" {
+		return DecodeSharedAttrsOut{}, fmt.Errorf("no mysql server ref found")
+	}
+
+	return DecodeSharedAttrsOut{
+		SharedServerRef: data.MysqlServer,
+		SharedDbName:    data.DatabaseName,
+		SharedUserName:  data.Username,
+	}, nil
+}
+
+func UndoDecodeSharedAttrs(ctx context.Context, in DecodeSharedAttrsIn, out DecodeSharedAttrsOut) error {
+	return nil
+}
+
+type LookupSharedServerIn struct {
+	SharedServerRef entity.Id
+}
+
+type LookupSharedServerOut struct {
+	SharedRootPassword string
+	SharedServiceRef   entity.Id
+	SharedPoolRef      entity.Id
+	SharedAssocCount   int64
+	SharedServiceHost  string
+}
+
+func LookupSharedServer(ctx context.Context, in LookupSharedServerIn) (LookupSharedServerOut, error) {
+	fw := saga.Get[*addon.ProviderFramework](ctx)
+
+	var server addon_v1alpha.MysqlServer
+	if err := fw.EC.GetById(ctx, in.SharedServerRef, &server); err != nil {
+		return LookupSharedServerOut{}, fmt.Errorf("looking up shared server: %w", err)
+	}
+
+	serviceHost, err := fw.GetServiceAddress(ctx, server.Service)
+	if err != nil {
+		return LookupSharedServerOut{}, fmt.Errorf("resolving shared service address: %w", err)
+	}
+
+	return LookupSharedServerOut{
+		SharedRootPassword: server.RootPassword,
+		SharedServiceRef:   server.Service,
+		SharedPoolRef:      server.SandboxPool,
+		SharedAssocCount:   server.AssociationCount,
+		SharedServiceHost:  serviceHost,
+	}, nil
+}
+
+func UndoLookupSharedServer(ctx context.Context, in LookupSharedServerIn, out LookupSharedServerOut) error {
+	return nil
+}
+
+type TerminateConnectionsIn struct {
+	SharedServiceHost  string
+	SharedRootPassword string
+	SharedDbName       string
+}
+
+type TerminateConnectionsOut struct {
+	ConnectionsTerminated bool
+}
+
+func TerminateConnections(ctx context.Context, in TerminateConnectionsIn) (TerminateConnectionsOut, error) {
+	db, err := connectAsRoot(ctx, in.SharedServiceHost, in.SharedRootPassword)
+	if err != nil {
+		return TerminateConnectionsOut{}, fmt.Errorf("connecting to terminate connections: %w", err)
+	}
+	defer db.Close()
+
+	if err := terminateMysqlConnections(ctx, db, in.SharedDbName); err != nil {
+		return TerminateConnectionsOut{}, err
+	}
+
+	return TerminateConnectionsOut{ConnectionsTerminated: true}, nil
+}
+
+func UndoTerminateConnections(ctx context.Context, in TerminateConnectionsIn, out TerminateConnectionsOut) error {
+	return nil
+}
+
+type DropSharedDatabaseIn struct {
+	SharedServiceHost     string
+	SharedRootPassword    string
+	SharedDbName          string
+	ConnectionsTerminated bool
+}
+
+type DropSharedDatabaseOut struct {
+	DatabaseDropped bool
+}
+
+func DropSharedDatabase(ctx context.Context, in DropSharedDatabaseIn) (DropSharedDatabaseOut, error) {
+	db, err := connectAsRoot(ctx, in.SharedServiceHost, in.SharedRootPassword)
+	if err != nil {
+		return DropSharedDatabaseOut{}, fmt.Errorf("connecting to drop database: %w", err)
+	}
+	defer db.Close()
+
+	if err := dropMysqlDatabase(ctx, db, in.SharedDbName); err != nil {
+		return DropSharedDatabaseOut{}, err
+	}
+
+	return DropSharedDatabaseOut{DatabaseDropped: true}, nil
+}
+
+func UndoDropSharedDatabase(ctx context.Context, in DropSharedDatabaseIn, out DropSharedDatabaseOut) error {
+	return nil
+}
+
+type DropSharedUserIn struct {
+	SharedServiceHost     string
+	SharedRootPassword    string
+	SharedUserName        string
+	ConnectionsTerminated bool
+}
+
+type DropSharedUserOut struct {
+	UserDropped bool
+}
+
+func DropSharedUser(ctx context.Context, in DropSharedUserIn) (DropSharedUserOut, error) {
+	db, err := connectAsRoot(ctx, in.SharedServiceHost, in.SharedRootPassword)
+	if err != nil {
+		return DropSharedUserOut{}, fmt.Errorf("connecting to drop user: %w", err)
+	}
+	defer db.Close()
+
+	if err := dropMysqlUser(ctx, db, in.SharedUserName); err != nil {
+		return DropSharedUserOut{}, err
+	}
+
+	return DropSharedUserOut{UserDropped: true}, nil
+}
+
+func UndoDropSharedUser(ctx context.Context, in DropSharedUserIn, out DropSharedUserOut) error {
+	return nil
+}
+
+type DecrementAssociationCountIn struct {
+	SharedServerRef entity.Id
+	DatabaseDropped bool
+	UserDropped     bool
+}
+
+type DecrementAssociationCountOut struct {
+	RemainingCount int64
+}
+
+func DecrementAssociationCount(ctx context.Context, in DecrementAssociationCountIn) (DecrementAssociationCountOut, error) {
+	fw := saga.Get[*addon.ProviderFramework](ctx)
+
+	var server addon_v1alpha.MysqlServer
+	ent, err := fw.EC.GetByIdWithEntity(ctx, in.SharedServerRef, &server)
+	if err != nil {
+		return DecrementAssociationCountOut{}, fmt.Errorf("getting server: %w", err)
+	}
+
+	if server.AssociationCount <= 0 {
+		fw.Log.Warn("association count already zero, skipping decrement", "server", in.SharedServerRef)
+		return DecrementAssociationCountOut{RemainingCount: 0}, nil
+	}
+
+	newCount := server.AssociationCount - 1
+	if err := fw.EC.Patch(ctx, in.SharedServerRef, ent.Revision(),
+		entity.Int64(addon_v1alpha.MysqlServerAssociationCountId, newCount),
+	); err != nil {
+		return DecrementAssociationCountOut{}, fmt.Errorf("updating association count: %w", err)
+	}
+
+	return DecrementAssociationCountOut{RemainingCount: newCount}, nil
+}
+
+func UndoDecrementAssociationCount(ctx context.Context, in DecrementAssociationCountIn, out DecrementAssociationCountOut) error {
+	return nil
+}
+
+type CleanupSharedServerIn struct {
+	SharedServerRef    entity.Id
+	SharedServiceRef   entity.Id
+	SharedPoolRef      entity.Id
+	SharedRootPassword string
+	RemainingCount     int64
+}
+
+type CleanupSharedServerOut struct {
+	CleanedUp bool
+}
+
+func CleanupSharedServer(ctx context.Context, in CleanupSharedServerIn) (CleanupSharedServerOut, error) {
+	if in.RemainingCount > 0 {
+		return CleanupSharedServerOut{CleanedUp: false}, nil
+	}
+
+	fw := saga.Get[*addon.ProviderFramework](ctx)
+
+	if in.SharedServiceRef != "" {
+		if err := fw.DeleteService(ctx, in.SharedServiceRef); err != nil {
+			return CleanupSharedServerOut{}, fmt.Errorf("deleting shared service: %w", err)
+		}
+	}
+
+	if in.SharedPoolRef != "" {
+		if err := fw.DeleteSandboxPool(ctx, in.SharedPoolRef); err != nil {
+			return CleanupSharedServerOut{}, fmt.Errorf("deleting shared pool: %w", err)
+		}
+	}
+
+	if in.SharedRootPassword != "" {
+		diskName := sharedDiskNameForPassword(in.SharedRootPassword)
+		if err := fw.DeleteDiskByName(ctx, diskName); err != nil {
+			return CleanupSharedServerOut{}, fmt.Errorf("deleting shared data disk %s: %w", diskName, err)
+		}
+	}
+
+	if err := fw.EC.Delete(ctx, in.SharedServerRef); err != nil {
+		return CleanupSharedServerOut{}, fmt.Errorf("deleting shared server: %w", err)
+	}
+
+	return CleanupSharedServerOut{CleanedUp: true}, nil
+}
+
+func UndoCleanupSharedServer(ctx context.Context, in CleanupSharedServerIn, out CleanupSharedServerOut) error {
+	return nil
+}
+
+func RegisterDeprovisionSharedSaga(registry *saga.Registry, fw *addon.ProviderFramework) error {
+	return saga.Define("deprovision-shared-mysql").
+		Using(fw).
+		Action(DecodeSharedAttrs).Undo(UndoDecodeSharedAttrs).
+		Action(LookupSharedServer).Undo(UndoLookupSharedServer).
+		Action(TerminateConnections).Undo(UndoTerminateConnections).
+		Action(DropSharedDatabase).Undo(UndoDropSharedDatabase).
+		Action(DropSharedUser).Undo(UndoDropSharedUser).
+		Action(DecrementAssociationCount).Undo(UndoDecrementAssociationCount).
+		Action(CleanupSharedServer).Undo(UndoCleanupSharedServer).
+		RegisterTo(registry)
+}
+
+func (p *Provider) provisionShared(ctx context.Context, app addon.App, variant addon.Variant) (*addon.ProvisionResult, error) {
+	p.log.Info("provisioning shared MySQL",
+		"app", app.Name,
+		"variant", variant.Name)
+
+	rc := &resultCapture{}
+	registry := saga.NewRegistry()
+
+	if err := RegisterSharedSaga(registry, p.fw, rc); err != nil {
+		return nil, fmt.Errorf("registering shared saga: %w", err)
+	}
+
+	storage := p.fw.Storage
+	executor := saga.NewExecutor(storage, saga.WithRegistry(registry), saga.WithLogger(p.log))
+
+	err := executor.Start("provision-shared-mysql").
+		Input("appname", app.Name).
+		Execute(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if rc.Result == nil {
+		return nil, fmt.Errorf("saga completed but no result was captured")
+	}
+
+	p.log.Info("shared MySQL provisioned", "app", app.Name)
+	return rc.Result, nil
+}
+
+func (p *Provider) deprovisionShared(ctx context.Context, assoc addon.AddonAssociation) error {
+	p.log.Info("deprovisioning shared MySQL", "assoc", assoc.ID)
+
+	registry := saga.NewRegistry()
+
+	if err := RegisterDeprovisionSharedSaga(registry, p.fw); err != nil {
+		return fmt.Errorf("registering deprovision saga: %w", err)
+	}
+
+	storage := p.fw.Storage
+	executor := saga.NewExecutor(storage, saga.WithRegistry(registry), saga.WithLogger(p.log))
+
+	err := executor.Start("deprovision-shared-mysql").
+		Input("assocentity", assoc.Entity).
+		Execute(ctx)
+	if err != nil {
+		return err
+	}
+
+	p.log.Info("shared MySQL deprovisioned", "assoc", assoc.ID)
+	return nil
+}
