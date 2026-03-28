@@ -41,6 +41,7 @@ func TestSanitizeIdentifier(t *testing.T) {
 		{"APP-NAME", "app_name"},
 		{"", "app"},
 		{"a", "a"},
+		{"my-really-long-application-name-for-production", "my_really_long_application_name_"},
 	}
 
 	for _, tt := range tests {

@@ -14,6 +14,9 @@ const (
 	defaultMysqlUser = "root"
 )
 
+// maxMysqlIdentLen is the maximum length of a MySQL username or database name.
+const maxMysqlIdentLen = 32
+
 func sanitizeIdentifier(name string) string {
 	result := make([]byte, 0, len(name))
 	for i := 0; i < len(name); i++ {
@@ -31,6 +34,9 @@ func sanitizeIdentifier(name string) string {
 	}
 	if result[0] >= '0' && result[0] <= '9' {
 		result = append([]byte{'a'}, result...)
+	}
+	if len(result) > maxMysqlIdentLen {
+		result = result[:maxMysqlIdentLen]
 	}
 	return string(result)
 }

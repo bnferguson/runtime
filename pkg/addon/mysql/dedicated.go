@@ -38,6 +38,7 @@ type GenerateCredentialsIn struct {
 
 type GenerateCredentialsOut struct {
 	Password     string
+	RootPassword string
 	DatabaseName string
 	Username     string
 	ServiceName  string
@@ -47,6 +48,7 @@ type GenerateCredentialsOut struct {
 func GenerateCredentials(ctx context.Context, in GenerateCredentialsIn) (GenerateCredentialsOut, error) {
 	return GenerateCredentialsOut{
 		Password:     idgen.Gen("pw"),
+		RootPassword: idgen.Gen("rt"),
 		DatabaseName: sanitizeIdentifier(in.AppName),
 		Username:     sanitizeIdentifier(in.AppName),
 		ServiceName:  fmt.Sprintf("%s-mysql", in.AppName),
@@ -59,9 +61,9 @@ func UndoGenerateCredentials(ctx context.Context, in GenerateCredentialsIn, out 
 }
 
 type CreateMysqlServerIn struct {
-	ServerName  string
-	VariantName string
-	Password    string
+	ServerName   string
+	VariantName  string
+	RootPassword string
 }
 
 type CreateMysqlServerOut struct {
@@ -76,7 +78,7 @@ func CreateMysqlServer(ctx context.Context, in CreateMysqlServerIn) (CreateMysql
 		Variant:          in.VariantName,
 		Status:           "provisioning",
 		AssociationCount: 1,
-		RootPassword:     in.Password,
+		RootPassword:     in.RootPassword,
 	}
 
 	serverID, err := fw.EC.Create(ctx, in.ServerName, server)
@@ -98,6 +100,7 @@ type CreateDedicatedPoolIn struct {
 	DatabaseName  string
 	Username      string
 	Password      string
+	RootPassword  string
 	VariantConfig map[string]string
 }
 
@@ -119,7 +122,7 @@ func CreateDedicatedPool(ctx context.Context, in CreateDedicatedPoolIn) (CreateD
 	mountPath := "/var/lib/mysql"
 
 	env := []string{
-		"MYSQL_ROOT_PASSWORD=" + in.Password,
+		"MYSQL_ROOT_PASSWORD=" + in.RootPassword,
 		"MYSQL_DATABASE=" + in.DatabaseName,
 		"MYSQL_USER=" + in.Username,
 		"MYSQL_PASSWORD=" + in.Password,
@@ -238,11 +241,11 @@ func UndoWaitForDedicatedService(ctx context.Context, in WaitForDedicatedService
 }
 
 type UpdateDedicatedServerIn struct {
-	ServerID    entity.Id
-	PoolID      entity.Id
-	ServiceID   entity.Id
-	VariantName string
-	Password    string
+	ServerID     entity.Id
+	PoolID       entity.Id
+	ServiceID    entity.Id
+	VariantName  string
+	RootPassword string
 }
 
 type UpdateDedicatedServerOut struct {
@@ -257,7 +260,7 @@ func UpdateDedicatedServer(ctx context.Context, in UpdateDedicatedServerIn) (Upd
 		Variant:          in.VariantName,
 		Status:           "active",
 		AssociationCount: 1,
-		RootPassword:     in.Password,
+		RootPassword:     in.RootPassword,
 		SandboxPool:      in.PoolID,
 		Service:          in.ServiceID,
 	}
