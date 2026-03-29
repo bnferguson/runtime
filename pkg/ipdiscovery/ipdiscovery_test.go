@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -36,31 +34,6 @@ func TestDiscover(t *testing.T) {
 		assert.NotEmpty(t, addr.IP)
 		assert.NotEmpty(t, addr.Network)
 	}
-}
-
-func TestGetPublicIP(t *testing.T) {
-	// Create a test server
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "miren-runtime/1.0", r.Header.Get("User-Agent"))
-
-		response := PublicIPResponse{
-			IP:      "203.0.113.1",
-			Country: "US",
-			City:    "San Francisco",
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
-	}))
-	defer server.Close()
-
-	// Now we can test with the stub server
-	ctx := context.Background()
-
-	// Call getPublicIP with the test server URL
-	ip, err := getPublicIP(ctx, server.URL+"/json")
-	require.NoError(t, err)
-	assert.Equal(t, "203.0.113.1", ip)
 }
 
 func TestDiscoverWithTimeout(t *testing.T) {
@@ -99,7 +72,6 @@ func TestAddressTypes(t *testing.T) {
 func TestDiscoveryJSON(t *testing.T) {
 	// Test that Discovery can be properly marshaled to JSON
 	discovery := &Discovery{
-		PublicIP: "203.0.113.1",
 		Addresses: []Address{
 			{
 				Interface: "eth0",
@@ -123,6 +95,5 @@ func TestDiscoveryJSON(t *testing.T) {
 	err = json.Unmarshal(data, &decoded)
 	require.NoError(t, err)
 
-	assert.Equal(t, discovery.PublicIP, decoded.PublicIP)
 	assert.Equal(t, len(discovery.Addresses), len(decoded.Addresses))
 }
