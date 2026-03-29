@@ -1155,8 +1155,9 @@ func (c *Coordinator) publicAddresses() []string {
 }
 
 // apiAddresses builds the list of API addresses for status reports.
-// When netcheck has been run, public IPs from AdditionalIPs are filtered out
-// in favor of the netcheck-determined public addresses.
+// When netcheck has found reachable public addresses, discovered public IPs
+// from AdditionalIPs are replaced by the netcheck results. If netcheck ran
+// but found nothing reachable, discovered public IPs are kept as a fallback.
 func (c *Coordinator) apiAddresses() []string {
 	var addrs []string
 
@@ -1168,22 +1169,20 @@ func (c *Coordinator) apiAddresses() []string {
 	// Add localhost addresses
 	addrs = append(addrs, "127.0.0.1:8443", "[::1]:8443")
 
-	c.netcheckMu.RLock()
-	hasNetcheck := c.netcheckResult != nil
-	c.netcheckMu.RUnlock()
+	pubAddrs := c.publicAddresses()
 
 	for _, ip := range c.AdditionalIPs {
-		// When netcheck has run, skip public IPs — netcheck results replace them
-		if hasNetcheck && !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsLinkLocalUnicast() {
+		// When netcheck found reachable public addresses, skip public AdditionalIPs
+		// in favor of the netcheck-determined ones. If netcheck ran but found nothing
+		// reachable (e.g., IPv4/IPv6 mismatch), keep the discovered public IPs.
+		if len(pubAddrs) > 0 && !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsLinkLocalUnicast() {
 			continue
 		}
 
-		addrs = append(addrs, net.JoinHostPort(ip.String(), "8443")) // Ensure proper formatting for IPv6 addresses
+		addrs = append(addrs, net.JoinHostPort(ip.String(), "8443"))
 	}
 
-	if pubAddrs := c.publicAddresses(); len(pubAddrs) > 0 {
-		addrs = append(addrs, pubAddrs...)
-	}
+	addrs = append(addrs, pubAddrs...)
 
 	c.logAddressesOnce.Do(func() {
 		additional := []string{}
