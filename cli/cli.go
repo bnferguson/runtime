@@ -10,6 +10,7 @@ import (
 	"miren.dev/mflags"
 	"miren.dev/runtime/cli/commands"
 	"miren.dev/runtime/pkg/labs"
+	"miren.dev/runtime/pkg/ui"
 	"miren.dev/runtime/version"
 )
 
@@ -34,7 +35,7 @@ func Run(args []string) int {
 	if helpJSON {
 		data, err := d.HelpJSON()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)
+			printError(err)
 			return 1
 		}
 		fmt.Println(string(data))
@@ -43,7 +44,7 @@ func Run(args []string) int {
 
 	execArgs, err := expandAlias(d, args[1:])
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)
+		printError(err)
 		return 1
 	}
 
@@ -58,11 +59,24 @@ func Run(args []string) int {
 			return int(exitErr)
 		}
 
-		fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)
+		printError(err)
 		return 1
 	}
 
 	return 0
+}
+
+// printError renders an error to stderr. If the error implements
+// ui.TerminalError, it gets colorized multi-line output; otherwise
+// it falls back to a plain "ERROR: ..." line.
+func printError(err error) {
+	var te ui.TerminalError
+	if errors.As(err, &te) {
+		fmt.Fprintf(os.Stderr, "ERROR: ")
+		te.WriteForTerminal(os.Stderr)
+	} else {
+		fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)
+	}
 }
 
 // Version returns the version string

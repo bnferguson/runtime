@@ -58,6 +58,8 @@ func HelpAlias(ctx *Context, opts helpAliasOpts) error {
 
 	ac, err := appconfig.LoadAppConfig()
 	if err != nil {
+		printConfigWarning(err)
+		fmt.Println()
 		return nil
 	}
 

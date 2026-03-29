@@ -2,10 +2,12 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"miren.dev/mflags"
 	"miren.dev/runtime/appconfig"
+	"miren.dev/runtime/pkg/ui"
 )
 
 // expandAlias checks if the given args match a configured alias and expands it.
@@ -17,7 +19,15 @@ func expandAlias(d *mflags.Dispatcher, args []string) ([]string, error) {
 	}
 
 	ac, err := appconfig.LoadAppConfig()
-	if err != nil || ac == nil || len(ac.Aliases) == 0 {
+	if err != nil {
+		if te, ok := err.(ui.TerminalError); ok {
+			te.WriteForTerminal(os.Stderr)
+		} else {
+			fmt.Fprintf(os.Stderr, "warning: could not load %s: %v\n", appconfig.AppConfigPath, err)
+		}
+		return args, nil
+	}
+	if ac == nil || len(ac.Aliases) == 0 {
 		return args, nil
 	}
 

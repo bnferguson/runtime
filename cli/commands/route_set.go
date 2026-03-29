@@ -23,7 +23,10 @@ func RouteSet(ctx *Context, opts struct {
 
 	appName := opts.AppName
 	if appName == "" {
-		if ac, err := appconfig.LoadAppConfig(); err == nil && ac != nil && ac.Name != "" {
+		ac, err := appconfig.LoadAppConfig()
+		if err != nil {
+			printConfigWarning(err)
+		} else if ac != nil && ac.Name != "" {
 			appName = ac.Name
 		}
 	}

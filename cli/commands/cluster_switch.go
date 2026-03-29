@@ -100,7 +100,9 @@ func ClusterSwitch(ctx *Context, opts struct {
 	ctx.Printf("Switched to cluster: %s\n", clusterName)
 
 	// Also update per-app state if we're in an app directory.
-	if ac, _ := appconfig.LoadAppConfig(); ac != nil && ac.Name != "" {
+	if ac, err := appconfig.LoadAppConfig(); err != nil {
+		printConfigWarning(err)
+	} else if ac != nil && ac.Name != "" {
 		_ = appconfig.SaveAppState(ac.Name, &appconfig.AppState{Cluster: clusterName})
 	}
 
