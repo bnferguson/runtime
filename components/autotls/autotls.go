@@ -7,6 +7,8 @@ import (
 	"net"
 	"net/http"
 	"time"
+
+	"golang.org/x/crypto/acme"
 )
 
 // CertificateProvider provides certificates via GetCertificate callback
@@ -30,6 +32,7 @@ func ServeTLSWithController(ctx context.Context, log *slog.Logger, certProvider 
 	tlsConfig := &tls.Config{
 		GetCertificate: certProvider.GetCertificate,
 		MinVersion:     tls.VersionTLS12,
+		NextProtos:     []string{"h2", "http/1.1", acme.ALPNProto},
 	}
 
 	server := &http.Server{
