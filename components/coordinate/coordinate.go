@@ -341,7 +341,7 @@ type Coordinator struct {
 	oidcAuthenticator *oidcauth.OIDCAuthenticator
 
 	netcheckMu        sync.RWMutex
-	netcheckResult    *cloudauth.NetcheckResponse
+	netcheckResult    *cloudauth.NetcheckDualStackResult
 	netcheckCheckedAt time.Time
 
 	logAddressesOnce sync.Once
@@ -1134,7 +1134,8 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	return nil
 }
 
-// runNetcheck calls the cloud's netcheck endpoint to determine public reachability.
+// runNetcheck calls the cloud's netcheck endpoint over both IPv4 and IPv6
+// to determine public reachability on each address family.
 func (c *Coordinator) runNetcheck(ctx context.Context) {
 	cloudURL := c.CloudAuth.CloudURL
 	if cloudURL == "" {
@@ -1146,7 +1147,7 @@ func (c *Coordinator) runNetcheck(ctx context.Context) {
 		{Port: 8443, Protocol: "http3"},
 	}
 
-	result, err := cloudauth.Netcheck(ctx, cloudURL, ports)
+	result, err := cloudauth.NetcheckDualStack(ctx, cloudURL, ports)
 	if err != nil {
 		if errors.Is(err, cloudauth.ErrPrivateAddress) {
 			c.Log.Info("netcheck: cluster is not publicly reachable (private IP)")
@@ -1160,12 +1161,25 @@ func (c *Coordinator) runNetcheck(ctx context.Context) {
 		return
 	}
 
-	// Validate that the source address is a global unicast IP — if not,
-	// the netcheck response is unreliable (e.g. proxy or misconfigured endpoint).
-	sourceIP := net.ParseIP(result.SourceAddress)
-	if sourceIP == nil || !sourceIP.IsGlobalUnicast() || sourceIP.IsPrivate() {
-		c.Log.Warn("netcheck: source address is not a public IP, ignoring result",
-			"source_address", result.SourceAddress)
+	// Validate source addresses — drop any that aren't public global unicast.
+	if result.IPv4 != nil {
+		sourceIP := net.ParseIP(result.IPv4.SourceAddress)
+		if sourceIP == nil || !sourceIP.IsGlobalUnicast() || sourceIP.IsPrivate() {
+			c.Log.Warn("netcheck: IPv4 source address is not a public IP, ignoring",
+				"source_address", result.IPv4.SourceAddress)
+			result.IPv4 = nil
+		}
+	}
+	if result.IPv6 != nil {
+		sourceIP := net.ParseIP(result.IPv6.SourceAddress)
+		if sourceIP == nil || !sourceIP.IsGlobalUnicast() || sourceIP.IsPrivate() {
+			c.Log.Warn("netcheck: IPv6 source address is not a public IP, ignoring",
+				"source_address", result.IPv6.SourceAddress)
+			result.IPv6 = nil
+		}
+	}
+
+	if result.IPv4 == nil && result.IPv6 == nil {
 		c.netcheckMu.Lock()
 		c.netcheckResult = nil
 		c.netcheckCheckedAt = time.Now()
@@ -1178,46 +1192,64 @@ func (c *Coordinator) runNetcheck(ctx context.Context) {
 	c.netcheckCheckedAt = time.Now()
 	c.netcheckMu.Unlock()
 
-	var reachable []string
-	for _, r := range result.Results {
-		if r.Reachable {
-			reachable = append(reachable, fmt.Sprintf("%s/%d", r.Protocol, r.Port))
+	// Log results for each address family
+	for _, entry := range []struct {
+		name string
+		resp *cloudauth.NetcheckResponse
+	}{
+		{"IPv4", result.IPv4},
+		{"IPv6", result.IPv6},
+	} {
+		if entry.resp == nil {
+			continue
 		}
+		var reachable []string
+		for _, r := range entry.resp.Results {
+			if r.Reachable {
+				reachable = append(reachable, fmt.Sprintf("%s/%d", r.Protocol, r.Port))
+			}
+		}
+		c.Log.Info("netcheck: public reachability determined",
+			"family", entry.name,
+			"source_ip", entry.resp.SourceAddress,
+			"reachable", reachable,
+			"duration_ms", entry.resp.DurationMs,
+		)
 	}
-	c.Log.Info("netcheck: public reachability determined",
-		"source_ip", result.SourceAddress,
-		"reachable", reachable,
-		"duration_ms", result.DurationMs,
-	)
 }
 
-// publicAddresses returns addresses derived from the cached netcheck result.
+// publicAddresses returns addresses derived from the cached dual-stack netcheck result.
 // Returns nil if no netcheck has been done or the cluster isn't publicly reachable.
 func (c *Coordinator) publicAddresses() []string {
 	c.netcheckMu.RLock()
 	result := c.netcheckResult
 	c.netcheckMu.RUnlock()
 
-	if result == nil || result.SourceAddress == "" {
-		return nil
-	}
-
-	if net.ParseIP(result.SourceAddress) == nil {
+	if result == nil {
 		return nil
 	}
 
 	seen := make(map[string]struct{})
 	var addrs []string
-	for _, r := range result.Results {
-		if !r.Reachable {
+
+	for _, resp := range []*cloudauth.NetcheckResponse{result.IPv4, result.IPv6} {
+		if resp == nil || resp.SourceAddress == "" {
 			continue
 		}
-		hp := net.JoinHostPort(result.SourceAddress, strconv.Itoa(r.Port))
-		if _, ok := seen[hp]; ok {
+		if net.ParseIP(resp.SourceAddress) == nil {
 			continue
 		}
-		seen[hp] = struct{}{}
-		addrs = append(addrs, hp)
+		for _, r := range resp.Results {
+			if !r.Reachable {
+				continue
+			}
+			hp := net.JoinHostPort(resp.SourceAddress, strconv.Itoa(r.Port))
+			if _, ok := seen[hp]; ok {
+				continue
+			}
+			seen[hp] = struct{}{}
+			addrs = append(addrs, hp)
+		}
 	}
 
 	return addrs
