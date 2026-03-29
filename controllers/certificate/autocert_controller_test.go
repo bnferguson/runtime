@@ -15,9 +15,11 @@ import (
 func newTestAutocertController(t *testing.T) *AutocertController {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	dataPath := t.TempDir()
-	// nil eac is fine for unit tests that don't exercise Delete
-	c := NewAutocertController(log, nil, dataPath, "test@example.com")
+	c := NewAutocertController(AutocertControllerOpts{
+		Log:      log,
+		DataPath: t.TempDir(),
+		Email:    "test@example.com",
+	})
 	if err := c.Init(context.Background()); err != nil {
 		t.Fatalf("failed to init autocert controller: %v", err)
 	}
@@ -209,7 +211,12 @@ func TestAutocertController_Init_PrePopulatesAllowedHosts(t *testing.T) {
 
 	// Create controller with real EAC and init
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	c := NewAutocertController(log, server.EAC, t.TempDir(), "test@example.com")
+	c := NewAutocertController(AutocertControllerOpts{
+		Log:      log,
+		EAC:      server.EAC,
+		DataPath: t.TempDir(),
+		Email:    "test@example.com",
+	})
 	if err := c.Init(ctx); err != nil {
 		t.Fatalf("failed to init: %v", err)
 	}

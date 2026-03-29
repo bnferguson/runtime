@@ -5,16 +5,28 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/crypto/acme/autocert"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/components/autotls"
 	"miren.dev/runtime/pkg/entity"
+)
+
+const (
+	// How long to suppress ACME retries for a domain after a failure.
+	acmeFailureCooldown = 5 * time.Minute
+
+	// Max time to wait for autocert before falling back to the self-signed cert.
+	// The upstream autocert.Manager uses a hardcoded 5-minute timeout internally;
+	// this shorter deadline lets TLS handshakes complete promptly with the fallback.
+	inlineGetCertTimeout = 10 * time.Second
 )
 
 // AutocertController provisions TLS certificates eagerly using HTTP-01 ACME challenges
@@ -29,16 +41,29 @@ type AutocertController struct {
 	fallbackCert tls.Certificate
 	allowedHosts sync.Map      // domain -> struct{}
 	ready        chan struct{} // closed when port-80 ACME challenge server is up
+	publicIPs    func() []net.IP
+	failures     sync.Map // domain -> time.Time of last failure
 }
 
-// NewAutocertController creates a new autocert controller for HTTP-01 ACME challenges.
-func NewAutocertController(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, dataPath string, email string) *AutocertController {
+type AutocertControllerOpts struct {
+	Log      *slog.Logger
+	EAC      *entityserver_v1alpha.EntityAccessClient
+	DataPath string
+	Email    string
+
+	// PublicIPs, if non-nil, is called before eager provisioning to verify DNS
+	// points to this cluster; when nil the check is skipped.
+	PublicIPs func() []net.IP
+}
+
+func NewAutocertController(opts AutocertControllerOpts) *AutocertController {
 	return &AutocertController{
-		log:      log.With("module", "autocert-controller"),
-		eac:      eac,
-		dataPath: dataPath,
-		email:    email,
-		ready:    make(chan struct{}),
+		log:       opts.Log.With("module", "autocert-controller"),
+		eac:       opts.EAC,
+		dataPath:  opts.DataPath,
+		email:     opts.Email,
+		ready:     make(chan struct{}),
+		publicIPs: opts.PublicIPs,
 	}
 }
 
@@ -125,6 +150,15 @@ func (c *AutocertController) Reconcile(ctx context.Context, route *ingress_v1alp
 		return nil
 	}
 
+	// Check DNS before attempting ACME to avoid wasting rate-limited authorizations
+	// on domains that don't resolve to this cluster yet (e.g., during DNS migration).
+	if c.publicIPs != nil {
+		if !c.dnsPointsToUs(domain) {
+			log.Info("skipping eager cert provisioning: DNS does not point to this cluster (will provision inline when DNS propagates)")
+			return nil
+		}
+	}
+
 	// Wait for port-80 ACME challenge server to be ready before attempting provisioning
 	select {
 	case <-c.ready:
@@ -136,12 +170,14 @@ func (c *AutocertController) Reconcile(ctx context.Context, route *ingress_v1alp
 	hello := &tls.ClientHelloInfo{ServerName: domain}
 	_, err := c.mgr.GetCertificate(hello)
 	if err != nil {
+		c.failures.Store(domain, time.Now())
 		log.Warn("eager cert provisioning failed (will retry on next TLS handshake)", "error", err)
 		// Don't return the error — the controller framework would retry, but autocert
 		// itself will handle this on the next actual TLS handshake or resync.
 		return nil
 	}
 
+	c.failures.Delete(domain)
 	log.Info("certificate provisioned successfully")
 	return nil
 }
@@ -169,16 +205,44 @@ func (c *AutocertController) Delete(ctx context.Context, id entity.Id) error {
 }
 
 // GetCertificate implements autotls.CertificateProvider — returns a cert from autocert,
-// falling back to the self-signed cert on any error.
+// falling back to the self-signed cert on any error or timeout.
 func (c *AutocertController) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	host := strings.ToLower(hello.ServerName)
 
-	if c.isAllowedHost(host) {
-		cert, err := c.mgr.GetCertificate(hello)
-		if err == nil {
-			return cert, nil
+	if !c.isAllowedHost(host) {
+		return &c.fallbackCert, nil
+	}
+
+	// Skip ACME if this domain recently failed — prevents rapid-fire attempts
+	// from every incoming TLS handshake while rate-limited.
+	if lastFail, ok := c.failures.Load(host); ok {
+		if time.Since(lastFail.(time.Time)) < acmeFailureCooldown {
+			return &c.fallbackCert, nil
 		}
-		c.log.Debug("autocert failed, using fallback", "host", host, "error", err)
+		c.failures.Delete(host)
+	}
+
+	// Run autocert with a deadline so handshakes fall back to the self-signed
+	// cert promptly instead of blocking for the upstream 5-minute timeout.
+	type certResult struct {
+		cert *tls.Certificate
+		err  error
+	}
+	ch := make(chan certResult, 1)
+	go func() {
+		cert, err := c.mgr.GetCertificate(hello)
+		ch <- certResult{cert, err}
+	}()
+
+	select {
+	case res := <-ch:
+		if res.err == nil {
+			return res.cert, nil
+		}
+		c.failures.Store(host, time.Now())
+		c.log.Debug("autocert failed, using fallback", "host", host, "error", res.err)
+	case <-time.After(inlineGetCertTimeout):
+		c.log.Warn("autocert timed out, using fallback", "host", host, "timeout", inlineGetCertTimeout)
 	}
 
 	return &c.fallbackCert, nil
@@ -188,6 +252,35 @@ func (c *AutocertController) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Ce
 // delegating non-challenge requests to the provided fallback handler.
 func (c *AutocertController) HTTPHandler(fallback http.Handler) http.Handler {
 	return c.mgr.HTTPHandler(fallback)
+}
+
+// dnsPointsToUs resolves domain and checks if any of the returned IPs match
+// one of the cluster's known public IPs. Returns true if there's a match, or
+// if public IPs are unavailable (fail open so we don't block provisioning
+// when netcheck hasn't run yet).
+func (c *AutocertController) dnsPointsToUs(domain string) bool {
+	ips := c.publicIPs()
+	if len(ips) == 0 {
+		return true // no known IPs — skip the check
+	}
+
+	addrs, err := net.LookupHost(domain)
+	if err != nil {
+		return false
+	}
+
+	for _, addr := range addrs {
+		resolved := net.ParseIP(addr)
+		if resolved == nil {
+			continue
+		}
+		for _, pub := range ips {
+			if resolved.Equal(pub) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // isAllowedHost checks whether host is covered by the allowed set, including

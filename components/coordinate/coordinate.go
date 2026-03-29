@@ -981,7 +981,13 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		c.cm.AddController(certRC)
 	} else {
 		c.Log.Info("enabling ACME HTTP-01 certificate controller (autocert)")
-		autocertController := certctrl.NewAutocertController(c.Log, eac, c.DataPath, c.AcmeEmail)
+		autocertController := certctrl.NewAutocertController(certctrl.AutocertControllerOpts{
+			Log:       c.Log,
+			EAC:       eac,
+			DataPath:  c.DataPath,
+			Email:     c.AcmeEmail,
+			PublicIPs: c.PublicIPs,
+		})
 		if err := autocertController.Init(ctx); err != nil {
 			c.Log.Error("failed to initialize autocert controller", "error", err)
 			return err
@@ -1255,6 +1261,49 @@ func (c *Coordinator) publicAddresses() []string {
 	}
 
 	return addrs
+}
+
+// PublicIPs returns the cluster's known public IP addresses from netcheck,
+// falling back to user-provided AdditionalIPs and auto-discovered IPs
+// (filtered to global unicast, non-private) if netcheck hasn't run yet.
+func (c *Coordinator) PublicIPs() []net.IP {
+	c.netcheckMu.RLock()
+	result := c.netcheckResult
+	c.netcheckMu.RUnlock()
+
+	seen := make(map[string]struct{})
+	var ips []net.IP
+
+	if result != nil {
+		for _, resp := range []*cloudauth.NetcheckResponse{result.IPv4, result.IPv6} {
+			if resp == nil || resp.SourceAddress == "" {
+				continue
+			}
+			ip := net.ParseIP(resp.SourceAddress)
+			if ip == nil {
+				continue
+			}
+			if _, ok := seen[resp.SourceAddress]; !ok {
+				seen[resp.SourceAddress] = struct{}{}
+				ips = append(ips, ip)
+			}
+		}
+	}
+
+	if len(ips) == 0 {
+		for _, ip := range append(c.AdditionalIPs, c.DiscoveredIPs...) {
+			if ip == nil || !ip.IsGlobalUnicast() || ip.IsPrivate() {
+				continue
+			}
+			s := ip.String()
+			if _, ok := seen[s]; !ok {
+				seen[s] = struct{}{}
+				ips = append(ips, ip)
+			}
+		}
+	}
+
+	return ips
 }
 
 // apiAddresses builds the list of API addresses for status reports.
