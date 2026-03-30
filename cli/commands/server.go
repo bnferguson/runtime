@@ -74,23 +74,24 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	versionInfo := version.GetInfo()
 	ctx.UILog.Info("starting miren server", "version", versionInfo.Version, "commit", versionInfo.Commit)
 
-	// Discover local IPs early so they're available for etcd TLS SANs.
+	// Discover local and public IPs early so they're available for TLS cert SANs.
 	// We track discovered IPs separately from user-configured IPs so the
 	// coordinator can treat them differently (netcheck can replace discovered
 	// public IPs but user-configured IPs always pass through).
 	var discoveredIps []net.IP
-	discovery, err := ipdiscovery.DiscoverWithTimeout(5*time.Second, ctx.Log)
+	discovery, err := ipdiscovery.DiscoverWithTimeout(10*time.Second, ctx.Log, ipdiscovery.Options{
+		NetcheckURL: coordinate.DefaultCloudURL,
+	})
 	if err != nil {
-		ctx.Log.Warn("failed to discover local IPs", "error", err)
+		ctx.Log.Warn("failed to discover IPs", "error", err)
 	} else {
 		for _, addr := range discovery.Addresses {
 			ip := net.ParseIP(addr.IP)
 			if ip != nil && !ip.IsLinkLocalUnicast() {
-				cfg.TLS.AdditionalIPs = append(cfg.TLS.AdditionalIPs, addr.IP)
 				discoveredIps = append(discoveredIps, ip)
 			}
 		}
-		ctx.Log.Info("discovered IPs", "local-addresses", len(discovery.Addresses))
+		ctx.Log.Info("discovered IPs", "addresses", len(discovery.Addresses))
 	}
 
 	switch cfg.GetMode() {
@@ -294,16 +295,8 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		if labs.DistributedRunners() {
 			ctx.Log.Info("setting up etcd mTLS for distributed runners")
 
-			// Parse additional IPs for etcd server cert SANs
-			var etcdExtraIPs []net.IP
-			for _, ipStr := range cfg.TLS.AdditionalIPs {
-				if ip := net.ParseIP(ipStr); ip != nil {
-					etcdExtraIPs = append(etcdExtraIPs, ip)
-				}
-			}
-
 			var err error
-			etcdTLSSetup, err = coordinate.SetupEtcdTLS(ctx.Log, cfg.Server.GetDataPath(), cfg.TLS.AdditionalNames, etcdExtraIPs)
+			etcdTLSSetup, err = coordinate.SetupEtcdTLS(ctx.Log, cfg.Server.GetDataPath(), cfg.TLS.AdditionalNames, discoveredIps)
 			if err != nil {
 				ctx.Log.Error("failed to set up etcd TLS", "error", err)
 				return err

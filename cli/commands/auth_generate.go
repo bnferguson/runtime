@@ -41,7 +41,9 @@ func AuthGenerate(ctx *Context, opts struct {
 	var tgt string
 
 	if opts.PublicIP {
-		discovery, err := ipdiscovery.DiscoverWithTimeout(5*time.Second, ctx.Log)
+		discovery, err := ipdiscovery.DiscoverWithTimeout(10*time.Second, ctx.Log, ipdiscovery.Options{
+			NetcheckURL: coordinate.DefaultCloudURL,
+		})
 		if err != nil {
 			return err
 		}

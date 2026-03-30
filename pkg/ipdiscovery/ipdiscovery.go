@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"net"
 	"time"
+
+	"miren.dev/runtime/pkg/cloudauth"
 )
 
 // Discovery holds information about discovered IP addresses
@@ -21,8 +23,17 @@ type Address struct {
 	IsIPv6    bool   `json:"is_ipv6"`
 }
 
-// Discover gathers all local interface addresses.
-func Discover(ctx context.Context, log *slog.Logger) (*Discovery, error) {
+// Options configures IP discovery behavior.
+type Options struct {
+	// NetcheckURL, when set, enables public IP discovery via a zero-port
+	// netcheck request to the given URL. On cloud providers the external IP
+	// isn't on any local interface, so this is the only way to find it.
+	NetcheckURL string
+}
+
+// Discover gathers IP addresses from local interfaces and, when configured,
+// from an external netcheck service for public IP discovery.
+func Discover(ctx context.Context, log *slog.Logger, opts Options) (*Discovery, error) {
 	discovery := &Discovery{
 		Addresses: []Address{},
 	}
@@ -69,12 +80,35 @@ func Discover(ctx context.Context, log *slog.Logger) (*Discovery, error) {
 		}
 	}
 
+	// Discover public IPs via netcheck if configured
+	if opts.NetcheckURL != "" {
+		result, err := cloudauth.NetcheckDualStack(ctx, opts.NetcheckURL, nil)
+		if err != nil {
+			log.Warn("public IP discovery failed", "error", err)
+		} else {
+			for _, resp := range []*cloudauth.NetcheckResponse{result.IPv4, result.IPv6} {
+				if resp == nil {
+					continue
+				}
+				ip := net.ParseIP(resp.SourceAddress)
+				if ip != nil && ip.IsGlobalUnicast() && !ip.IsPrivate() {
+					log.Info("discovered public IP via netcheck", "ip", ip)
+					discovery.Addresses = append(discovery.Addresses, Address{
+						Interface: "netcheck",
+						IP:        ip.String(),
+						IsIPv6:    ip.To4() == nil,
+					})
+				}
+			}
+		}
+	}
+
 	return discovery, nil
 }
 
 // DiscoverWithTimeout is a convenience function that adds a timeout to Discover
-func DiscoverWithTimeout(timeout time.Duration, log *slog.Logger) (*Discovery, error) {
+func DiscoverWithTimeout(timeout time.Duration, log *slog.Logger, opts Options) (*Discovery, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	return Discover(ctx, log)
+	return Discover(ctx, log, opts)
 }

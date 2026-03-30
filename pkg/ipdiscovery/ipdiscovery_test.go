@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"miren.dev/runtime/pkg/cloudauth"
 	"miren.dev/runtime/pkg/slogfmt"
 )
 
@@ -21,7 +24,7 @@ func testLogger(t *testing.T) *slog.Logger {
 func TestDiscover(t *testing.T) {
 	ctx := context.Background()
 	log := testLogger(t)
-	discovery, err := Discover(ctx, log)
+	discovery, err := Discover(ctx, log, Options{})
 	require.NoError(t, err)
 	require.NotNil(t, discovery)
 
@@ -38,7 +41,7 @@ func TestDiscover(t *testing.T) {
 
 func TestDiscoverWithTimeout(t *testing.T) {
 	log := testLogger(t)
-	discovery, err := DiscoverWithTimeout(5*time.Second, log)
+	discovery, err := DiscoverWithTimeout(5*time.Second, log, Options{})
 	require.NoError(t, err)
 	require.NotNil(t, discovery)
 
@@ -49,7 +52,7 @@ func TestDiscoverWithTimeout(t *testing.T) {
 func TestAddressTypes(t *testing.T) {
 	ctx := context.Background()
 	log := testLogger(t)
-	discovery, err := Discover(ctx, log)
+	discovery, err := Discover(ctx, log, Options{})
 	require.NoError(t, err)
 
 	var hasIPv4 bool
@@ -67,6 +70,102 @@ func TestAddressTypes(t *testing.T) {
 
 	// Most systems should have at least IPv4
 	assert.True(t, hasIPv4)
+}
+
+func fakeNetcheckServer(t *testing.T, resp cloudauth.NetcheckResponse) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" || r.URL.Path != "/api/v1/netcheck" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestDiscoverWithNetcheck(t *testing.T) {
+	srv := fakeNetcheckServer(t, cloudauth.NetcheckResponse{
+		SourceAddress: "203.0.113.42",
+	})
+
+	log := testLogger(t)
+	discovery, err := Discover(context.Background(), log, Options{
+		NetcheckURL: srv.URL,
+	})
+	require.NoError(t, err)
+
+	var found bool
+	for _, addr := range discovery.Addresses {
+		if addr.IP == "203.0.113.42" {
+			found = true
+			assert.Equal(t, "netcheck", addr.Interface)
+			assert.False(t, addr.IsIPv6)
+			break
+		}
+	}
+	assert.True(t, found, "expected netcheck-discovered public IP in addresses")
+}
+
+func TestDiscoverWithNetcheckIPv6(t *testing.T) {
+	srv := fakeNetcheckServer(t, cloudauth.NetcheckResponse{
+		SourceAddress: "2001:db8::1",
+	})
+
+	log := testLogger(t)
+	discovery, err := Discover(context.Background(), log, Options{
+		NetcheckURL: srv.URL,
+	})
+	require.NoError(t, err)
+
+	var found bool
+	for _, addr := range discovery.Addresses {
+		if addr.IP == "2001:db8::1" {
+			found = true
+			assert.Equal(t, "netcheck", addr.Interface)
+			assert.True(t, addr.IsIPv6)
+			break
+		}
+	}
+	assert.True(t, found, "expected netcheck-discovered IPv6 address in addresses")
+}
+
+func TestDiscoverWithNetcheckPrivateIPFiltered(t *testing.T) {
+	srv := fakeNetcheckServer(t, cloudauth.NetcheckResponse{
+		SourceAddress: "10.0.0.1",
+	})
+
+	log := testLogger(t)
+	discovery, err := Discover(context.Background(), log, Options{
+		NetcheckURL: srv.URL,
+	})
+	require.NoError(t, err)
+
+	for _, addr := range discovery.Addresses {
+		if addr.Interface == "netcheck" {
+			t.Errorf("private IP %s should not appear as netcheck address", addr.IP)
+		}
+	}
+}
+
+func TestDiscoverWithNetcheckFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+
+	log := testLogger(t)
+	discovery, err := Discover(context.Background(), log, Options{
+		NetcheckURL: srv.URL,
+	})
+	require.NoError(t, err)
+	// Should still return local addresses even when netcheck fails
+	assert.NotEmpty(t, discovery.Addresses)
+	for _, addr := range discovery.Addresses {
+		assert.NotEqual(t, "netcheck", addr.Interface)
+	}
 }
 
 func TestDiscoveryJSON(t *testing.T) {
