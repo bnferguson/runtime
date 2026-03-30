@@ -3,6 +3,7 @@ package dbsaga
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"miren.dev/runtime/pkg/addon"
 	"miren.dev/runtime/pkg/entity"
@@ -48,9 +49,7 @@ func UndoWaitForSharedPool(ctx context.Context, in WaitForSharedPoolIn, out Wait
 
 // CreateSharedService creates a network Service for the shared pool.
 
-type CreateSharedServiceIn struct {
-	SharedServerName string
-}
+type CreateSharedServiceIn struct{}
 
 type CreateSharedServiceOut struct {
 	ServiceID entity.Id
@@ -62,11 +61,12 @@ func CreateSharedService(ctx context.Context, in CreateSharedServiceIn) (CreateS
 
 	labels := types.LabelSet(
 		"addon", cfg.AddonName,
-		"server", in.SharedServerName,
+		"server", cfg.SharedServerName,
 		"shared", "true",
 	)
 
-	serviceName := in.SharedServerName + "-" + cfg.AddonName[len("miren-"):]
+	suffix := strings.TrimPrefix(cfg.AddonName, "miren-")
+	serviceName := cfg.SharedServerName + "-" + suffix
 	svcID, err := fw.CreateService(ctx, serviceName, labels, cfg.Port)
 	if err != nil {
 		return CreateSharedServiceOut{}, fmt.Errorf("creating shared service: %w", err)

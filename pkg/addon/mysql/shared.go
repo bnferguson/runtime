@@ -11,6 +11,7 @@ import (
 	"miren.dev/runtime/api/addon/addon_v1alpha"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/pkg/addon"
+	"miren.dev/runtime/pkg/addon/dbsaga"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
@@ -123,80 +124,6 @@ func UndoCreateSharedPool(ctx context.Context, in CreateSharedPoolIn, out Create
 	return fw.DeleteSandboxPool(ctx, out.PoolID)
 }
 
-type WaitForSharedPoolIn struct {
-	PoolID entity.Id
-}
-
-type WaitForSharedPoolOut struct {
-	PoolReady bool
-}
-
-func WaitForSharedPool(ctx context.Context, in WaitForSharedPoolIn) (WaitForSharedPoolOut, error) {
-	fw := saga.Get[*addon.ProviderFramework](ctx)
-
-	if err := fw.WaitForPool(ctx, in.PoolID, poolReadyTimeout); err != nil {
-		return WaitForSharedPoolOut{}, fmt.Errorf("waiting for shared pool: %w", err)
-	}
-
-	return WaitForSharedPoolOut{PoolReady: true}, nil
-}
-
-func UndoWaitForSharedPool(ctx context.Context, in WaitForSharedPoolIn, out WaitForSharedPoolOut) error {
-	return nil
-}
-
-type CreateSharedServiceIn struct{}
-
-type CreateSharedServiceOut struct {
-	ServiceID entity.Id
-}
-
-func CreateSharedService(ctx context.Context, in CreateSharedServiceIn) (CreateSharedServiceOut, error) {
-	fw := saga.Get[*addon.ProviderFramework](ctx)
-
-	labels := types.LabelSet(
-		"addon", AddonName,
-		"server", sharedServerName,
-		"shared", "true",
-	)
-
-	serviceName := sharedServerName + "-mysql"
-	svcID, err := fw.CreateService(ctx, serviceName, labels, mysqlPort)
-	if err != nil {
-		return CreateSharedServiceOut{}, fmt.Errorf("creating shared service: %w", err)
-	}
-
-	return CreateSharedServiceOut{ServiceID: svcID}, nil
-}
-
-func UndoCreateSharedService(ctx context.Context, in CreateSharedServiceIn, out CreateSharedServiceOut) error {
-	fw := saga.Get[*addon.ProviderFramework](ctx)
-	return fw.DeleteService(ctx, out.ServiceID)
-}
-
-type WaitForSharedServiceIn struct {
-	ServiceID entity.Id
-}
-
-type WaitForSharedServiceOut struct {
-	ServiceHost string
-}
-
-func WaitForSharedService(ctx context.Context, in WaitForSharedServiceIn) (WaitForSharedServiceOut, error) {
-	fw := saga.Get[*addon.ProviderFramework](ctx)
-
-	serviceHost, err := fw.WaitForServiceAddress(ctx, in.ServiceID, poolReadyTimeout)
-	if err != nil {
-		return WaitForSharedServiceOut{}, fmt.Errorf("waiting for shared service address: %w", err)
-	}
-
-	return WaitForSharedServiceOut{ServiceHost: serviceHost}, nil
-}
-
-func UndoWaitForSharedService(ctx context.Context, in WaitForSharedServiceIn, out WaitForSharedServiceOut) error {
-	return nil
-}
-
 type ActivateSharedServerIn struct {
 	ServerID     entity.Id
 	PoolID       entity.Id
@@ -235,13 +162,15 @@ func UndoActivateSharedServer(ctx context.Context, in ActivateSharedServerIn, ou
 }
 
 func RegisterEnsureSharedServerSaga(registry *saga.Registry, fw *addon.ProviderFramework) error {
+	cfg := &dbsaga.AddonConfig{AddonName: AddonName, SharedServerName: sharedServerName, Port: mysqlPort, ReadyTimeout: poolReadyTimeout}
 	return saga.Define("ensure-shared-mysql-server").
 		Using(fw).
+		Using(cfg).
 		Action(CreateSharedServerEntity).Undo(UndoCreateSharedServerEntity).
 		Action(CreateSharedPool).Undo(UndoCreateSharedPool).
-		Action(WaitForSharedPool).Undo(UndoWaitForSharedPool).
-		Action(CreateSharedService).Undo(UndoCreateSharedService).
-		Action(WaitForSharedService).Undo(UndoWaitForSharedService).
+		Action(dbsaga.WaitForSharedPool).Undo(dbsaga.UndoWaitForSharedPool).
+		Action(dbsaga.CreateSharedService).Undo(dbsaga.UndoCreateSharedService).
+		Action(dbsaga.WaitForSharedService).Undo(dbsaga.UndoWaitForSharedService).
 		Action(ActivateSharedServer).Undo(UndoActivateSharedServer).
 		RegisterTo(registry)
 }
@@ -456,55 +385,6 @@ func UndoCreateSharedDatabase(ctx context.Context, in CreateSharedDatabaseIn, ou
 	return dropMysqlDatabase(ctx, db, in.SharedDatabaseName)
 }
 
-type IncrementAssociationCountIn struct {
-	ServerID entity.Id
-}
-
-type IncrementAssociationCountOut struct {
-	Incremented bool
-}
-
-func IncrementAssociationCount(ctx context.Context, in IncrementAssociationCountIn) (IncrementAssociationCountOut, error) {
-	fw := saga.Get[*addon.ProviderFramework](ctx)
-
-	var server addon_v1alpha.MysqlServer
-	ent, err := fw.EC.GetByIdWithEntity(ctx, in.ServerID, &server)
-	if err != nil {
-		return IncrementAssociationCountOut{}, fmt.Errorf("getting server for count increment: %w", err)
-	}
-
-	newCount := server.AssociationCount + 1
-	if err := fw.EC.Patch(ctx, in.ServerID, ent.Revision(),
-		entity.Int64(addon_v1alpha.MysqlServerAssociationCountId, newCount),
-	); err != nil {
-		return IncrementAssociationCountOut{}, fmt.Errorf("updating association count: %w", err)
-	}
-
-	return IncrementAssociationCountOut{Incremented: true}, nil
-}
-
-func UndoIncrementAssociationCount(ctx context.Context, in IncrementAssociationCountIn, out IncrementAssociationCountOut) error {
-	if !out.Incremented {
-		return nil
-	}
-
-	fw := saga.Get[*addon.ProviderFramework](ctx)
-
-	var server addon_v1alpha.MysqlServer
-	ent, err := fw.EC.GetByIdWithEntity(ctx, in.ServerID, &server)
-	if err != nil {
-		return err
-	}
-
-	newCount := server.AssociationCount - 1
-	if newCount < 0 {
-		newCount = 0
-	}
-	return fw.EC.Patch(ctx, in.ServerID, ent.Revision(),
-		entity.Int64(addon_v1alpha.MysqlServerAssociationCountId, newCount),
-	)
-}
-
 type BuildSharedResultIn struct {
 	ServerID           entity.Id
 	ServiceHost        string
@@ -545,14 +425,18 @@ func RegisterSharedSaga(registry *saga.Registry, fw *addon.ProviderFramework, rc
 		return err
 	}
 
-	return saga.Define("provision-shared-mysql").
+	cfg := &dbsaga.AddonConfig{AddonName: AddonName, SharedServerName: sharedServerName, Port: mysqlPort, ReadyTimeout: poolReadyTimeout}
+	b := saga.Define("provision-shared-mysql").
 		Using(fw).
 		Using(rc).
+		Using(cfg)
+	saga.UsingAs[dbsaga.ServerCounter](b, mysqlServerCounter{})
+	return b.
 		Action(FindOrCreateSharedServer).Undo(UndoFindOrCreateSharedServer).
 		Action(GenerateSharedCredentials).Undo(UndoGenerateSharedCredentials).
 		Action(CreateSharedUser).Undo(UndoCreateSharedUser).
 		Action(CreateSharedDatabase).Undo(UndoCreateSharedDatabase).
-		Action(IncrementAssociationCount).Undo(UndoIncrementAssociationCount).
+		Action(dbsaga.IncrementAssociationCount).Undo(dbsaga.UndoIncrementAssociationCount).
 		Action(BuildSharedResult).Undo(UndoBuildSharedResult).
 		RegisterTo(registry)
 }
@@ -714,44 +598,6 @@ func UndoDropSharedUser(ctx context.Context, in DropSharedUserIn, out DropShared
 	return nil
 }
 
-type DecrementAssociationCountIn struct {
-	SharedServerRef entity.Id
-	DatabaseDropped bool
-	UserDropped     bool
-}
-
-type DecrementAssociationCountOut struct {
-	RemainingCount int64
-}
-
-func DecrementAssociationCount(ctx context.Context, in DecrementAssociationCountIn) (DecrementAssociationCountOut, error) {
-	fw := saga.Get[*addon.ProviderFramework](ctx)
-
-	var server addon_v1alpha.MysqlServer
-	ent, err := fw.EC.GetByIdWithEntity(ctx, in.SharedServerRef, &server)
-	if err != nil {
-		return DecrementAssociationCountOut{}, fmt.Errorf("getting server: %w", err)
-	}
-
-	if server.AssociationCount <= 0 {
-		fw.Log.Warn("association count already zero, skipping decrement", "server", in.SharedServerRef)
-		return DecrementAssociationCountOut{RemainingCount: 0}, nil
-	}
-
-	newCount := server.AssociationCount - 1
-	if err := fw.EC.Patch(ctx, in.SharedServerRef, ent.Revision(),
-		entity.Int64(addon_v1alpha.MysqlServerAssociationCountId, newCount),
-	); err != nil {
-		return DecrementAssociationCountOut{}, fmt.Errorf("updating association count: %w", err)
-	}
-
-	return DecrementAssociationCountOut{RemainingCount: newCount}, nil
-}
-
-func UndoDecrementAssociationCount(ctx context.Context, in DecrementAssociationCountIn, out DecrementAssociationCountOut) error {
-	return nil
-}
-
 type CleanupSharedServerIn struct {
 	SharedServerRef    entity.Id
 	SharedServiceRef   entity.Id
@@ -802,14 +648,16 @@ func UndoCleanupSharedServer(ctx context.Context, in CleanupSharedServerIn, out 
 }
 
 func RegisterDeprovisionSharedSaga(registry *saga.Registry, fw *addon.ProviderFramework) error {
-	return saga.Define("deprovision-shared-mysql").
-		Using(fw).
+	b := saga.Define("deprovision-shared-mysql").
+		Using(fw)
+	saga.UsingAs[dbsaga.ServerCounter](b, mysqlServerCounter{})
+	return b.
 		Action(DecodeSharedAttrs).Undo(UndoDecodeSharedAttrs).
 		Action(LookupSharedServer).Undo(UndoLookupSharedServer).
 		Action(TerminateConnections).Undo(UndoTerminateConnections).
 		Action(DropSharedDatabase).Undo(UndoDropSharedDatabase).
 		Action(DropSharedUser).Undo(UndoDropSharedUser).
-		Action(DecrementAssociationCount).Undo(UndoDecrementAssociationCount).
+		Action(dbsaga.DecrementAssociationCount).Undo(dbsaga.UndoDecrementAssociationCount).
 		Action(CleanupSharedServer).Undo(UndoCleanupSharedServer).
 		RegisterTo(registry)
 }

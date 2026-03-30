@@ -21,7 +21,7 @@ func SanitizeIdentifier(name string, maxLen int) string {
 		}
 	}
 	if len(result) == 0 {
-		return "app"
+		result = []byte("app")
 	}
 	if result[0] >= '0' && result[0] <= '9' {
 		result = append([]byte{'a'}, result...)

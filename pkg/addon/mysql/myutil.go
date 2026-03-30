@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-sql-driver/mysql"
 
 	"miren.dev/runtime/pkg/addon"
 )
@@ -30,8 +30,15 @@ func quoteIdentifier(name string) string {
 }
 
 func connectMysql(ctx context.Context, host string, port int, user, password, database string) (*sql.DB, error) {
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?tls=false", user, password, host, port, database)
-	db, err := sql.Open("mysql", dsn)
+	cfg := mysql.NewConfig()
+	cfg.User = user
+	cfg.Passwd = password
+	cfg.Net = "tcp"
+	cfg.Addr = fmt.Sprintf("%s:%d", host, port)
+	cfg.DBName = database
+	cfg.TLSConfig = "false"
+
+	db, err := sql.Open("mysql", cfg.FormatDSN())
 	if err != nil {
 		return nil, fmt.Errorf("opening mysql connection to %s:%d: %w", host, port, err)
 	}
@@ -50,17 +57,24 @@ func connectAsRoot(ctx context.Context, host string, password string) (*sql.DB, 
 
 func createMysqlUser(ctx context.Context, db *sql.DB, username, password string) error {
 	_, err := db.ExecContext(ctx,
-		fmt.Sprintf("CREATE USER %s@'%%' IDENTIFIED BY '%s'",
+		fmt.Sprintf("CREATE USER IF NOT EXISTS %s@'%%' IDENTIFIED BY '%s'",
 			quoteIdentifier(username), strings.ReplaceAll(password, "'", "''")))
 	if err != nil {
 		return fmt.Errorf("creating user %s: %w", username, err)
+	}
+	// Ensure password is current even if user already existed from a prior saga attempt.
+	_, err = db.ExecContext(ctx,
+		fmt.Sprintf("ALTER USER %s@'%%' IDENTIFIED BY '%s'",
+			quoteIdentifier(username), strings.ReplaceAll(password, "'", "''")))
+	if err != nil {
+		return fmt.Errorf("updating password for user %s: %w", username, err)
 	}
 	return nil
 }
 
 func createMysqlDatabase(ctx context.Context, db *sql.DB, dbname, owner string) error {
 	_, err := db.ExecContext(ctx,
-		fmt.Sprintf("CREATE DATABASE %s", quoteIdentifier(dbname)))
+		fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", quoteIdentifier(dbname)))
 	if err != nil {
 		return fmt.Errorf("creating database %s: %w", dbname, err)
 	}

@@ -38,12 +38,12 @@ type GenerateCredentialsIn struct {
 }
 
 type GenerateCredentialsOut struct {
-	Password     string
-	RootPassword string
-	DatabaseName string
-	Username     string
-	ServiceName  string
-	ServerName   string
+	Password     string `saga:"password"`
+	RootPassword string `saga:"rootpassword"`
+	DatabaseName string `saga:"databasename"`
+	Username     string `saga:"username"`
+	ServiceName  string `saga:"servicename"`
+	ServerName   string `saga:"servername"`
 }
 
 func GenerateCredentials(ctx context.Context, in GenerateCredentialsIn) (GenerateCredentialsOut, error) {
@@ -62,13 +62,13 @@ func UndoGenerateCredentials(ctx context.Context, in GenerateCredentialsIn, out 
 }
 
 type CreateMysqlServerIn struct {
-	ServerName   string
-	VariantName  string
-	RootPassword string
+	ServerName   string `saga:"servername"`
+	VariantName  string `saga:"variantname"`
+	RootPassword string `saga:"rootpassword"`
 }
 
 type CreateMysqlServerOut struct {
-	ServerID entity.Id
+	ServerID entity.Id `saga:"serverid"`
 }
 
 func CreateMysqlServer(ctx context.Context, in CreateMysqlServerIn) (CreateMysqlServerOut, error) {
@@ -96,17 +96,17 @@ func UndoCreateMysqlServer(ctx context.Context, in CreateMysqlServerIn, out Crea
 }
 
 type CreateDedicatedPoolIn struct {
-	ServerName    string
-	AppName       string
-	DatabaseName  string
-	Username      string
-	Password      string
-	RootPassword  string
-	VariantConfig map[string]string
+	ServerName    string            `saga:"servername"`
+	AppName       string            `saga:"appname"`
+	DatabaseName  string            `saga:"databasename"`
+	Username      string            `saga:"username"`
+	Password      string            `saga:"password"`
+	RootPassword  string            `saga:"rootpassword"`
+	VariantConfig map[string]string `saga:"variantconfig"`
 }
 
 type CreateDedicatedPoolOut struct {
-	PoolID entity.Id
+	PoolID entity.Id `saga:"poolid"`
 }
 
 func CreateDedicatedPool(ctx context.Context, in CreateDedicatedPoolIn) (CreateDedicatedPoolOut, error) {
@@ -165,11 +165,11 @@ func UndoCreateDedicatedPool(ctx context.Context, in CreateDedicatedPoolIn, out 
 }
 
 type UpdateDedicatedServerIn struct {
-	ServerID     entity.Id
-	PoolID       entity.Id
-	ServiceID    entity.Id
-	VariantName  string
-	RootPassword string
+	ServerID     entity.Id `saga:"serverid"`
+	PoolID       entity.Id `saga:"poolid"`
+	ServiceID    entity.Id `saga:"serviceid"`
+	VariantName  string    `saga:"variantname"`
+	RootPassword string    `saga:"rootpassword"`
 }
 
 type UpdateDedicatedServerOut struct {
@@ -202,11 +202,11 @@ func UndoUpdateDedicatedServer(ctx context.Context, in UpdateDedicatedServerIn, 
 }
 
 type BuildDedicatedResultIn struct {
-	ServiceHost  string
-	Username     string
-	Password     string
-	DatabaseName string
-	ServerID     entity.Id
+	ServiceHost  string    `saga:"servicehost"`
+	Username     string    `saga:"username"`
+	Password     string    `saga:"password"`
+	DatabaseName string    `saga:"databasename"`
+	ServerID     entity.Id `saga:"serverid"`
 }
 
 type BuildDedicatedResultOut struct {
@@ -258,7 +258,7 @@ type DecodeDedicatedAttrsIn struct {
 }
 
 type DecodeDedicatedAttrsOut struct {
-	DedicatedServerID entity.Id
+	DedicatedServerID entity.Id `saga:"dedicatedserverid"`
 }
 
 func DecodeDedicatedAttrs(ctx context.Context, in DecodeDedicatedAttrsIn) (DecodeDedicatedAttrsOut, error) {
@@ -279,13 +279,13 @@ func UndoDecodeDedicatedAttrs(ctx context.Context, in DecodeDedicatedAttrsIn, ou
 }
 
 type LookupDedicatedServerIn struct {
-	DedicatedServerID entity.Id
+	DedicatedServerID entity.Id `saga:"dedicatedserverid"`
 }
 
 type LookupDedicatedServerOut struct {
-	DedicatedServiceID  entity.Id
-	DedicatedPoolID     entity.Id
-	DedicatedServerName string
+	DedicatedServiceID  entity.Id `saga:"dedicatedserviceid"`
+	DedicatedPoolID     entity.Id `saga:"dedicatedpoolid"`
+	DedicatedServerName string    `saga:"dedicatedservername"`
 }
 
 func LookupDedicatedServer(ctx context.Context, in LookupDedicatedServerIn) (LookupDedicatedServerOut, error) {
@@ -313,8 +313,8 @@ func UndoLookupDedicatedServer(ctx context.Context, in LookupDedicatedServerIn, 
 }
 
 type DeleteDedicatedServerEntityIn struct {
-	DedicatedServerID   entity.Id
-	DedicatedServerName string
+	DedicatedServerID   entity.Id `saga:"dedicatedserverid"`
+	DedicatedServerName string    `saga:"dedicatedservername"`
 
 	PoolCleanedUp saga.Edge `saga:"dedicated_pool_deleted"`
 }
