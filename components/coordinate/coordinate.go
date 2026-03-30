@@ -749,6 +749,17 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		c.Log.Info("entity migration completed", "migrated", migrated, "skipped", skipped)
 	}
 
+	// Backfill short-ids for entities that don't have one
+	sidMigrated, sidSkipped, sidErr := entity.MigrateShortIds(ctx, c.Log, client, entity.MigrateShortIdOptions{
+		Prefix: c.Prefix,
+		DryRun: false,
+	})
+	if sidErr != nil {
+		c.Log.Warn("short-id migration completed with errors", "migrated", sidMigrated, "skipped", sidSkipped, "error", sidErr)
+	} else if sidMigrated > 0 {
+		c.Log.Info("short-id migration completed", "migrated", sidMigrated, "skipped", sidSkipped)
+	}
+
 	// Check if indexes have changed and reindex if needed
 	if err := c.checkAndReindex(ctx, etcdStore, client); err != nil {
 		c.Log.Error("automatic reindex failed (will retry next startup)", "error", err)

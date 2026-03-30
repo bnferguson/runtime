@@ -8,6 +8,7 @@ import (
 
 const (
 	DBId           Id = "db/id"
+	DBShortId      Id = "db/short-id"
 	Ident          Id = "db/ident"
 	Doc            Id = "db/doc"
 	Uniq           Id = "db/uniq"
@@ -302,6 +303,15 @@ func InitSystemEntities(save func(*Entity) error) error {
 		Type, TypeRef,
 	)
 
+	dbShortId := New(
+		Ident, types.Keyword(DBShortId),
+		Doc, "Short, human-friendly entity identifier",
+		Uniq, UniqueValue,
+		Cardinality, CardinalityOne,
+		Type, TypeStr,
+		Index, true,
+	)
+
 	entities := []*Entity{
 		dbid,
 		ident, doc, uniq, card, typ, enumValues, enumType,
@@ -312,6 +322,7 @@ func InitSystemEntities(save func(*Entity) error) error {
 		attrSession,
 		attrPred, program, predIP, predCidr, entityAttrs, entityPreds, entityEnsure,
 		entityKind, entitySchema, entityESchema, schemaKind,
+		dbShortId,
 	}
 
 	for _, entity := range entities {

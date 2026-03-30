@@ -59,17 +59,25 @@ func (e *EntityServer) Get(ctx context.Context, req *entityserver_v1alpha.Entity
 		return cond.ValidationFailure("missing-field", "id")
 	}
 
-	entity, err := e.Store.GetEntity(ctx, entity.Id(args.Id()))
+	ent, err := e.Store.GetEntity(ctx, entity.Id(args.Id()))
 	if err != nil {
-		return cond.NotFound("entity", args.Id())
+		// Try resolving as a short-id via the db/short-id index
+		if etcdStore, ok := e.Store.(*entity.EtcdStore); ok {
+			if resolvedId, idxErr := etcdStore.GetOneIndex(ctx, entity.String(entity.DBShortId, args.Id())); idxErr == nil {
+				ent, err = e.Store.GetEntity(ctx, resolvedId)
+			}
+		}
+		if err != nil {
+			return cond.NotFound("entity", args.Id())
+		}
 	}
 
 	var rpcEntity entityserver_v1alpha.Entity
-	rpcEntity.SetId(entity.Id().String())
-	rpcEntity.SetCreatedAt(entity.GetCreatedAt().UnixMilli())
-	rpcEntity.SetUpdatedAt(entity.GetUpdatedAt().UnixMilli())
-	rpcEntity.SetRevision(entity.GetRevision())
-	rpcEntity.SetAttrs(entity.Attrs())
+	rpcEntity.SetId(ent.Id().String())
+	rpcEntity.SetCreatedAt(ent.GetCreatedAt().UnixMilli())
+	rpcEntity.SetUpdatedAt(ent.GetUpdatedAt().UnixMilli())
+	rpcEntity.SetRevision(ent.GetRevision())
+	rpcEntity.SetAttrs(ent.Attrs())
 
 	req.Results().SetEntity(&rpcEntity)
 

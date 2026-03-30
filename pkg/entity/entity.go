@@ -25,6 +25,7 @@ var (
 	ErrAttributeNotFound   = errors.New("attribute not found")
 	ErrInvalidAttribute    = errors.New("invalid attribute")
 	ErrSchemaNotFound      = errors.New("schema not found")
+	ErrShortIdExhausted    = errors.New("failed to allocate unique short-id")
 )
 
 type uniq int

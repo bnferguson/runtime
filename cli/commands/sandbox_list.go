@@ -168,8 +168,13 @@ func SandboxList(ctx *Context, opts struct {
 		}
 
 		// Apply all UI formatting for table display
+		sandboxId := ui.CleanEntityID(sandbox.ID.String())
+		if !ctx.Verbose() {
+			sandboxId = ui.BriefId(e.Entity())
+		}
+
 		rows = append(rows, ui.Row{
-			ui.CleanEntityID(sandbox.ID.String()),
+			sandboxId,
 			ui.DisplayAppVersion(sandbox.Spec.Version.String()),
 			service,
 			poolLabelDisplay,

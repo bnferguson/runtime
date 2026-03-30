@@ -167,6 +167,20 @@ func (s *EtcdStore) CreateEntity(
 
 	entity.ForceID()
 
+	// Allocate a short-id for entities that have an entity/kind attribute
+	// (skip system/schema entities which are saved via basicSave)
+	if _, hasKind := entity.Get(EntityKind); hasKind {
+		if _, hasShortId := entity.Get(DBShortId); !hasShortId {
+			shortId, err := AllocateShortId(string(entity.Id()), func(candidate string) (bool, error) {
+				return s.uniqueExists(ctx, String(DBShortId, candidate))
+			})
+			if err != nil {
+				return nil, fmt.Errorf("failed to allocate short-id: %w", err)
+			}
+			entity.Set(String(DBShortId, shortId))
+		}
+	}
+
 	// Revision is an attr maintained by the store itself, so we remove it
 	// and allow it to be repopulated later. This is mostly to avoid confusion
 	// when retrieving an entity, before stamping it with the current etcd revision.
@@ -210,66 +224,147 @@ func (s *EtcdStore) CreateEntity(
 		}
 	}
 
-	entity.attrs = primary
-
-	// Build entity save operations
-	key := s.buildKey(entity.Id())
-	txopt, err := s.buildEntitySaveOps(entity, key, primary, session, &o)
+	// Collect unique-value attributes and build transaction conditions + ops
+	uniqueAttrs, err := s.collectUniqueAttrs(ctx, entity)
 	if err != nil {
 		return nil, err
 	}
 
-	txopt = append(txopt, coltxopt...)
-
-	// Use Txn to check that the key doesn't exist yet
-	txnResp, err := s.client.Txn(ctx).
-		If(clientv3.Compare(clientv3.CreateRevision(key), "=", 0)).
-		Then(txopt...).
-		Else(clientv3.OpGet(key)).
-		Commit()
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to create entity in etcd: %w", err)
+	var uniqueConditions []clientv3.Cmp
+	for _, attr := range uniqueAttrs {
+		uniqueKey := s.buildUniqueKey(attr)
+		uniqueConditions = append(uniqueConditions, clientv3.Compare(clientv3.CreateRevision(uniqueKey), "=", 0))
+		coltxopt = append(coltxopt, s.addUniqueOp(attr, entity.Id()))
 	}
 
-	if !txnResp.Succeeded {
+	entity.attrs = primary
+	key := s.buildKey(entity.Id())
+
+	// Retry loop: if the create transaction fails due to a unique-value
+	// collision (TOCTOU race on short-id or other unique attr), allocate
+	// a new value and try again.
+	const maxUniqueRetries = 3
+	for attempt := 0; ; attempt++ {
+		// Build entity save operations (must rebuild each attempt since
+		// short-id changes affect the serialized entity data)
+		txopt, err := s.buildEntitySaveOps(entity, key, primary, session, &o)
+		if err != nil {
+			return nil, err
+		}
+
+		txopt = append(txopt, coltxopt...)
+
+		// Build transaction conditions: entity must not exist + all unique values must be free
+		conditions := []clientv3.Cmp{
+			clientv3.Compare(clientv3.CreateRevision(key), "=", 0),
+		}
+		conditions = append(conditions, uniqueConditions...)
+
+		txnResp, err := s.client.Txn(ctx).
+			If(conditions...).
+			Then(txopt...).
+			Else(clientv3.OpGet(key)).
+			Commit()
+
+		if err != nil {
+			return nil, fmt.Errorf("failed to create entity in etcd: %w", err)
+		}
+
+		if txnResp.Succeeded {
+			entity.SetRevision(txnResp.Header.Revision)
+			return entity, nil
+		}
+
+		// Transaction failed — figure out why.
+		// Check if the entity key already exists (genuine conflict) vs
+		// a unique-value condition failed (retryable).
 		if len(txnResp.Responses) == 1 {
-			// If the current value of the entity has the same attributes as
-			// the entity we were trying to store, then we're all done!
 			rng := txnResp.Responses[0].GetResponseRange()
+			if len(rng.Kvs) > 0 {
+				// Entity key exists — this is a genuine entity conflict.
+				var curr Entity
+				if decoder.Unmarshal(rng.Kvs[0].Value, &curr) == nil {
+					if slices.EqualFunc(curr.attrs, entity.attrs, func(a, b Attr) bool {
+						return a.Equal(b)
+					}) {
+						entity.SetRevision(rng.Header.Revision)
+						return entity, nil
+					}
+				}
 
-			var curr Entity
+				if o.overwrite {
+					// On overwrite, preserve the existing entity's short-id
+					// to avoid changing a stable identifier.
+					if existingShortId := curr.ShortId(); existingShortId != "" {
+						entity.Set(String(DBShortId, existingShortId))
+						primary = entity.Attrs()
+					}
 
-			if decoder.Unmarshal(rng.Kvs[0].Value, &curr) == nil {
-				if slices.EqualFunc(curr.attrs, entity.attrs, func(a, b Attr) bool {
-					return a.Equal(b)
-				}) {
-					entity.SetRevision(rng.Header.Revision)
+					txopt, err = s.buildEntitySaveOps(entity, key, primary, session, &o)
+					if err != nil {
+						return nil, err
+					}
+					// No unique ops needed on overwrite — values are already claimed
+					txopt = append(txopt, coltxopt...)
+
+					txnResp, err = s.client.Txn(ctx).
+						Then(txopt...).
+						Commit()
+					if err != nil {
+						return nil, fmt.Errorf("failed to create entity in etcd (on overwrite): %w", err)
+					}
+
+					entity.SetRevision(txnResp.Header.Revision)
 					return entity, nil
 				}
-			}
 
-			if o.overwrite {
-				txnResp, err = s.client.Txn(ctx).
-					Then(txopt...).
-					Else(clientv3.OpGet(key)).
-					Commit()
-				if err != nil {
-					return nil, fmt.Errorf("failed to create entity in etcd (on overwrite): %w", err)
-				}
-
-				entity.SetRevision(txnResp.Header.Revision)
-				return entity, nil
+				s.log.Error("failed to create entity in etcd", "id", entity.Id())
+				return nil, cond.Conflict("entity", entity.Id())
 			}
 		}
 
-		s.log.Error("failed to create entity in etcd", "id", entity.Id())
-		return nil, cond.Conflict("entity", entity.Id())
+		// Entity key didn't exist, so a unique-value condition failed.
+		// Re-allocate the short-id and retry.
+		if attempt >= maxUniqueRetries {
+			s.log.Error("unique value collision persisted after retries", "id", entity.Id())
+			return nil, fmt.Errorf("failed to create entity: unique value collision after %d retries", maxUniqueRetries)
+		}
+
+		s.log.Info("unique value collision, retrying with new short-id",
+			"id", entity.Id(), "old_short_id", entity.ShortId(), "attempt", attempt+1)
+
+		newShortId, err := AllocateShortId(string(entity.Id()), func(candidate string) (bool, error) {
+			return s.uniqueExists(ctx, String(DBShortId, candidate))
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to reallocate short-id: %w", err)
+		}
+		entity.Set(String(DBShortId, newShortId))
+
+		// Rebuild primary attrs and unique conditions with the new short-id
+		primary = entity.Attrs()
+
+		uniqueAttrs, err = s.collectUniqueAttrs(ctx, entity)
+		if err != nil {
+			return nil, err
+		}
+		uniqueConditions = nil
+		// Rebuild coltxopt without old unique ops — keep collection ops, replace unique ops
+		coltxopt = coltxopt[:0]
+		for _, attrs := range indexedAttrs {
+			for _, attr := range attrs {
+				coltxopt = append(coltxopt, s.addToCollectionOp(entity, attr.CAS()))
+				if sessPart != "" {
+					coltxopt = append(coltxopt, s.addToCollectionSessionOp(entity, attr.CAS(), sessPart, sid))
+				}
+			}
+		}
+		for _, attr := range uniqueAttrs {
+			uniqueKey := s.buildUniqueKey(attr)
+			uniqueConditions = append(uniqueConditions, clientv3.Compare(clientv3.CreateRevision(uniqueKey), "=", 0))
+			coltxopt = append(coltxopt, s.addUniqueOp(attr, entity.Id()))
+		}
 	}
-
-	entity.SetRevision(txnResp.Header.Revision)
-
-	return entity, nil
 }
 
 // GetEntity implements Store interface
@@ -573,6 +668,9 @@ func (s *EtcdStore) UpdateEntity(
 		return nil, cond.Conflict("entity", entity.Id())
 	}
 
+	// Snapshot original entity for unique-value diffing
+	originalEntity := entity.Clone()
+
 	// Keep track of original indexed attributes for removal (including nested ones)
 	originalIndexedAttrs, err := s.collectIndexedAttributes(ctx, entity.attrs)
 	if err != nil {
@@ -655,6 +753,13 @@ func (s *EtcdStore) UpdateEntity(
 		}
 	}
 
+	// Build unique-value update operations (release old, claim new)
+	uniqueOps, uniqueConditions, err := s.buildUniqueUpdateOps(ctx, entity.Id(), originalEntity, entity)
+	if err != nil {
+		return nil, err
+	}
+	coltxopt = append(coltxopt, uniqueOps...)
+
 	entity.attrs = primary
 
 	// Build entity save operations
@@ -668,15 +773,20 @@ func (s *EtcdStore) UpdateEntity(
 
 	var txnResp *clientv3.TxnResponse
 
-	// When using 0 as the from rev, we skip the revision check
-	if o.fromRevision == 0 {
+	// Build conditions: revision check + unique-value constraints
+	var conditions []clientv3.Cmp
+	if o.fromRevision != 0 {
+		conditions = append(conditions, clientv3.Compare(clientv3.ModRevision(key), "=", rev))
+	}
+	conditions = append(conditions, uniqueConditions...)
+
+	if len(conditions) > 0 {
 		txnResp, err = s.client.Txn(ctx).
+			If(conditions...).
 			Then(txopt...).
 			Commit()
 	} else {
-		// Use Txn to check that the key exists before updating
 		txnResp, err = s.client.Txn(ctx).
-			If(clientv3.Compare(clientv3.ModRevision(key), "=", rev)).
 			Then(txopt...).
 			Commit()
 	}
@@ -801,6 +911,50 @@ func (s *EtcdStore) buildCollectionOps(entity *Entity, originalIndexedAttrs, new
 	return ops
 }
 
+// buildUniqueUpdateOps compares the old and new unique-value attributes and
+// returns operations to release old unique keys and claim new ones, along with
+// conditions that ensure the new keys don't already exist.
+func (s *EtcdStore) buildUniqueUpdateOps(ctx context.Context, entityId Id, oldEntity, newEntity *Entity) (ops []clientv3.Op, conditions []clientv3.Cmp, err error) {
+	oldUnique, err := s.collectUniqueAttrs(ctx, oldEntity)
+	if err != nil {
+		return nil, nil, err
+	}
+	newUnique, err := s.collectUniqueAttrs(ctx, newEntity)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Build maps for comparison
+	oldByID := make(map[Id]Attr)
+	for _, attr := range oldUnique {
+		oldByID[attr.ID] = attr
+	}
+	newByID := make(map[Id]Attr)
+	for _, attr := range newUnique {
+		newByID[attr.ID] = attr
+	}
+
+	// Release old unique keys for values that changed or were removed
+	for id, oldAttr := range oldByID {
+		newAttr, exists := newByID[id]
+		if !exists || !oldAttr.Equal(newAttr) {
+			ops = append(ops, s.deleteUniqueOp(oldAttr))
+		}
+	}
+
+	// Claim new unique keys for values that changed or were added
+	for id, newAttr := range newByID {
+		oldAttr, exists := oldByID[id]
+		if !exists || !oldAttr.Equal(newAttr) {
+			uniqueKey := s.buildUniqueKey(newAttr)
+			conditions = append(conditions, clientv3.Compare(clientv3.CreateRevision(uniqueKey), "=", 0))
+			ops = append(ops, s.addUniqueOp(newAttr, entityId))
+		}
+	}
+
+	return ops, conditions, nil
+}
+
 // buildEntitySaveOps builds etcd operations for saving entity data (primary and session attributes)
 func (s *EtcdStore) buildEntitySaveOps(entity *Entity, key string, primary, session []Attr, o *entityOpts) ([]clientv3.Op, error) {
 	var ops []clientv3.Op
@@ -861,12 +1015,13 @@ func (s *EtcdStore) ReplaceEntity(
 		return nil, err
 	}
 
-	// Get current entity to check revision
+	// Get current entity to check revision and snapshot for unique-value diffing
 	entity, err := s.GetEntity(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 
+	originalEntity := entity.Clone()
 	rev := entity.GetRevision()
 
 	repl := current.Clone()
@@ -913,6 +1068,13 @@ func (s *EtcdStore) ReplaceEntity(
 	}
 	coltxopt := s.buildCollectionOps(repl, originalIndexedAttrs, newIndexedAttrs, sessPart, sid)
 
+	// Build unique-value update operations (release old, claim new)
+	uniqueOps, uniqueConditions, err := s.buildUniqueUpdateOps(ctx, repl.Id(), originalEntity, repl)
+	if err != nil {
+		return nil, err
+	}
+	coltxopt = append(coltxopt, uniqueOps...)
+
 	// Build entity save operations
 	key := s.buildKey(repl.Id())
 	txopt, err := s.buildEntitySaveOps(repl, key, primary, session, &o)
@@ -924,15 +1086,20 @@ func (s *EtcdStore) ReplaceEntity(
 
 	var txnResp *clientv3.TxnResponse
 
-	// When using 0 as the from rev, we skip the revision check
-	if o.fromRevision == 0 {
+	// Build conditions: revision check + unique-value constraints
+	var conditions []clientv3.Cmp
+	if o.fromRevision != 0 {
+		conditions = append(conditions, clientv3.Compare(clientv3.ModRevision(key), "=", rev))
+	}
+	conditions = append(conditions, uniqueConditions...)
+
+	if len(conditions) > 0 {
 		txnResp, err = s.client.Txn(ctx).
+			If(conditions...).
 			Then(txopt...).
 			Commit()
 	} else {
-		// Use Txn to check that the entity hasn't changed
 		txnResp, err = s.client.Txn(ctx).
-			If(clientv3.Compare(clientv3.ModRevision(key), "=", rev)).
 			Then(txopt...).
 			Commit()
 	}
@@ -971,11 +1138,13 @@ func (s *EtcdStore) PatchEntity(
 		return nil, err
 	}
 
-	// Get current entity
+	// Get current entity and snapshot for unique-value diffing
 	entity, err := s.GetEntity(ctx, id)
 	if err != nil {
 		return nil, err
 	}
+
+	originalEntity := entity.Clone()
 
 	// Check revision if specified
 	if err := s.checkRevisionConflict(entity, o.fromRevision); err != nil {
@@ -1036,6 +1205,13 @@ func (s *EtcdStore) PatchEntity(
 	}
 	coltxopt := s.buildCollectionOps(entity, originalIndexedAttrs, newIndexedAttrs, sessPart, sid)
 
+	// Build unique-value update operations (release old, claim new)
+	uniqueOps, uniqueConditions, err := s.buildUniqueUpdateOps(ctx, entity.Id(), originalEntity, entity)
+	if err != nil {
+		return nil, err
+	}
+	coltxopt = append(coltxopt, uniqueOps...)
+
 	entity.attrs = primary
 
 	// Build entity save operations
@@ -1049,15 +1225,20 @@ func (s *EtcdStore) PatchEntity(
 
 	var txnResp *clientv3.TxnResponse
 
-	// When using 0 as the from rev, we skip the revision check
-	if o.fromRevision == 0 {
+	// Build conditions: revision check + unique-value constraints
+	var conditions []clientv3.Cmp
+	if o.fromRevision != 0 {
+		conditions = append(conditions, clientv3.Compare(clientv3.ModRevision(key), "=", rev))
+	}
+	conditions = append(conditions, uniqueConditions...)
+
+	if len(conditions) > 0 {
 		txnResp, err = s.client.Txn(ctx).
+			If(conditions...).
 			Then(txopt...).
 			Commit()
 	} else {
-		// Use Txn to check that the key exists before updating
 		txnResp, err = s.client.Txn(ctx).
-			If(clientv3.Compare(clientv3.ModRevision(key), "=", rev)).
 			Then(txopt...).
 			Commit()
 	}
@@ -1147,10 +1328,21 @@ func (s *EtcdStore) DeleteEntity(ctx context.Context, id Id) error {
 
 	key := s.buildKey(id)
 
+	// Build delete operations: entity key + unique-value keys
+	ops := []clientv3.Op{clientv3.OpDelete(key)}
+
+	uniqueAttrs, err := s.collectUniqueAttrs(ctx, entity)
+	if err != nil {
+		return err
+	}
+	for _, attr := range uniqueAttrs {
+		ops = append(ops, s.deleteUniqueOp(attr))
+	}
+
 	// Use Txn to check that the key exists before deleting
 	txnResp, err := s.client.Txn(ctx).
 		If(clientv3.Compare(clientv3.ModRevision(key), "=", entity.GetRevision())).
-		Then(clientv3.OpDelete(key)).
+		Then(ops...).
 		Commit()
 
 	if err != nil {
@@ -1379,6 +1571,80 @@ func (s *EtcdStore) CollectionPrefix(ctx context.Context, collection string) (st
 	colKey := tr.Replace(collection)
 
 	return fmt.Sprintf("%s/collections/%s/", s.prefix, colKey), nil
+}
+
+// BuildUniqueKeyForTest exposes buildUniqueKey for use in tests.
+func (s *EtcdStore) BuildUniqueKeyForTest(attr Attr) string {
+	return s.buildUniqueKey(attr)
+}
+
+// buildUniqueKey returns the etcd key for a unique-value constraint.
+// The key is namespaced by the attribute's CAS to avoid collisions
+// between different unique attributes that happen to share a value.
+func (s *EtcdStore) buildUniqueKey(attr Attr) string {
+	return fmt.Sprintf("%s/unique/%s", s.prefix, attr.CAS())
+}
+
+// addUniqueOp returns an etcd put operation that claims a unique value.
+func (s *EtcdStore) addUniqueOp(attr Attr, entityId Id) clientv3.Op {
+	return clientv3.OpPut(s.buildUniqueKey(attr), string(entityId))
+}
+
+// deleteUniqueOp returns an etcd delete operation that releases a unique value.
+func (s *EtcdStore) deleteUniqueOp(attr Attr) clientv3.Op {
+	return clientv3.OpDelete(s.buildUniqueKey(attr))
+}
+
+// uniqueExists checks whether a unique value is already claimed.
+func (s *EtcdStore) uniqueExists(ctx context.Context, attr Attr) (bool, error) {
+	resp, err := s.client.Get(ctx, s.buildUniqueKey(attr), clientv3.WithCountOnly())
+	if err != nil {
+		return false, fmt.Errorf("failed to check unique value existence: %w", err)
+	}
+	return resp.Count > 0, nil
+}
+
+// collectUniqueAttrs returns all attributes on the entity that have
+// UniqueValue enforcement according to their schema.
+func (s *EtcdStore) collectUniqueAttrs(ctx context.Context, entity *Entity) ([]Attr, error) {
+	var unique []Attr
+	for _, attr := range entity.attrs {
+		schema, err := s.GetAttributeSchema(ctx, attr.ID)
+		if err != nil {
+			continue // schema entities won't have schemas for their own attrs
+		}
+		if schema.Unique == uniqVal {
+			unique = append(unique, attr)
+		}
+	}
+	return unique, nil
+}
+
+// GetOneIndex looks up a single entity by an indexed attribute value.
+// Returns the entity ID if exactly one match is found, or ErrNotFound.
+func (s *EtcdStore) GetOneIndex(ctx context.Context, attr Attr) (Id, error) {
+	schema, err := s.GetAttributeSchema(ctx, attr.ID)
+	if err != nil {
+		return "", err
+	}
+
+	if !schema.Index {
+		return "", fmt.Errorf("attribute %s is not indexed", attr.ID)
+	}
+
+	colKey := tr.Replace(attr.CAS())
+	prefix := fmt.Sprintf("%s/collections/%s/", s.prefix, colKey)
+
+	resp, err := s.client.Get(ctx, prefix, clientv3.WithPrefix(), clientv3.WithLimit(1))
+	if err != nil {
+		return "", fmt.Errorf("failed to query index: %w", err)
+	}
+
+	if len(resp.Kvs) == 0 {
+		return "", cond.NotFound("entity", attr.Value.String())
+	}
+
+	return Id(resp.Kvs[0].Value), nil
 }
 
 func (s *EtcdStore) CreateSession(ctx context.Context, ttl int64) ([]byte, error) {
