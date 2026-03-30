@@ -216,7 +216,15 @@ func walkAST(p *tomlast.Parser, parts []string, depth int) int {
 				keyName := string(n.Data)
 
 				if keyIdx < depth {
-					// Skip already-matched prefix components
+					// Verify skipped prefix components still match the
+					// already-resolved path — prevents sibling tables like
+					// [services.api.concurrency] from matching when we're
+					// looking for services.web.concurrency.
+					wantPrefix := parts[keyIdx]
+					if wantPrefix != "*" && keyName != wantPrefix {
+						matched = false
+						break
+					}
 					keyIdx++
 					continue
 				}

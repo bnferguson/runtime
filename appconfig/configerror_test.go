@@ -186,6 +186,27 @@ requests_per_instance = 10
 	assert.Equal(t, 5, resolveKeyLine(data, "services.web.port"))
 }
 
+func TestResolveKeyLine_SiblingTables(t *testing.T) {
+	// Regression: sibling tables like [services.api.concurrency] must not
+	// match when looking for services.web.concurrency.mode — the skipped
+	// prefix components must be verified against the expected path.
+	data := []byte(`
+name = "test"
+
+[services.api.concurrency]
+mode = "fixed"
+num_instances = 1
+
+[services.web.concurrency]
+mode = "auto"
+requests_per_instance = 10
+`)
+	// Should find the web service's mode, not the api service's
+	assert.Equal(t, 9, resolveKeyLine(data, "services.web.concurrency.mode"))
+	// Should find the api service's mode
+	assert.Equal(t, 5, resolveKeyLine(data, "services.api.concurrency.mode"))
+}
+
 func TestKeyParentPath(t *testing.T) {
 	tests := []struct {
 		name string
