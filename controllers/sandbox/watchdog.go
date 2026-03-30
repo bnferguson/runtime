@@ -111,6 +111,10 @@ func (w *ContainerWatchdog) CleanupOrphanedContainers(ctx context.Context) (*Cle
 		FailedContainers:  make(map[string]error),
 	}
 
+	if w.NodeId == "" {
+		return result, fmt.Errorf("watchdog: NodeId is required for cleanup")
+	}
+
 	// Create a timeout for the cleanup operation
 	cleanupCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
