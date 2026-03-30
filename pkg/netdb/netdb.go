@@ -118,18 +118,21 @@ func (n *NetDB) Subnet(cidr string) (*Subnet, error) {
 }
 
 // GetLeasedSubnet returns the previously persisted flannel subnet lease, if any.
-// Returns an invalid prefix if no lease has been saved.
-func (n *NetDB) GetLeasedSubnet() netip.Prefix {
+// Returns an invalid prefix with nil error if no lease has been saved.
+func (n *NetDB) GetLeasedSubnet() (netip.Prefix, error) {
 	var value string
 	err := n.db.QueryRow("SELECT value FROM metadata WHERE key = 'leased_subnet'").Scan(&value)
 	if err != nil {
-		return netip.Prefix{}
+		if err == sql.ErrNoRows {
+			return netip.Prefix{}, nil
+		}
+		return netip.Prefix{}, fmt.Errorf("failed to query leased subnet: %w", err)
 	}
 	prefix, err := netip.ParsePrefix(value)
 	if err != nil {
-		return netip.Prefix{}
+		return netip.Prefix{}, fmt.Errorf("failed to parse leased subnet %q: %w", value, err)
 	}
-	return prefix
+	return prefix, nil
 }
 
 // SetLeasedSubnet persists the flannel subnet lease so it can be reused on restart.

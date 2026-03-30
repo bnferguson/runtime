@@ -256,8 +256,9 @@ func TestNetDB(t *testing.T) {
 		n, err := New(dbPath)
 		r.NoError(err)
 
-		// No previous lease
-		prev := n.GetLeasedSubnet()
+		// No previous lease — returns invalid prefix with nil error
+		prev, err := n.GetLeasedSubnet()
+		r.NoError(err)
 		r.False(prev.IsValid())
 
 		// Save a lease
@@ -266,14 +267,17 @@ func TestNetDB(t *testing.T) {
 		r.NoError(err)
 
 		// Read it back
-		got := n.GetLeasedSubnet()
+		got, err := n.GetLeasedSubnet()
+		r.NoError(err)
 		r.Equal(subnet, got)
 
 		// Update to a different lease
 		subnet2 := netip.MustParsePrefix("10.8.96.0/24")
 		err = n.SetLeasedSubnet(subnet2)
 		r.NoError(err)
-		r.Equal(subnet2, n.GetLeasedSubnet())
+		got2, err := n.GetLeasedSubnet()
+		r.NoError(err)
+		r.Equal(subnet2, got2)
 
 		// Survives close and reopen
 		n.Close()
@@ -282,6 +286,8 @@ func TestNetDB(t *testing.T) {
 		r.NoError(err)
 		defer n2.Close()
 
-		r.Equal(subnet2, n2.GetLeasedSubnet())
+		got3, err := n2.GetLeasedSubnet()
+		r.NoError(err)
+		r.Equal(subnet2, got3)
 	})
 }

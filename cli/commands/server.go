@@ -674,11 +674,16 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		return fmt.Errorf("failed to open netdb: %w", err)
 	}
 
+	prevSubnet, err := ndb.GetLeasedSubnet()
+	if err != nil {
+		return fmt.Errorf("failed to read leased subnet from netdb: %w", err)
+	}
+
 	grungeOpts := grunge.NetworkOptions{
 		EtcdEndpoints: cfg.Etcd.Endpoints,
 		EtcdPrefix:    cfg.Etcd.GetPrefix() + "/sub/flannel",
 		BackendType:   cfg.Server.GetNetworkBackend(),
-		PrevIPv4:      ndb.GetLeasedSubnet(),
+		PrevIPv4:      prevSubnet,
 	}
 
 	// Add TLS config when distributed runners is enabled
