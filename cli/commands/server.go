@@ -88,7 +88,6 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		for _, addr := range discovery.Addresses {
 			ip := net.ParseIP(addr.IP)
 			if ip != nil && !ip.IsLinkLocalUnicast() {
-				cfg.TLS.AdditionalIPs = append(cfg.TLS.AdditionalIPs, addr.IP)
 				discoveredIps = append(discoveredIps, ip)
 			}
 		}
@@ -296,16 +295,8 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		if labs.DistributedRunners() {
 			ctx.Log.Info("setting up etcd mTLS for distributed runners")
 
-			// Parse additional IPs for etcd server cert SANs
-			var etcdExtraIPs []net.IP
-			for _, ipStr := range cfg.TLS.AdditionalIPs {
-				if ip := net.ParseIP(ipStr); ip != nil {
-					etcdExtraIPs = append(etcdExtraIPs, ip)
-				}
-			}
-
 			var err error
-			etcdTLSSetup, err = coordinate.SetupEtcdTLS(ctx.Log, cfg.Server.GetDataPath(), cfg.TLS.AdditionalNames, etcdExtraIPs)
+			etcdTLSSetup, err = coordinate.SetupEtcdTLS(ctx.Log, cfg.Server.GetDataPath(), cfg.TLS.AdditionalNames, discoveredIps)
 			if err != nil {
 				ctx.Log.Error("failed to set up etcd TLS", "error", err)
 				return err
