@@ -55,17 +55,27 @@ func connectAsRoot(ctx context.Context, host string, password string) (*sql.DB, 
 	return connectMysql(ctx, host, mysqlPort, defaultMysqlUser, password, defaultMysqlDB)
 }
 
+// escapeMysqlString escapes a value for use in a MySQL single-quoted string
+// literal. Backslashes must be doubled first (MySQL treats \ as an escape
+// character by default), then single quotes are doubled.
+func escapeMysqlString(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, "'", "''")
+	return s
+}
+
 func createMysqlUser(ctx context.Context, db *sql.DB, username, password string) error {
+	escaped := escapeMysqlString(password)
 	_, err := db.ExecContext(ctx,
 		fmt.Sprintf("CREATE USER IF NOT EXISTS %s@'%%' IDENTIFIED BY '%s'",
-			quoteIdentifier(username), strings.ReplaceAll(password, "'", "''")))
+			quoteIdentifier(username), escaped))
 	if err != nil {
 		return fmt.Errorf("creating user %s: %w", username, err)
 	}
 	// Ensure password is current even if user already existed from a prior saga attempt.
 	_, err = db.ExecContext(ctx,
 		fmt.Sprintf("ALTER USER %s@'%%' IDENTIFIED BY '%s'",
-			quoteIdentifier(username), strings.ReplaceAll(password, "'", "''")))
+			quoteIdentifier(username), escaped))
 	if err != nil {
 		return fmt.Errorf("updating password for user %s: %w", username, err)
 	}
