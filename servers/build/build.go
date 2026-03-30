@@ -314,7 +314,7 @@ func validateNodePorts(ctx context.Context, eac *entityserver_v1alpha.EntityAcce
 func validateDiskConfigs(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient, spec core_v1alpha.ConfigSpec) error {
 	for _, svc := range spec.Services {
 		for _, disk := range svc.Disks {
-			if disk.SizeGb > 0 || disk.Name == "" {
+			if disk.SizeGb > 0 || disk.Name == "" || disk.Provider == core_v1alpha.ConfigSpecServicesDisksLOCAL {
 				continue
 			}
 			// size_gb == 0 means we expect the disk to already exist

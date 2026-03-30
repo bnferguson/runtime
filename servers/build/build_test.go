@@ -2344,6 +2344,29 @@ func TestValidateDiskConfigsExistingDisk(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestValidateDiskConfigsLocalDiskSkipsCheck(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// Local disk with size_gb=0 and no existing entity — should succeed
+	// because local disks are managed by the node, not the entity store
+	spec := core_v1alpha.ConfigSpec{
+		Services: []core_v1alpha.ConfigSpecServices{{
+			Name: "web",
+			Disks: []core_v1alpha.ConfigSpecServicesDisks{{
+				Name:      "data",
+				MountPath: "/miren/data/local",
+				Provider:  core_v1alpha.ConfigSpecServicesDisksLOCAL,
+				SizeGb:    0,
+			}},
+		}},
+	}
+
+	err := validateDiskConfigs(ctx, server.EAC, spec)
+	assert.NoError(t, err)
+}
+
 func TestValidateDiskConfigsAutoCreate(t *testing.T) {
 	ctx := context.Background()
 	server, cleanup := testutils.NewInMemEntityServer(t)
