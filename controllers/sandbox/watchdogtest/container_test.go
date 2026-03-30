@@ -40,6 +40,18 @@ func TestContainerWatchdog(t *testing.T) {
 		require.NoError(t, err)
 	}
 
+	// Create the node entity so sandbox ScheduleKeys can reference it.
+	// Only set the kind — Status is a session attribute and can't be set via Put.
+	{
+		nodeId := entity.Id("node/" + testNodeId)
+		node := &compute.Node{}
+		var nodeE entityserver_v1alpha.Entity
+		nodeE.SetId(nodeId.String())
+		nodeE.SetAttrs(entity.New(entity.DBId, nodeId, node.Encode).Attrs())
+		_, err := eac.Put(context.Background(), &nodeE)
+		require.NoError(t, err)
+	}
+
 	t.Run("removes orphaned containers", func(t *testing.T) {
 		r := require.New(t)
 

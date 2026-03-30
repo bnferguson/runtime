@@ -95,6 +95,19 @@ func TestSandbox(t *testing.T) {
 		require.NoError(t, err)
 	}
 
+	// Create a node entity so sandbox ScheduleKeys can reference it.
+	// The test sandbox controller uses NodeId "test-node".
+	// Only set the kind — Status is a session attribute and can't be set via Put.
+	{
+		nodeId := entity.Id("node/test-node")
+		node := &compute.Node{}
+		var nodeE entityserver_v1alpha.Entity
+		nodeE.SetId(nodeId.String())
+		nodeE.SetAttrs(entity.New(entity.DBId, nodeId, node.Encode).Attrs())
+		_, err := testDeps.EAC.Put(setupCtx, &nodeE)
+		require.NoError(t, err)
+	}
+
 	sbName := func() string {
 		return idgen.GenNS("sb")
 	}
@@ -714,6 +727,14 @@ func TestSandbox(t *testing.T) {
 		err = sbc.Init(ctx)
 		r.NoError(err)
 
+		// Schedule key so sandboxes match the node-scoped index used by Periodic.
+		schedule := compute.Schedule{
+			Key: compute.Key{
+				Kind: compute.KindSandbox,
+				Node: entity.Id("node/test-node"),
+			},
+		}
+
 		// Create a few sandboxes
 		sbID1 := entity.Id(sbName())
 		sb1 := &compute.Sandbox{
@@ -726,7 +747,9 @@ func TestSandbox(t *testing.T) {
 		rpcE1.SetId(sbID1.String())
 		rpcE1.SetAttrs(entity.New(
 			entity.Keyword(entity.Ident, sbID1.String()),
-			sb1.Encode).Attrs())
+			sb1.Encode,
+			schedule.Encode,
+		).Attrs())
 		_, err = sbc.EAC.Put(ctx, &rpcE1)
 		r.NoError(err)
 
@@ -754,7 +777,9 @@ func TestSandbox(t *testing.T) {
 		rpcE2.SetId(sbID2.String())
 		rpcE2.SetAttrs(entity.New(
 			entity.Keyword(entity.Ident, sbID2.String()),
-			sb2.Encode).Attrs())
+			sb2.Encode,
+			schedule.Encode,
+		).Attrs())
 		_, err = sbc.EAC.Put(ctx, &rpcE2)
 		r.NoError(err)
 
@@ -784,6 +809,7 @@ func TestSandbox(t *testing.T) {
 			(&compute.Sandbox{
 				Status: compute.DEAD,
 			}).Encode,
+			schedule.Encode,
 		).Attrs())
 
 		_, err = sbc.EAC.Put(ctx, &rpcE)

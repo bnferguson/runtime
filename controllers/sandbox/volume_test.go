@@ -476,6 +476,17 @@ func TestReleaseDiskLeases(t *testing.T) {
 	})
 }
 
+// testSchedule returns a Schedule encoder that assigns sandboxes to the
+// test node, matching the node-scoped index used by Periodic.
+func testSchedule() compute.Schedule {
+	return compute.Schedule{
+		Key: compute.Key{
+			Kind: compute.KindSandbox,
+			Node: entity.Id("node/test-node"),
+		},
+	}
+}
+
 func TestPeriodicReleasesDiskLeases(t *testing.T) {
 	t.Run("releases disk leases before deleting dead sandbox", func(t *testing.T) {
 		r := require.New(t)
@@ -497,12 +508,14 @@ func TestPeriodicReleasesDiskLeases(t *testing.T) {
 		leaseID := entity.Id("disk-lease/orphan-candidate")
 
 		// Create a DEAD sandbox entity
+		schedule := testSchedule()
 		_, err := es.EAC.Create(ctx, entity.New(
 			entity.DBId, sandboxID,
 			(&compute.Sandbox{
 				ID:     sandboxID,
 				Status: compute.DEAD,
 			}).Encode,
+			schedule.Encode,
 		).Attrs())
 		r.NoError(err)
 
@@ -555,12 +568,14 @@ func TestPeriodicReleasesDiskLeases(t *testing.T) {
 		sandboxID := entity.Id("sandbox/dead-no-lease")
 
 		// Create a DEAD sandbox entity with no disk leases
+		schedule := testSchedule()
 		_, err := es.EAC.Create(ctx, entity.New(
 			entity.DBId, sandboxID,
 			(&compute.Sandbox{
 				ID:     sandboxID,
 				Status: compute.DEAD,
 			}).Encode,
+			schedule.Encode,
 		).Attrs())
 		r.NoError(err)
 
@@ -592,12 +607,14 @@ func TestPeriodicReleasesDiskLeases(t *testing.T) {
 		leaseID := entity.Id("disk-lease/should-stay-bound")
 
 		// Create a RUNNING sandbox
+		schedule := testSchedule()
 		_, err := es.EAC.Create(ctx, entity.New(
 			entity.DBId, sandboxID,
 			(&compute.Sandbox{
 				ID:     sandboxID,
 				Status: compute.RUNNING,
 			}).Encode,
+			schedule.Encode,
 		).Attrs())
 		r.NoError(err)
 
