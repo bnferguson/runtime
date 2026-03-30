@@ -94,6 +94,7 @@ type CoordinatorConfig struct {
 	DataPath        string              `json:"data_path" yaml:"data_path"`
 	AdditionalNames []string            `json:"additional_names" yaml:"additional_names"`
 	AdditionalIPs   []net.IP            `json:"additional_ips" yaml:"additional_ips"`
+	DiscoveredIPs   []net.IP            `json:"discovered_ips" yaml:"discovered_ips"`
 
 	// ACME certificate configuration
 	AcmeEmail       string `json:"acme_email" yaml:"acme_email"`
@@ -341,7 +342,7 @@ type Coordinator struct {
 	oidcAuthenticator *oidcauth.OIDCAuthenticator
 
 	netcheckMu        sync.RWMutex
-	netcheckResult    *cloudauth.NetcheckResponse
+	netcheckResult    *cloudauth.NetcheckDualStackResult
 	netcheckCheckedAt time.Time
 
 	logAddressesOnce sync.Once
@@ -469,6 +470,7 @@ func (c *Coordinator) LoadAPICert(ctx context.Context) error {
 	}
 
 	ips = append(ips, c.AdditionalIPs...)
+	ips = append(ips, c.DiscoveredIPs...)
 
 	cert := filepath.Join(c.DataPath, "server", "api.crt")
 	keyPath := filepath.Join(c.DataPath, "server", "api.key")
@@ -1134,7 +1136,8 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	return nil
 }
 
-// runNetcheck calls the cloud's netcheck endpoint to determine public reachability.
+// runNetcheck calls the cloud's netcheck endpoint over both IPv4 and IPv6
+// to determine public reachability on each address family.
 func (c *Coordinator) runNetcheck(ctx context.Context) {
 	cloudURL := c.CloudAuth.CloudURL
 	if cloudURL == "" {
@@ -1146,7 +1149,7 @@ func (c *Coordinator) runNetcheck(ctx context.Context) {
 		{Port: 8443, Protocol: "http3"},
 	}
 
-	result, err := cloudauth.Netcheck(ctx, cloudURL, ports)
+	result, err := cloudauth.NetcheckDualStack(ctx, cloudURL, ports)
 	if err != nil {
 		if errors.Is(err, cloudauth.ErrPrivateAddress) {
 			c.Log.Info("netcheck: cluster is not publicly reachable (private IP)")
@@ -1160,12 +1163,25 @@ func (c *Coordinator) runNetcheck(ctx context.Context) {
 		return
 	}
 
-	// Validate that the source address is a global unicast IP — if not,
-	// the netcheck response is unreliable (e.g. proxy or misconfigured endpoint).
-	sourceIP := net.ParseIP(result.SourceAddress)
-	if sourceIP == nil || !sourceIP.IsGlobalUnicast() || sourceIP.IsPrivate() {
-		c.Log.Warn("netcheck: source address is not a public IP, ignoring result",
-			"source_address", result.SourceAddress)
+	// Validate source addresses — drop any that aren't public global unicast.
+	if result.IPv4 != nil {
+		sourceIP := net.ParseIP(result.IPv4.SourceAddress)
+		if sourceIP == nil || !sourceIP.IsGlobalUnicast() || sourceIP.IsPrivate() {
+			c.Log.Warn("netcheck: IPv4 source address is not a public IP, ignoring",
+				"source_address", result.IPv4.SourceAddress)
+			result.IPv4 = nil
+		}
+	}
+	if result.IPv6 != nil {
+		sourceIP := net.ParseIP(result.IPv6.SourceAddress)
+		if sourceIP == nil || !sourceIP.IsGlobalUnicast() || sourceIP.IsPrivate() {
+			c.Log.Warn("netcheck: IPv6 source address is not a public IP, ignoring",
+				"source_address", result.IPv6.SourceAddress)
+			result.IPv6 = nil
+		}
+	}
+
+	if result.IPv4 == nil && result.IPv6 == nil {
 		c.netcheckMu.Lock()
 		c.netcheckResult = nil
 		c.netcheckCheckedAt = time.Now()
@@ -1178,54 +1194,74 @@ func (c *Coordinator) runNetcheck(ctx context.Context) {
 	c.netcheckCheckedAt = time.Now()
 	c.netcheckMu.Unlock()
 
-	var reachable []string
-	for _, r := range result.Results {
-		if r.Reachable {
-			reachable = append(reachable, fmt.Sprintf("%s/%d", r.Protocol, r.Port))
+	// Log results for each address family
+	for _, entry := range []struct {
+		name string
+		resp *cloudauth.NetcheckResponse
+	}{
+		{"IPv4", result.IPv4},
+		{"IPv6", result.IPv6},
+	} {
+		if entry.resp == nil {
+			continue
 		}
+		var reachable []string
+		for _, r := range entry.resp.Results {
+			if r.Reachable {
+				reachable = append(reachable, fmt.Sprintf("%s/%d", r.Protocol, r.Port))
+			}
+		}
+		c.Log.Info("netcheck: public reachability determined",
+			"family", entry.name,
+			"source_ip", entry.resp.SourceAddress,
+			"reachable", reachable,
+			"duration_ms", entry.resp.DurationMs,
+		)
 	}
-	c.Log.Info("netcheck: public reachability determined",
-		"source_ip", result.SourceAddress,
-		"reachable", reachable,
-		"duration_ms", result.DurationMs,
-	)
 }
 
-// publicAddresses returns addresses derived from the cached netcheck result.
+// publicAddresses returns addresses derived from the cached dual-stack netcheck result.
 // Returns nil if no netcheck has been done or the cluster isn't publicly reachable.
 func (c *Coordinator) publicAddresses() []string {
 	c.netcheckMu.RLock()
 	result := c.netcheckResult
 	c.netcheckMu.RUnlock()
 
-	if result == nil || result.SourceAddress == "" {
-		return nil
-	}
-
-	if net.ParseIP(result.SourceAddress) == nil {
+	if result == nil {
 		return nil
 	}
 
 	seen := make(map[string]struct{})
 	var addrs []string
-	for _, r := range result.Results {
-		if !r.Reachable {
+
+	for _, resp := range []*cloudauth.NetcheckResponse{result.IPv4, result.IPv6} {
+		if resp == nil || resp.SourceAddress == "" {
 			continue
 		}
-		hp := net.JoinHostPort(result.SourceAddress, strconv.Itoa(r.Port))
-		if _, ok := seen[hp]; ok {
+		if net.ParseIP(resp.SourceAddress) == nil {
 			continue
 		}
-		seen[hp] = struct{}{}
-		addrs = append(addrs, hp)
+		for _, r := range resp.Results {
+			if !r.Reachable {
+				continue
+			}
+			hp := net.JoinHostPort(resp.SourceAddress, strconv.Itoa(r.Port))
+			if _, ok := seen[hp]; ok {
+				continue
+			}
+			seen[hp] = struct{}{}
+			addrs = append(addrs, hp)
+		}
 	}
 
 	return addrs
 }
 
 // apiAddresses builds the list of API addresses for status reports.
-// When netcheck has been run, public IPs from AdditionalIPs are filtered out
-// in favor of the netcheck-determined public addresses.
+// User-provided AdditionalIPs are always included. For auto-discovered IPs,
+// netcheck results replace discovered public IPs when reachable addresses
+// are found. If netcheck ran but found nothing reachable, discovered public
+// IPs are kept as a fallback.
 func (c *Coordinator) apiAddresses() []string {
 	var addrs []string
 
@@ -1237,30 +1273,34 @@ func (c *Coordinator) apiAddresses() []string {
 	// Add localhost addresses
 	addrs = append(addrs, "127.0.0.1:8443", "[::1]:8443")
 
-	c.netcheckMu.RLock()
-	hasNetcheck := c.netcheckResult != nil
-	c.netcheckMu.RUnlock()
-
+	// User-provided IPs are always included.
 	for _, ip := range c.AdditionalIPs {
-		// When netcheck has run, skip public IPs — netcheck results replace them
-		if hasNetcheck && !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsLinkLocalUnicast() {
+		addrs = append(addrs, net.JoinHostPort(ip.String(), "8443"))
+	}
+
+	// For discovered IPs, netcheck results replace discovered public IPs
+	// when netcheck found reachable addresses. If netcheck ran but found
+	// nothing reachable (e.g., firewalled), keep discovered public IPs
+	// as a fallback.
+	pubAddrs := c.publicAddresses()
+	for _, ip := range c.DiscoveredIPs {
+		if len(pubAddrs) > 0 && !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsLinkLocalUnicast() {
 			continue
 		}
-
-		addrs = append(addrs, net.JoinHostPort(ip.String(), "8443")) // Ensure proper formatting for IPv6 addresses
+		addrs = append(addrs, net.JoinHostPort(ip.String(), "8443"))
 	}
-
-	if pubAddrs := c.publicAddresses(); len(pubAddrs) > 0 {
-		addrs = append(addrs, pubAddrs...)
-	}
+	addrs = append(addrs, pubAddrs...)
 
 	c.logAddressesOnce.Do(func() {
 		additional := []string{}
 		for _, ip := range c.AdditionalIPs {
 			additional = append(additional, ip.String())
 		}
-
-		c.Log.Info("reporting API addresses", "listen", c.Address, "discovered", additional, "result", addrs)
+		discovered := []string{}
+		for _, ip := range c.DiscoveredIPs {
+			discovered = append(discovered, ip.String())
+		}
+		c.Log.Info("reporting API addresses", "listen", c.Address, "configured", additional, "discovered", discovered, "result", addrs)
 	})
 
 	return addrs

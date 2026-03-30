@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"time"
 )
@@ -38,6 +39,12 @@ type NetcheckResponse struct {
 	DurationMs    int              `json:"duration_ms"`
 }
 
+// NetcheckDualStackResult holds netcheck responses for both address families.
+type NetcheckDualStackResult struct {
+	IPv4 *NetcheckResponse
+	IPv6 *NetcheckResponse
+}
+
 // ErrPrivateAddress is returned when the cloud rejects the request
 // because the cluster's IP is private/loopback/link-local.
 var ErrPrivateAddress = errors.New("client IP is not a public address")
@@ -45,7 +52,10 @@ var ErrPrivateAddress = errors.New("client IP is not a public address")
 // Netcheck calls the cloud's netcheck endpoint to determine whether the
 // cluster is publicly reachable on the given ports. The endpoint requires no
 // authentication — it uses the request's source IP for probing.
-func Netcheck(ctx context.Context, cloudURL string, ports []NetcheckPort) (*NetcheckResponse, error) {
+//
+// The network parameter controls the address family: "tcp4" forces IPv4,
+// "tcp6" forces IPv6, and "" uses the OS default.
+func Netcheck(ctx context.Context, cloudURL string, ports []NetcheckPort, network string) (*NetcheckResponse, error) {
 	body, err := json.Marshal(NetcheckRequest{Ports: ports})
 	if err != nil {
 		return nil, fmt.Errorf("marshal netcheck request: %w", err)
@@ -59,7 +69,21 @@ func Netcheck(ctx context.Context, cloudURL string, ports []NetcheckPort) (*Netc
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if network != "" {
+		transport.DialContext = (&net.Dialer{
+			Timeout: 10 * time.Second,
+		}).DialContext
+		// Wrap the dialer to force the address family
+		baseDialContext := transport.DialContext
+		transport.DialContext = func(ctx context.Context, _, addr string) (net.Conn, error) {
+			return baseDialContext(ctx, network, addr)
+		}
+	}
+
+	client := &http.Client{
+		Transport: transport,
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("send netcheck request: %w", err)
@@ -85,4 +109,44 @@ func Netcheck(ctx context.Context, cloudURL string, ports []NetcheckPort) (*Netc
 	}
 
 	return &result, nil
+}
+
+// NetcheckDualStack calls the netcheck endpoint concurrently over IPv4 and
+// IPv6 to discover public addresses on both address families. Each call gets
+// its own timeout so a missing address family fails fast without blocking the
+// other. Either result may be nil if the address family is unavailable or the
+// check fails. Returns an error only if both checks fail.
+func NetcheckDualStack(ctx context.Context, cloudURL string, ports []NetcheckPort) (*NetcheckDualStackResult, error) {
+	type netcheckResult struct {
+		resp *NetcheckResponse
+		err  error
+	}
+
+	ipv4Ch := make(chan netcheckResult, 1)
+	ipv6Ch := make(chan netcheckResult, 1)
+
+	go func() {
+		callCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		resp, err := Netcheck(callCtx, cloudURL, ports, "tcp4")
+		ipv4Ch <- netcheckResult{resp, err}
+	}()
+	go func() {
+		callCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		resp, err := Netcheck(callCtx, cloudURL, ports, "tcp6")
+		ipv6Ch <- netcheckResult{resp, err}
+	}()
+
+	v4 := <-ipv4Ch
+	v6 := <-ipv6Ch
+
+	if v4.err != nil && v6.err != nil {
+		return nil, fmt.Errorf("netcheck failed on both address families: ipv4: %w, ipv6: %v", v4.err, v6.err)
+	}
+
+	return &NetcheckDualStackResult{
+		IPv4: v4.resp,
+		IPv6: v6.resp,
+	}, nil
 }

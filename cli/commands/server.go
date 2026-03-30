@@ -74,7 +74,11 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	versionInfo := version.GetInfo()
 	ctx.UILog.Info("starting miren server", "version", versionInfo.Version, "commit", versionInfo.Commit)
 
-	// Discover local IPs early so they're available for etcd TLS SANs
+	// Discover local IPs early so they're available for etcd TLS SANs.
+	// We track discovered IPs separately from user-configured IPs so the
+	// coordinator can treat them differently (netcheck can replace discovered
+	// public IPs but user-configured IPs always pass through).
+	var discoveredIps []net.IP
 	discovery, err := ipdiscovery.DiscoverWithTimeout(5*time.Second, ctx.Log)
 	if err != nil {
 		ctx.Log.Warn("failed to discover local IPs", "error", err)
@@ -83,12 +87,10 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 			ip := net.ParseIP(addr.IP)
 			if ip != nil && !ip.IsLinkLocalUnicast() {
 				cfg.TLS.AdditionalIPs = append(cfg.TLS.AdditionalIPs, addr.IP)
+				discoveredIps = append(discoveredIps, ip)
 			}
 		}
-		if discovery.PublicIP != "" {
-			cfg.TLS.AdditionalIPs = append(cfg.TLS.AdditionalIPs, discovery.PublicIP)
-		}
-		ctx.Log.Info("discovered IPs", "local-addresses", len(discovery.Addresses), "public", discovery.PublicIP)
+		ctx.Log.Info("discovered IPs", "local-addresses", len(discovery.Addresses))
 	}
 
 	switch cfg.GetMode() {
@@ -624,6 +626,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		DataPath:           cfg.Server.GetDataPath(),
 		AdditionalNames:    cfg.TLS.AdditionalNames,
 		AdditionalIPs:      additionalIps,
+		DiscoveredIPs:      discoveredIps,
 		AcmeEmail:          cfg.TLS.GetAcmeEmail(),
 		AcmeDNSProvider:    cfg.TLS.GetAcmeDNSProvider(),
 		Resolver:           res,

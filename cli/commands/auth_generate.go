@@ -46,10 +46,19 @@ func AuthGenerate(ctx *Context, opts struct {
 			return err
 		}
 
-		if discovery.PublicIP == "" {
+		// Find the first public (non-private, non-loopback) IP from local interfaces
+		var publicIP string
+		for _, addr := range discovery.Addresses {
+			ip := net.ParseIP(addr.IP)
+			if ip != nil && ip.IsGlobalUnicast() && !ip.IsPrivate() {
+				publicIP = addr.IP
+				break
+			}
+		}
+		if publicIP == "" {
 			return fmt.Errorf("no public IP found, use --target to specify a hostname")
 		}
-		tgt = discovery.PublicIP + ":8443"
+		tgt = publicIP + ":8443"
 	} else {
 		tgt = opts.Target
 		if !strings.Contains(tgt, ":") {
