@@ -94,6 +94,7 @@ type CoordinatorConfig struct {
 	DataPath        string              `json:"data_path" yaml:"data_path"`
 	AdditionalNames []string            `json:"additional_names" yaml:"additional_names"`
 	AdditionalIPs   []net.IP            `json:"additional_ips" yaml:"additional_ips"`
+	DiscoveredIPs   []net.IP            `json:"discovered_ips" yaml:"discovered_ips"`
 
 	// ACME certificate configuration
 	AcmeEmail       string `json:"acme_email" yaml:"acme_email"`
@@ -469,6 +470,7 @@ func (c *Coordinator) LoadAPICert(ctx context.Context) error {
 	}
 
 	ips = append(ips, c.AdditionalIPs...)
+	ips = append(ips, c.DiscoveredIPs...)
 
 	cert := filepath.Join(c.DataPath, "server", "api.crt")
 	keyPath := filepath.Join(c.DataPath, "server", "api.key")
@@ -1256,9 +1258,10 @@ func (c *Coordinator) publicAddresses() []string {
 }
 
 // apiAddresses builds the list of API addresses for status reports.
-// When netcheck has found reachable public addresses, discovered public IPs
-// from AdditionalIPs are replaced by the netcheck results. If netcheck ran
-// but found nothing reachable, discovered public IPs are kept as a fallback.
+// User-provided AdditionalIPs are always included. For auto-discovered IPs,
+// netcheck results replace discovered public IPs when reachable addresses
+// are found. If netcheck ran but found nothing reachable, discovered public
+// IPs are kept as a fallback.
 func (c *Coordinator) apiAddresses() []string {
 	var addrs []string
 
@@ -1270,19 +1273,22 @@ func (c *Coordinator) apiAddresses() []string {
 	// Add localhost addresses
 	addrs = append(addrs, "127.0.0.1:8443", "[::1]:8443")
 
-	pubAddrs := c.publicAddresses()
-
+	// User-provided IPs are always included.
 	for _, ip := range c.AdditionalIPs {
-		// When netcheck found reachable public addresses, skip public AdditionalIPs
-		// in favor of the netcheck-determined ones. If netcheck ran but found nothing
-		// reachable (e.g., firewalled), keep the discovered public IPs as a fallback.
-		if len(pubAddrs) > 0 && !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsLinkLocalUnicast() {
-			continue
-		}
-
 		addrs = append(addrs, net.JoinHostPort(ip.String(), "8443"))
 	}
 
+	// For discovered IPs, netcheck results replace discovered public IPs
+	// when netcheck found reachable addresses. If netcheck ran but found
+	// nothing reachable (e.g., firewalled), keep discovered public IPs
+	// as a fallback.
+	pubAddrs := c.publicAddresses()
+	for _, ip := range c.DiscoveredIPs {
+		if len(pubAddrs) > 0 && !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsLinkLocalUnicast() {
+			continue
+		}
+		addrs = append(addrs, net.JoinHostPort(ip.String(), "8443"))
+	}
 	addrs = append(addrs, pubAddrs...)
 
 	c.logAddressesOnce.Do(func() {
@@ -1290,8 +1296,11 @@ func (c *Coordinator) apiAddresses() []string {
 		for _, ip := range c.AdditionalIPs {
 			additional = append(additional, ip.String())
 		}
-
-		c.Log.Info("reporting API addresses", "listen", c.Address, "discovered", additional, "result", addrs)
+		discovered := []string{}
+		for _, ip := range c.DiscoveredIPs {
+			discovered = append(discovered, ip.String())
+		}
+		c.Log.Info("reporting API addresses", "listen", c.Address, "configured", additional, "discovered", discovered, "result", addrs)
 	})
 
 	return addrs
