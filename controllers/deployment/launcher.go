@@ -656,8 +656,13 @@ func (l *Launcher) buildSandboxSpec(
 			}
 
 			for _, disk := range svc.Disks {
-				provider := string(disk.Provider)
-				if provider == "" {
+				var provider string
+				switch disk.Provider {
+				case core_v1alpha.ConfigSpecServicesDisksLOCAL:
+					provider = "local"
+				case core_v1alpha.ConfigSpecServicesDisksMIREN:
+					provider = "miren"
+				default:
 					provider = "miren"
 				}
 

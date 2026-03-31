@@ -70,9 +70,16 @@ func ConfigSpecFromConfig(cfg *core_v1alpha.Config) core_v1alpha.ConfigSpec {
 
 		// Convert disks (field-by-field since Provider enum types differ)
 		for _, d := range svc.Disks {
+			provider := core_v1alpha.ConfigSpecServicesDisksMIREN
+			switch d.Provider {
+			case core_v1alpha.LOCAL:
+				provider = core_v1alpha.ConfigSpecServicesDisksLOCAL
+			case core_v1alpha.MIREN:
+				provider = core_v1alpha.ConfigSpecServicesDisksMIREN
+			}
 			s.Disks = append(s.Disks, core_v1alpha.ConfigSpecServicesDisks{
 				Name:         d.Name,
-				Provider:     core_v1alpha.ConfigSpecServicesDisksProvider(d.Provider),
+				Provider:     provider,
 				MountPath:    d.MountPath,
 				ReadOnly:     d.ReadOnly,
 				SizeGb:       d.SizeGb,

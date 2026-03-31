@@ -2260,3 +2260,146 @@ func TestWebServiceImplicitHTTPPortWithMultiPort(t *testing.T) {
 	// PORT env var should be set to 3000 (the implicit HTTP port)
 	assert.Contains(t, container.Env, "PORT=3000")
 }
+
+// TestDiskProviderMapping verifies that disk provider enum values are mapped to
+// the short string form that the sandbox volume controller expects.
+func TestDiskProviderMapping(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{
+		Project: entity.Id("project-1"),
+	}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	version := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+					Disks: []core_v1alpha.Disks{
+						{
+							Name:      "local-data",
+							Provider:  core_v1alpha.LOCAL,
+							MountPath: "/data",
+						},
+						{
+							Name:      "miren-data",
+							Provider:  core_v1alpha.MIREN,
+							MountPath: "/miren-data",
+							SizeGb:    1,
+						},
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", version)
+	require.NoError(t, err)
+	version.ID = verID
+
+	app.ActiveVersion = version.ID
+	err = server.Client.Update(ctx, app)
+	require.NoError(t, err)
+
+	launcher := newTestLauncher(log, server.EAC)
+	err = launcher.Reconcile(ctx, app, nil)
+	require.NoError(t, err)
+
+	pools := listAllPools(t, ctx, server)
+	require.Len(t, pools, 1, "should create one pool")
+
+	volumes := pools[0].SandboxSpec.Volume
+	require.Len(t, volumes, 2, "should have two volumes")
+
+	// Volumes should have short provider strings, not full entity enum values
+	var localVol, mirenVol *compute_v1alpha.SandboxSpecVolume
+	for i := range volumes {
+		switch volumes[i].Name {
+		case "local-data":
+			localVol = &volumes[i]
+		case "miren-data":
+			mirenVol = &volumes[i]
+		}
+	}
+
+	require.NotNil(t, localVol, "should have local-data volume")
+	assert.Equal(t, "local", localVol.Provider, "local disk provider should be mapped to short string")
+	assert.Equal(t, "/data", localVol.MountPath)
+
+	require.NotNil(t, mirenVol, "should have miren-data volume")
+	assert.Equal(t, "miren", mirenVol.Provider, "miren disk provider should be mapped to short string")
+	assert.Equal(t, "/miren-data", mirenVol.MountPath)
+}
+
+// TestDiskProviderDefaultsToMiren verifies that an empty provider defaults to "miren".
+func TestDiskProviderDefaultsToMiren(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{
+		Project: entity.Id("project-1"),
+	}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	version := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+					Disks: []core_v1alpha.Disks{
+						{
+							Name:      "default-disk",
+							MountPath: "/storage",
+							SizeGb:    1,
+						},
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", version)
+	require.NoError(t, err)
+	version.ID = verID
+
+	app.ActiveVersion = version.ID
+	err = server.Client.Update(ctx, app)
+	require.NoError(t, err)
+
+	launcher := newTestLauncher(log, server.EAC)
+	err = launcher.Reconcile(ctx, app, nil)
+	require.NoError(t, err)
+
+	pools := listAllPools(t, ctx, server)
+	require.Len(t, pools, 1)
+
+	volumes := pools[0].SandboxSpec.Volume
+	require.Len(t, volumes, 1)
+	assert.Equal(t, "miren", volumes[0].Provider, "empty provider should default to miren")
+}

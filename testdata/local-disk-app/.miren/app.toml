@@ -1,0 +1,10 @@
+name = "local-disk-app"
+
+[services.web.concurrency]
+mode = "fixed"
+num_instances = 1
+
+[[services.web.disks]]
+name = "shared-data"
+provider = "local"
+mount_path = "/data"
