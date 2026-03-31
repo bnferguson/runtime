@@ -161,13 +161,18 @@ func CreateDedicatedPool(ctx context.Context, in CreateDedicatedPoolIn) (CreateD
 
 func UndoCreateDedicatedPool(ctx context.Context, in CreateDedicatedPoolIn, out CreateDedicatedPoolOut) error {
 	fw := saga.Get[*addon.ProviderFramework](ctx)
-	return fw.DeleteSandboxPool(ctx, out.PoolID)
+	if err := fw.DeleteSandboxPool(ctx, out.PoolID); err != nil {
+		return err
+	}
+	diskName := fmt.Sprintf("my-%s-data", in.ServerName)
+	return fw.DeleteDiskByName(ctx, diskName)
 }
 
 type UpdateDedicatedServerIn struct {
 	ServerID     entity.Id `saga:"serverid"`
 	PoolID       entity.Id `saga:"poolid"`
 	ServiceID    entity.Id `saga:"serviceid"`
+	ServiceHost  string    `saga:"servicehost"`
 	VariantName  string    `saga:"variantname"`
 	RootPassword string    `saga:"rootpassword"`
 }
