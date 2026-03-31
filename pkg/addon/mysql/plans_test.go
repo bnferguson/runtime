@@ -1,4 +1,4 @@
-package postgresql
+package mysql
 
 import (
 	"testing"
@@ -10,7 +10,7 @@ func TestDefinitionHasAllVariants(t *testing.T) {
 	def := Definition()
 
 	assert.Equal(t, AddonName, def.Name)
-	assert.Equal(t, "Miren PostgreSQL", def.DisplayName)
+	assert.Equal(t, "Miren MySQL", def.DisplayName)
 	assert.Equal(t, "small", def.DefaultVariant)
 	assert.Len(t, def.Variants, 2)
 
@@ -41,7 +41,7 @@ func TestSanitizeIdentifier(t *testing.T) {
 		{"APP-NAME", "app_name"},
 		{"", "app"},
 		{"a", "a"},
-		{"a-very-long-application-name-that-exceeds-the-postgres-identifier-limit-of-63-chars", "a_very_long_application_name_that_exceeds_the_postgres_identifi"},
+		{"my-really-long-application-name-for-production", "my_really_long_application_name_"},
 	}
 
 	for _, tt := range tests {
@@ -52,7 +52,7 @@ func TestSanitizeIdentifier(t *testing.T) {
 }
 
 func TestBuildEnvVars(t *testing.T) {
-	vars := buildEnvVars("myhost", 5432, "myuser", "mypass", "mydb")
+	vars := buildEnvVars("myhost", 3306, "myuser", "mypass", "mydb")
 
 	assert.Len(t, vars, 6)
 
@@ -63,28 +63,28 @@ func TestBuildEnvVars(t *testing.T) {
 		sensitiveMap[v.Key] = v.Sensitive
 	}
 
-	assert.Equal(t, "postgres://myuser:mypass@myhost:5432/mydb", varMap["DATABASE_URL"])
+	assert.Equal(t, "mysql://myuser:mypass@myhost:3306/mydb", varMap["DATABASE_URL"])
 	assert.True(t, sensitiveMap["DATABASE_URL"])
 
-	assert.Equal(t, "myhost", varMap["PGHOST"])
-	assert.False(t, sensitiveMap["PGHOST"])
+	assert.Equal(t, "myhost", varMap["MYSQL_HOST"])
+	assert.False(t, sensitiveMap["MYSQL_HOST"])
 
-	assert.Equal(t, "5432", varMap["PGPORT"])
-	assert.False(t, sensitiveMap["PGPORT"])
+	assert.Equal(t, "3306", varMap["MYSQL_PORT"])
+	assert.False(t, sensitiveMap["MYSQL_PORT"])
 
-	assert.Equal(t, "myuser", varMap["PGUSER"])
-	assert.False(t, sensitiveMap["PGUSER"])
+	assert.Equal(t, "myuser", varMap["MYSQL_USER"])
+	assert.False(t, sensitiveMap["MYSQL_USER"])
 
-	assert.Equal(t, "mypass", varMap["PGPASSWORD"])
-	assert.True(t, sensitiveMap["PGPASSWORD"])
+	assert.Equal(t, "mypass", varMap["MYSQL_PASSWORD"])
+	assert.True(t, sensitiveMap["MYSQL_PASSWORD"])
 
-	assert.Equal(t, "mydb", varMap["PGDATABASE"])
-	assert.False(t, sensitiveMap["PGDATABASE"])
+	assert.Equal(t, "mydb", varMap["MYSQL_DATABASE"])
+	assert.False(t, sensitiveMap["MYSQL_DATABASE"])
 }
 
 func TestBuildDatabaseURL(t *testing.T) {
-	url := buildDatabaseURL("host.example.com", 5432, "user", "pass", "dbname")
-	assert.Equal(t, "postgres://user:pass@host.example.com:5432/dbname", url)
+	url := buildDatabaseURL("host.example.com", 3306, "user", "pass", "dbname")
+	assert.Equal(t, "mysql://user:pass@host.example.com:3306/dbname", url)
 }
 
 func TestVariantConfigContainsExpectedKeys(t *testing.T) {

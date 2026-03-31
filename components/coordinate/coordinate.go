@@ -50,6 +50,7 @@ import (
 	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/addon"
+	"miren.dev/runtime/pkg/addon/mysql"
 	"miren.dev/runtime/pkg/addon/postgresql"
 	"miren.dev/runtime/pkg/caauth"
 	"miren.dev/runtime/pkg/cloudauth"
@@ -860,16 +861,15 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		return err
 	}
 
-	// Set up addon registry; only register providers when the addons lab flag is enabled
+	// Set up addon registry and register providers.
 	addonRegistry := addon.NewRegistry()
-	if labs.Addons() {
-		addonFw := addon.NewProviderFramework(c.Log, ec, eac, saga.NewEntityStorage(etcdStore, c.Log))
-		addonRegistry.Register(postgresql.AddonName, postgresql.NewProvider(addonFw), postgresql.Definition())
+	addonFw := addon.NewProviderFramework(c.Log, ec, eac, saga.NewEntityStorage(etcdStore, c.Log))
+	addonRegistry.Register(postgresql.AddonName, postgresql.NewProvider(addonFw), postgresql.Definition())
+	addonRegistry.Register(mysql.AddonName, mysql.NewProvider(addonFw), mysql.Definition())
 
-		if err := addonRegistry.EnsureEntities(ctx, ec); err != nil {
-			c.Log.Error("failed to ensure addon entities", "error", err)
-			return err
-		}
+	if err := addonRegistry.EnsureEntities(ctx, ec); err != nil {
+		c.Log.Error("failed to ensure addon entities", "error", err)
+		return err
 	}
 
 	// Migrate app versions before starting components that depend on them

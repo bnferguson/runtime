@@ -1,4 +1,4 @@
-package postgresql
+package mysql
 
 import (
 	"context"
@@ -9,12 +9,10 @@ import (
 	"miren.dev/runtime/pkg/addon/dbsaga"
 )
 
-// Provider implements the AddonProvider interface for PostgreSQL.
 type Provider struct {
 	dbsaga.BaseProvider
 }
 
-// NewProvider creates a new PostgreSQL addon provider.
 func NewProvider(fw *addon.ProviderFramework) *Provider {
 	return &Provider{
 		BaseProvider: dbsaga.BaseProvider{
@@ -39,10 +37,9 @@ func (p *Provider) Deprovision(ctx context.Context, assoc addon.AddonAssociation
 	return p.deprovisionDedicated(ctx, assoc)
 }
 
-// buildDatabaseURL constructs a postgres:// connection URL.
 func buildDatabaseURL(host string, port int, user, password, database string) string {
 	u := &url.URL{
-		Scheme: "postgres",
+		Scheme: "mysql",
 		User:   url.UserPassword(user, password),
 		Host:   fmt.Sprintf("%s:%d", host, port),
 		Path:   database,
@@ -50,14 +47,13 @@ func buildDatabaseURL(host string, port int, user, password, database string) st
 	return u.String()
 }
 
-// buildEnvVars creates the standard set of PostgreSQL environment variables.
 func buildEnvVars(host string, port int, user, password, database string) []addon.Variable {
 	return []addon.Variable{
 		{Key: "DATABASE_URL", Value: buildDatabaseURL(host, port, user, password, database), Sensitive: true},
-		{Key: "PGHOST", Value: host},
-		{Key: "PGPORT", Value: fmt.Sprintf("%d", port)},
-		{Key: "PGUSER", Value: user},
-		{Key: "PGPASSWORD", Value: password, Sensitive: true},
-		{Key: "PGDATABASE", Value: database},
+		{Key: "MYSQL_HOST", Value: host},
+		{Key: "MYSQL_PORT", Value: fmt.Sprintf("%d", port)},
+		{Key: "MYSQL_USER", Value: user},
+		{Key: "MYSQL_PASSWORD", Value: password, Sensitive: true},
+		{Key: "MYSQL_DATABASE", Value: database},
 	}
 }

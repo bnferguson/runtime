@@ -397,6 +397,252 @@ func (o *Variables) InitSchema(sb *schema.SchemaBuilder) {
 }
 
 const (
+	MysqlDedicatedDataMysqlServerId = entity.Id("dev.miren.addon/mysql_dedicated_data.mysql_server")
+)
+
+type MysqlDedicatedData struct {
+	ID          entity.Id `json:"id"`
+	MysqlServer entity.Id `cbor:"mysql_server,omitempty" json:"mysql_server,omitempty"`
+}
+
+func (o *MysqlDedicatedData) Decode(e entity.AttrGetter) {
+	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
+	if a, ok := e.Get(MysqlDedicatedDataMysqlServerId); ok && a.Value.Kind() == entity.KindId {
+		o.MysqlServer = a.Value.Id()
+	}
+}
+
+func (o *MysqlDedicatedData) Is(e entity.AttrGetter) bool {
+	return entity.Is(e, KindMysqlDedicatedData)
+}
+
+func (o *MysqlDedicatedData) ShortKind() string {
+	return "mysql_dedicated_data"
+}
+
+func (o *MysqlDedicatedData) Kind() entity.Id {
+	return KindMysqlDedicatedData
+}
+
+func (o *MysqlDedicatedData) EntityId() entity.Id {
+	return o.ID
+}
+
+func (o *MysqlDedicatedData) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.MysqlServer) {
+		attrs = append(attrs, entity.Ref(MysqlDedicatedDataMysqlServerId, o.MysqlServer))
+	}
+	attrs = append(attrs, entity.Ref(entity.EntityKind, KindMysqlDedicatedData))
+	return
+}
+
+func (o *MysqlDedicatedData) Empty() bool {
+	return entity.Empty(o.MysqlServer)
+}
+
+func (o *MysqlDedicatedData) InitSchema(sb *schema.SchemaBuilder) {
+	sb.Ref("mysql_server", "dev.miren.addon/mysql_dedicated_data.mysql_server")
+}
+
+const (
+	MysqlServerAddonNameId        = entity.Id("dev.miren.addon/mysql_server.addon_name")
+	MysqlServerAssociationCountId = entity.Id("dev.miren.addon/mysql_server.association_count")
+	MysqlServerRootPasswordId     = entity.Id("dev.miren.addon/mysql_server.root_password")
+	MysqlServerSandboxPoolId      = entity.Id("dev.miren.addon/mysql_server.sandbox_pool")
+	MysqlServerServiceId          = entity.Id("dev.miren.addon/mysql_server.service")
+	MysqlServerStatusId           = entity.Id("dev.miren.addon/mysql_server.status")
+	MysqlServerVariantId          = entity.Id("dev.miren.addon/mysql_server.variant")
+)
+
+type MysqlServer struct {
+	ID               entity.Id `json:"id"`
+	AddonName        string    `cbor:"addon_name,omitempty" json:"addon_name,omitempty"`
+	AssociationCount int64     `cbor:"association_count,omitempty" json:"association_count,omitempty"`
+	RootPassword     string    `cbor:"root_password,omitempty" json:"root_password,omitempty"`
+	SandboxPool      entity.Id `cbor:"sandbox_pool,omitempty" json:"sandbox_pool,omitempty"`
+	Service          entity.Id `cbor:"service,omitempty" json:"service,omitempty"`
+	Status           string    `cbor:"status,omitempty" json:"status,omitempty"`
+	Variant          string    `cbor:"variant,omitempty" json:"variant,omitempty"`
+}
+
+func (o *MysqlServer) Decode(e entity.AttrGetter) {
+	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
+	if a, ok := e.Get(MysqlServerAddonNameId); ok && a.Value.Kind() == entity.KindString {
+		o.AddonName = a.Value.String()
+	}
+	if a, ok := e.Get(MysqlServerAssociationCountId); ok && a.Value.Kind() == entity.KindInt64 {
+		o.AssociationCount = a.Value.Int64()
+	}
+	if a, ok := e.Get(MysqlServerRootPasswordId); ok && a.Value.Kind() == entity.KindString {
+		o.RootPassword = a.Value.String()
+	}
+	if a, ok := e.Get(MysqlServerSandboxPoolId); ok && a.Value.Kind() == entity.KindId {
+		o.SandboxPool = a.Value.Id()
+	}
+	if a, ok := e.Get(MysqlServerServiceId); ok && a.Value.Kind() == entity.KindId {
+		o.Service = a.Value.Id()
+	}
+	if a, ok := e.Get(MysqlServerStatusId); ok && a.Value.Kind() == entity.KindString {
+		o.Status = a.Value.String()
+	}
+	if a, ok := e.Get(MysqlServerVariantId); ok && a.Value.Kind() == entity.KindString {
+		o.Variant = a.Value.String()
+	}
+}
+
+func (o *MysqlServer) Is(e entity.AttrGetter) bool {
+	return entity.Is(e, KindMysqlServer)
+}
+
+func (o *MysqlServer) ShortKind() string {
+	return "mysql_server"
+}
+
+func (o *MysqlServer) Kind() entity.Id {
+	return KindMysqlServer
+}
+
+func (o *MysqlServer) EntityId() entity.Id {
+	return o.ID
+}
+
+func (o *MysqlServer) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.AddonName) {
+		attrs = append(attrs, entity.String(MysqlServerAddonNameId, o.AddonName))
+	}
+	if !entity.Empty(o.AssociationCount) {
+		attrs = append(attrs, entity.Int64(MysqlServerAssociationCountId, o.AssociationCount))
+	}
+	if !entity.Empty(o.RootPassword) {
+		attrs = append(attrs, entity.String(MysqlServerRootPasswordId, o.RootPassword))
+	}
+	if !entity.Empty(o.SandboxPool) {
+		attrs = append(attrs, entity.Ref(MysqlServerSandboxPoolId, o.SandboxPool))
+	}
+	if !entity.Empty(o.Service) {
+		attrs = append(attrs, entity.Ref(MysqlServerServiceId, o.Service))
+	}
+	if !entity.Empty(o.Status) {
+		attrs = append(attrs, entity.String(MysqlServerStatusId, o.Status))
+	}
+	if !entity.Empty(o.Variant) {
+		attrs = append(attrs, entity.String(MysqlServerVariantId, o.Variant))
+	}
+	attrs = append(attrs, entity.Ref(entity.EntityKind, KindMysqlServer))
+	return
+}
+
+func (o *MysqlServer) Empty() bool {
+	if !entity.Empty(o.AddonName) {
+		return false
+	}
+	if !entity.Empty(o.AssociationCount) {
+		return false
+	}
+	if !entity.Empty(o.RootPassword) {
+		return false
+	}
+	if !entity.Empty(o.SandboxPool) {
+		return false
+	}
+	if !entity.Empty(o.Service) {
+		return false
+	}
+	if !entity.Empty(o.Status) {
+		return false
+	}
+	if !entity.Empty(o.Variant) {
+		return false
+	}
+	return true
+}
+
+func (o *MysqlServer) InitSchema(sb *schema.SchemaBuilder) {
+	sb.String("addon_name", "dev.miren.addon/mysql_server.addon_name", schema.Indexed)
+	sb.Int64("association_count", "dev.miren.addon/mysql_server.association_count")
+	sb.String("root_password", "dev.miren.addon/mysql_server.root_password")
+	sb.Ref("sandbox_pool", "dev.miren.addon/mysql_server.sandbox_pool")
+	sb.Ref("service", "dev.miren.addon/mysql_server.service")
+	sb.String("status", "dev.miren.addon/mysql_server.status")
+	sb.String("variant", "dev.miren.addon/mysql_server.variant")
+}
+
+const (
+	MysqlSharedDataDatabaseNameId = entity.Id("dev.miren.addon/mysql_shared_data.database_name")
+	MysqlSharedDataMysqlServerId  = entity.Id("dev.miren.addon/mysql_shared_data.mysql_server")
+	MysqlSharedDataUsernameId     = entity.Id("dev.miren.addon/mysql_shared_data.username")
+)
+
+type MysqlSharedData struct {
+	ID           entity.Id `json:"id"`
+	DatabaseName string    `cbor:"database_name,omitempty" json:"database_name,omitempty"`
+	MysqlServer  entity.Id `cbor:"mysql_server,omitempty" json:"mysql_server,omitempty"`
+	Username     string    `cbor:"username,omitempty" json:"username,omitempty"`
+}
+
+func (o *MysqlSharedData) Decode(e entity.AttrGetter) {
+	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
+	if a, ok := e.Get(MysqlSharedDataDatabaseNameId); ok && a.Value.Kind() == entity.KindString {
+		o.DatabaseName = a.Value.String()
+	}
+	if a, ok := e.Get(MysqlSharedDataMysqlServerId); ok && a.Value.Kind() == entity.KindId {
+		o.MysqlServer = a.Value.Id()
+	}
+	if a, ok := e.Get(MysqlSharedDataUsernameId); ok && a.Value.Kind() == entity.KindString {
+		o.Username = a.Value.String()
+	}
+}
+
+func (o *MysqlSharedData) Is(e entity.AttrGetter) bool {
+	return entity.Is(e, KindMysqlSharedData)
+}
+
+func (o *MysqlSharedData) ShortKind() string {
+	return "mysql_shared_data"
+}
+
+func (o *MysqlSharedData) Kind() entity.Id {
+	return KindMysqlSharedData
+}
+
+func (o *MysqlSharedData) EntityId() entity.Id {
+	return o.ID
+}
+
+func (o *MysqlSharedData) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.DatabaseName) {
+		attrs = append(attrs, entity.String(MysqlSharedDataDatabaseNameId, o.DatabaseName))
+	}
+	if !entity.Empty(o.MysqlServer) {
+		attrs = append(attrs, entity.Ref(MysqlSharedDataMysqlServerId, o.MysqlServer))
+	}
+	if !entity.Empty(o.Username) {
+		attrs = append(attrs, entity.String(MysqlSharedDataUsernameId, o.Username))
+	}
+	attrs = append(attrs, entity.Ref(entity.EntityKind, KindMysqlSharedData))
+	return
+}
+
+func (o *MysqlSharedData) Empty() bool {
+	if !entity.Empty(o.DatabaseName) {
+		return false
+	}
+	if !entity.Empty(o.MysqlServer) {
+		return false
+	}
+	if !entity.Empty(o.Username) {
+		return false
+	}
+	return true
+}
+
+func (o *MysqlSharedData) InitSchema(sb *schema.SchemaBuilder) {
+	sb.String("database_name", "dev.miren.addon/mysql_shared_data.database_name")
+	sb.Ref("mysql_server", "dev.miren.addon/mysql_shared_data.mysql_server")
+	sb.String("username", "dev.miren.addon/mysql_shared_data.username")
+}
+
+const (
 	PostgresServerAddonNameId         = entity.Id("dev.miren.addon/postgres_server.addon_name")
 	PostgresServerAssociationCountId  = entity.Id("dev.miren.addon/postgres_server.association_count")
 	PostgresServerSandboxPoolId       = entity.Id("dev.miren.addon/postgres_server.sandbox_pool")
@@ -645,6 +891,9 @@ func (o *PostgresqlSharedData) InitSchema(sb *schema.SchemaBuilder) {
 var (
 	KindAddon                   = entity.Id("dev.miren.addon/kind.addon")
 	KindAddonAssociation        = entity.Id("dev.miren.addon/kind.addon_association")
+	KindMysqlDedicatedData      = entity.Id("dev.miren.addon/kind.mysql_dedicated_data")
+	KindMysqlServer             = entity.Id("dev.miren.addon/kind.mysql_server")
+	KindMysqlSharedData         = entity.Id("dev.miren.addon/kind.mysql_shared_data")
 	KindPostgresServer          = entity.Id("dev.miren.addon/kind.postgres_server")
 	KindPostgresqlDedicatedData = entity.Id("dev.miren.addon/kind.postgresql_dedicated_data")
 	KindPostgresqlSharedData    = entity.Id("dev.miren.addon/kind.postgresql_shared_data")
@@ -655,9 +904,12 @@ func init() {
 	schema.Register("dev.miren.addon", "v1alpha", func(sb *schema.SchemaBuilder) {
 		(&Addon{}).InitSchema(sb)
 		(&AddonAssociation{}).InitSchema(sb)
+		(&MysqlDedicatedData{}).InitSchema(sb)
+		(&MysqlServer{}).InitSchema(sb)
+		(&MysqlSharedData{}).InitSchema(sb)
 		(&PostgresServer{}).InitSchema(sb)
 		(&PostgresqlDedicatedData{}).InitSchema(sb)
 		(&PostgresqlSharedData{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.addon", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\x9c\x97\xeb\xae\xd4 \x10ǟC\x8d\xf7\xfb%=9Ƙ\xf84\x84-\xb3]\\\n]\x86\xd6ݏj\xa2\x0f\xa2\xc77\xd4\xcf\x06\xe8n[腞/\x1b:a~0\xf3\x87\x19\xf67\x93\xb4\x04Š\xc9J\xaeAf\x941%a\xcf%Û\xe3\xdd\xc0~e\xed~\xf8\xc79\xd6ᄞ\xfb\xbf-S%\xe52\x84o\xb7\x1c\x04\xc3\x1f\xbf6\x9c\x1d\x9f\x8f\x022\x06[Z\vC\x1a\xaa9\x95\xe6\xbcɡќ*آ\xd1\\\x16\x8e\xf5x\x8a\x85\xb9\xe6\x95\xe1J:ξo\b\x19O&\x18\x1c+AO\xc4\xfa;\x88\x18XB\xca\xd3q\x8aP9\x15ܜH\xa9\x98ǔCSȉ\xf2\xef9\x97]\xb0p\xf5\x1b\xeb\xf5`ܫM\x1b\xb2\x92\xca\xd3_纻\xd8,\x83窬\x94\x04i\xba\x91\x979BfCd\x92\xe0\xdf]H\xcf\xc2͝\x19\xc9:\xb9\x18\x1f\xcd`\f\xe5\xa2\x1feq6-\x04\xf9b>\xc839)\xd8o.\xd8{\xe1.[D\xb6\x87\x93[3\xb7\x83P\xf5\xfbS^\r\x15\xb5\xd7\x1c\xfc\xb0\xe7Y4\xa0\x91+Y4\xd7TT;**\xcdK\xaaO\xc4\xee\xf6\x9c\x81q\xfc%\xc0\xe9s5K\xbf\x9c\xa2\xd9Y\xe0\x16\x8b\xf5w%\xa5Rh\n\rH\x10t\x03\xba\x15\xe4a87\x98\x96\xa4\xc4O\x17\xf4\x9b\x05\x94\xb7v\xf7\xfbs\xef;\xd4\xe7z\x91\x85\xa8rN\xed\xc1%\xb9\xaa\xdb\xfau\x88͖\x9csi\x1c\xf6\xdd\x12\x16\xa9d\x1bu$\x95R\xc2\x17\xa1\x81\xc5\xc26\x9c9\xd6\xcbE\x16\xe8\x86\xe7>\xd6\xe2\xfc\xd1'\x84\x97!&\x18jjt\x80m;\x0e\x13\xf5~\x91QW\xa0k\x04M*\x8a\xf8Ei\xe6xz\xc4\x1e\xb2\x17#췎b\xa4e\xcc\x1eV\x15\xd0\xe2tt\x9d\x90\xf4tm\x0f\xeex'\xeaO\\\xd1\"\xa3H#\x98\xb7\xfb\xc2\xe0\x87}%\xc7[\xecп\xaa|9\xb2\x83\xbe\xefղ/h\xad4)\x01\x91\x16mS\x1b\x9aB\xe5^-3\xe7ϖk\x00o\x97)N\xf4\x8d\x80~/\xe0\x9dq\xa1\x1b\x84\v\xc4bw\v\xac\xe8\x7f\xe3\xd5\xd7B\xe6\x9bB\xf4\xa4\xe8\xfc\x10$r\xc3\x1b\x9f}\xde}Z\x06\xdb(%\x1c!\xaa\xa6\x1d\xe1֍\xa5K\xa7[\xe2u\xa2(\xb7\xbd\x96\x87\x88\x17\x9f\x83A?9\b\x82;\xaa\x81\x11F\r\x9d\xe8\xf3W\xe3\xb3W\x88\xfa!\x8d\x98ٟ\rE\xe8\xfaL94\x85\xaa\x7fL\x04\a\xe5ʿ\x97C\xe3\xecŞ\x00\xdb\"|\xd9\xec\xee\xf2\x95*X3\x8e=fK\xaa1`<\xa7f(\\t\xbc&\x1d\x92\xb4\xfb\xea2\xf1)\x19\xba*˳i9ޙ\\$\xf4\xdb\xe3NiC\xfc\x1f\xb2\xf6\r5\xf3\xb7,j\\Iﭑ{\x95\xd8\xf0\xa6\x04^s-g\xb2\xb1\xf6\xa0\xfc\a\x00\x00\xff\xff\x01\x00\x00\xff\xffR\x9f\x1a\n\xcf\x0e\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.addon", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xa4\x98َ\xdb,\x14ǟ\xe3[\xbb\xefUFSU\x95\xfa4\x161ġ\xc1\xe0\x01\xecƗm\xa5\xf6A\xba\xa8/\xd8^W\x80\x13\xb3\x1bgnF\xf8\x88\xf3c9\x7f\xce9\x93o\x90\x82\x161\x88\x86M\x8b9\xa2\x1b\x00!\xa3\xe8\x80)\x14?\x8f\x7f{\xf6+e7\xc3\x1fڱ\xf7'X\xee\xbfw\x90\xb5\x00S\x1f\xbe\xdbaD\xa0\xf8\xfcu\x8b\xe1\xf1Q\x14\xb0\x81h\az\"\xab\x01p\f\xa8<m\xd25ʱC;!9\xa6\x8df\xddK\xb1D\xcdq'1\xa3\x9as\xb0\r>\xe3~\x82\x81EG\xc0X)\x7f\r!\x8eŧ<\x88S\b\xab\x01\xc1r\xacZ\x06\r\xa6uM>'\xb8\x7f\xc39\xef\x02\xfa\xab\x7fW^\xffǽ\xa6k\x13\xb0\x05t\xfc\xa5]\xf7g\x9bb\xe0\x9a\xb5\x1d\xa3\x88\xcayd\xc2\x1c 7.\xb2(\xe0\x9f\xf4\x91\x1e\xfa\x9b;1\x8a\xe3\xa4\xcfx7\x83\x91\x00\x13\xfb\x94\xcdɴp\xc8\xc7\xf9C\x9e\xc8E\x87\xfd\xa8\x0f\xfb\x8f\xbf\xcb\t\xb19\xa0Q\xafY\xab\x81\x1f\xf5\xffR^\x03 \xbd\x8992C˳\x19\x10\x17\x98\xd1f\xb8\x06\xa4\xdb\x03\xd2q\xdc\x02>Vj\xb7\xa7\x1b\x88\xe3\xcf\aL\xeb*K?\xab(;\v\xe9\xc5\xc2G\xaaSJ;\x8a\x1bR\t\xc4\aħh\xfc\xebO\xb4\xe7\x14\xc5\xe0\x8b>\xee\x93\x1cǘ\xe6g\xfd\xce\xfa\xf6òɃ\x84`5\x06J\xacU\xcd\xfa)g݄f\x85\xad1\x95\x9a\xf9<\xcb\xe4\x8cɪ\x03B\xbcg\x1c\x9a|\xe1\x9a\xfc->\xcb\xe2\x04\xa0pˎU\xc7\x181I̱(\xd8\x16\xc3\xf8+uA\x88\x0f\xb867֜>l\xf7 \xff\xb9\xee\x12\xc8^h\xef\xdd4\xf6\x0f\x92_߮\nM\xa4\x1aduHlT\xb8\x90\x96cǄl8\x12\xae\"\xef\xf8s\xbdi+D\x19\xc4\xddC\xad\xd1\xe5\xf5\"\xeb\"i\xbe\\®\x90S\xf0\x06\x03֒\xa2\xfc\xdc\x1c\x12\x96E\xf5j\x91\xd1w\x88\xf7\x02q\xf7\xd1\xf1\x88\xddg/\x9e\xf0V\x9ae\x1e-\xbc\x8e\xb91\xab\xac\xb8N\u008d7F\xf6\xc4\x15\x1d[p\xd2\x00f\xec\xa6N\x99\xa1\x1d\xc9x\xc7\xe7\xfaw\x9d\xa9\x8ej`\xfb^-\xfb\"\xce\x19\xafZ$\x04h\xa6\x1e\xcb5\xf9\x91{\xba\xcc\xcckK\xf7#/\x96):\xe8[\x82\xec\xd6\x04\xcfƅ\xe6\xc4_ \f\xf6\xbc\xc0\x8av,\xde\f(H\xbeG\t2\xfc\xec'\x10\x15X\xe2\xc1\xdc>\x9e?\x15\x03n\x19#\x9a\x10dәpq\x9f3_g\xbc\x1c&\xee\xec\xd2gy\x13\xf0\x12\x0fs*9{\xc0\x11\xac \x90 \xf50\x83\x89+B\x19<\x8e\x00\xb6Q\x7f\xb6@\xa0\xb9\xb0\xb4\xae\xa9\xb4籘v95e\xc0\xb1\xd8\xcf7\xd5\xedX4\x95eϛ۟\xbf\x8a#\x12\x10C\x11X\x11\x81\b\xe2\x1aH7(\x89\xdeÝ[\x14\x97\x0f\xf1\xfa\x1c\xe3\x15^c\xf6\xf02\x06\x0e3\x93\xd3\xe1De\x99,\xb6\x17k\xf3u\x19q\xbd@\xdf\x14\x82\xbd\x02j~P\xf0\x8d\xd9R\x93\x00\xdfR\xb0C\x1c\x1b><?jQ\xe9\x06ZO:\xac\xd0\xef\xdbb\xe8\xaa[\xce^\xcb\xf1\xaf\xe4\"\xbe\xdfA\xec\x19\x97\x95\xf9\xc5j\xfa'3\xf3\xbb\x95\xdb\xfe/\xff7\x1a\xb4^E\xff1\x14W\x86`^$\x83\x15֔\xf8\xf3/O\x7f))\xaeI \x99\xb8\xad\x95\xf4\x1f\x00\x00\x00\xff\xff\x01\x00\x00\xff\xffc\x95\x1ds\x9a\x14\x00\x00"))
 }

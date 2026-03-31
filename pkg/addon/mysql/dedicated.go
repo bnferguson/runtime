@@ -1,4 +1,4 @@
-package postgresql
+package mysql
 
 import (
 	"context"
@@ -15,20 +15,18 @@ import (
 	"miren.dev/runtime/pkg/saga"
 )
 
-const postgresPort = 5432
+const mysqlPort = 3306
 
-func postgresContainerPorts() []compute_v1alpha.SandboxSpecContainerPort {
+func mysqlContainerPorts() []compute_v1alpha.SandboxSpecContainerPort {
 	return []compute_v1alpha.SandboxSpecContainerPort{
 		{
-			Name:     "postgres",
-			Port:     postgresPort,
+			Name:     "mysql",
+			Port:     mysqlPort,
 			Protocol: compute_v1alpha.SandboxSpecContainerPortTCP,
 		},
 	}
 }
 
-// resultCapture is injected as a saga dependency so the final action
-// can pass the ProvisionResult back to the caller.
 type resultCapture struct {
 	Result *addon.ProvisionResult
 }
@@ -40,20 +38,22 @@ type GenerateCredentialsIn struct {
 }
 
 type GenerateCredentialsOut struct {
-	Password     string
-	DatabaseName string
-	Username     string
-	ServiceName  string
-	ServerName   string
+	Password     string `saga:"password"`
+	RootPassword string `saga:"rootpassword"`
+	DatabaseName string `saga:"databasename"`
+	Username     string `saga:"username"`
+	ServiceName  string `saga:"servicename"`
+	ServerName   string `saga:"servername"`
 }
 
 func GenerateCredentials(ctx context.Context, in GenerateCredentialsIn) (GenerateCredentialsOut, error) {
 	return GenerateCredentialsOut{
 		Password:     idgen.Gen("pw"),
+		RootPassword: idgen.Gen("rt"),
 		DatabaseName: sanitizeIdentifier(in.AppName),
 		Username:     sanitizeIdentifier(in.AppName),
-		ServiceName:  fmt.Sprintf("%s-postgresql", in.AppName),
-		ServerName:   fmt.Sprintf("pg-%s-%s", in.AppName, idgen.Gen("s")),
+		ServiceName:  fmt.Sprintf("%s-mysql", in.AppName),
+		ServerName:   fmt.Sprintf("my-%s-%s", in.AppName, idgen.Gen("s")),
 	}, nil
 }
 
@@ -61,51 +61,52 @@ func UndoGenerateCredentials(ctx context.Context, in GenerateCredentialsIn, out 
 	return nil
 }
 
-type CreatePostgresServerIn struct {
-	ServerName  string
-	VariantName string
-	Password    string
+type CreateMysqlServerIn struct {
+	ServerName   string `saga:"servername"`
+	VariantName  string `saga:"variantname"`
+	RootPassword string `saga:"rootpassword"`
 }
 
-type CreatePostgresServerOut struct {
-	ServerID entity.Id
+type CreateMysqlServerOut struct {
+	ServerID entity.Id `saga:"serverid"`
 }
 
-func CreatePostgresServer(ctx context.Context, in CreatePostgresServerIn) (CreatePostgresServerOut, error) {
+func CreateMysqlServer(ctx context.Context, in CreateMysqlServerIn) (CreateMysqlServerOut, error) {
 	fw := saga.Get[*addon.ProviderFramework](ctx)
 
-	server := &addon_v1alpha.PostgresServer{
-		AddonName:         AddonName,
-		Variant:           in.VariantName,
-		Status:            "provisioning",
-		AssociationCount:  1,
-		SuperuserPassword: in.Password,
+	server := &addon_v1alpha.MysqlServer{
+		AddonName:        AddonName,
+		Variant:          in.VariantName,
+		Status:           "provisioning",
+		AssociationCount: 1,
+		RootPassword:     in.RootPassword,
 	}
 
 	serverID, err := fw.EC.Create(ctx, in.ServerName, server)
 	if err != nil {
-		return CreatePostgresServerOut{}, fmt.Errorf("creating postgres server entity: %w", err)
+		return CreateMysqlServerOut{}, fmt.Errorf("creating mysql server entity: %w", err)
 	}
 
-	return CreatePostgresServerOut{ServerID: serverID}, nil
+	return CreateMysqlServerOut{ServerID: serverID}, nil
 }
 
-func UndoCreatePostgresServer(ctx context.Context, in CreatePostgresServerIn, out CreatePostgresServerOut) error {
+func UndoCreateMysqlServer(ctx context.Context, in CreateMysqlServerIn, out CreateMysqlServerOut) error {
 	fw := saga.Get[*addon.ProviderFramework](ctx)
 	return fw.EC.Delete(ctx, out.ServerID)
 }
 
 type CreateDedicatedPoolIn struct {
-	ServerName    string
-	AppName       string
-	DatabaseName  string
-	Username      string
-	Password      string
-	VariantConfig map[string]string
+	ServerName    string            `saga:"servername"`
+	AppName       string            `saga:"appname"`
+	DatabaseName  string            `saga:"databasename"`
+	Username      string            `saga:"username"`
+	Password      string            `saga:"password"`
+	RootPassword  string            `saga:"rootpassword"`
+	VariantConfig map[string]string `saga:"variantconfig"`
 }
 
 type CreateDedicatedPoolOut struct {
-	PoolID entity.Id
+	PoolID entity.Id `saga:"poolid"`
 }
 
 func CreateDedicatedPool(ctx context.Context, in CreateDedicatedPoolIn) (CreateDedicatedPoolOut, error) {
@@ -118,30 +119,30 @@ func CreateDedicatedPool(ctx context.Context, in CreateDedicatedPoolIn) (CreateD
 	)
 
 	sizeGb := addon.ParseStorageGb(in.VariantConfig[ConfigStorage])
-	diskName := fmt.Sprintf("pg-%s-data", in.ServerName)
-	mountPath := "/var/lib/postgresql/data"
+	diskName := fmt.Sprintf("my-%s-data", in.ServerName)
+	mountPath := "/var/lib/mysql"
 
 	env := []string{
-		"POSTGRES_DB=" + in.DatabaseName,
-		"POSTGRES_USER=" + in.Username,
-		"POSTGRES_PASSWORD=" + in.Password,
-		"PGDATA=" + mountPath + "/pgdata",
+		"MYSQL_ROOT_PASSWORD=" + in.RootPassword,
+		"MYSQL_DATABASE=" + in.DatabaseName,
+		"MYSQL_USER=" + in.Username,
+		"MYSQL_PASSWORD=" + in.Password,
 	}
 
 	poolID, err := fw.CreateSandboxPool(ctx, addon.CreateSandboxPoolSpec{
 		Name:             in.ServerName,
 		Image:            DefaultImage,
 		Env:              env,
-		Ports:            postgresContainerPorts(),
+		Ports:            mysqlContainerPorts(),
 		DesiredInstances: 1,
 		Labels:           labels,
-		SandboxPrefix:    fmt.Sprintf("%s-pg", in.AppName),
+		SandboxPrefix:    fmt.Sprintf("%s-my", in.AppName),
 		Mounts: []compute_v1alpha.SandboxSpecContainerMount{
-			{Source: "pgdata", Destination: mountPath},
+			{Source: "mydata", Destination: mountPath},
 		},
 		Volumes: []compute_v1alpha.SandboxSpecVolume{
 			{
-				Name:         "pgdata",
+				Name:         "mydata",
 				Provider:     "miren",
 				DiskName:     diskName,
 				MountPath:    mountPath,
@@ -163,17 +164,17 @@ func UndoCreateDedicatedPool(ctx context.Context, in CreateDedicatedPoolIn, out 
 	if err := fw.DeleteSandboxPool(ctx, out.PoolID); err != nil {
 		return err
 	}
-	diskName := fmt.Sprintf("pg-%s-data", in.ServerName)
+	diskName := fmt.Sprintf("my-%s-data", in.ServerName)
 	return fw.DeleteDiskByName(ctx, diskName)
 }
 
 type UpdateDedicatedServerIn struct {
-	ServerID    entity.Id
-	PoolID      entity.Id
-	ServiceID   entity.Id
-	ServiceHost string
-	VariantName string
-	Password    string
+	ServerID     entity.Id `saga:"serverid"`
+	PoolID       entity.Id `saga:"poolid"`
+	ServiceID    entity.Id `saga:"serviceid"`
+	ServiceHost  string    `saga:"servicehost"`
+	VariantName  string    `saga:"variantname"`
+	RootPassword string    `saga:"rootpassword"`
 }
 
 type UpdateDedicatedServerOut struct {
@@ -183,19 +184,19 @@ type UpdateDedicatedServerOut struct {
 func UpdateDedicatedServer(ctx context.Context, in UpdateDedicatedServerIn) (UpdateDedicatedServerOut, error) {
 	fw := saga.Get[*addon.ProviderFramework](ctx)
 
-	server := &addon_v1alpha.PostgresServer{
-		AddonName:         AddonName,
-		Variant:           in.VariantName,
-		Status:            "active",
-		AssociationCount:  1,
-		SuperuserPassword: in.Password,
-		SandboxPool:       in.PoolID,
-		Service:           in.ServiceID,
+	server := &addon_v1alpha.MysqlServer{
+		AddonName:        AddonName,
+		Variant:          in.VariantName,
+		Status:           "active",
+		AssociationCount: 1,
+		RootPassword:     in.RootPassword,
+		SandboxPool:      in.PoolID,
+		Service:          in.ServiceID,
 	}
 	server.ID = in.ServerID
 
 	if err := fw.EC.Update(ctx, server); err != nil {
-		return UpdateDedicatedServerOut{}, fmt.Errorf("updating postgres server: %w", err)
+		return UpdateDedicatedServerOut{}, fmt.Errorf("updating mysql server: %w", err)
 	}
 
 	return UpdateDedicatedServerOut{Updated: true}, nil
@@ -206,11 +207,11 @@ func UndoUpdateDedicatedServer(ctx context.Context, in UpdateDedicatedServerIn, 
 }
 
 type BuildDedicatedResultIn struct {
-	ServiceHost  string
-	Username     string
-	Password     string
-	DatabaseName string
-	ServerID     entity.Id
+	ServiceHost  string    `saga:"servicehost"`
+	Username     string    `saga:"username"`
+	Password     string    `saga:"password"`
+	DatabaseName string    `saga:"databasename"`
+	ServerID     entity.Id `saga:"serverid"`
 }
 
 type BuildDedicatedResultOut struct {
@@ -220,11 +221,10 @@ type BuildDedicatedResultOut struct {
 func BuildDedicatedResult(ctx context.Context, in BuildDedicatedResultIn) (BuildDedicatedResultOut, error) {
 	rc := saga.Get[*resultCapture](ctx)
 
-	host := in.ServiceHost
-	envVars := buildEnvVars(host, postgresPort, in.Username, in.Password, in.DatabaseName)
+	envVars := buildEnvVars(in.ServiceHost, mysqlPort, in.Username, in.Password, in.DatabaseName)
 
-	dedicatedData := &addon_v1alpha.PostgresqlDedicatedData{
-		PostgresServer: in.ServerID,
+	dedicatedData := &addon_v1alpha.MysqlDedicatedData{
+		MysqlServer: in.ServerID,
 	}
 
 	rc.Result = &addon.ProvisionResult{
@@ -239,15 +239,14 @@ func UndoBuildDedicatedResult(ctx context.Context, in BuildDedicatedResultIn, ou
 	return nil
 }
 
-// RegisterDedicatedSaga registers the dedicated PostgreSQL provisioning saga.
 func RegisterDedicatedSaga(registry *saga.Registry, fw *addon.ProviderFramework, rc *resultCapture) error {
-	cfg := &dbsaga.AddonConfig{AddonName: AddonName, Port: postgresPort, ReadyTimeout: poolReadyTimeout}
-	return saga.Define("provision-dedicated-postgresql").
+	cfg := &dbsaga.AddonConfig{AddonName: AddonName, Port: mysqlPort, ReadyTimeout: poolReadyTimeout}
+	return saga.Define("provision-dedicated-mysql").
 		Using(fw).
 		Using(rc).
 		Using(cfg).
 		Action(GenerateCredentials).Undo(UndoGenerateCredentials).
-		Action(CreatePostgresServer).Undo(UndoCreatePostgresServer).
+		Action(CreateMysqlServer).Undo(UndoCreateMysqlServer).
 		Action(CreateDedicatedPool).Undo(UndoCreateDedicatedPool).
 		Action(dbsaga.WaitForDedicatedPool).Undo(dbsaga.UndoWaitForDedicatedPool).
 		Action(dbsaga.CreateDedicatedService).Undo(dbsaga.UndoCreateDedicatedService).
@@ -264,20 +263,20 @@ type DecodeDedicatedAttrsIn struct {
 }
 
 type DecodeDedicatedAttrsOut struct {
-	DedicatedServerID entity.Id
+	DedicatedServerID entity.Id `saga:"dedicatedserverid"`
 }
 
 func DecodeDedicatedAttrs(ctx context.Context, in DecodeDedicatedAttrsIn) (DecodeDedicatedAttrsOut, error) {
-	var data addon_v1alpha.PostgresqlDedicatedData
+	var data addon_v1alpha.MysqlDedicatedData
 	if in.AssocEntity != nil {
 		data.Decode(in.AssocEntity)
 	}
 
-	if data.PostgresServer == "" {
-		return DecodeDedicatedAttrsOut{}, fmt.Errorf("no postgres server ref found")
+	if data.MysqlServer == "" {
+		return DecodeDedicatedAttrsOut{}, fmt.Errorf("no mysql server ref found")
 	}
 
-	return DecodeDedicatedAttrsOut{DedicatedServerID: data.PostgresServer}, nil
+	return DecodeDedicatedAttrsOut{DedicatedServerID: data.MysqlServer}, nil
 }
 
 func UndoDecodeDedicatedAttrs(ctx context.Context, in DecodeDedicatedAttrsIn, out DecodeDedicatedAttrsOut) error {
@@ -285,24 +284,23 @@ func UndoDecodeDedicatedAttrs(ctx context.Context, in DecodeDedicatedAttrsIn, ou
 }
 
 type LookupDedicatedServerIn struct {
-	DedicatedServerID entity.Id
+	DedicatedServerID entity.Id `saga:"dedicatedserverid"`
 }
 
 type LookupDedicatedServerOut struct {
-	DedicatedServiceID  entity.Id
-	DedicatedPoolID     entity.Id
-	DedicatedServerName string
+	DedicatedServiceID  entity.Id `saga:"dedicatedserviceid"`
+	DedicatedPoolID     entity.Id `saga:"dedicatedpoolid"`
+	DedicatedServerName string    `saga:"dedicatedservername"`
 }
 
 func LookupDedicatedServer(ctx context.Context, in LookupDedicatedServerIn) (LookupDedicatedServerOut, error) {
 	fw := saga.Get[*addon.ProviderFramework](ctx)
 
-	var server addon_v1alpha.PostgresServer
+	var server addon_v1alpha.MysqlServer
 	if err := fw.EC.GetById(ctx, in.DedicatedServerID, &server); err != nil {
-		return LookupDedicatedServerOut{}, fmt.Errorf("looking up postgres server: %w", err)
+		return LookupDedicatedServerOut{}, fmt.Errorf("looking up mysql server: %w", err)
 	}
 
-	// Get the entity name (used to derive the disk name for cleanup)
 	var meta core_v1alpha.Metadata
 	if err := fw.EC.GetById(ctx, in.DedicatedServerID, &meta); err != nil {
 		return LookupDedicatedServerOut{}, fmt.Errorf("looking up server metadata: %w", err)
@@ -320,11 +318,9 @@ func UndoLookupDedicatedServer(ctx context.Context, in LookupDedicatedServerIn, 
 }
 
 type DeleteDedicatedServerEntityIn struct {
-	DedicatedServerID   entity.Id
-	DedicatedServerName string
+	DedicatedServerID   entity.Id `saga:"dedicatedserverid"`
+	DedicatedServerName string    `saga:"dedicatedservername"`
 
-	// PoolCleanedUp forces this action to run after DeleteDedicatedPool,
-	// ensuring the server entity is deleted last.
 	PoolCleanedUp saga.Edge `saga:"dedicated_pool_deleted"`
 }
 
@@ -335,18 +331,15 @@ type DeleteDedicatedServerEntityOut struct {
 func DeleteDedicatedServerEntity(ctx context.Context, in DeleteDedicatedServerEntityIn) (DeleteDedicatedServerEntityOut, error) {
 	fw := saga.Get[*addon.ProviderFramework](ctx)
 
-	// Delete the data disk before removing the server entity. If this fails,
-	// abort so the saga retries — once the server entity is gone we lose the
-	// stable name needed to derive the disk name.
 	if in.DedicatedServerName != "" {
-		diskName := fmt.Sprintf("pg-%s-data", in.DedicatedServerName)
+		diskName := fmt.Sprintf("my-%s-data", in.DedicatedServerName)
 		if err := fw.DeleteDiskByName(ctx, diskName); err != nil {
 			return DeleteDedicatedServerEntityOut{}, fmt.Errorf("deleting dedicated data disk %s: %w", diskName, err)
 		}
 	}
 
 	if err := fw.EC.Delete(ctx, in.DedicatedServerID); err != nil {
-		return DeleteDedicatedServerEntityOut{}, fmt.Errorf("deleting postgres server: %w", err)
+		return DeleteDedicatedServerEntityOut{}, fmt.Errorf("deleting mysql server: %w", err)
 	}
 
 	return DeleteDedicatedServerEntityOut{ServerDeleted: true}, nil
@@ -356,9 +349,8 @@ func UndoDeleteDedicatedServerEntity(ctx context.Context, in DeleteDedicatedServ
 	return nil
 }
 
-// RegisterDeprovisionDedicatedSaga registers the dedicated deprovisioning saga.
 func RegisterDeprovisionDedicatedSaga(registry *saga.Registry, fw *addon.ProviderFramework) error {
-	return saga.Define("deprovision-dedicated-postgresql").
+	return saga.Define("deprovision-dedicated-mysql").
 		Using(fw).
 		Action(DecodeDedicatedAttrs).Undo(UndoDecodeDedicatedAttrs).
 		Action(LookupDedicatedServer).Undo(UndoLookupDedicatedServer).
@@ -368,15 +360,8 @@ func RegisterDeprovisionDedicatedSaga(registry *saga.Registry, fw *addon.Provide
 		RegisterTo(registry)
 }
 
-// maxPgIdentLen is the maximum length of a PostgreSQL identifier (NAMEDATALEN-1).
-const maxPgIdentLen = 63
-
-func sanitizeIdentifier(name string) string {
-	return addon.SanitizeIdentifier(name, maxPgIdentLen)
-}
-
 func (p *Provider) provisionDedicated(ctx context.Context, app addon.App, variant addon.Variant) (*addon.ProvisionResult, error) {
-	p.Log.Info("provisioning dedicated PostgreSQL",
+	p.Log.Info("provisioning dedicated MySQL",
 		"app", app.Name,
 		"variant", variant.Name)
 
@@ -390,7 +375,7 @@ func (p *Provider) provisionDedicated(ctx context.Context, app addon.App, varian
 	storage := p.Fw.Storage
 	executor := saga.NewExecutor(storage, saga.WithRegistry(registry), saga.WithLogger(p.Log))
 
-	err := executor.Start("provision-dedicated-postgresql").
+	err := executor.Start("provision-dedicated-mysql").
 		Input("appname", app.Name).
 		Input("variantname", variant.Name).
 		Input("variantconfig", variant.Config).
@@ -403,12 +388,12 @@ func (p *Provider) provisionDedicated(ctx context.Context, app addon.App, varian
 		return nil, fmt.Errorf("saga completed but no result was captured")
 	}
 
-	p.Log.Info("dedicated PostgreSQL provisioned", "app", app.Name)
+	p.Log.Info("dedicated MySQL provisioned", "app", app.Name)
 	return rc.Result, nil
 }
 
 func (p *Provider) deprovisionDedicated(ctx context.Context, assoc addon.AddonAssociation) error {
-	p.Log.Info("deprovisioning dedicated PostgreSQL", "assoc", assoc.ID)
+	p.Log.Info("deprovisioning dedicated MySQL", "assoc", assoc.ID)
 
 	registry := saga.NewRegistry()
 
@@ -419,13 +404,13 @@ func (p *Provider) deprovisionDedicated(ctx context.Context, assoc addon.AddonAs
 	storage := p.Fw.Storage
 	executor := saga.NewExecutor(storage, saga.WithRegistry(registry), saga.WithLogger(p.Log))
 
-	err := executor.Start("deprovision-dedicated-postgresql").
+	err := executor.Start("deprovision-dedicated-mysql").
 		Input("assocentity", assoc.Entity).
 		Execute(ctx)
 	if err != nil {
 		return err
 	}
 
-	p.Log.Info("dedicated PostgreSQL deprovisioned", "assoc", assoc.ID)
+	p.Log.Info("dedicated MySQL deprovisioned", "assoc", assoc.ID)
 	return nil
 }
