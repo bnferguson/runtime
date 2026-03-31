@@ -1,7 +1,7 @@
 
 # Persistent Storage
 
-Miren provides two options for persistent storage: **Local Storage** (simple, node-local) and **Miren Disks** (experimental, cloud-synced). Both are configured as disks in your `app.toml`.
+Miren provides two options for persistent storage: **Local Storage** (simple, node-local) and **Miren Disks** (managed persistent volumes). Both are configured as disks in your `app.toml`.
 
 ## Local Storage
 
@@ -51,7 +51,7 @@ mount_path = "/var/lib/postgresql/data"
 ### Limitations
 
 - **Host-local**: Data is tied to the server. If you move your app to a different server, you'll need to migrate the data manually.
-- **No automatic backups**: Unlike Miren Disks, local storage isn't replicated to Miren Cloud.
+- **No managed backups**: You're responsible for your own backup strategy with local storage.
 - **Shared access**: All containers in your app can read/write simultaneously—your application needs to handle concurrent access (SQLite handles this well when configured with `PRAGMA journal_mode=WAL`).
 - **Node affinity**: Apps with any disk (local or miren) are pinned to the coordinator and won't be scheduled to distributed runners.
 
@@ -66,18 +66,19 @@ If any of your environment variables reference `/miren/data/local`, Miren will a
 ## Miren Disks
 
 :::info Experimental Feature
-We're excited about Miren Disks—cloud-synced storage that travels with your app is a powerful capability we're actively building toward. That said, we're still working out the kinks, so for data you care about today, [Local Shared Storage](#local-shared-storage) is the safer choice.
+Miren Disks are under active development. They provide managed local persistent storage today, with cloud backup and sync capabilities on the roadmap. For data you care about, disks work well — just be aware the feature is still evolving.
 
-We'd love to have you try Disks and share your feedback as we work toward making this a production-grade feature!
+We'd love to have you try Disks and share your feedback!
 :::
 
-Miren Disks provide cloud-synced persistent storage with automatic replication to Miren Cloud. This enables data portability across clusters but adds complexity.
+Miren Disks provide managed persistent storage for your applications. Disks are provisioned with a specific size and filesystem, support exclusive leasing for data consistency, and persist across app restarts and redeployments.
 
 ### Why Use Disks?
 
-- **Portable across clusters**: Your disk data is automatically synced to Miren Cloud and can be restored on any cluster
-- **Automatic backups**: Data is replicated to Miren Cloud, giving you peace of mind
+- **Managed lifecycle**: Miren handles disk creation, formatting, and attachment automatically
 - **Configurable size and filesystem**: Specify exactly what you need
+- **Thin provisioning**: Storage is allocated as needed, not all at once
+- **Persist across redeployments**: Disks survive app deletion — reattach by name
 
 ### How Disks Work
 
@@ -86,7 +87,6 @@ When you configure a disk for your application:
 1. **Miren creates the disk** with the size and filesystem you specify
 2. **Your app instance acquires a lease** on the disk (exclusive access)
 3. **The disk is mounted** at the path you specified in your container
-4. **Data is replicated** to Miren Cloud in the background
 
 When your app stops or restarts:
 - The lease is released
@@ -182,17 +182,7 @@ Disks are **not** automatically deleted when you delete an app. This is intentio
 miren debug disk delete -i <disk-id>
 ```
 
-### Viewing Disks in Miren Cloud
-
-When connected to Miren Cloud, you can view and monitor your disks:
-
-1. **Dashboard**: See all disks across your clusters with their status and usage
-2. **Data sync status**: Monitor replication progress to the cloud
-3. **Disk history**: View when disks were created, attached, and modified
-
-Visit [miren.cloud](https://miren.cloud) and navigate to your cluster to view disk details.
-
-### Inspecting Disks via CLI
+### Inspecting Disks
 
 List all disks:
 
@@ -234,6 +224,15 @@ Disks use exclusive leasing - only one app instance can mount a disk at a time. 
 - **xfs**: Better for large files and high-throughput workloads
 
 **NOTE:** Your server must have the mkfs tools to format the disk types.
+
+### Roadmap: Cloud Backup & Sync
+
+We're building toward cloud-connected storage for Miren Disks. Here's what's planned:
+
+- **Remote backup & restore** (next up): Trigger backups of your disks to Miren Cloud and restore them on any cluster. This extends the existing local backup/restore functionality to work remotely.
+- **Automatic cloud sync**: Background replication of disk data to Miren Cloud, enabling seamless portability across clusters.
+
+We'll update this page and the [changelog](https://miren.md/changelog) as these capabilities land.
 
 ### Next Steps
 
