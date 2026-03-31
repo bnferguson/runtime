@@ -330,6 +330,15 @@ func validateDiskConfigs(ctx context.Context, eac *entityserver_v1alpha.EntityAc
 	return nil
 }
 
+func mapDiskProvider(provider string) core_v1alpha.ConfigSpecServicesDisksProvider {
+	switch provider {
+	case "local":
+		return core_v1alpha.ConfigSpecServicesDisksLOCAL
+	default:
+		return core_v1alpha.ConfigSpecServicesDisksMIREN
+	}
+}
+
 // buildServicesConfig collects services from app config and procfile,
 // resolves defaults, and returns the final service configurations.
 // This is the core logic for determining which services exist in an app_version
@@ -446,6 +455,7 @@ func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[st
 						SizeGb:       int64(disk.SizeGB),
 						Filesystem:   disk.Filesystem,
 						LeaseTimeout: disk.LeaseTimeout,
+						Provider:     mapDiskProvider(disk.Provider),
 					})
 				}
 			}

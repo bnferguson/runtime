@@ -361,6 +361,69 @@ func TestBuildServicesConfig(t *testing.T) {
 				assert.Equal(t, "ext4", disk.Filesystem)
 				assert.Equal(t, "5m", disk.LeaseTimeout)
 				assert.False(t, disk.ReadOnly)
+				assert.Equal(t, core_v1alpha.ConfigSpecServicesDisksMIREN, disk.Provider, "default provider should be miren")
+			},
+		},
+		{
+			name: "service with local disk provider",
+			appConfig: &appconfig.AppConfig{
+				Services: map[string]*appconfig.ServiceConfig{
+					"web": {
+						Concurrency: &appconfig.ServiceConcurrencyConfig{
+							Mode:         "fixed",
+							NumInstances: 1,
+						},
+						Disks: []appconfig.DiskConfig{
+							{
+								Name:      "cache",
+								MountPath: "/cache",
+								Provider:  "local",
+							},
+						},
+					},
+				},
+			},
+			procfileServices: nil,
+			validateServices: func(t *testing.T, services []core_v1alpha.ConfigSpecServices) {
+				require.Len(t, services, 1)
+				svc := services[0]
+
+				require.Len(t, svc.Disks, 1)
+				disk := svc.Disks[0]
+				assert.Equal(t, "cache", disk.Name)
+				assert.Equal(t, "/cache", disk.MountPath)
+				assert.Equal(t, core_v1alpha.ConfigSpecServicesDisksLOCAL, disk.Provider, "local provider should be mapped")
+			},
+		},
+		{
+			name: "service with explicit miren disk provider",
+			appConfig: &appconfig.AppConfig{
+				Services: map[string]*appconfig.ServiceConfig{
+					"db": {
+						Concurrency: &appconfig.ServiceConcurrencyConfig{
+							Mode:         "fixed",
+							NumInstances: 1,
+						},
+						Disks: []appconfig.DiskConfig{
+							{
+								Name:      "data",
+								MountPath: "/data",
+								SizeGB:    100,
+								Provider:  "miren",
+							},
+						},
+					},
+				},
+			},
+			procfileServices: nil,
+			validateServices: func(t *testing.T, services []core_v1alpha.ConfigSpecServices) {
+				require.Len(t, services, 1)
+				svc := services[0]
+
+				require.Len(t, svc.Disks, 1)
+				disk := svc.Disks[0]
+				assert.Equal(t, "data", disk.Name)
+				assert.Equal(t, core_v1alpha.ConfigSpecServicesDisksMIREN, disk.Provider, "explicit miren provider should be mapped")
 			},
 		},
 		{
