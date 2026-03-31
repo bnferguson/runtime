@@ -46,6 +46,10 @@ func (a *AppCentric) ResolvedDir() string {
 }
 
 func (a *AppCentric) Validate(glbl *GlobalFlags) error {
+	a.config = nil
+	a.resolvedDir = ""
+	a.foundInParent = false
+
 	var ac *appconfig.AppConfig
 	var err error
 
@@ -55,12 +59,11 @@ func (a *AppCentric) Validate(glbl *GlobalFlags) error {
 		var configPath string
 		ac, configPath, err = appconfig.LoadAppConfigWithPath()
 		if err == nil && ac != nil && configPath != "" {
-			// Config was found — check if it's in a parent directory.
+			// Config was found — always record the resolved directory.
 			configDir := filepath.Dir(filepath.Dir(configPath)) // strip .miren/app.toml
-			cwd, wdErr := os.Getwd()
-			if wdErr == nil && configDir != cwd {
+			a.resolvedDir = configDir
+			if cwd, wdErr := os.Getwd(); wdErr == nil && configDir != cwd {
 				a.foundInParent = true
-				a.resolvedDir = configDir
 			}
 		}
 	}
