@@ -17,18 +17,21 @@ import (
 func structFingerprint(t reflect.Type) string {
 	var walk func(reflect.Type) string
 	walk = func(t reflect.Type) string {
-		if t.Kind() == reflect.Slice {
-			t = t.Elem()
+		switch t.Kind() {
+		case reflect.Slice, reflect.Array, reflect.Pointer:
+			return t.Kind().String() + "<" + walk(t.Elem()) + ">"
+		case reflect.Map:
+			return "map<" + walk(t.Key()) + "," + walk(t.Elem()) + ">"
+		case reflect.Struct:
+			var parts []string
+			for i := range t.NumField() {
+				f := t.Field(i)
+				parts = append(parts, f.Name+":"+walk(f.Type))
+			}
+			return "struct{" + strings.Join(parts, ",") + "}"
+		default:
+			return t.String()
 		}
-		if t.Kind() != reflect.Struct {
-			return t.Name()
-		}
-		var parts []string
-		for i := range t.NumField() {
-			f := t.Field(i)
-			parts = append(parts, f.Name+":"+walk(f.Type))
-		}
-		return strings.Join(parts, ",")
 	}
 	h := sha256.Sum256([]byte(walk(t)))
 	return fmt.Sprintf("%x", h[:8])
@@ -39,7 +42,7 @@ func structFingerprint(t reflect.Type) string {
 // fails, update specsMatch to handle the new field (or explicitly skip it),
 // then update the expected hash here.
 func TestSpecsMatchCoversAllFields(t *testing.T) {
-	assert.Equal(t, "5f449fa70a9f419f", structFingerprint(reflect.TypeOf(compute_v1alpha.SandboxSpec{})),
+	assert.Equal(t, "c265eaf0ef8b8bdb", structFingerprint(reflect.TypeOf(compute_v1alpha.SandboxSpec{})),
 		"SandboxSpec struct tree changed — update specsMatch and this hash")
 }
 
@@ -78,6 +81,15 @@ func TestSpecsMatch(t *testing.T) {
 			},
 			wantMatch:  false,
 			wantReason: "image mismatch",
+		},
+		{
+			name: "shutdown timeout change does not match",
+			modify: func(a, b *compute_v1alpha.SandboxSpec) {
+				a.Container[0].ShutdownTimeout = "5s"
+				b.Container[0].ShutdownTimeout = "30s"
+			},
+			wantMatch:  false,
+			wantReason: "shutdown timeout mismatch",
 		},
 		{
 			name: "different versions are ignored",

@@ -791,6 +791,9 @@ func specsMatch(spec1, spec2 *compute_v1alpha.SandboxSpec) (string, bool) {
 		if c1.Directory != c2.Directory {
 			return fmt.Sprintf("container[%d] directory mismatch: %s vs %s", i, c1.Directory, c2.Directory), false
 		}
+		if c1.ShutdownTimeout != c2.ShutdownTimeout {
+			return fmt.Sprintf("container[%d] shutdown timeout mismatch: %s vs %s", i, c1.ShutdownTimeout, c2.ShutdownTimeout), false
+		}
 
 		// Compare env vars (order-independent)
 		if !envVarsEqual(c1.Env, c2.Env) {
@@ -817,7 +820,6 @@ func specsMatch(spec1, spec2 *compute_v1alpha.SandboxSpec) (string, bool) {
 	return "", true
 }
 
-// volumesEqual compares two volume slices
 func volumesEqual(vols1, vols2 []compute_v1alpha.SandboxSpecVolume) bool {
 	if len(vols1) != len(vols2) {
 		return false
@@ -846,7 +848,6 @@ func volumesEqual(vols1, vols2 []compute_v1alpha.SandboxSpecVolume) bool {
 	return true
 }
 
-// labelsEqual compares two label slices
 func labelsEqual(l1, l2 types.Labels) bool {
 	if len(l1) != len(l2) {
 		return false
@@ -861,7 +862,6 @@ func labelsEqual(l1, l2 types.Labels) bool {
 	return true
 }
 
-// mountsEqual compares two mount slices
 func mountsEqual(mounts1, mounts2 []compute_v1alpha.SandboxSpecContainerMount) bool {
 	if len(mounts1) != len(mounts2) {
 		return false
