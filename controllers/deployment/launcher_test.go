@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +23,7 @@ import (
 func newTestLauncher(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient) *Launcher {
 	l := NewLauncher(log, eac)
 	l.PoolReadyTimeout = 100 * time.Millisecond
+	l.DataPath = os.TempDir()
 	return l
 }
 
@@ -2541,4 +2544,189 @@ func TestMirenDisksSkippedForAutoScalingWebService(t *testing.T) {
 	require.Len(t, volumes, 1, "only local disk should be attached, miren disk should be skipped")
 	assert.Equal(t, "local", volumes[0].Provider)
 	assert.Equal(t, "local-data", volumes[0].Name)
+}
+
+func TestAutoMountLocalStorageWithExistingData(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{
+		Project: entity.Id("project-1"),
+	}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	version := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", version)
+	require.NoError(t, err)
+	version.ID = verID
+
+	app.ActiveVersion = version.ID
+	err = server.Client.Update(ctx, app)
+	require.NoError(t, err)
+
+	// Create a temp DataPath with existing data for this app
+	dataPath := t.TempDir()
+	localDir := filepath.Join(dataPath, "data", "local", app.ID.String())
+	require.NoError(t, os.MkdirAll(localDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "data.db"), []byte("test"), 0644))
+
+	launcher := newTestLauncher(log, server.EAC)
+	launcher.DataPath = dataPath
+	err = launcher.Reconcile(ctx, app, nil)
+	require.NoError(t, err)
+
+	pools := listAllPools(t, ctx, server)
+	require.Len(t, pools, 1)
+
+	// Should have auto-mounted the local volume
+	volumes := pools[0].SandboxSpec.Volume
+	require.Len(t, volumes, 1, "should auto-mount local storage when data exists")
+	assert.Equal(t, "local-data", volumes[0].Name)
+	assert.Equal(t, "local", volumes[0].Provider)
+	assert.Equal(t, "/miren/data/local", volumes[0].MountPath)
+
+	mounts := pools[0].SandboxSpec.Container[0].Mount
+	require.Len(t, mounts, 1)
+	assert.Equal(t, "local-data", mounts[0].Source)
+	assert.Equal(t, "/miren/data/local", mounts[0].Destination)
+}
+
+func TestNoAutoMountWhenNoExistingData(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{
+		Project: entity.Id("project-1"),
+	}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	version := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", version)
+	require.NoError(t, err)
+	version.ID = verID
+
+	app.ActiveVersion = version.ID
+	err = server.Client.Update(ctx, app)
+	require.NoError(t, err)
+
+	// DataPath exists but no local data for this app
+	launcher := newTestLauncher(log, server.EAC)
+	launcher.DataPath = t.TempDir()
+	err = launcher.Reconcile(ctx, app, nil)
+	require.NoError(t, err)
+
+	pools := listAllPools(t, ctx, server)
+	require.Len(t, pools, 1)
+
+	// Should NOT auto-mount since there's no existing data
+	assert.Empty(t, pools[0].SandboxSpec.Volume, "should not auto-mount when no existing data")
+}
+
+func TestNoAutoMountWhenExplicitDiskConfig(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{
+		Project: entity.Id("project-1"),
+	}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	version := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+					Disks: []core_v1alpha.Disks{
+						{
+							Name:      "my-data",
+							Provider:  core_v1alpha.LOCAL,
+							MountPath: "/data",
+						},
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", version)
+	require.NoError(t, err)
+	version.ID = verID
+
+	app.ActiveVersion = version.ID
+	err = server.Client.Update(ctx, app)
+	require.NoError(t, err)
+
+	// Create existing data even though explicit config exists
+	dataPath := t.TempDir()
+	localDir := filepath.Join(dataPath, "data", "local", app.ID.String())
+	require.NoError(t, os.MkdirAll(localDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "data.db"), []byte("test"), 0644))
+
+	launcher := newTestLauncher(log, server.EAC)
+	launcher.DataPath = dataPath
+	err = launcher.Reconcile(ctx, app, nil)
+	require.NoError(t, err)
+
+	pools := listAllPools(t, ctx, server)
+	require.Len(t, pools, 1)
+
+	// Should only have the explicit disk, not the auto-mounted one
+	volumes := pools[0].SandboxSpec.Volume
+	require.Len(t, volumes, 1, "should only have explicit disk config")
+	assert.Equal(t, "my-data", volumes[0].Name)
+	assert.Equal(t, "local", volumes[0].Provider)
 }

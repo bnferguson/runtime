@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -36,6 +38,9 @@ var launcherTracer = otel.Tracer("miren.dev/runtime/deployment/launcher")
 type Launcher struct {
 	Log *slog.Logger
 	EAC *entityserver_v1alpha.EntityAccessClient
+
+	// DataPath is the root data directory for local storage checks.
+	DataPath string
 
 	// PoolReadyTimeout is how long to wait for new pools to have ready instances
 	// before proceeding with old pool cleanup. Defaults to 60s.
@@ -691,32 +696,30 @@ func (l *Launcher) buildSandboxSpec(
 		}
 	}
 
-	// Auto-add local storage volume if any env var references /miren/data/local
-	// but no local disk is explicitly configured. This eases migration from the
-	// old automatic mount behavior.
-	hasLocalDisk := false
-	for _, vol := range sbSpec.Volume {
-		if vol.Provider == "local" {
-			hasLocalDisk = true
-			break
-		}
-	}
-	if !hasLocalDisk {
-		for _, v := range envMap {
-			if strings.Contains(v, "/miren/data/local") {
-				l.Log.Info("auto-adding local storage volume (env var references /miren/data/local)",
-					"service", serviceName)
-				sbSpec.Volume = append(sbSpec.Volume, compute_v1alpha.SandboxSpecVolume{
-					Name:      "local-data",
-					Provider:  "local",
-					MountPath: "/miren/data/local",
-				})
-				appCont.Mount = append(appCont.Mount, compute_v1alpha.SandboxSpecContainerMount{
-					Source:      "local-data",
-					Destination: "/miren/data/local",
-				})
+	// Transitional: auto-mount local storage if the host directory has existing
+	// data but no explicit disk config. This prevents data loss for apps that
+	// relied on the old implicit mount behavior. Will be removed in a future release.
+	if l.DataPath != "" {
+		hasLocalDisk := false
+		for _, vol := range sbSpec.Volume {
+			if vol.Provider == "local" {
+				hasLocalDisk = true
 				break
 			}
+		}
+		if !hasLocalDisk && dirHasData(filepath.Join(l.DataPath, "data", "local", app.ID.String())) {
+			l.Log.Warn("auto-mounting local storage for app with existing data but no disk config",
+				"service", serviceName,
+				"app", app.ID)
+			sbSpec.Volume = append(sbSpec.Volume, compute_v1alpha.SandboxSpecVolume{
+				Name:      "local-data",
+				Provider:  "local",
+				MountPath: "/miren/data/local",
+			})
+			appCont.Mount = append(appCont.Mount, compute_v1alpha.SandboxSpecContainerMount{
+				Source:      "local-data",
+				Destination: "/miren/data/local",
+			})
 		}
 	}
 
@@ -727,6 +730,12 @@ func (l *Launcher) buildSandboxSpec(
 	sbSpec.Container = []compute_v1alpha.SandboxSpecContainer{appCont}
 
 	return sbSpec, nil
+}
+
+// dirHasData returns true if the directory exists and contains at least one entry.
+func dirHasData(path string) bool {
+	entries, err := os.ReadDir(path)
+	return err == nil && len(entries) > 0
 }
 
 // findMatchingPool searches for an existing pool with matching spec
