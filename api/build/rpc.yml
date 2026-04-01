@@ -24,6 +24,36 @@ types:
           - name: error
             type: string
             index: 3
+          - name: log
+            type: LogEntry
+            index: 4
+
+  - type: LogEntry
+    doc: A structured log message with severity level and extensible fields
+    fields:
+      - name: level
+        type: string
+        index: 0
+        doc: Log level (info, warn)
+      - name: text
+        type: string
+        index: 1
+        doc: Short summary line
+      - name: fields
+        type: list
+        element: LogField
+        index: 2
+        doc: Extensible key-value pairs for display (detail, link, etc.)
+
+  - type: LogField
+    doc: A key-value pair for structured log metadata
+    fields:
+      - name: key
+        type: string
+        index: 0
+      - name: value
+        type: string
+        index: 1
 
   - type: AccessInfo
     doc: Information about how to access the deployed application

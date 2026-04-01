@@ -18,12 +18,15 @@ type StatusUpdate interface {
 	SetBuildkit([]byte)
 	Error() string
 	SetError(string)
+	Log() *LogEntry
+	SetLog(*LogEntry)
 }
 
 type statusUpdate struct {
-	U_Message  *string `cbor:"1,keyasint,omitempty" json:"message,omitempty"`
-	U_Buildkit *[]byte `cbor:"2,keyasint,omitempty" json:"buildkit,omitempty"`
-	U_Error    *string `cbor:"3,keyasint,omitempty" json:"error,omitempty"`
+	U_Message  *string    `cbor:"1,keyasint,omitempty" json:"message,omitempty"`
+	U_Buildkit *[]byte    `cbor:"2,keyasint,omitempty" json:"buildkit,omitempty"`
+	U_Error    *string    `cbor:"3,keyasint,omitempty" json:"error,omitempty"`
+	U_Log      **LogEntry `cbor:"4,keyasint,omitempty" json:"log,omitempty"`
 }
 
 func (v *statusUpdate) Which() string {
@@ -35,6 +38,9 @@ func (v *statusUpdate) Which() string {
 	}
 	if v.U_Error != nil {
 		return "error"
+	}
+	if v.U_Log != nil {
+		return "log"
 	}
 	return ""
 }
@@ -49,6 +55,7 @@ func (v *statusUpdate) Message() string {
 func (v *statusUpdate) SetMessage(val string) {
 	v.U_Buildkit = nil
 	v.U_Error = nil
+	v.U_Log = nil
 	v.U_Message = &val
 }
 
@@ -62,6 +69,7 @@ func (v *statusUpdate) Buildkit() []byte {
 func (v *statusUpdate) SetBuildkit(val []byte) {
 	v.U_Message = nil
 	v.U_Error = nil
+	v.U_Log = nil
 	v.U_Buildkit = &val
 }
 
@@ -75,7 +83,22 @@ func (v *statusUpdate) Error() string {
 func (v *statusUpdate) SetError(val string) {
 	v.U_Message = nil
 	v.U_Buildkit = nil
+	v.U_Log = nil
 	v.U_Error = &val
+}
+
+func (v *statusUpdate) Log() *LogEntry {
+	if v.U_Log == nil {
+		return nil
+	}
+	return *v.U_Log
+}
+
+func (v *statusUpdate) SetLog(val *LogEntry) {
+	v.U_Message = nil
+	v.U_Buildkit = nil
+	v.U_Error = nil
+	v.U_Log = &val
 }
 
 type statusData struct {
@@ -119,6 +142,133 @@ func (v *Status) MarshalJSON() ([]byte, error) {
 }
 
 func (v *Status) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type logEntryData struct {
+	Level  *string      `cbor:"0,keyasint,omitempty" json:"level,omitempty"`
+	Text   *string      `cbor:"1,keyasint,omitempty" json:"text,omitempty"`
+	Fields *[]*LogField `cbor:"2,keyasint,omitempty" json:"fields,omitempty"`
+}
+
+type LogEntry struct {
+	data logEntryData
+}
+
+func (v *LogEntry) HasLevel() bool {
+	return v.data.Level != nil
+}
+
+func (v *LogEntry) Level() string {
+	if v.data.Level == nil {
+		return ""
+	}
+	return *v.data.Level
+}
+
+func (v *LogEntry) SetLevel(level string) {
+	v.data.Level = &level
+}
+
+func (v *LogEntry) HasText() bool {
+	return v.data.Text != nil
+}
+
+func (v *LogEntry) Text() string {
+	if v.data.Text == nil {
+		return ""
+	}
+	return *v.data.Text
+}
+
+func (v *LogEntry) SetText(text string) {
+	v.data.Text = &text
+}
+
+func (v *LogEntry) HasFields() bool {
+	return v.data.Fields != nil
+}
+
+func (v *LogEntry) Fields() []*LogField {
+	if v.data.Fields == nil {
+		return nil
+	}
+	return *v.data.Fields
+}
+
+func (v *LogEntry) SetFields(fields []*LogField) {
+	x := slices.Clone(fields)
+	v.data.Fields = &x
+}
+
+func (v *LogEntry) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *LogEntry) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *LogEntry) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *LogEntry) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type logFieldData struct {
+	Key   *string `cbor:"0,keyasint,omitempty" json:"key,omitempty"`
+	Value *string `cbor:"1,keyasint,omitempty" json:"value,omitempty"`
+}
+
+type LogField struct {
+	data logFieldData
+}
+
+func (v *LogField) HasKey() bool {
+	return v.data.Key != nil
+}
+
+func (v *LogField) Key() string {
+	if v.data.Key == nil {
+		return ""
+	}
+	return *v.data.Key
+}
+
+func (v *LogField) SetKey(key string) {
+	v.data.Key = &key
+}
+
+func (v *LogField) HasValue() bool {
+	return v.data.Value != nil
+}
+
+func (v *LogField) Value() string {
+	if v.data.Value == nil {
+		return ""
+	}
+	return *v.data.Value
+}
+
+func (v *LogField) SetValue(value string) {
+	v.data.Value = &value
+}
+
+func (v *LogField) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *LogField) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *LogField) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *LogField) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
