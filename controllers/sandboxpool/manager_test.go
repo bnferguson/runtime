@@ -1392,3 +1392,89 @@ func TestManagerDecommissionedPool_NoCrashDetection(t *testing.T) {
 	assert.True(t, updatedPool.CooldownUntil.IsZero(),
 		"decommissioned pool should not enter cooldown")
 }
+
+// TestManagerCrashResetDoesNotRecount verifies that after crash state is reset
+// (e.g. by a deploy), old DEAD sandboxes are not re-counted as new crashes.
+// This is a regression test for MIR-956.
+func TestManagerCrashResetDoesNotRecount(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	pool := &compute_v1alpha.SandboxPool{
+		Service:              "web",
+		DesiredInstances:     1,
+		ReferencedByVersions: []entity.Id{entity.Id("ver-1")},
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Version: entity.Id("ver-1"),
+			Container: []compute_v1alpha.SandboxSpecContainer{
+				{Image: "test:latest"},
+			},
+		},
+	}
+
+	poolID, err := server.Client.Create(ctx, "test-pool", pool)
+	require.NoError(t, err)
+	pool.ID = poolID
+
+	// Create 3 DEAD sandboxes that crashed quickly (lifetime < 60s).
+	// These represent sandboxes from a previous version that crash-looped.
+	crashTime := time.Now().Add(-5 * time.Minute)
+	for i := 0; i < 3; i++ {
+		createdAt := crashTime.Add(time.Duration(i) * 30 * time.Second)
+		server.Store.NowFunc = func() time.Time { return createdAt }
+
+		deadSb := &compute_v1alpha.Sandbox{
+			Status: compute_v1alpha.DEAD,
+			Spec:   pool.SandboxSpec,
+		}
+		deadSbID, err := server.Client.Create(ctx, fmt.Sprintf("dead-sb-%d", i), deadSb,
+			entityserver.WithLabels(types.LabelSet("service", "web", "pool", poolID.String())))
+		require.NoError(t, err)
+
+		// Patch to simulate dying 10s after creation
+		diedAt := createdAt.Add(10 * time.Second)
+		server.Store.NowFunc = func() time.Time { return diedAt }
+		_, err = server.EAC.Patch(ctx, entity.New(
+			entity.DBId, deadSbID,
+			(&compute_v1alpha.Sandbox{Status: compute_v1alpha.DEAD}).Encode,
+		).Attrs(), 0)
+		require.NoError(t, err)
+	}
+
+	// Simulate the state after a deploy resets crash fields:
+	// ConsecutiveCrashCount=0 and CooldownUntil=zero, but LastCrashTime
+	// preserved as a high water mark so old dead sandboxes aren't re-counted.
+	server.Store.NowFunc = nil
+	lastCrashTime := crashTime.Add(2*30*time.Second + 10*time.Second) // after the last dead sandbox died
+	_, err = server.EAC.Patch(ctx, entity.New(
+		entity.DBId, poolID,
+		(&compute_v1alpha.SandboxPool{
+			ConsecutiveCrashCount: 0,
+			LastCrashTime:         lastCrashTime,
+			CooldownUntil:         time.Time{},
+		}).Encode,
+	).Attrs(), 0)
+	require.NoError(t, err)
+
+	// Create a new RUNNING sandbox (the healthy one from the new deploy)
+	runningSb := &compute_v1alpha.Sandbox{
+		Status: compute_v1alpha.RUNNING,
+		Spec:   pool.SandboxSpec,
+	}
+	_, err = server.Client.Create(ctx, "running-sb", runningSb,
+		entityserver.WithLabels(types.LabelSet("service", "web", "pool", poolID.String())))
+	require.NoError(t, err)
+
+	// Reconcile — old DEAD sandboxes must not be re-counted
+	manager := NewManager(log, server.EAC)
+	reconcilePool(t, ctx, server, manager, pool)
+
+	updatedPool := getPool(t, ctx, server, poolID)
+	assert.Equal(t, int64(0), updatedPool.ConsecutiveCrashCount,
+		"crash count should remain 0 after reset — old dead sandboxes must not be re-counted")
+	assert.True(t, updatedPool.CooldownUntil.IsZero(),
+		"pool should not re-enter cooldown from old dead sandboxes")
+}

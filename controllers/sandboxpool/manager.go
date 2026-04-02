@@ -141,7 +141,6 @@ func (m *Manager) Reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPo
 			"pool", pool.ID,
 			"previous_crash_count", pool.ConsecutiveCrashCount)
 		pool.ConsecutiveCrashCount = 0
-		pool.LastCrashTime = time.Time{}
 		pool.CooldownUntil = time.Time{}
 		// Pool crash state fields reset, framework will apply via entity.Diff
 	}

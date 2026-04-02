@@ -370,7 +370,6 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 				"pool", poolWithEntity.Pool.ID,
 				"previous_crash_count", poolWithEntity.Pool.ConsecutiveCrashCount)
 			poolWithEntity.Pool.ConsecutiveCrashCount = 0
-			poolWithEntity.Pool.LastCrashTime = time.Time{}
 			poolWithEntity.Pool.CooldownUntil = time.Time{}
 			needsUpdate = true
 		}
