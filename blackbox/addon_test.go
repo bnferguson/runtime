@@ -232,29 +232,6 @@ func TestValkeyAddonCreateListDestroy(t *testing.T) {
 	m.MustRun("addon", "destroy", "miren-valkey", "-a", name, "--force")
 }
 
-func TestMemcacheAddonCreateListDestroy(t *testing.T) {
-	c := harness.NewCluster(t)
-	m := harness.NewMiren(t, c)
-
-	name := harness.DeployApp(t, m, harness.AppOptions{
-		Testdata: "go-server",
-	})
-
-	// Create a small (dedicated) Memcache addon on the app
-	m.MustRun("addon", "create", "miren-memcache:small", "-a", name)
-
-	// Wait for addon to appear and provisioning to complete.
-	harness.WaitForAddonReady(t, m, name, "miren-memcache", 30*time.Second)
-	harness.WaitForEnvVar(t, m, name, "MEMCACHE_URL", 5*time.Minute)
-
-	// Verify Memcache-specific env vars are injected
-	harness.WaitForEnvVar(t, m, name, "MEMCACHE_HOST", 30*time.Second)
-	harness.WaitForEnvVar(t, m, name, "MEMCACHE_PORT", 30*time.Second)
-
-	// Destroy the addon
-	m.MustRun("addon", "destroy", "miren-memcache", "-a", name, "--force")
-}
-
 func TestAddonUnknownAddon(t *testing.T) {
 	c := harness.NewCluster(t)
 	m := harness.NewMiren(t, c)

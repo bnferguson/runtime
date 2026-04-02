@@ -108,6 +108,9 @@ func CreateDedicatedPool(ctx context.Context, in CreateDedicatedPoolIn) (CreateD
 	)
 
 	memory := in.VariantConfig[ConfigMemory]
+	if memory == "" {
+		return CreateDedicatedPoolOut{}, fmt.Errorf("missing required config: %s", ConfigMemory)
+	}
 
 	poolID, err := fw.CreateSandboxPool(ctx, addon.CreateSandboxPoolSpec{
 		Name:             in.ServerName,
