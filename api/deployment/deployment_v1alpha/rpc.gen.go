@@ -26,6 +26,8 @@ type deploymentInfoData struct {
 	GitInfo             *GitInfo            `cbor:"12,keyasint,omitempty" json:"git_info,omitempty"`
 	DeployedByUserName  *string             `cbor:"21,keyasint,omitempty" json:"deployed_by_user_name,omitempty"`
 	SourceDeploymentId  *string             `cbor:"22,keyasint,omitempty" json:"source_deployment_id,omitempty"`
+	ShortId             *string             `cbor:"23,keyasint,omitempty" json:"short_id,omitempty"`
+	AppVersionShortId   *string             `cbor:"24,keyasint,omitempty" json:"app_version_short_id,omitempty"`
 }
 
 type DeploymentInfo struct {
@@ -248,6 +250,36 @@ func (v *DeploymentInfo) SetSourceDeploymentId(source_deployment_id string) {
 	v.data.SourceDeploymentId = &source_deployment_id
 }
 
+func (v *DeploymentInfo) HasShortId() bool {
+	return v.data.ShortId != nil
+}
+
+func (v *DeploymentInfo) ShortId() string {
+	if v.data.ShortId == nil {
+		return ""
+	}
+	return *v.data.ShortId
+}
+
+func (v *DeploymentInfo) SetShortId(short_id string) {
+	v.data.ShortId = &short_id
+}
+
+func (v *DeploymentInfo) HasAppVersionShortId() bool {
+	return v.data.AppVersionShortId != nil
+}
+
+func (v *DeploymentInfo) AppVersionShortId() string {
+	if v.data.AppVersionShortId == nil {
+		return ""
+	}
+	return *v.data.AppVersionShortId
+}
+
+func (v *DeploymentInfo) SetAppVersionShortId(app_version_short_id string) {
+	v.data.AppVersionShortId = &app_version_short_id
+}
+
 func (v *DeploymentInfo) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(v.data)
 }
@@ -445,13 +477,14 @@ func (v *GitInfo) UnmarshalJSON(data []byte) error {
 }
 
 type deploymentLockInfoData struct {
-	AppName              *string             `cbor:"0,keyasint,omitempty" json:"app_name,omitempty"`
-	ClusterId            *string             `cbor:"1,keyasint,omitempty" json:"cluster_id,omitempty"`
-	BlockingDeploymentId *string             `cbor:"2,keyasint,omitempty" json:"blocking_deployment_id,omitempty"`
-	StartedBy            *string             `cbor:"3,keyasint,omitempty" json:"started_by,omitempty"`
-	StartedAt            *standard.Timestamp `cbor:"4,keyasint,omitempty" json:"started_at,omitempty"`
-	CurrentPhase         *string             `cbor:"5,keyasint,omitempty" json:"current_phase,omitempty"`
-	LockExpiresAt        *standard.Timestamp `cbor:"6,keyasint,omitempty" json:"lock_expires_at,omitempty"`
+	AppName                   *string             `cbor:"0,keyasint,omitempty" json:"app_name,omitempty"`
+	ClusterId                 *string             `cbor:"1,keyasint,omitempty" json:"cluster_id,omitempty"`
+	BlockingDeploymentId      *string             `cbor:"2,keyasint,omitempty" json:"blocking_deployment_id,omitempty"`
+	StartedBy                 *string             `cbor:"3,keyasint,omitempty" json:"started_by,omitempty"`
+	StartedAt                 *standard.Timestamp `cbor:"4,keyasint,omitempty" json:"started_at,omitempty"`
+	CurrentPhase              *string             `cbor:"5,keyasint,omitempty" json:"current_phase,omitempty"`
+	LockExpiresAt             *standard.Timestamp `cbor:"6,keyasint,omitempty" json:"lock_expires_at,omitempty"`
+	BlockingDeploymentShortId *string             `cbor:"7,keyasint,omitempty" json:"blocking_deployment_short_id,omitempty"`
 }
 
 type DeploymentLockInfo struct {
@@ -555,6 +588,21 @@ func (v *DeploymentLockInfo) LockExpiresAt() *standard.Timestamp {
 
 func (v *DeploymentLockInfo) SetLockExpiresAt(lock_expires_at *standard.Timestamp) {
 	v.data.LockExpiresAt = lock_expires_at
+}
+
+func (v *DeploymentLockInfo) HasBlockingDeploymentShortId() bool {
+	return v.data.BlockingDeploymentShortId != nil
+}
+
+func (v *DeploymentLockInfo) BlockingDeploymentShortId() string {
+	if v.data.BlockingDeploymentShortId == nil {
+		return ""
+	}
+	return *v.data.BlockingDeploymentShortId
+}
+
+func (v *DeploymentLockInfo) SetBlockingDeploymentShortId(blocking_deployment_short_id string) {
+	v.data.BlockingDeploymentShortId = &blocking_deployment_short_id
 }
 
 func (v *DeploymentLockInfo) MarshalCBOR() ([]byte, error) {

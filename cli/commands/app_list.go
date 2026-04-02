@@ -123,7 +123,12 @@ func AppList(ctx *Context, opts struct {
 		routeDisplay := "-"
 
 		if a.HasCurrentVersion() {
-			version = ui.DisplayAppVersion(a.CurrentVersion().Version())
+			cv := a.CurrentVersion()
+			if cv.HasShortId() && cv.ShortId() != "" {
+				version = cv.ShortId()
+			} else {
+				version = ui.DisplayAppVersion(cv.Version())
+			}
 		}
 
 		// Runtime status from server-aggregated pool state

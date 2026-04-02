@@ -109,6 +109,10 @@ types:
       - name: created_at
         type: standard.Timestamp
         index: 1
+      - name: short_id
+        type: string
+        index: 2
+        doc: Short human-friendly ID for the app version
 
   - type: AppInfo
     fields:

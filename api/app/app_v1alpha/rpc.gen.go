@@ -506,6 +506,7 @@ func (v *NamedValue) UnmarshalJSON(data []byte) error {
 type versionInfoData struct {
 	Version   *string             `cbor:"0,keyasint,omitempty" json:"version,omitempty"`
 	CreatedAt *standard.Timestamp `cbor:"1,keyasint,omitempty" json:"created_at,omitempty"`
+	ShortId   *string             `cbor:"2,keyasint,omitempty" json:"short_id,omitempty"`
 }
 
 type VersionInfo struct {
@@ -537,6 +538,21 @@ func (v *VersionInfo) CreatedAt() *standard.Timestamp {
 
 func (v *VersionInfo) SetCreatedAt(created_at *standard.Timestamp) {
 	v.data.CreatedAt = created_at
+}
+
+func (v *VersionInfo) HasShortId() bool {
+	return v.data.ShortId != nil
+}
+
+func (v *VersionInfo) ShortId() string {
+	if v.data.ShortId == nil {
+		return ""
+	}
+	return *v.data.ShortId
+}
+
+func (v *VersionInfo) SetShortId(short_id string) {
+	v.data.ShortId = &short_id
 }
 
 func (v *VersionInfo) MarshalCBOR() ([]byte, error) {

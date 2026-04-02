@@ -337,6 +337,14 @@ types:
         type: string
         index: 22
         doc: ID of the source deployment (set for rollback/redeploy, empty for fresh builds)
+      - name: short_id
+        type: string
+        index: 23
+        doc: Short human-friendly ID for this deployment
+      - name: app_version_short_id
+        type: string
+        index: 24
+        doc: Short human-friendly ID for the app version
 
   - type: GitInfo
     doc: Git repository information
@@ -413,6 +421,10 @@ types:
         type: standard.Timestamp
         index: 6
         doc: When the lock will expire
+      - name: blocking_deployment_short_id
+        type: string
+        index: 7
+        doc: Short human-friendly ID for the blocking deployment
 
   - type: EnvironmentVariable
     doc: An environment variable to set on the app during deploy

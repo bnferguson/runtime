@@ -152,7 +152,7 @@ func Deploy(ctx *Context, opts struct {
 				ctx.Printf("Another deployment is already in progress for app '%s' on cluster '%s'.\n\n",
 					lockInfo.AppName(), lockInfo.ClusterId())
 				ctx.Printf("Existing deployment details:\n")
-				ctx.Printf("  • Deployment ID: %s\n", lockInfo.BlockingDeploymentId())
+				ctx.Printf("  • Deployment ID: %s\n", ui.DisplayShortID(lockInfo.BlockingDeploymentShortId(), lockInfo.BlockingDeploymentId()))
 				ctx.Printf("  • Started by: %s\n", lockInfo.StartedBy())
 				if lockInfo.HasStartedAt() && lockInfo.StartedAt() != nil {
 					startedAt := time.Unix(lockInfo.StartedAt().Seconds(), 0)
@@ -172,16 +172,18 @@ func Deploy(ctx *Context, opts struct {
 		}
 
 		if result.HasDeployment() && result.Deployment() != nil {
-			deployedVersion := result.Deployment().AppVersionId()
+			dep := result.Deployment()
+			deployedVersion := dep.AppVersionId()
 			if deployedVersion == "" {
 				deployedVersion = opts.Version
 			}
-			ctx.Printf("✓ Deployed version %s to %s\n", deployedVersion, ctx.ClusterName)
+			versionDisplay := ui.DisplayShortID(dep.AppVersionShortId(), deployedVersion)
+			ctx.Printf("✓ Deployed version %s to %s\n", versionDisplay, ctx.ClusterName)
 
 			appCl, appErr := ctx.RPCClient(rpcAppStatus)
 			if appErr == nil {
 				appStatusClient := app_v1alpha.NewAppStatusClient(appCl)
-				waitForActivation(ctx, appStatusClient, name, deployedVersion)
+				waitForActivation(ctx, appStatusClient, name, deployedVersion, versionDisplay)
 			}
 
 			if result.HasAccessInfo() && result.AccessInfo() != nil {
@@ -325,7 +327,7 @@ func Deploy(ctx *Context, opts struct {
 				lockInfo.AppName(), lockInfo.ClusterId())
 
 			ctx.Printf("Existing deployment details:\n")
-			ctx.Printf("  • Deployment ID: %s\n", lockInfo.BlockingDeploymentId())
+			ctx.Printf("  • Deployment ID: %s\n", ui.DisplayShortID(lockInfo.BlockingDeploymentShortId(), lockInfo.BlockingDeploymentId()))
 			ctx.Printf("  • Started by: %s\n", lockInfo.StartedBy())
 
 			if lockInfo.HasStartedAt() && lockInfo.StartedAt() != nil {

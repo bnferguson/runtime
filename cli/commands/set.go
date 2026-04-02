@@ -2,6 +2,7 @@ package commands
 
 import (
 	"miren.dev/runtime/api/app/app_v1alpha"
+	"miren.dev/runtime/pkg/ui"
 )
 
 func Set(ctx *Context, opts struct {
@@ -35,7 +36,7 @@ func Set(ctx *Context, opts struct {
 		return err
 	}
 
-	ctx.Printf("new version id: %s\n", setres.VersionId())
+	ctx.Printf("new version id: %s\n", ui.CleanEntityID(setres.VersionId()))
 
 	return nil
 }

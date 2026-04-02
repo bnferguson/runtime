@@ -117,12 +117,16 @@ func Rollback(ctx *Context, opts struct {
 		return fmt.Errorf("rollback failed")
 	}
 
-	ctx.Printf("✓ Rolled back %s to version %s\n", opts.App, selectedVersion)
+	versionDisplay := selectedVersion
+	if deployResult.HasDeployment() && deployResult.Deployment().HasAppVersionShortId() {
+		versionDisplay = deployResult.Deployment().AppVersionShortId()
+	}
+	ctx.Printf("✓ Rolled back %s to version %s\n", opts.App, versionDisplay)
 
 	appCl, appErr := ctx.RPCClient(rpcAppStatus)
 	if appErr == nil {
 		appStatusClient := app_v1alpha.NewAppStatusClient(appCl)
-		waitForActivation(ctx, appStatusClient, opts.App, selectedVersion)
+		waitForActivation(ctx, appStatusClient, opts.App, selectedVersion, versionDisplay)
 	}
 
 	if deployResult.HasAccessInfo() && deployResult.AccessInfo() != nil {
