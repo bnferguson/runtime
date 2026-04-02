@@ -2403,3 +2403,142 @@ func TestDiskProviderDefaultsToMiren(t *testing.T) {
 	require.Len(t, volumes, 1)
 	assert.Equal(t, "miren", volumes[0].Provider, "empty provider should default to miren")
 }
+
+// TestLocalDisksAttachedForAutoScalingWebService verifies that local disks are
+// mounted on web services with auto concurrency mode. This is a regression test
+// for MIR-950 where the miren disk concurrency guard broke out of the entire
+// disk loop, preventing local disks from being attached.
+func TestLocalDisksAttachedForAutoScalingWebService(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{
+		Project: entity.Id("project-1"),
+	}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	version := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+					},
+					Disks: []core_v1alpha.Disks{
+						{
+							Name:      "data",
+							Provider:  core_v1alpha.LOCAL,
+							MountPath: "/miren/data/local",
+						},
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", version)
+	require.NoError(t, err)
+	version.ID = verID
+
+	app.ActiveVersion = version.ID
+	err = server.Client.Update(ctx, app)
+	require.NoError(t, err)
+
+	launcher := newTestLauncher(log, server.EAC)
+	err = launcher.Reconcile(ctx, app, nil)
+	require.NoError(t, err)
+
+	pools := listAllPools(t, ctx, server)
+	require.Len(t, pools, 1, "should create one pool")
+
+	volumes := pools[0].SandboxSpec.Volume
+	require.Len(t, volumes, 1, "local disk should be attached even with auto concurrency")
+	assert.Equal(t, "local", volumes[0].Provider)
+	assert.Equal(t, "data", volumes[0].Name)
+	assert.Equal(t, "/miren/data/local", volumes[0].MountPath)
+
+	// Verify the container mount was also added
+	containers := pools[0].SandboxSpec.Container
+	require.NotEmpty(t, containers)
+	require.Len(t, containers[0].Mount, 1, "container should have disk mount")
+	assert.Equal(t, "data", containers[0].Mount[0].Source)
+	assert.Equal(t, "/miren/data/local", containers[0].Mount[0].Destination)
+}
+
+// TestMirenDisksSkippedForAutoScalingWebService verifies that miren disks are
+// still correctly skipped for non-fixed concurrency services, while local disks
+// in the same config are still attached.
+func TestMirenDisksSkippedForAutoScalingWebService(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{
+		Project: entity.Id("project-1"),
+	}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	version := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+					},
+					Disks: []core_v1alpha.Disks{
+						{
+							Name:      "local-data",
+							Provider:  core_v1alpha.LOCAL,
+							MountPath: "/data",
+						},
+						{
+							Name:      "miren-data",
+							Provider:  core_v1alpha.MIREN,
+							MountPath: "/miren-data",
+							SizeGb:    1,
+						},
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", version)
+	require.NoError(t, err)
+	version.ID = verID
+
+	app.ActiveVersion = version.ID
+	err = server.Client.Update(ctx, app)
+	require.NoError(t, err)
+
+	launcher := newTestLauncher(log, server.EAC)
+	err = launcher.Reconcile(ctx, app, nil)
+	require.NoError(t, err)
+
+	pools := listAllPools(t, ctx, server)
+	require.Len(t, pools, 1, "should create one pool")
+
+	volumes := pools[0].SandboxSpec.Volume
+	require.Len(t, volumes, 1, "only local disk should be attached, miren disk should be skipped")
+	assert.Equal(t, "local", volumes[0].Provider)
+	assert.Equal(t, "local-data", volumes[0].Name)
+}

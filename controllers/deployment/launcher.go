@@ -633,7 +633,8 @@ func (l *Launcher) buildSandboxSpec(
 	// Add disk volumes and mounts for this service
 	for _, svc := range cfgSpec.Services {
 		if svc.Name == serviceName {
-			// Check concurrency constraints for miren disk volumes
+			// Pre-compute concurrency mode for miren disk eligibility check
+			var skipMirenDisks bool
 			hasMirenDisks := false
 			for _, disk := range svc.Disks {
 				if disk.Provider == "" || disk.Provider == core_v1alpha.ConfigSpecServicesDisksMIREN {
@@ -648,10 +649,10 @@ func (l *Launcher) buildSandboxSpec(
 				}
 
 				if svcConcurrency.Mode != "fixed" {
-					l.Log.Warn("skipping disk attachment for non-fixed service",
+					l.Log.Warn("skipping miren disk attachment for non-fixed service",
 						"service", serviceName,
 						"mode", svcConcurrency.Mode)
-					break
+					skipMirenDisks = true
 				}
 			}
 
@@ -664,6 +665,10 @@ func (l *Launcher) buildSandboxSpec(
 					provider = "miren"
 				default:
 					provider = "miren"
+				}
+
+				if skipMirenDisks && provider != "local" {
+					continue
 				}
 
 				sbSpec.Volume = append(sbSpec.Volume, compute_v1alpha.SandboxSpecVolume{
