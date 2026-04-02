@@ -896,6 +896,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	// Create DeploymentLauncher to watch App entities and create pools
 	launcher := deploymentctrl.NewLauncher(c.Log, eac)
+	launcher.DataPath = c.DataPath
 	if err := launcher.Init(ctx); err != nil {
 		c.Log.Error("failed to initialize deployment launcher", "error", err)
 		return err

@@ -403,9 +403,10 @@ func Deploy(ctx *Context, opts struct {
 		ctx.Printf("  Setting %d environment variable(s)...\n", len(envVars))
 	}
 
-	// Initialize build error/log tracking
+	// Initialize build error/log/warning tracking
 	var buildErrors []string
 	var buildLogs []string
+	var deployWarnings []*build_v1alpha.LogEntry
 
 	// Helper function to update deployment phase
 	updateDeploymentPhase := func(phase string) {
@@ -637,7 +638,7 @@ func Deploy(ctx *Context, opts struct {
 			return nil
 		}
 
-		cb = createBuildStatusCallback(buildCtx, nil, nil, &buildErrors, nil, progressHandler)
+		cb = createBuildStatusCallback(buildCtx, nil, nil, &buildErrors, nil, &deployWarnings, progressHandler)
 
 		results, err = buildCall(buildCtx, r, cb)
 		if err != nil {
@@ -731,7 +732,7 @@ func Deploy(ctx *Context, opts struct {
 			return nil
 		}
 
-		cb = createBuildStatusCallback(deployCtx, updateCh, buildCh, &buildErrors, &buildLogs, progressHandler)
+		cb = createBuildStatusCallback(deployCtx, updateCh, buildCh, &buildErrors, &buildLogs, &deployWarnings, progressHandler)
 
 		results, err = buildCall(deployCtx, r, cb)
 
@@ -849,6 +850,14 @@ func Deploy(ctx *Context, opts struct {
 
 	ctx.Printf("\n\nUpdated version %s deployed. All traffic moved to new version.\n", results.Version())
 
+	if len(deployWarnings) > 0 {
+		warnHeaderStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("208")).Bold(true)
+		ctx.Printf("\n%s\n", warnHeaderStyle.Render("Warnings:"))
+		for _, entry := range deployWarnings {
+			renderDeployWarning(ctx, entry)
+		}
+	}
+
 	// Show route/access information using server-provided data
 	displayAccessInfo(ctx, name, results)
 
@@ -891,6 +900,7 @@ func createBuildStatusCallback(
 	buildCh chan<- buildProgress,
 	buildErrors *[]string,
 	buildLogs *[]string,
+	deployWarnings *[]*build_v1alpha.LogEntry,
 	progressHandler func(*client.SolveStatus) error,
 ) stream.SendStream[*build_v1alpha.Status] {
 	vertices := map[string]bool{} // digest → completed
@@ -980,10 +990,58 @@ func createBuildStatusCallback(
 			}
 		case "error":
 			*buildErrors = append(*buildErrors, update.Error())
+		case "log":
+			if entry := update.Log(); entry != nil {
+				switch entry.Level() {
+				case "warn":
+					if deployWarnings != nil {
+						*deployWarnings = append(*deployWarnings, entry)
+					}
+				case "info":
+					if updateCh != nil {
+						select {
+						case updateCh <- entry.Text():
+						default:
+						}
+					}
+				}
+			}
 		}
 
 		return nil
 	})
+}
+
+func renderDeployWarning(ctx *Context, entry *build_v1alpha.LogEntry) {
+	orange := lipgloss.Color("208")
+	headerStyle := lipgloss.NewStyle().Foreground(orange).Bold(true)
+	linkStyle := lipgloss.NewStyle().Foreground(orange).Faint(true)
+
+	// Compute wrap width: terminal width minus indent (4 chars), capped at 76
+	const indent = 4
+	const maxWidth = 76
+	detailWidth := maxWidth
+	if tw := ui.TerminalWidth(); tw > 0 {
+		if available := tw - indent; available > 0 {
+			detailWidth = min(available, maxWidth)
+		}
+	}
+	detailStyle := lipgloss.NewStyle().Foreground(orange).Width(detailWidth).PaddingLeft(indent)
+
+	ctx.Printf("  %s\n", headerStyle.Render("⚠ "+entry.Text()))
+
+	// Index fields by key for controlled rendering order
+	fields := make(map[string]string)
+	for _, f := range entry.Fields() {
+		fields[f.Key()] = f.Value()
+	}
+
+	if detail, ok := fields["detail"]; ok {
+		ctx.Printf("%s\n", detailStyle.Render(detail))
+	}
+	if link, ok := fields["link"]; ok {
+		ctx.Printf("    %s%s\n", linkStyle.Render("See: "), ui.RenderMarkdownLink(link, 208))
+	}
 }
 
 func buildStepsSummary(count int) string {

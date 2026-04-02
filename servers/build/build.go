@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -781,6 +782,60 @@ func (b *Builder) sendErrorStatus(ctx context.Context, status *stream.SendStream
 	}
 }
 
+// sendLogStatus sends a structured log status update if status is not nil
+func (b *Builder) sendLogStatus(ctx context.Context, status *stream.SendStreamClient[*build_v1alpha.Status], level, text string, fields ...*build_v1alpha.LogField) {
+	if status != nil {
+		so := new(build_v1alpha.Status)
+		entry := &build_v1alpha.LogEntry{}
+		entry.SetLevel(level)
+		entry.SetText(text)
+		if len(fields) > 0 {
+			entry.SetFields(fields)
+		}
+		so.Update().SetLog(entry)
+		if _, err := status.Send(ctx, so); err != nil {
+			b.Log.Warn("error sending log status", "error", err)
+		}
+	}
+}
+
+func logField(key, value string) *build_v1alpha.LogField {
+	f := &build_v1alpha.LogField{}
+	f.SetKey(key)
+	f.SetValue(value)
+	return f
+}
+
+// checkLocalStorageMigration checks whether the app has existing data in
+// local storage but no explicit disk config, and sends a deploy warning.
+func (b *Builder) checkLocalStorageMigration(ctx context.Context, appID entity.Id, configSpec core_v1alpha.ConfigSpec, status *stream.SendStreamClient[*build_v1alpha.Status]) {
+	if b.DataPath == "" {
+		return
+	}
+
+	// Check if any service already declares a disk at /miren/data/local
+	// (any provider — local or miren). If so, the user has migrated.
+	for _, svc := range configSpec.Services {
+		for _, disk := range svc.Disks {
+			if disk.MountPath == "/miren/data/local" {
+				return
+			}
+		}
+	}
+
+	localPath := filepath.Join(b.DataPath, "data", "local", appID.String())
+	entries, err := os.ReadDir(localPath)
+	if err != nil || len(entries) == 0 {
+		return
+	}
+
+	b.sendLogStatus(ctx, status, "warn", "Local storage data was automatically mounted",
+		logField("detail", "This app has data stored on disk, but your app.toml doesn't declare it yet. "+
+			"Add a disk config so the data continues to be available — this safety net will be removed in a future release."),
+		logField("link", "[Configuring Disks](https://miren.md/disks)"),
+	)
+}
+
 // isSystemEnvVar returns true if the given key is a system-managed env var
 // that should not be injected as a build arg.
 func isSystemEnvVar(key string) bool {
@@ -1409,6 +1464,8 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 	activateSpan.End()
 
 	b.Log.Info("app version updated", "app", name, "version", mrv.Version)
+
+	b.checkLocalStorageMigration(ctx, appRec.ID, configSpec, status)
 
 	// Log the deployment to the app's logs
 	b.logDeployment(ctx, name, mrv.Version, artifactName)

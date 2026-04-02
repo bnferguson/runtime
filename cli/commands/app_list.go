@@ -13,11 +13,6 @@ import (
 	"miren.dev/runtime/pkg/ui"
 )
 
-// hyperlink creates a clickable terminal hyperlink using OSC 8 escape sequence
-func hyperlink(url, text string) string {
-	return fmt.Sprintf("\x1b]8;;%s\x1b\\%s\x1b]8;;\x1b\\", url, text)
-}
-
 func AppList(ctx *Context, opts struct {
 	FormatOptions
 	ConfigCentric
@@ -164,7 +159,7 @@ func AppList(ctx *Context, opts struct {
 			if strings.Contains(host, "localhost") || strings.HasPrefix(host, "127.") {
 				scheme = "http://"
 			}
-			routeDisplay = hyperlink(scheme+host, displayHost)
+			routeDisplay = ui.Hyperlink(scheme+host, displayHost)
 		}
 
 		rows = append(rows, ui.Row{
