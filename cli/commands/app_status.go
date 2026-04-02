@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/deployment/deployment_v1alpha"
+	"miren.dev/runtime/pkg/ui"
 )
 
 func AppStatus(ctx *Context, opts struct {
@@ -117,7 +118,7 @@ func AppStatus(ctx *Context, opts struct {
 		ctx.Printf("\n%s\n", labelStyle.Render("Active Deployment:"))
 
 		// Deployment ID
-		ctx.Printf("  ID: %s\n", deployment.Id())
+		ctx.Printf("  ID: %s\n", ui.DisplayShortID(deployment.ShortId(), deployment.Id()))
 
 		// Status with color
 		status := deployment.Status()
@@ -245,7 +246,7 @@ func AppStatus(ctx *Context, opts struct {
 				statusIcon = yellowStyle.Render("○")
 			}
 
-			ctx.Printf("  %s %s - %s", statusIcon, timeStr, dep.Id()[:8])
+			ctx.Printf("  %s %s - %s", statusIcon, timeStr, ui.DisplayShortID(dep.ShortId(), dep.Id()))
 
 			if dep.HasGitInfo() && dep.GitInfo() != nil && dep.GitInfo().HasSha() {
 				sha := dep.GitInfo().Sha()

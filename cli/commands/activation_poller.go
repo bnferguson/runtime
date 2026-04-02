@@ -21,11 +21,15 @@ type appInfoGetter interface {
 // waitForActivation polls AppInfo to wait for a specific version to become active.
 // This is non-fatal — the deploy/rollback already succeeded server-side, so a
 // timeout just means we can't confirm activation yet.
-func waitForActivation(ctx *Context, getter appInfoGetter, appName, versionID string) {
+func waitForActivation(ctx *Context, getter appInfoGetter, appName, versionID, versionDisplay string) {
 	const (
 		pollInterval = 2 * time.Second
 		timeout      = 60 * time.Second
 	)
+
+	if versionDisplay == "" {
+		versionDisplay = versionID
+	}
 
 	ctx.Printf("Waiting for version to become active...\n")
 
@@ -38,12 +42,12 @@ func waitForActivation(ctx *Context, getter appInfoGetter, appName, versionID st
 		case <-ctx.Done():
 			return
 		case <-deadline:
-			ctx.Printf("⚠ Timed out waiting for version %s to activate. Activation is still in progress.\n", versionID)
+			ctx.Printf("⚠ Timed out waiting for version %s to activate. Activation is still in progress.\n", versionDisplay)
 			return
 		case <-ticker.C:
 			ready, summary := checkVersionActive(ctx, getter, appName, versionID)
 			if ready {
-				ctx.Printf("✓ Version %s is active%s\n", versionID, summary)
+				ctx.Printf("✓ Version %s is active%s\n", versionDisplay, summary)
 				return
 			}
 		}

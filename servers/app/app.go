@@ -14,6 +14,7 @@ import (
 	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/pkg/cond"
@@ -52,6 +53,18 @@ func NewAppInfo(log *slog.Logger, ec *entityserver.Client, cpu *metrics.CPUUsage
 }
 
 var _ app_v1alpha.Crud = &AppInfo{}
+
+func shortIDFromEntity(ent *entityserver_v1alpha.Entity) string {
+	if ent == nil {
+		return ""
+	}
+	for _, attr := range ent.Attrs() {
+		if entity.Id(attr.ID) == entity.DBShortId {
+			return attr.Value.String()
+		}
+	}
+	return ""
+}
 
 func (r *AppInfo) New(ctx context.Context, state *app_v1alpha.CrudNew) error {
 	name := state.Args().Name()
@@ -101,9 +114,10 @@ func (r *AppInfo) List(ctx context.Context, state *app_v1alpha.CrudList) error {
 
 	// Collect apps and resolve their active versions
 	type appEntry struct {
-		name          string
-		app           core_v1alpha.App
-		activeVersion *core_v1alpha.AppVersion
+		name                string
+		app                 core_v1alpha.App
+		activeVersion       *core_v1alpha.AppVersion
+		activeVersionEntity *entityserver_v1alpha.Entity
 	}
 
 	var apps []appEntry
@@ -118,8 +132,9 @@ func (r *AppInfo) List(ctx context.Context, state *app_v1alpha.CrudList) error {
 
 		if app.ActiveVersion != "" {
 			var appVer core_v1alpha.AppVersion
-			if err := r.EC.GetById(ctx, app.ActiveVersion, &appVer); err == nil {
+			if verEnt, err := r.EC.GetByIdWithEntity(ctx, entity.Id(app.ActiveVersion), &appVer); err == nil {
 				entry.activeVersion = &appVer
+				entry.activeVersionEntity = verEnt
 				if resolvedCfg, err := coreutil.ResolveConfig(ctx, r.EC.EAC(), &appVer); err == nil {
 					specMap[appVer.ID.String()] = resolvedCfg
 				}
@@ -206,6 +221,9 @@ func (r *AppInfo) List(ctx context.Context, state *app_v1alpha.CrudList) error {
 		if entry.activeVersion != nil {
 			var vi app_v1alpha.VersionInfo
 			vi.SetVersion(entry.activeVersion.Version)
+			if sid := shortIDFromEntity(entry.activeVersionEntity); sid != "" {
+				vi.SetShortId(sid)
+			}
 			a.SetCurrentVersion(&vi)
 		}
 

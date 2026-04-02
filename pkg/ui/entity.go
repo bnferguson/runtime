@@ -58,6 +58,14 @@ func entityIdStr(e entity.AttrGetter) string {
 	return ""
 }
 
+// DisplayShortID returns the short ID if available, otherwise falls back to CleanEntityID.
+func DisplayShortID(shortID, fullID string) string {
+	if shortID != "" {
+		return shortID
+	}
+	return CleanEntityID(fullID)
+}
+
 // DisplayAppVersion formats an app version string by removing prefixes and bolding the app name.
 // For example: "app_version/meet-vXYZ123" -> "**meet**-vXYZ123" (where **meet** is bold)
 func DisplayAppVersion(version string) string {

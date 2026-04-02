@@ -77,7 +77,8 @@ func (d *DeploymentServer) CreateDeployment(ctx context.Context, req *deployment
 
 	if len(existingDeployments) > 0 {
 		// Found an existing in_progress deployment
-		existing := existingDeployments[0]
+		existing := existingDeployments[0].deployment
+		existingEnt := existingDeployments[0].entity
 
 		// Parse the deployment timestamp
 		// Treat malformed/empty timestamps as expired to avoid blocking deployments
@@ -108,6 +109,7 @@ func (d *DeploymentServer) CreateDeployment(ctx context.Context, req *deployment
 			lockInfo.SetAppName(appName)
 			lockInfo.SetClusterId(clusterId)
 			lockInfo.SetBlockingDeploymentId(string(existing.ID))
+			lockInfo.SetBlockingDeploymentShortId(shortIDFromRPCEntity(existingEnt))
 			lockInfo.SetStartedBy(displayEmail)
 			lockInfo.SetStartedAt(standard.ToTimestamp(deploymentTime))
 			lockInfo.SetCurrentPhase(existing.Phase)
@@ -213,6 +215,10 @@ func (d *DeploymentServer) CreateDeployment(ctx context.Context, req *deployment
 
 	// Convert to RPC response
 	deploymentInfo := d.toDeploymentInfo(deployment)
+	if depEnt, err := d.EAC.Get(ctx, putResp.Id()); err == nil {
+		versionShortIDs := d.resolveShortIDs(ctx, []string{deployment.AppVersion})
+		enrichDeploymentShortIDs(deploymentInfo, depEnt.Entity(), versionShortIDs)
+	}
 	results.SetDeployment(deploymentInfo)
 
 	d.Log.Info("Created deployment",
@@ -500,10 +506,19 @@ func (d *DeploymentServer) ListDeployments(ctx context.Context, req *deployment_
 		return err
 	}
 
+	// Batch-resolve app version short IDs
+	versionIDs := make([]string, 0, len(deployments))
+	for _, dwe := range deployments {
+		versionIDs = append(versionIDs, dwe.deployment.AppVersion)
+	}
+	versionShortIDs := d.resolveShortIDs(ctx, versionIDs)
+
 	// Convert to deployment info list
 	deploymentInfos := make([]*deployment_v1alpha.DeploymentInfo, 0, len(deployments))
-	for _, dep := range deployments {
-		deploymentInfos = append(deploymentInfos, d.toDeploymentInfo(dep))
+	for _, dwe := range deployments {
+		info := d.toDeploymentInfo(dwe.deployment)
+		enrichDeploymentShortIDs(info, dwe.entity, versionShortIDs)
+		deploymentInfos = append(deploymentInfos, info)
 	}
 
 	results.SetDeployments(deploymentInfos)
@@ -537,6 +552,8 @@ func (d *DeploymentServer) GetDeploymentById(ctx context.Context, req *deploymen
 	}
 
 	deploymentInfo := d.toDeploymentInfo(&deployment)
+	versionShortIDs := d.resolveShortIDs(ctx, []string{deployment.AppVersion})
+	enrichDeploymentShortIDs(deploymentInfo, deploymentResp.Entity(), versionShortIDs)
 	results.SetDeployment(deploymentInfo)
 
 	return nil
@@ -628,8 +645,10 @@ func (d *DeploymentServer) GetActiveDeployment(ctx context.Context, req *deploym
 		return cond.NotFound("active-deployment", fmt.Sprintf("%s/%s", appName, clusterId))
 	}
 
-	deployment := deployments[0]
-	deploymentInfo := d.toDeploymentInfo(deployment)
+	dwe := deployments[0]
+	deploymentInfo := d.toDeploymentInfo(dwe.deployment)
+	versionShortIDs := d.resolveShortIDs(ctx, []string{dwe.deployment.AppVersion})
+	enrichDeploymentShortIDs(deploymentInfo, dwe.entity, versionShortIDs)
 	results.SetDeployment(deploymentInfo)
 
 	return nil
@@ -764,7 +783,8 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 	}
 
 	if len(existingDeployments) > 0 {
-		existing := existingDeployments[0]
+		existing := existingDeployments[0].deployment
+		existingEnt := existingDeployments[0].entity
 
 		deploymentTime, parseErr := time.Parse(time.RFC3339, existing.DeployedBy.Timestamp)
 		if parseErr != nil {
@@ -784,6 +804,7 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 			lockInfo.SetAppName(appName)
 			lockInfo.SetClusterId(clusterId)
 			lockInfo.SetBlockingDeploymentId(string(existing.ID))
+			lockInfo.SetBlockingDeploymentShortId(shortIDFromRPCEntity(existingEnt))
 			lockInfo.SetStartedBy(displayEmail)
 			lockInfo.SetStartedAt(standard.ToTimestamp(deploymentTime))
 			lockInfo.SetCurrentPhase(existing.Phase)
@@ -824,9 +845,9 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 	}
 
 	var sourceDeployment *core_v1alpha.Deployment
-	for _, dep := range allDeployments {
-		if dep.AppVersion == sourceVersionId {
-			sourceDeployment = dep
+	for _, dwe := range allDeployments {
+		if dwe.deployment.AppVersion == sourceVersionId {
+			sourceDeployment = dwe.deployment
 			break // listDeploymentsInternal returns newest first
 		}
 	}
@@ -911,6 +932,10 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 	}
 
 	deploymentInfo := d.toDeploymentInfo(deployment)
+	if depEnt, getErr := d.EAC.Get(ctx, newDeploymentId); getErr == nil {
+		versionShortIDs := d.resolveShortIDs(ctx, []string{deployment.AppVersion})
+		enrichDeploymentShortIDs(deploymentInfo, depEnt.Entity(), versionShortIDs)
+	}
 	results.SetDeployment(deploymentInfo)
 
 	accessInfo := d.getAccessInfo(ctx, appName)
@@ -1038,7 +1063,8 @@ func (d *DeploymentServer) createEnvVarDeployment(ctx context.Context, appName, 
 	}
 
 	if len(existingDeployments) > 0 {
-		existing := existingDeployments[0]
+		existing := existingDeployments[0].deployment
+		existingEnt := existingDeployments[0].entity
 
 		deploymentTime, parseErr := time.Parse(time.RFC3339, existing.DeployedBy.Timestamp)
 		if parseErr != nil {
@@ -1058,6 +1084,7 @@ func (d *DeploymentServer) createEnvVarDeployment(ctx context.Context, appName, 
 			lockInfo.SetAppName(appName)
 			lockInfo.SetClusterId(clusterId)
 			lockInfo.SetBlockingDeploymentId(string(existing.ID))
+			lockInfo.SetBlockingDeploymentShortId(shortIDFromRPCEntity(existingEnt))
 			lockInfo.SetStartedBy(displayEmail)
 			lockInfo.SetStartedAt(standard.ToTimestamp(deploymentTime))
 			lockInfo.SetCurrentPhase(existing.Phase)
@@ -1126,6 +1153,10 @@ func (d *DeploymentServer) createEnvVarDeployment(ctx context.Context, appName, 
 	}
 
 	deploymentInfo := d.toDeploymentInfo(deployment)
+	if depEnt, getErr := d.EAC.Get(ctx, newDeploymentId); getErr == nil {
+		versionShortIDs := d.resolveShortIDs(ctx, []string{deployment.AppVersion})
+		enrichDeploymentShortIDs(deploymentInfo, depEnt.Entity(), versionShortIDs)
+	}
 	results.SetDeployment(deploymentInfo)
 
 	accessInfo := d.getAccessInfo(ctx, appName)
@@ -1183,7 +1214,7 @@ func (d *DeploymentServer) getAccessInfo(ctx context.Context, appName string) *d
 
 // Internal helper methods
 
-func (d *DeploymentServer) listDeploymentsInternal(ctx context.Context, appName, clusterId, status string, limit int) ([]*core_v1alpha.Deployment, error) {
+func (d *DeploymentServer) listDeploymentsInternal(ctx context.Context, appName, clusterId, status string, limit int) ([]deploymentWithEntity, error) {
 	// List all deployments by type
 	listResp, err := d.EAC.List(ctx, entity.Ref(entity.EntityKind, core_v1alpha.KindDeployment))
 	if err != nil {
@@ -1195,7 +1226,7 @@ func (d *DeploymentServer) listDeploymentsInternal(ctx context.Context, appName,
 	entities := listResp.Values()
 
 	// Decode and filter deployments
-	deployments := make([]*core_v1alpha.Deployment, 0)
+	deployments := make([]deploymentWithEntity, 0)
 	for _, e := range entities {
 		// List already returns full entity data with attributes, no need to fetch again
 		var dep core_v1alpha.Deployment
@@ -1212,12 +1243,12 @@ func (d *DeploymentServer) listDeploymentsInternal(ctx context.Context, appName,
 			continue
 		}
 
-		deployments = append(deployments, &dep)
+		deployments = append(deployments, deploymentWithEntity{deployment: &dep, entity: e})
 	}
 
 	// Sort by timestamp (newest first) using efficient sort.Slice
 	sort.Slice(deployments, func(i, j int) bool {
-		return deployments[i].DeployedBy.Timestamp > deployments[j].DeployedBy.Timestamp
+		return deployments[i].deployment.DeployedBy.Timestamp > deployments[j].deployment.DeployedBy.Timestamp
 	})
 
 	// Apply limit after sorting
@@ -1289,6 +1320,58 @@ func (d *DeploymentServer) toDeploymentInfo(deployment *core_v1alpha.Deployment)
 	return info
 }
 
+// shortIDFromRPCEntity extracts the db/short-id attribute from an RPC entity.
+func shortIDFromRPCEntity(ent *entityserver_v1alpha.Entity) string {
+	if ent == nil {
+		return ""
+	}
+	for _, attr := range ent.Attrs() {
+		if entity.Id(attr.ID) == entity.DBShortId {
+			return attr.Value.String()
+		}
+	}
+	return ""
+}
+
+// enrichDeploymentShortIDs populates the short ID fields on a DeploymentInfo
+// from the deployment entity and a version short ID lookup map.
+func enrichDeploymentShortIDs(info *deployment_v1alpha.DeploymentInfo, ent *entityserver_v1alpha.Entity, versionShortIDs map[string]string) {
+	if sid := shortIDFromRPCEntity(ent); sid != "" {
+		info.SetShortId(sid)
+	}
+	if versionShortIDs != nil {
+		if sid, ok := versionShortIDs[info.AppVersionId()]; ok && sid != "" {
+			info.SetAppVersionShortId(sid)
+		}
+	}
+}
+
+// resolveShortIDs batch-resolves short IDs for a set of entity IDs.
+func (d *DeploymentServer) resolveShortIDs(ctx context.Context, ids []string) map[string]string {
+	result := make(map[string]string, len(ids))
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if _, ok := result[id]; ok {
+			continue // already resolved
+		}
+		resp, err := d.EAC.Get(ctx, id)
+		if err != nil {
+			continue
+		}
+		if sid := shortIDFromRPCEntity(resp.Entity()); sid != "" {
+			result[id] = sid
+		}
+	}
+	return result
+}
+
+type deploymentWithEntity struct {
+	deployment *core_v1alpha.Deployment
+	entity     *entityserver_v1alpha.Entity
+}
+
 // markPreviousActiveAs marks all active deployments for the given app/cluster with the target status,
 // except for the specified currentDeploymentId
 func (d *DeploymentServer) markPreviousActiveAs(ctx context.Context, appName, clusterId, currentDeploymentId, targetStatus string) error {
@@ -1299,7 +1382,8 @@ func (d *DeploymentServer) markPreviousActiveAs(ctx context.Context, appName, cl
 	}
 
 	// Update each active deployment (except the current one) to the target status
-	for _, dep := range deployments {
+	for _, dwe := range deployments {
+		dep := dwe.deployment
 		if string(dep.ID) == currentDeploymentId {
 			continue
 		}

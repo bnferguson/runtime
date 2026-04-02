@@ -274,7 +274,7 @@ func buildDeploymentRow(dep *deployment_v1alpha.DeploymentInfo, opts historyDisp
 
 	row := ui.Row{
 		formatDeploymentStatus(status),
-		formatVersion(dep.AppVersionId(), status),
+		formatVersionWithShortID(dep.AppVersionShortId(), dep.AppVersionId(), status),
 	}
 
 	if opts.hasIdentity {
@@ -285,7 +285,7 @@ func buildDeploymentRow(dep *deployment_v1alpha.DeploymentInfo, opts historyDisp
 
 	if opts.detailed {
 		gitSha, gitBranch, gitMessage := formatGitInfo(dep)
-		row = append(row, ui.CleanEntityID(dep.Id()), formatErrorInfo(dep, status), gitSha, gitBranch, gitMessage)
+		row = append(row, ui.DisplayShortID(dep.ShortId(), dep.Id()), formatErrorInfo(dep, status), gitSha, gitBranch, gitMessage)
 	} else {
 		gitSha, gitBranch, _ := formatGitInfo(dep)
 		row = append(row, gitSha, gitBranch)
@@ -312,6 +312,13 @@ func formatVersion(version, status string) string {
 		return "-"
 	}
 	return version
+}
+
+func formatVersionWithShortID(shortID, version, status string) string {
+	if shortID != "" {
+		return formatVersion(shortID, status)
+	}
+	return formatVersion(ui.DisplayAppVersion(version), status)
 }
 
 func formatDeploymentTime(dep *deployment_v1alpha.DeploymentInfo) string {

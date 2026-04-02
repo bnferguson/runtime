@@ -84,7 +84,7 @@ func SandboxPoolList(ctx *Context, opts struct {
 		}
 
 		rows = append(rows, ui.Row{
-			ui.CleanEntityID(pool.ID.String()),
+			ui.BriefId(e.Entity()),
 			ui.DisplayAppVersion(pool.SandboxSpec.Version.String()),
 			pool.Service,
 			mode,
