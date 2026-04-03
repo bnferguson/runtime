@@ -32,8 +32,10 @@ func TestRabbitmqAddonCreateListDestroy(t *testing.T) {
 	harness.WaitForEnvVar(t, m, name, "RABBITMQ_PASSWORD", 30*time.Second)
 	harness.WaitForEnvVar(t, m, name, "RABBITMQ_VHOST", 30*time.Second)
 
-	// Destroy the addon
+	// Destroy the addon and verify full async cleanup completes.
 	m.MustRun("addon", "destroy", "miren-rabbitmq", "-a", name, "--force")
+	harness.WaitForAddonRemoved(t, m, name, "miren-rabbitmq", 2*time.Minute)
+	harness.WaitForEnvVarRemoved(t, m, name, "RABBITMQ_URL", 2*time.Minute)
 }
 
 func TestRabbitmqAddonDeployWithAppToml(t *testing.T) {
