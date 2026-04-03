@@ -14,10 +14,12 @@ import (
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	apiserver "miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/network/network_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
+	"miren.dev/runtime/pkg/entity/types"
 )
 
 func newTestLauncher(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient) *Launcher {
@@ -2728,4 +2730,428 @@ func TestNoAutoMountWhenExplicitDiskConfig(t *testing.T) {
 	require.Len(t, volumes, 1, "should only have explicit disk config")
 	assert.Equal(t, "my-data", volumes[0].Name)
 	assert.Equal(t, "local", volumes[0].Provider)
+}
+
+// TestDiskPoolDrainedBeforeNewPoolCreated verifies that when deploying a new
+// version of an app with disks, the old pool is scaled to 0 before the new
+// pool is created. This prevents conflicts when both old and new sandboxes try
+// to mount the same disk.
+func TestDiskPoolDrainedBeforeNewPoolCreated(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{
+		Project: entity.Id("project-1"),
+	}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	// Deploy v1 with a local disk (e.g. victoriametrics)
+	v1 := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "oci.miren.cloud/victoriametrics:v1",
+		Config: core_v1alpha.Config{
+			Port: 8428,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "victoriametrics",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+					Disks: []core_v1alpha.Disks{
+						{
+							Name:      "vm-data",
+							Provider:  core_v1alpha.LOCAL,
+							MountPath: "/miren/data/local/victoria-metrics-data",
+						},
+					},
+				},
+			},
+		},
+	}
+	v1ID, err := server.Client.Create(ctx, "test-v1", v1)
+	require.NoError(t, err)
+	v1.ID = v1ID
+
+	app.ActiveVersion = v1.ID
+	err = server.Client.Update(ctx, app)
+	require.NoError(t, err)
+
+	launcher := newTestLauncher(log, server.EAC)
+	err = launcher.Reconcile(ctx, app, nil)
+	require.NoError(t, err)
+
+	poolsV1 := listAllPools(t, ctx, server)
+	require.Len(t, poolsV1, 1, "should create one pool for v1")
+	poolV1ID := poolsV1[0].ID
+
+	// Deploy v2 with same local disk but new image (triggers new pool)
+	v2 := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v2",
+		ImageUrl: "oci.miren.cloud/victoriametrics:v2",
+		Config: core_v1alpha.Config{
+			Port: 8428,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "victoriametrics",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+					Disks: []core_v1alpha.Disks{
+						{
+							Name:      "vm-data",
+							Provider:  core_v1alpha.LOCAL,
+							MountPath: "/miren/data/local/victoria-metrics-data",
+						},
+					},
+				},
+			},
+		},
+	}
+	v2ID, err := server.Client.Create(ctx, "test-v2", v2)
+	require.NoError(t, err)
+	v2.ID = v2ID
+
+	app.ActiveVersion = v2.ID
+	err = server.Client.Update(ctx, app)
+	require.NoError(t, err)
+
+	err = launcher.Reconcile(ctx, app, nil)
+	require.NoError(t, err)
+
+	// The old pool should have been drained (scaled to 0, no references)
+	// BEFORE the new pool was created.
+	getRes, err := server.EAC.Get(ctx, poolV1ID.String())
+	require.NoError(t, err)
+	var poolV1Refreshed compute_v1alpha.SandboxPool
+	poolV1Refreshed.Decode(getRes.Entity().Entity())
+
+	assert.Equal(t, int64(0), poolV1Refreshed.DesiredInstances,
+		"old disk pool should be scaled to 0")
+	assert.Empty(t, poolV1Refreshed.ReferencedByVersions,
+		"old disk pool should have no version references")
+
+	// New pool should have been created for v2
+	allPools := listAllPools(t, ctx, server)
+	require.Len(t, allPools, 2, "should have old and new pools")
+
+	var poolV2 *compute_v1alpha.SandboxPool
+	for i := range allPools {
+		if allPools[i].ID != poolV1ID {
+			poolV2 = &allPools[i]
+			break
+		}
+	}
+	require.NotNil(t, poolV2, "should find the new pool")
+	assert.Equal(t, "victoriametrics", poolV2.Service)
+	assert.Contains(t, poolV2.ReferencedByVersions, v2.ID)
+
+	// New pool should have the local disk volume
+	require.Len(t, poolV2.SandboxSpec.Volume, 1)
+	assert.Equal(t, "local", poolV2.SandboxSpec.Volume[0].Provider)
+}
+
+// TestDiskDrainBlockedByActiveSandbox verifies that when a RUNNING sandbox
+// exists for the old pool, the drain times out and the new pool is NOT created.
+// This proves drain-before-create ordering: the launcher won't start the new
+// version while the old one still holds the disk.
+func TestDiskDrainBlockedByActiveSandbox(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{
+		Project: entity.Id("project-1"),
+	}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	v1 := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "oci.miren.cloud/victoriametrics:v1",
+		Config: core_v1alpha.Config{
+			Port: 8428,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "victoriametrics",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+					Disks: []core_v1alpha.Disks{
+						{
+							Name:      "vm-data",
+							Provider:  core_v1alpha.LOCAL,
+							MountPath: "/miren/data/local/victoria-metrics-data",
+						},
+					},
+				},
+			},
+		},
+	}
+	v1ID, err := server.Client.Create(ctx, "test-v1", v1)
+	require.NoError(t, err)
+	v1.ID = v1ID
+
+	app.ActiveVersion = v1.ID
+	err = server.Client.Update(ctx, app)
+	require.NoError(t, err)
+
+	launcher := newTestLauncher(log, server.EAC)
+	err = launcher.Reconcile(ctx, app, nil)
+	require.NoError(t, err)
+
+	poolsV1 := listAllPools(t, ctx, server)
+	require.Len(t, poolsV1, 1)
+	poolV1ID := poolsV1[0].ID
+
+	// Simulate a RUNNING sandbox for the old pool (as the sandbox controller
+	// would create). This holds the disk and blocks draining.
+	sb := &compute_v1alpha.Sandbox{
+		Status: compute_v1alpha.RUNNING,
+	}
+	_, err = server.Client.Create(ctx, "old-sandbox",
+		sb,
+		apiserver.WithLabels(types.LabelSet(
+			"pool", poolV1ID.String(),
+			"service", "victoriametrics",
+		)),
+	)
+	require.NoError(t, err)
+
+	// Deploy v2
+	v2 := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v2",
+		ImageUrl: "oci.miren.cloud/victoriametrics:v2",
+		Config: core_v1alpha.Config{
+			Port: 8428,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "victoriametrics",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+					Disks: []core_v1alpha.Disks{
+						{
+							Name:      "vm-data",
+							Provider:  core_v1alpha.LOCAL,
+							MountPath: "/miren/data/local/victoria-metrics-data",
+						},
+					},
+				},
+			},
+		},
+	}
+	v2ID, err := server.Client.Create(ctx, "test-v2", v2)
+	require.NoError(t, err)
+	v2.ID = v2ID
+
+	app.ActiveVersion = v2.ID
+	err = server.Client.Update(ctx, app)
+	require.NoError(t, err)
+
+	// Reconcile should NOT create a new pool because the old sandbox is
+	// still running (drain times out). The service is skipped.
+	err = launcher.Reconcile(ctx, app, nil)
+	require.NoError(t, err)
+
+	// Only the original pool should exist — no v2 pool was created
+	allPools := listAllPools(t, ctx, server)
+	require.Len(t, allPools, 1, "should not create new pool while old sandbox is running")
+
+	// The old pool was marked for drain (desired=0, no refs)
+	getRes, err := server.EAC.Get(ctx, poolV1ID.String())
+	require.NoError(t, err)
+	var poolV1 compute_v1alpha.SandboxPool
+	poolV1.Decode(getRes.Entity().Entity())
+	assert.Equal(t, int64(0), poolV1.DesiredInstances,
+		"old pool should be scaled to 0")
+	assert.Empty(t, poolV1.ReferencedByVersions,
+		"old pool should have no version references")
+}
+
+// TestServiceHasDisks verifies the serviceHasDisks helper.
+func TestServiceHasDisks(t *testing.T) {
+	tests := []struct {
+		name     string
+		spec     *core_v1alpha.ConfigSpec
+		service  string
+		expected bool
+	}{
+		{
+			name: "service with local disk",
+			spec: &core_v1alpha.ConfigSpec{
+				Services: []core_v1alpha.ConfigSpecServices{
+					{
+						Name: "db",
+						Disks: []core_v1alpha.ConfigSpecServicesDisks{
+							{Name: "data", Provider: core_v1alpha.ConfigSpecServicesDisksLOCAL},
+						},
+					},
+				},
+			},
+			service:  "db",
+			expected: true,
+		},
+		{
+			name: "service with miren disk",
+			spec: &core_v1alpha.ConfigSpec{
+				Services: []core_v1alpha.ConfigSpecServices{
+					{
+						Name: "db",
+						Disks: []core_v1alpha.ConfigSpecServicesDisks{
+							{Name: "data", Provider: core_v1alpha.ConfigSpecServicesDisksMIREN},
+						},
+					},
+				},
+			},
+			service:  "db",
+			expected: true,
+		},
+		{
+			name: "service with no disks",
+			spec: &core_v1alpha.ConfigSpec{
+				Services: []core_v1alpha.ConfigSpecServices{
+					{Name: "web"},
+				},
+			},
+			service:  "web",
+			expected: false,
+		},
+		{
+			name: "different service has disk",
+			spec: &core_v1alpha.ConfigSpec{
+				Services: []core_v1alpha.ConfigSpecServices{
+					{Name: "web"},
+					{
+						Name: "db",
+						Disks: []core_v1alpha.ConfigSpecServicesDisks{
+							{Name: "data", Provider: core_v1alpha.ConfigSpecServicesDisksLOCAL},
+						},
+					},
+				},
+			},
+			service:  "web",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, serviceHasDisks(tt.spec, tt.service))
+		})
+	}
+}
+
+// TestDisklessServiceNotDrained verifies that services without disks still use
+// the normal rolling deploy strategy (new pool created before old pool is
+// cleaned up).
+func TestDisklessServiceNotDrained(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{
+		Project: entity.Id("project-1"),
+	}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	// Deploy v1 — no disks
+	v1 := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "oci.miren.cloud/myapp:v1",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+				},
+			},
+		},
+	}
+	v1ID, err := server.Client.Create(ctx, "test-v1", v1)
+	require.NoError(t, err)
+	v1.ID = v1ID
+
+	app.ActiveVersion = v1.ID
+	err = server.Client.Update(ctx, app)
+	require.NoError(t, err)
+
+	launcher := newTestLauncher(log, server.EAC)
+	err = launcher.Reconcile(ctx, app, nil)
+	require.NoError(t, err)
+
+	poolsV1 := listAllPools(t, ctx, server)
+	require.Len(t, poolsV1, 1)
+
+	// Deploy v2 with new image
+	v2 := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v2",
+		ImageUrl: "oci.miren.cloud/myapp:v2",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+				},
+			},
+		},
+	}
+	v2ID, err := server.Client.Create(ctx, "test-v2", v2)
+	require.NoError(t, err)
+	v2.ID = v2ID
+
+	app.ActiveVersion = v2.ID
+	err = server.Client.Update(ctx, app)
+	require.NoError(t, err)
+
+	err = launcher.Reconcile(ctx, app, nil)
+	require.NoError(t, err)
+
+	// Both pools should exist — rolling deploy creates the new pool before
+	// cleaning up the old one (create-before-drain). Verify one is the active
+	// v2 pool and the other was scaled down by cleanup.
+	allPools := listAllPools(t, ctx, server)
+	require.Len(t, allPools, 2, "rolling deploy should have both pools")
+
+	var newPool, oldPool *compute_v1alpha.SandboxPool
+	for i := range allPools {
+		if len(allPools[i].ReferencedByVersions) > 0 {
+			newPool = &allPools[i]
+		} else {
+			oldPool = &allPools[i]
+		}
+	}
+	require.NotNil(t, newPool, "should have an active pool for v2")
+	require.NotNil(t, oldPool, "should have a decommissioned old pool")
+	assert.Equal(t, int64(1), newPool.DesiredInstances, "new pool should be active")
+	assert.Equal(t, int64(0), oldPool.DesiredInstances, "old pool should be scaled down")
 }

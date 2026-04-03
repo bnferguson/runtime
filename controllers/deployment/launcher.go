@@ -216,6 +216,20 @@ func (l *Launcher) reconcileAppVersion(ctx context.Context, app *core_v1alpha.Ap
 	// For each service, ensure a pool exists. Collect IDs of newly created pools.
 	var newPoolIDs []entity.Id
 	for _, svc := range spec.Services {
+		// For services with disks, drain old pools before creating new ones.
+		// Disks require exclusive access (local disks use flock, miren disks
+		// use leases), so the old sandbox must release the disk before the
+		// new one can mount it.
+		if serviceHasDisks(spec, svc.Name) {
+			if err := l.drainStaleDiskPools(ctx, app, &ver, spec, svc.Name); err != nil {
+				l.Log.Error("failed to drain old disk pools, skipping service",
+					"app", app.ID,
+					"service", svc.Name,
+					"error", err)
+				continue
+			}
+		}
+
 		poolID, err := l.ensurePoolForService(ctx, app, &ver, spec, svc.Name)
 		if err != nil {
 			l.Log.Error("failed to ensure pool for service",
@@ -1472,4 +1486,209 @@ func (l *Launcher) cleanupStaleServices(ctx context.Context, app *core_v1alpha.A
 				"error", err)
 		}
 	}
+}
+
+// serviceHasDisks returns true if the named service in the config spec has any
+// disk mounts configured.
+func serviceHasDisks(spec *core_v1alpha.ConfigSpec, serviceName string) bool {
+	for _, svc := range spec.Services {
+		if svc.Name == serviceName {
+			return len(svc.Disks) > 0
+		}
+	}
+	return false
+}
+
+// drainStaleDiskPools finds pools for the given app+service whose spec
+// does not match the current desired spec, scales them to 0, and waits for
+// their sandboxes to stop. This ensures disks are released before a new
+// pool tries to mount them.
+func (l *Launcher) drainStaleDiskPools(
+	ctx context.Context,
+	app *core_v1alpha.App,
+	ver *core_v1alpha.AppVersion,
+	cfgSpec *core_v1alpha.ConfigSpec,
+	serviceName string,
+) error {
+	// Determine which image to use (same logic as ensurePoolForService)
+	image := ver.ImageUrl
+	for _, svc := range cfgSpec.Services {
+		if svc.Name == serviceName && svc.Image != "" {
+			image = containerdx.NormalizeImageReference(svc.Image)
+			break
+		}
+	}
+
+	desiredSpec, err := l.buildSandboxSpec(ctx, app, ver, cfgSpec, serviceName, image)
+	if err != nil {
+		return fmt.Errorf("build sandbox spec: %w", err)
+	}
+
+	stalePools, err := l.findStalePoolsForService(ctx, app.ID, serviceName, desiredSpec)
+	if err != nil {
+		return fmt.Errorf("find stale pools: %w", err)
+	}
+
+	if len(stalePools) == 0 {
+		return nil
+	}
+
+	l.Log.Info("draining stale disk pools before creating new pool",
+		"app", app.ID,
+		"service", serviceName,
+		"stale_pools", len(stalePools))
+
+	for _, pwe := range stalePools {
+		pool := pwe.Pool
+
+		// Remove version references and scale to 0
+		pool.ReferencedByVersions = nil
+		pool.DesiredInstances = 0
+
+		l.Log.Info("scaling down stale disk pool",
+			"pool", pool.ID,
+			"service", pool.Service)
+
+		if err := l.updatePool(ctx, pwe); err != nil {
+			return fmt.Errorf("update pool %s: %w", pool.ID, err)
+		}
+	}
+
+	// Wait for all stale pools to fully drain so disk leases are released.
+	for _, pwe := range stalePools {
+		if err := l.waitForPoolDrained(ctx, pwe.Pool.ID, pwe.Pool.Service, l.PoolReadyTimeout); err != nil {
+			return fmt.Errorf("waiting for pool %s to drain: %w", pwe.Pool.ID, err)
+		}
+	}
+
+	return nil
+}
+
+// findStalePoolsForService returns pools for the given app+service whose spec
+// does NOT match the desired spec. These are old-version pools that should be
+// drained before starting new sandboxes.
+func (l *Launcher) findStalePoolsForService(
+	ctx context.Context,
+	appID entity.Id,
+	serviceName string,
+	desiredSpec *compute_v1alpha.SandboxSpec,
+) ([]*PoolWithEntity, error) {
+	poolsResp, err := l.EAC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool))
+	if err != nil {
+		return nil, fmt.Errorf("list pools: %w", err)
+	}
+
+	var stale []*PoolWithEntity
+	for _, ent := range poolsResp.Values() {
+		var pool compute_v1alpha.SandboxPool
+		pool.Decode(ent.Entity())
+
+		if pool.Service != serviceName {
+			continue
+		}
+
+		var poolMeta core_v1alpha.Metadata
+		poolMeta.Decode(ent.Entity())
+
+		appLabel, _ := poolMeta.Labels.Get("app")
+		if appLabel != appID.String() {
+			continue
+		}
+
+		// Skip pools that already match the desired spec
+		if _, matches := specsMatch(&pool.SandboxSpec, desiredSpec); matches {
+			continue
+		}
+
+		// Skip pools already scaled to 0 with no references AND no active
+		// sandboxes. A previous drain attempt may have set DesiredInstances=0
+		// but timed out before all sandboxes stopped — we still need to wait
+		// for those to finish.
+		if pool.DesiredInstances == 0 && len(pool.ReferencedByVersions) == 0 {
+			hasActive, err := l.hasActiveSandboxForPool(ctx, pool.ID, serviceName)
+			if err != nil {
+				return nil, fmt.Errorf("check active sandboxes for pool %s: %w", pool.ID, err)
+			}
+			if !hasActive {
+				continue
+			}
+		}
+
+		entCopy := *ent.Entity()
+		stale = append(stale, &PoolWithEntity{Pool: &pool, Entity: entCopy})
+	}
+
+	return stale, nil
+}
+
+// waitForPoolDrained polls until a pool has no RUNNING or PENDING sandboxes,
+// indicating that its resources (including disk leases) have been released.
+func (l *Launcher) waitForPoolDrained(ctx context.Context, poolID entity.Id, service string, timeout time.Duration) error {
+	pollInterval := 500 * time.Millisecond
+	deadline := time.Now().Add(timeout)
+
+	for {
+		hasActive, err := l.hasActiveSandboxForPool(ctx, poolID, service)
+		if err != nil {
+			return fmt.Errorf("check sandboxes for pool %s: %w", poolID, err)
+		}
+
+		if !hasActive {
+			l.Log.Info("stale pool fully drained", "pool", poolID)
+			return nil
+		}
+
+		if time.Now().After(deadline) {
+			return fmt.Errorf("pool %s still has active sandboxes after %s: %w",
+				poolID, timeout, context.DeadlineExceeded)
+		}
+
+		l.Log.Debug("waiting for stale pool to drain",
+			"pool", poolID)
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(pollInterval):
+		}
+	}
+}
+
+// hasActiveSandboxForPool returns true if there are any RUNNING, PENDING, or
+// NOT_READY sandboxes for the given pool. NOT_READY sandboxes may still hold
+// disk leases, so we must wait for them to fully stop.
+func (l *Launcher) hasActiveSandboxForPool(ctx context.Context, poolID entity.Id, service string) (bool, error) {
+	resp, err := l.EAC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox))
+	if err != nil {
+		return false, fmt.Errorf("list sandboxes: %w", err)
+	}
+
+	for _, ent := range resp.Values() {
+		var sb compute_v1alpha.Sandbox
+		sb.Decode(ent.Entity())
+
+		switch sb.Status {
+		case compute_v1alpha.RUNNING, compute_v1alpha.PENDING, compute_v1alpha.NOT_READY:
+			// Active — may still hold disk resources
+		default:
+			continue
+		}
+
+		var md core_v1alpha.Metadata
+		md.Decode(ent.Entity())
+
+		poolLabel, _ := md.Labels.Get("pool")
+		if poolLabel != poolID.String() {
+			continue
+		}
+
+		serviceLabel, _ := md.Labels.Get("service")
+		if serviceLabel != service {
+			continue
+		}
+
+		return true, nil
+	}
+
+	return false, nil
 }
