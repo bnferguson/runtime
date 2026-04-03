@@ -18,6 +18,7 @@ func TestAddonListAvailable(t *testing.T) {
 	r.RequireContains(t, "miren-postgresql")
 	r.RequireContains(t, "miren-mysql")
 	r.RequireContains(t, "miren-valkey")
+	r.RequireContains(t, "miren-rabbitmq")
 }
 
 func TestAddonVariants(t *testing.T) {
@@ -33,6 +34,9 @@ func TestAddonVariants(t *testing.T) {
 	r.RequireContains(t, "shared")
 
 	r = m.MustRun("addon", "variants", "miren-valkey")
+	r.RequireContains(t, "small")
+
+	r = m.MustRun("addon", "variants", "miren-rabbitmq")
 	r.RequireContains(t, "small")
 }
 

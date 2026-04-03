@@ -1,0 +1,10 @@
+{
+  "name": "bun-rabbitmq-example",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "bun run index.ts"
+  },
+  "dependencies": {
+    "amqplib": "^0.10.5"
+  }
+}

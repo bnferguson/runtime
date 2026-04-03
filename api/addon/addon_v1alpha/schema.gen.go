@@ -889,6 +889,177 @@ func (o *PostgresqlSharedData) InitSchema(sb *schema.SchemaBuilder) {
 }
 
 const (
+	RabbitmqDedicatedDataRabbitmqServerId = entity.Id("dev.miren.addon/rabbitmq_dedicated_data.rabbitmq_server")
+)
+
+type RabbitmqDedicatedData struct {
+	ID             entity.Id `json:"id"`
+	RabbitmqServer entity.Id `cbor:"rabbitmq_server,omitempty" json:"rabbitmq_server,omitempty"`
+}
+
+func (o *RabbitmqDedicatedData) Decode(e entity.AttrGetter) {
+	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
+	if a, ok := e.Get(RabbitmqDedicatedDataRabbitmqServerId); ok && a.Value.Kind() == entity.KindId {
+		o.RabbitmqServer = a.Value.Id()
+	}
+}
+
+func (o *RabbitmqDedicatedData) Is(e entity.AttrGetter) bool {
+	return entity.Is(e, KindRabbitmqDedicatedData)
+}
+
+func (o *RabbitmqDedicatedData) ShortKind() string {
+	return "rabbitmq_dedicated_data"
+}
+
+func (o *RabbitmqDedicatedData) Kind() entity.Id {
+	return KindRabbitmqDedicatedData
+}
+
+func (o *RabbitmqDedicatedData) EntityId() entity.Id {
+	return o.ID
+}
+
+func (o *RabbitmqDedicatedData) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.RabbitmqServer) {
+		attrs = append(attrs, entity.Ref(RabbitmqDedicatedDataRabbitmqServerId, o.RabbitmqServer))
+	}
+	attrs = append(attrs, entity.Ref(entity.EntityKind, KindRabbitmqDedicatedData))
+	return
+}
+
+func (o *RabbitmqDedicatedData) Empty() bool {
+	return entity.Empty(o.RabbitmqServer)
+}
+
+func (o *RabbitmqDedicatedData) InitSchema(sb *schema.SchemaBuilder) {
+	sb.Ref("rabbitmq_server", "dev.miren.addon/rabbitmq_dedicated_data.rabbitmq_server")
+}
+
+const (
+	RabbitmqServerAddonNameId        = entity.Id("dev.miren.addon/rabbitmq_server.addon_name")
+	RabbitmqServerAssociationCountId = entity.Id("dev.miren.addon/rabbitmq_server.association_count")
+	RabbitmqServerPasswordId         = entity.Id("dev.miren.addon/rabbitmq_server.password")
+	RabbitmqServerSandboxPoolId      = entity.Id("dev.miren.addon/rabbitmq_server.sandbox_pool")
+	RabbitmqServerServiceId          = entity.Id("dev.miren.addon/rabbitmq_server.service")
+	RabbitmqServerStatusId           = entity.Id("dev.miren.addon/rabbitmq_server.status")
+	RabbitmqServerVariantId          = entity.Id("dev.miren.addon/rabbitmq_server.variant")
+)
+
+type RabbitmqServer struct {
+	ID               entity.Id `json:"id"`
+	AddonName        string    `cbor:"addon_name,omitempty" json:"addon_name,omitempty"`
+	AssociationCount int64     `cbor:"association_count,omitempty" json:"association_count,omitempty"`
+	Password         string    `cbor:"password,omitempty" json:"password,omitempty"`
+	SandboxPool      entity.Id `cbor:"sandbox_pool,omitempty" json:"sandbox_pool,omitempty"`
+	Service          entity.Id `cbor:"service,omitempty" json:"service,omitempty"`
+	Status           string    `cbor:"status,omitempty" json:"status,omitempty"`
+	Variant          string    `cbor:"variant,omitempty" json:"variant,omitempty"`
+}
+
+func (o *RabbitmqServer) Decode(e entity.AttrGetter) {
+	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
+	if a, ok := e.Get(RabbitmqServerAddonNameId); ok && a.Value.Kind() == entity.KindString {
+		o.AddonName = a.Value.String()
+	}
+	if a, ok := e.Get(RabbitmqServerAssociationCountId); ok && a.Value.Kind() == entity.KindInt64 {
+		o.AssociationCount = a.Value.Int64()
+	}
+	if a, ok := e.Get(RabbitmqServerPasswordId); ok && a.Value.Kind() == entity.KindString {
+		o.Password = a.Value.String()
+	}
+	if a, ok := e.Get(RabbitmqServerSandboxPoolId); ok && a.Value.Kind() == entity.KindId {
+		o.SandboxPool = a.Value.Id()
+	}
+	if a, ok := e.Get(RabbitmqServerServiceId); ok && a.Value.Kind() == entity.KindId {
+		o.Service = a.Value.Id()
+	}
+	if a, ok := e.Get(RabbitmqServerStatusId); ok && a.Value.Kind() == entity.KindString {
+		o.Status = a.Value.String()
+	}
+	if a, ok := e.Get(RabbitmqServerVariantId); ok && a.Value.Kind() == entity.KindString {
+		o.Variant = a.Value.String()
+	}
+}
+
+func (o *RabbitmqServer) Is(e entity.AttrGetter) bool {
+	return entity.Is(e, KindRabbitmqServer)
+}
+
+func (o *RabbitmqServer) ShortKind() string {
+	return "rabbitmq_server"
+}
+
+func (o *RabbitmqServer) Kind() entity.Id {
+	return KindRabbitmqServer
+}
+
+func (o *RabbitmqServer) EntityId() entity.Id {
+	return o.ID
+}
+
+func (o *RabbitmqServer) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.AddonName) {
+		attrs = append(attrs, entity.String(RabbitmqServerAddonNameId, o.AddonName))
+	}
+	if !entity.Empty(o.AssociationCount) {
+		attrs = append(attrs, entity.Int64(RabbitmqServerAssociationCountId, o.AssociationCount))
+	}
+	if !entity.Empty(o.Password) {
+		attrs = append(attrs, entity.String(RabbitmqServerPasswordId, o.Password))
+	}
+	if !entity.Empty(o.SandboxPool) {
+		attrs = append(attrs, entity.Ref(RabbitmqServerSandboxPoolId, o.SandboxPool))
+	}
+	if !entity.Empty(o.Service) {
+		attrs = append(attrs, entity.Ref(RabbitmqServerServiceId, o.Service))
+	}
+	if !entity.Empty(o.Status) {
+		attrs = append(attrs, entity.String(RabbitmqServerStatusId, o.Status))
+	}
+	if !entity.Empty(o.Variant) {
+		attrs = append(attrs, entity.String(RabbitmqServerVariantId, o.Variant))
+	}
+	attrs = append(attrs, entity.Ref(entity.EntityKind, KindRabbitmqServer))
+	return
+}
+
+func (o *RabbitmqServer) Empty() bool {
+	if !entity.Empty(o.AddonName) {
+		return false
+	}
+	if !entity.Empty(o.AssociationCount) {
+		return false
+	}
+	if !entity.Empty(o.Password) {
+		return false
+	}
+	if !entity.Empty(o.SandboxPool) {
+		return false
+	}
+	if !entity.Empty(o.Service) {
+		return false
+	}
+	if !entity.Empty(o.Status) {
+		return false
+	}
+	if !entity.Empty(o.Variant) {
+		return false
+	}
+	return true
+}
+
+func (o *RabbitmqServer) InitSchema(sb *schema.SchemaBuilder) {
+	sb.String("addon_name", "dev.miren.addon/rabbitmq_server.addon_name", schema.Indexed)
+	sb.Int64("association_count", "dev.miren.addon/rabbitmq_server.association_count")
+	sb.String("password", "dev.miren.addon/rabbitmq_server.password")
+	sb.Ref("sandbox_pool", "dev.miren.addon/rabbitmq_server.sandbox_pool")
+	sb.Ref("service", "dev.miren.addon/rabbitmq_server.service")
+	sb.String("status", "dev.miren.addon/rabbitmq_server.status")
+	sb.String("variant", "dev.miren.addon/rabbitmq_server.variant")
+}
+
+const (
 	ValkeyDedicatedDataValkeyServerId = entity.Id("dev.miren.addon/valkey_dedicated_data.valkey_server")
 )
 
@@ -1068,6 +1239,8 @@ var (
 	KindPostgresServer          = entity.Id("dev.miren.addon/kind.postgres_server")
 	KindPostgresqlDedicatedData = entity.Id("dev.miren.addon/kind.postgresql_dedicated_data")
 	KindPostgresqlSharedData    = entity.Id("dev.miren.addon/kind.postgresql_shared_data")
+	KindRabbitmqDedicatedData   = entity.Id("dev.miren.addon/kind.rabbitmq_dedicated_data")
+	KindRabbitmqServer          = entity.Id("dev.miren.addon/kind.rabbitmq_server")
 	KindValkeyDedicatedData     = entity.Id("dev.miren.addon/kind.valkey_dedicated_data")
 	KindValkeyServer            = entity.Id("dev.miren.addon/kind.valkey_server")
 	Schema                      = entity.Id("dev.miren.addon/schema.v1alpha")
@@ -1083,8 +1256,10 @@ func init() {
 		(&PostgresServer{}).InitSchema(sb)
 		(&PostgresqlDedicatedData{}).InitSchema(sb)
 		(&PostgresqlSharedData{}).InitSchema(sb)
+		(&RabbitmqDedicatedData{}).InitSchema(sb)
+		(&RabbitmqServer{}).InitSchema(sb)
 		(&ValkeyDedicatedData{}).InitSchema(sb)
 		(&ValkeyServer{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.addon", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xa4\x98[\xae\xdb,\x10\xc7\xd7\xf1ݿޯ\xca\xd1i\xabJ]\x8dE\fqh\xb0\xf1\x01\xecƏm\xa5v!\xbd<t\x7f\xedsepb`\x00㜗\xc8\x191?\x03\xf3\x9fa\xf0Wܠ\x9apL\xfaMM\x05i6\bcސ\x03m\xb0\xfcq\xfcӳ_\x8dv\xf3\xf8];v\xfe\x00\xcb\xfd\xd7\x0e\xf3\x1a\xd1Ƈ\xefv\x940,?}\xd9R||\x10\x04l0١\x8e\xa9\xa2G\x82\xa2F\x9d&\xe9\x1a\xd5В\x9dT\x826\x95f݉\xb1d)h\xab(o4\xe7`\x1b|\xc6\xdd\b\x83ʖ\xa1\xa1\x18\xfd5\x849\x16\x9fr/La\xbcD\x8c\xaa\xa1\xa896\x98\xda5\xf9\x1c\xb0\xff\x86s\x9e\x05\xf6\xdf\xfem\xf4\xfa7\xec5m\x9b\xc45j\x86\x9f\xdau\x7f\xb6\x8d\fZ\xf2\xba\xe5\ri\xd4\xfcd\xc2\f\x90\x1b\x17\x99\x15\xf0\x8fzI\xf7\xfdɝ\x18\xd9q\xd2k\xfc?\x81Q\x882{\x95\xd5ɴ\xb0ȇ\xe9E\x9e\xc8Y\x8b\xfd\xa0\x17\xfb\x97?\xcb\t\xb19\x90A\xbf\xb3\x1c\x1f\xfc\xa8\xff\x13\xf3\xea\x11\xebL̉y\xb4<\xab\x9e\bIyS\xf5\u05c8\xb5{\xc4ZAk$\x86b\x9c\xedi\a\xc2\xf8\xf3\x02\xe3\xbaJ\xd2\xcf*J\x8e\"\xfae0IuI\xa9\ay\xc3\nIDO\xc4\x14\x8d\xbf\xfd\x81\xf6\x98\xac\x18|\xd6\xcb}\x94\xe2\x18Ӝ\xd6o\xad\xff~X6i\x90\x94\xbc\xa4h\x14kQ\xf2n\xaaY7\xd0<bK\xda(\xcd|\x9ad\n\xceU\xd1\")\xdfq\x81M\xbdpM\xfe\x14\x9f$q\x125xˏE\xcb93E̱\x8c\xb0-\xc5\xe1,uAD\xf4\xb44;V\x9d\xfe\xd8\xee\xa0\xfe\xb9\xee\n\xa9Nj\xef\xdd\xf4\xec/$\xfd~\xfbT\xa8\x02\xa7AR\x87\xccF\xc1z\xaf\xe5\xd8#v \x83\xab\xc7@\xdaX\x83V\b\xf2q\x12\xb4F\x91W\v\xa4\x8b$\xe9WA\x0f\xea\xc8q\x1fU\"\x10\xb6KY!E\xd0!x\xa4%-\x06\x0e\x1c\xc7\x7fY\x8c\v3\xb8\x95\x1ak\x87\x05'\xab\xe5\xd8r\xa9*A\xa4+\xc8\xff\xfc\xb1ް\x15\x92\x04\xd1\xf2PkDy\xbdȺH\x96ϗ\xb0+$\x05\x8e\x04\xc0Z\x12\x15H\x12@X\x96ՋEF\xd7\x12\xd1I\"\xdc3@\x04\xec>{q\x85\xb7\x12-\xf7hp;\xe6{Ba\xc5u\x12n\xb8O\xb7\a\xae\xb8@\x80\x95\x02\x98\xb1\x9b\xb6\xc9<&\xcbK\xc0\xbfmM\xb36>ؾ\xa0\xfeB_\"\x04\x17EM\xa4D\xd5\xd4\xf2\xbb&?r\xe0t\x80̴\xb6t{\xfcl\x99\xa2\x83\xbee\xc4\xee\x94\xe9l\\\xe8\x95\xfd\x17\xc0`\xcf/Xq;\b\xf7\xa6#$\xdd2\x83\x86c\xf6\x93\xa4\x91T\xd1\xde\xec>\x9d\xff\x8e\f\xbc\xe5\x9ci\x02\xa8\xa63\xe1\xe2\xb6{\xde\xcepw\x16ٳK\xd3\xf2\x06\xf0\"\x899u@{$\b.0R(\x96\x98`\xe0\x8aP\x82\xe4\x00\xb0\xcd\xf8\xb3E\x92\xcc\aK\xed\x9ar[p\x8biww\xe6\x18p,v\xfaƚo\x8b6V\xd9\xf3\xe4\xf6\xe7\x7f\xd9\x11\x01D(\x02+\"\x98`Z\"\xe5\x06%\xd2\n\xbbc\xb3\xe2\xf2>|>\x87x\x99ۘ\\\xbc\n\x81\xe1\xa6\xdb\rwp\x03b\xed\xd7\xc5;\xf02\v\xe8^\x02\x8c:]S\xce&tA6\xac\xcfN\x9f\x17L\xceh\xcbqq\x86\xbe\xca#\xaeO\xd3י`\xaf\x8d0_\xf9|c\xf2\xc0\x8d\x80o\x99\xb6}\x18\vˏ\x1f\xb5\xa0~A\xc6G\x1dVh\xf8M6t\xd5.'\xb7\xe5\xf8G\xf4%\xbe\xdfA\xee\xb9P\x85\xf9\x8c<}\xf9I|Lv\xef\xe4˟\x88\xbc[S\xc6%\x1e\xb4\xacY7\xad\xec\x13\x15\x8c\vT\xfe̳8\\6\xf3\x8f\x8dH\xc5YQwc\xf2_S\xb4\x12ZY\x9bF\xbf\x01\x00\x00\xff\xff\x01\x00\x00\xff\xff7\xd4l\x1e\xa3\x18\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.addon", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xa4\x99ٮ\xf34\x10ǟ\x83}\xdfQ?}\x80@<M\xe4\xc6nk\x9a\xc49\xb6\x9bsz\tH\xf0 ,W\xbc\x1e\\\xa3\xd8ic\xcfxMo\x8eґ\xe7\x17\xdb\xf3\x9f\xb1'\xe7O:\x90\x9e\tʦ]\xcf%\x1bv\x84R1\xb03\x1f\xa8\xfa\xe7\xe5M`\x7f5\xdb\xed\xe3\xdf\xc6\xf1\x02\a8\xee\xff\x1d\xa8\xe8\t\x1f \xfcpଣ\xea\xb7?\xf6\x9c\xbe|\x12\x04\xec(;\x90K\xa7\x9b\x89HN\x06}\x9b\xa4o\xd4ב\x1d\x94\x96|8\x1a\xd6\a1\x96j%\x1f5\x17\x83\xe1\x9c]\x03d|\x18ap5v\xe4\xda\xcc\xfe\x06\xd2y\x16H\xf9(L\xe9DK:\xae\xafM/\xa8\xc5\xf4\xbe\tr\xd0\xfe[\xce}\x16\x14\xbe\xfd\xaf\xd9\xebݰײm\x8a\xf6d\xb8\xfek\\Ow\xdb\xcc\xe0\xad\xe8G1\xb0A\xafO6\xcc\b\xb9\xf3\x91E\x01\xff\xd5,\xe9c8\xb9\x1b\xa38Nf\x8d\xef'0\x9a\xf0\xce]\xe5\xf1f\xca,\xf2\xd3\xf4\"o\xe4\xa2\xc5\xfeb\x16\xfb\x16\x9c\xe5\x82؝\xd9ռ\xb3\x9d\x1f`\xd4߉yM\xa4\xbbؘ3\xfb\xe8x\x1e'&\x15\x17\xc3qzM\xba\xf1D\xbaQ\xf2\x9e\xc8k3\xcf\xf6\xb6\x03a\xfc}\x81q]%\xe9w\x15%G1\xf32\x9c\xa4\xa6\xa4\xf4W\xf5\xd45\x8aɉ\xc9%\x1aoÁ\ue622\x18\xfcn\x96\xfbY\x8acMkZ\xff\xe4\xfc\x86a٥AJ\x89\x96\x93Y\xacM+.K\xcdz\xc2\xe6\x19\xdb\xf2A\x1b\xe6\x97I\xa6\x14B7#Q\xeaYHj\xeb\x85o\x82S\xfc\"\x89Sd\xa0{\xf1ҌBt\xb6\x88y\x96\x19\xb6\xe74\x9c\xa5>\x88ɉ\xb7vǎ\xb7\x1f\xae;\xaa\x7f\xbe\xbb&\xfa\xa2\x8c\xf7ay\x86\vI\xbf\xdf=\x15\x8e\x81\xd3 \xa9\xc3\xceE\xe1zo\xe48\x91\xee̮\xbe\x1e\x03i\xe3\f\xaa\x10\xe4\xe7IP\x8d\"_eH\x9b$\t\xab \x80zr<E\x95\x88\x84\xedS*\xa4\x88n\b\x80\x94\xd3b\xe0\xc0\xf1\xfc\xf3b\xcc\xcc\xe0!5\xf6\x1e\vO\xd6\xc8q\x14J\x1f%S\xbe ߃c\xc1\xb0\nI\xa2h\x01T\x8d(_gY\x9bd\xf9u\x0e[!)t$ VNT(I\x10!/\xabo\xb2\x8c\xcb\xc8\xe4E1\xe9\x9f\x012`\x87\xec\xec\n\x1f\x12\xad\x00\xb4\x88l%\xd9\xef\xb9\xee\x9f2\xb2\x05\xc3\x1e\x91-@=$[\xc4\xda$[T\xec!\xb6\xb0\x9e\"\xf9C\xce#\xf2G\xacj\xf9#B^\xfe\xd9Y<&Q@\xc3S^[\xd9Ɖ\xe1\"\xd2p+\xe9\x0e\xac\xe8q\xd1J\x11\xcc\xda\xed\xcd\xde>&O\xc0\x80\xff8\xda~b~p}\xd1\x15\x01\xfb2)\x85lz\xa6\x149.]\xa9o\x82\x91C\x9a\xc6\xcct\xfcM\a\xf7U\x9eb\x82\xbe\xef\x98\xdb\xcc\xf1\u0558i\xe7\xe0\vp\xb0\xd7\x17T4\xb0\xe1\xf6i\x86\xa4\xbb:t'^\xfd\x14\x1b\x14\xd7|\xb2\xbb\xcfן3\x83\xee\x85\xe8\f\x01UΕ\xb0\xb93\\\xb73\xdc@D\xf6lkZ>!^$1\x97K\xfa\x89HF\x1bJ4\x89%&\x1aX\x11J\x94\x1c\b\xb6\x9b\xff\xec\x89b\xeb!\xd2\xfb\xa6\xd2.\xd1a\xba\r\x88-՞\xc5M\xdfX\x7f\xe8\xd0\xe6\x8b\xc0}r\xa7\xfb\xaf\xe2\x88 \"\x16\x81\x13\x11\xca(o\x89\xf6\x83\x12\xe9\xd6\xfc\xb1Eq\xf99|\x16\x87x\x85ۘ\\\xbc\x0e\x81\xf1\xa6\xbb=ap\x03b\x1d\xc2\xe6\x1d\xf8\xb6\b\xe8\xf7\xa9V\x9d\xbe\xa9d\x13.A6\xae\xcf^+\x12L\xce\xe8\xadxs\x86~WF\xacO\xd3\xef\v\xc1\xe0\xa6k?DCc\xf2\xc0\x8d\x80\x1fL\xdb)\x8c\xc5\xf7D\xff&\x1eTo\xfc&\xb6Y\xbf?\x14\"a\x8f`\xf7\x17\x1aKT\xfc\x1cy\x03.\xc8P\xc7\xc1=A50\xeaP\xb1+?\x16C\xabt\x97ܗ\x977\xa2/\x81~gu\x12R7\xf6\x7f?\xcb\xe7\xda\xc4\x7f\x80\xfc\x0fi\xf9\xef\xba\xe0SG\xc1\x97\xb7\xc2>\x13\x8cBW\xff\xa2\xee\xb4\xf8f\x82\xc6\x05N\xd0\xc2;M\xf8\xf8)?~#\x95\xbb\xe2\xfc\x8a\x95\x91\x9a\xe2\x1fͼ\xaaZ\x94\xd0im\n\xff\x0f\x00\x00\xff\xff\x01\x00\x00\xff\xff/X`~\xd4\x1c\x00\x00"))
 }

@@ -52,6 +52,7 @@ import (
 	"miren.dev/runtime/pkg/addon"
 	"miren.dev/runtime/pkg/addon/mysql"
 	"miren.dev/runtime/pkg/addon/postgresql"
+	"miren.dev/runtime/pkg/addon/rabbitmq"
 	"miren.dev/runtime/pkg/addon/valkey"
 	"miren.dev/runtime/pkg/caauth"
 	"miren.dev/runtime/pkg/cloudauth"
@@ -868,6 +869,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	addonRegistry.Register(postgresql.AddonName, postgresql.NewProvider(addonFw), postgresql.Definition())
 	addonRegistry.Register(mysql.AddonName, mysql.NewProvider(addonFw), mysql.Definition())
 	addonRegistry.Register(valkey.AddonName, valkey.NewProvider(addonFw), valkey.Definition())
+	addonRegistry.Register(rabbitmq.AddonName, rabbitmq.NewProvider(addonFw), rabbitmq.Definition())
 
 	if err := addonRegistry.EnsureEntities(ctx, ec); err != nil {
 		c.Log.Error("failed to ensure addon entities", "error", err)

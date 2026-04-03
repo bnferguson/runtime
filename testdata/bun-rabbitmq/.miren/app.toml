@@ -1,0 +1,7 @@
+name = "bun-rabbitmq"
+
+[services.web]
+command = "bun run index.ts"
+
+[addons.miren-rabbitmq]
+variant = "small"
