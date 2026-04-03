@@ -50,7 +50,7 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 	}
 
 	// Create contexts
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	// Start coordinator in background

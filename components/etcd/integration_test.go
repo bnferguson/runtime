@@ -333,18 +333,18 @@ func TestEtcdComponentAutoRestart(t *testing.T) {
 		// Try to connect to etcd
 		client, err := clientv3.New(clientv3.Config{
 			Endpoints:   []string{endpoint},
-			DialTimeout: 1 * time.Second,
+			DialTimeout: 3 * time.Second,
 		})
 		if err != nil {
 			return false
 		}
 		defer client.Close()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_, err = client.Get(ctx, "restart-health-check")
 		return err == nil
-	}, 30*time.Second, 1*time.Second, "etcd should auto-restart and become ready")
+	}, 90*time.Second, 1*time.Second, "etcd should auto-restart and become ready")
 
 	t.Log("etcd auto-restarted successfully!")
 

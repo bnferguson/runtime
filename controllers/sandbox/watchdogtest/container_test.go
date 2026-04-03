@@ -50,6 +50,9 @@ func TestContainerWatchdog(t *testing.T) {
 		nodeE.SetAttrs(entity.New(entity.DBId, nodeId, node.Encode).Attrs())
 		_, err := eac.Put(context.Background(), &nodeE)
 		require.NoError(t, err)
+		// Confirm the node is readable before subtests create sandbox entities that reference it.
+		_, err = eac.Get(context.Background(), nodeId.String())
+		require.NoError(t, err)
 	}
 
 	t.Run("removes orphaned containers", func(t *testing.T) {

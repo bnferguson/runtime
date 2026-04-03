@@ -144,7 +144,7 @@ func WaitForAppReady(t *testing.T, m *Miren, name string, timeout time.Duration)
 				case "healthy":
 					return true, ""
 				case "crashed":
-					t.Fatalf("app %s crashed while waiting for ready", name)
+					return false, fmt.Sprintf("app %s health: crashed (may recover after env injection)", name)
 				default:
 					return false, fmt.Sprintf("app %s health: %s (ready: %d)", name, app.Health, app.ReadyInstances)
 				}

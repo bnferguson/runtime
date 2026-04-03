@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
@@ -532,8 +533,9 @@ func TestPeriodicReleasesDiskLeases(t *testing.T) {
 		).Attrs())
 		r.NoError(err)
 
-		// Run periodic cleanup with zero time horizon (everything eligible)
-		err = controller.Periodic(ctx, 0)
+		// Use a negative time horizon so the cutoff is slightly in the future,
+		// avoiding a race where updatedAt ≈ now causes Before(cutoff) to fail.
+		err = controller.Periodic(ctx, -time.Millisecond)
 		r.NoError(err)
 
 		// Verify the disk lease was released
@@ -579,7 +581,9 @@ func TestPeriodicReleasesDiskLeases(t *testing.T) {
 		).Attrs())
 		r.NoError(err)
 
-		err = controller.Periodic(ctx, 0)
+		// Use a negative time horizon so the cutoff is slightly in the future,
+		// avoiding a race where updatedAt ≈ now causes Before(cutoff) to fail.
+		err = controller.Periodic(ctx, -time.Millisecond)
 		r.NoError(err)
 
 		resp, err := es.EAC.List(ctx, entity.Ref(entity.EntityKind, compute.KindSandbox))

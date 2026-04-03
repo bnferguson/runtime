@@ -815,9 +815,9 @@ func TestSandbox(t *testing.T) {
 		_, err = sbc.EAC.Put(ctx, &rpcE)
 		r.NoError(err)
 
-		// Run the periodic cleanup with a 2 second time horizon
-		// This tests that sandboxes older than the horizon are cleaned up
-		err = sbc.Periodic(ctx, 0)
+		// Use a negative time horizon so the cutoff is slightly in the future,
+		// avoiding a race where updatedAt ≈ now causes Before(cutoff) to fail.
+		err = sbc.Periodic(ctx, -time.Millisecond)
 		r.NoError(err)
 
 		// Check that the old dead sandbox was deleted
