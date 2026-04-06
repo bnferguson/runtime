@@ -516,3 +516,46 @@ func TestEntity_Update_MultipleTimesDoesNotDuplicate(t *testing.T) {
 	// Verify final revision value is correct
 	r.Equal(int64(5), ent.GetRevision())
 }
+
+func TestEntity_Update_MultiValuedAttrs(t *testing.T) {
+	r := require.New(t)
+
+	multiID := Id("test/multi")
+	singleID := Id("test/single")
+
+	// Start with an entity that has two attrs sharing the same ID (simulating many:true)
+	// plus a single-valued attr.
+	ent := New(
+		Ref(DBId, "test/entity"),
+		String(multiID, "old-a"),
+		String(multiID, "old-b"),
+		String(singleID, "original"),
+	)
+
+	// Sanity check: both multi-valued attrs are present
+	r.Len(ent.GetAll(multiID), 2)
+
+	// Update with three new multi-valued attrs and a new single-valued attr
+	err := ent.Update([]Attr{
+		String(multiID, "new-x"),
+		String(multiID, "new-y"),
+		String(multiID, "new-z"),
+		String(singleID, "updated"),
+	})
+	r.NoError(err)
+
+	// Multi-valued: should have exactly the 3 new values, not the 2 old ones
+	multiAttrs := ent.GetAll(multiID)
+	r.Len(multiAttrs, 3, "expected all new multi-valued attrs, got %d", len(multiAttrs))
+
+	vals := make([]string, len(multiAttrs))
+	for i, a := range multiAttrs {
+		vals[i] = a.Value.String()
+	}
+	r.ElementsMatch([]string{"new-x", "new-y", "new-z"}, vals)
+
+	// Single-valued: should be replaced as before
+	single, ok := ent.Get(singleID)
+	r.True(ok)
+	r.Equal("updated", single.Value.String())
+}
