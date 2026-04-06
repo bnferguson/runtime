@@ -37,8 +37,13 @@ var (
 // etcdState tracks the configuration state of the etcd container.
 // This is persisted to detect when configuration changes require container recreation.
 type etcdState struct {
-	TLSEnabled bool `json:"tls_enabled"`
+	TLSEnabled    bool `json:"tls_enabled"`
+	ConfigVersion int  `json:"config_version"`
 }
+
+// currentConfigVersion should be bumped whenever the container spec changes
+// (new env vars, different args, etc.) so that upgrades recreate the container.
+const currentConfigVersion = 1
 
 // TLSConfig holds TLS certificate paths for etcd mTLS.
 // When configured, etcd will require client certificate authentication.
@@ -148,40 +153,41 @@ func (e *EtcdComponent) Start(ctx context.Context, config EtcdConfig) error {
 		return fmt.Errorf("failed to create data directory: %w", err)
 	}
 
-	// Check if TLS configuration has changed since the container was created.
-	// If so, we must recreate the container since TLS settings are baked into the args.
+	// Check if the container config has changed since last start. If so, we
+	// must recreate the container since env vars and args are baked into the spec.
 	requestedTLSEnabled := config.TLS != nil
 	prevState := e.loadState()
 
-	// Determine if we need to recreate the container due to TLS config mismatch.
-	// If there's no state file but there IS an existing container, we must also
-	// recreate because we can't verify the container's TLS config matches.
-	var tlsConfigMismatch bool
+	var configChanged bool
 	if prevState == nil {
-		// No state file - if TLS is requested, we must recreate to ensure TLS is enabled
-		tlsConfigMismatch = requestedTLSEnabled
+		// No state file. If TLS is requested we must recreate to be sure it's
+		// enabled; if not, the existing container is probably fine.
+		configChanged = requestedTLSEnabled
 	} else {
-		// Have state file - check if TLS setting changed
-		tlsConfigMismatch = prevState.TLSEnabled != requestedTLSEnabled
+		configChanged = prevState.TLSEnabled != requestedTLSEnabled ||
+			prevState.ConfigVersion != currentConfigVersion
 	}
 
 	// Check if container already exists
 	existingContainer, err := e.CC.LoadContainer(ctx, etcdContainerName)
 	if err == nil {
-		if tlsConfigMismatch {
-			previousTLS := false
-			if prevState != nil {
-				previousTLS = prevState.TLSEnabled
-			}
-			e.Log.Info("etcd TLS configuration changed, recreating container",
-				"previous_tls", previousTLS,
+		if configChanged {
+			e.Log.Info("etcd container config changed, recreating container",
+				"previous_tls", prevState != nil && prevState.TLSEnabled,
 				"requested_tls", requestedTLSEnabled,
-				"had_state_file", prevState != nil)
+				"previous_config_version", func() int {
+					if prevState != nil {
+						return prevState.ConfigVersion
+					}
+					return 0
+				}(),
+				"current_config_version", currentConfigVersion)
 			e.CleanupExistingContainer(ctx, existingContainer)
 		} else {
 			e.Log.Info("found existing etcd container, attempting restart", "container_id", existingContainer.ID())
 			err = e.restartExistingContainer(ctx, existingContainer, config)
 			if err == nil {
+				e.StartMaintenanceLoop(ctx)
 				return nil
 			}
 			// If restart failed (e.g., port mismatch), try deleting the container and creating fresh
@@ -251,8 +257,11 @@ func (e *EtcdComponent) Start(ctx context.Context, config EtcdConfig) error {
 	// Start monitoring for unexpected exits
 	e.StartExitMonitor(ctx)
 
+	// Start periodic maintenance (health logging + auto-defrag)
+	e.StartMaintenanceLoop(ctx)
+
 	// Persist the TLS state so we can detect config changes on restart
-	if err := e.saveState(&etcdState{TLSEnabled: e.tlsEnabled}); err != nil {
+	if err := e.saveState(&etcdState{TLSEnabled: e.tlsEnabled, ConfigVersion: currentConfigVersion}); err != nil {
 		e.Log.Warn("failed to save etcd state", "error", err)
 	}
 
@@ -417,6 +426,7 @@ func (e *EtcdComponent) createContainer(ctx context.Context, image containerd.Im
 		oci.WithEnv([]string{
 			"ETCD_AUTO_COMPACTION_MODE=periodic",
 			"ETCD_AUTO_COMPACTION_RETENTION=1h",
+			"ETCD_EXPERIMENTAL_BACKEND_BBOLT_FREELIST_TYPE=map",
 		}),
 		oci.WithMounts(mounts),
 	}
