@@ -155,3 +155,22 @@ kinds:
   rabbitmq_dedicated_data:
     rabbitmq_server:
       type: ref
+
+  memcache_server:
+    addon_name:
+      type: string
+      indexed: true
+    variant:
+      type: string
+    sandbox_pool:
+      type: ref
+    service:
+      type: ref
+    status:
+      type: string
+    association_count:
+      type: int
+
+  memcache_dedicated_data:
+    memcache_server:
+      type: ref

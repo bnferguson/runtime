@@ -50,6 +50,7 @@ import (
 	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/addon"
+	"miren.dev/runtime/pkg/addon/memcache"
 	"miren.dev/runtime/pkg/addon/mysql"
 	"miren.dev/runtime/pkg/addon/postgresql"
 	"miren.dev/runtime/pkg/addon/rabbitmq"
@@ -870,6 +871,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	addonRegistry.Register(mysql.AddonName, mysql.NewProvider(addonFw), mysql.Definition())
 	addonRegistry.Register(valkey.AddonName, valkey.NewProvider(addonFw), valkey.Definition())
 	addonRegistry.Register(rabbitmq.AddonName, rabbitmq.NewProvider(addonFw), rabbitmq.Definition())
+	addonRegistry.Register(memcache.AddonName, memcache.NewProvider(addonFw), memcache.Definition())
 
 	if err := addonRegistry.EnsureEntities(ctx, ec); err != nil {
 		c.Log.Error("failed to ensure addon entities", "error", err)

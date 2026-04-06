@@ -10,7 +10,7 @@ import (
 	"miren.dev/runtime/blackbox/harness"
 )
 
-func TestRabbitmqAddonCreateListDestroy(t *testing.T) {
+func TestMemcacheAddonCreateListDestroy(t *testing.T) {
 	c := harness.NewCluster(t)
 	m := harness.NewMiren(t, c)
 
@@ -18,33 +18,32 @@ func TestRabbitmqAddonCreateListDestroy(t *testing.T) {
 		Testdata: "go-server",
 	})
 
-	// Create a small (dedicated) RabbitMQ addon on the app
-	m.MustRun("addon", "create", "miren-rabbitmq:small", "-a", name)
+	// Create a small (dedicated) Memcache addon on the app
+	m.MustRun("addon", "create", "miren-memcache:small", "-a", name)
 
 	// Wait for addon to appear and provisioning to complete.
-	harness.WaitForAddonReady(t, m, name, "miren-rabbitmq", 30*time.Second)
-	harness.WaitForEnvVar(t, m, name, "RABBITMQ_URL", 5*time.Minute)
+	harness.WaitForAddonReady(t, m, name, "miren-memcache", 30*time.Second)
+	harness.WaitForEnvVar(t, m, name, "MEMCACHE_URL", 5*time.Minute)
 
-	// Verify RabbitMQ-specific env vars are injected
-	harness.WaitForEnvVar(t, m, name, "RABBITMQ_HOST", 30*time.Second)
-	harness.WaitForEnvVar(t, m, name, "RABBITMQ_PORT", 30*time.Second)
-	harness.WaitForEnvVar(t, m, name, "RABBITMQ_USER", 30*time.Second)
-	harness.WaitForEnvVar(t, m, name, "RABBITMQ_PASSWORD", 30*time.Second)
-	harness.WaitForEnvVar(t, m, name, "RABBITMQ_VHOST", 30*time.Second)
+	// Verify Memcache-specific env vars are injected
+	harness.WaitForEnvVar(t, m, name, "MEMCACHE_HOST", 30*time.Second)
+	harness.WaitForEnvVar(t, m, name, "MEMCACHE_PORT", 30*time.Second)
 
 	// Destroy the addon and verify the association is removed.
-	// NOTE: WaitForEnvVarRemoved blocked by MIR-974.
-	m.MustRun("addon", "destroy", "miren-rabbitmq", "-a", name, "--force")
-	harness.WaitForAddonRemoved(t, m, name, "miren-rabbitmq", 5*time.Minute)
+	// NOTE: WaitForEnvVarRemoved is blocked by MIR-974 (Entity.Set
+	// overwrites many:true component attrs, so deprovision only removes
+	// 1 of N env vars). Add it back once that's fixed.
+	m.MustRun("addon", "destroy", "miren-memcache", "-a", name, "--force")
+	harness.WaitForAddonRemoved(t, m, name, "miren-memcache", 5*time.Minute)
 }
 
-func TestRabbitmqAddonDeployWithAppToml(t *testing.T) {
+func TestMemcacheAddonDeployWithAppToml(t *testing.T) {
 	c := harness.NewCluster(t)
 	m := harness.NewMiren(t, c)
 
-	name := harness.UniqueAppName(t, "bun-rabbitmq")
+	name := harness.UniqueAppName(t, "bun-memcache")
 
-	hostDir := filepath.Join(c.TestdataDir, "bun-rabbitmq")
+	hostDir := filepath.Join(c.TestdataDir, "bun-memcache")
 	containerDir := m.ContainerPath(hostDir)
 
 	t.Cleanup(func() {
@@ -52,22 +51,22 @@ func TestRabbitmqAddonDeployWithAppToml(t *testing.T) {
 		m.Run("app", "delete", name, "-f")
 	})
 
-	// Deploy without waiting for healthy — the app depends on RABBITMQ_HOST
+	// Deploy without waiting for healthy — the app depends on MEMCACHE_HOST
 	// which is only injected after addon provisioning completes.
 	m.MustRun("deploy", "-a", name, "-d", containerDir, "-f")
 
 	// Wait for addon provisioning to complete.
-	harness.WaitForAddonReady(t, m, name, "miren-rabbitmq", 30*time.Second)
-	harness.WaitForEnvVar(t, m, name, "RABBITMQ_HOST", 5*time.Minute)
+	harness.WaitForAddonReady(t, m, name, "miren-memcache", 30*time.Second)
+	harness.WaitForEnvVar(t, m, name, "MEMCACHE_HOST", 5*time.Minute)
 
 	// Now wait for the app to become healthy
 	harness.WaitForAppReady(t, m, name, 3*time.Minute)
 
 	// Verify addon is listed
 	r := m.MustRun("addon", "list", "-a", name, "--format", "json")
-	r.RequireContains(t, "miren-rabbitmq")
+	r.RequireContains(t, "miren-memcache")
 
-	// Set a route and verify the app responds with RabbitMQ connectivity
+	// Set a route and verify the app responds with memcache connectivity
 	host := name + ".test.local"
 	m.MustRun("route", "set", host, name)
 
@@ -82,7 +81,7 @@ func TestRabbitmqAddonDeployWithAppToml(t *testing.T) {
 		return true, ""
 	})
 
-	// Verify the root endpoint works (exercises RabbitMQ publish/consume)
+	// Verify the root endpoint works (exercises memcache writes/reads)
 	code, body, err := harness.HTTPGet(m, host, "/")
 	if err != nil {
 		t.Fatalf("HTTP GET / failed: %v", err)

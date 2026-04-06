@@ -19,6 +19,7 @@ func TestAddonListAvailable(t *testing.T) {
 	r.RequireContains(t, "miren-mysql")
 	r.RequireContains(t, "miren-valkey")
 	r.RequireContains(t, "miren-rabbitmq")
+	r.RequireContains(t, "miren-memcache")
 }
 
 func TestAddonVariants(t *testing.T) {
@@ -37,6 +38,9 @@ func TestAddonVariants(t *testing.T) {
 	r.RequireContains(t, "small")
 
 	r = m.MustRun("addon", "variants", "miren-rabbitmq")
+	r.RequireContains(t, "small")
+
+	r = m.MustRun("addon", "variants", "miren-memcache")
 	r.RequireContains(t, "small")
 }
 
@@ -58,12 +62,10 @@ func TestAddonCreateListDestroy(t *testing.T) {
 	harness.WaitForAddonReady(t, m, name, "miren-postgresql", 30*time.Second)
 	harness.WaitForEnvVar(t, m, name, "DATABASE_URL", 5*time.Minute)
 
-	// Destroy the addon. The CLI sets the association status to "deprovisioning"
-	// and the addon controller asynchronously tears down infrastructure and
-	// removes env vars. We verify the command was accepted; full async cleanup
-	// (env var removal, entity deletion) depends on the deprovision saga
-	// completing, which requires infrastructure teardown.
+	// Destroy the addon and verify the association is removed.
+	// NOTE: WaitForEnvVarRemoved blocked by MIR-974.
 	m.MustRun("addon", "destroy", "miren-postgresql", "-a", name, "--force")
+	harness.WaitForAddonRemoved(t, m, name, "miren-postgresql", 5*time.Minute)
 }
 
 func TestAddonDeployWithAppToml(t *testing.T) {
@@ -198,8 +200,10 @@ func TestMysqlAddonCreateListDestroy(t *testing.T) {
 	harness.WaitForEnvVar(t, m, name, "MYSQL_HOST", 30*time.Second)
 	harness.WaitForEnvVar(t, m, name, "MYSQL_DATABASE", 30*time.Second)
 
-	// Destroy the addon
+	// Destroy the addon and verify the association is removed.
+	// NOTE: WaitForEnvVarRemoved blocked by MIR-974.
 	m.MustRun("addon", "destroy", "miren-mysql", "-a", name, "--force")
+	harness.WaitForAddonRemoved(t, m, name, "miren-mysql", 5*time.Minute)
 }
 
 func TestValkeyAddonCreateListDestroy(t *testing.T) {
@@ -224,8 +228,10 @@ func TestValkeyAddonCreateListDestroy(t *testing.T) {
 	// Verify REDIS_* aliases are also injected
 	harness.WaitForEnvVar(t, m, name, "REDIS_URL", 30*time.Second)
 
-	// Destroy the addon
+	// Destroy the addon and verify the association is removed.
+	// NOTE: WaitForEnvVarRemoved blocked by MIR-974.
 	m.MustRun("addon", "destroy", "miren-valkey", "-a", name, "--force")
+	harness.WaitForAddonRemoved(t, m, name, "miren-valkey", 5*time.Minute)
 }
 
 func TestAddonUnknownAddon(t *testing.T) {

@@ -1,4 +1,4 @@
-package valkey
+package memcache
 
 import (
 	"context"
@@ -7,7 +7,6 @@ import (
 
 	"miren.dev/runtime/api/addon/addon_v1alpha"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
-	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/pkg/addon"
 	"miren.dev/runtime/pkg/addon/dbsaga"
 	"miren.dev/runtime/pkg/entity"
@@ -17,15 +16,15 @@ import (
 )
 
 const (
-	valkeyPort       = 6379
+	memcachePort     = 11211
 	poolReadyTimeout = 5 * time.Minute
 )
 
-func valkeyContainerPorts() []compute_v1alpha.SandboxSpecContainerPort {
+func memcacheContainerPorts() []compute_v1alpha.SandboxSpecContainerPort {
 	return []compute_v1alpha.SandboxSpecContainerPort{
 		{
-			Name:     "valkey",
-			Port:     valkeyPort,
+			Name:     "memcache",
+			Port:     memcachePort,
 			Protocol: compute_v1alpha.SandboxSpecContainerPortTCP,
 		},
 	}
@@ -37,58 +36,54 @@ type resultCapture struct {
 
 // --- Dedicated Provisioning Saga Actions ---
 
-type GenerateCredentialsIn struct {
+type GenerateNamesIn struct {
 	AppName string
 }
 
-type GenerateCredentialsOut struct {
-	Password    string `saga:"password"`
+type GenerateNamesOut struct {
 	ServiceName string `saga:"servicename"`
 	ServerName  string `saga:"servername"`
 }
 
-func GenerateCredentials(ctx context.Context, in GenerateCredentialsIn) (GenerateCredentialsOut, error) {
-	return GenerateCredentialsOut{
-		Password:    idgen.Gen("pw"),
-		ServiceName: fmt.Sprintf("%s-valkey", in.AppName),
-		ServerName:  fmt.Sprintf("vk-%s-%s", in.AppName, idgen.Gen("s")),
+func GenerateNames(ctx context.Context, in GenerateNamesIn) (GenerateNamesOut, error) {
+	return GenerateNamesOut{
+		ServiceName: fmt.Sprintf("%s-memcache", in.AppName),
+		ServerName:  fmt.Sprintf("mc-%s-%s", in.AppName, idgen.Gen("s")),
 	}, nil
 }
 
-func UndoGenerateCredentials(ctx context.Context, in GenerateCredentialsIn, out GenerateCredentialsOut) error {
+func UndoGenerateNames(ctx context.Context, in GenerateNamesIn, out GenerateNamesOut) error {
 	return nil
 }
 
-type CreateValkeyServerIn struct {
+type CreateMemcacheServerIn struct {
 	ServerName  string `saga:"servername"`
 	VariantName string `saga:"variantname"`
-	Password    string `saga:"password"`
 }
 
-type CreateValkeyServerOut struct {
+type CreateMemcacheServerOut struct {
 	ServerID entity.Id `saga:"serverid"`
 }
 
-func CreateValkeyServer(ctx context.Context, in CreateValkeyServerIn) (CreateValkeyServerOut, error) {
+func CreateMemcacheServer(ctx context.Context, in CreateMemcacheServerIn) (CreateMemcacheServerOut, error) {
 	fw := saga.Get[*addon.ProviderFramework](ctx)
 
-	server := &addon_v1alpha.ValkeyServer{
+	server := &addon_v1alpha.MemcacheServer{
 		AddonName:        AddonName,
 		Variant:          in.VariantName,
 		Status:           "provisioning",
 		AssociationCount: 1,
-		Password:         in.Password,
 	}
 
 	serverID, err := fw.EC.Create(ctx, in.ServerName, server)
 	if err != nil {
-		return CreateValkeyServerOut{}, fmt.Errorf("creating valkey server entity: %w", err)
+		return CreateMemcacheServerOut{}, fmt.Errorf("creating memcache server entity: %w", err)
 	}
 
-	return CreateValkeyServerOut{ServerID: serverID}, nil
+	return CreateMemcacheServerOut{ServerID: serverID}, nil
 }
 
-func UndoCreateValkeyServer(ctx context.Context, in CreateValkeyServerIn, out CreateValkeyServerOut) error {
+func UndoCreateMemcacheServer(ctx context.Context, in CreateMemcacheServerIn, out CreateMemcacheServerOut) error {
 	fw := saga.Get[*addon.ProviderFramework](ctx)
 	return fw.EC.Delete(ctx, out.ServerID)
 }
@@ -96,7 +91,6 @@ func UndoCreateValkeyServer(ctx context.Context, in CreateValkeyServerIn, out Cr
 type CreateDedicatedPoolIn struct {
 	ServerName    string            `saga:"servername"`
 	AppName       string            `saga:"appname"`
-	Password      string            `saga:"password"`
 	VariantConfig map[string]string `saga:"variantconfig"`
 }
 
@@ -113,33 +107,19 @@ func CreateDedicatedPool(ctx context.Context, in CreateDedicatedPoolIn) (CreateD
 		"server", in.ServerName,
 	)
 
-	sizeGb := addon.ParseStorageGb(in.VariantConfig[ConfigStorage])
-	diskName := fmt.Sprintf("vk-%s-data", in.ServerName)
-	mountPath := "/data"
+	memory := in.VariantConfig[ConfigMemory]
+	if memory == "" {
+		return CreateDedicatedPoolOut{}, fmt.Errorf("missing required config: %s", ConfigMemory)
+	}
 
 	poolID, err := fw.CreateSandboxPool(ctx, addon.CreateSandboxPoolSpec{
 		Name:             in.ServerName,
 		Image:            DefaultImage,
-		Command:          "valkey-server --save 60 1",
-		Env:              []string{fmt.Sprintf("VALKEY_EXTRA_FLAGS=--requirepass %s", in.Password)},
-		Ports:            valkeyContainerPorts(),
+		Command:          fmt.Sprintf("memcached -m %s", memory),
+		Ports:            memcacheContainerPorts(),
 		DesiredInstances: 1,
 		Labels:           labels,
-		SandboxPrefix:    fmt.Sprintf("%s-vk", in.AppName),
-		Mounts: []compute_v1alpha.SandboxSpecContainerMount{
-			{Source: "vkdata", Destination: mountPath},
-		},
-		Volumes: []compute_v1alpha.SandboxSpecVolume{
-			{
-				Name:         "vkdata",
-				Provider:     "miren",
-				DiskName:     diskName,
-				MountPath:    mountPath,
-				SizeGb:       sizeGb,
-				Filesystem:   "ext4",
-				LeaseTimeout: "5m",
-			},
-		},
+		SandboxPrefix:    fmt.Sprintf("%s-mc", in.AppName),
 	})
 	if err != nil {
 		return CreateDedicatedPoolOut{}, fmt.Errorf("creating sandbox pool: %w", err)
@@ -150,11 +130,7 @@ func CreateDedicatedPool(ctx context.Context, in CreateDedicatedPoolIn) (CreateD
 
 func UndoCreateDedicatedPool(ctx context.Context, in CreateDedicatedPoolIn, out CreateDedicatedPoolOut) error {
 	fw := saga.Get[*addon.ProviderFramework](ctx)
-	if err := fw.DeleteSandboxPool(ctx, out.PoolID); err != nil {
-		return err
-	}
-	diskName := fmt.Sprintf("vk-%s-data", in.ServerName)
-	return fw.DeleteDiskByName(ctx, diskName)
+	return fw.DeleteSandboxPool(ctx, out.PoolID)
 }
 
 type UpdateDedicatedServerIn struct {
@@ -163,7 +139,6 @@ type UpdateDedicatedServerIn struct {
 	ServiceID   entity.Id `saga:"serviceid"`
 	ServiceHost string    `saga:"servicehost"`
 	VariantName string    `saga:"variantname"`
-	Password    string    `saga:"password"`
 }
 
 type UpdateDedicatedServerOut struct {
@@ -173,19 +148,18 @@ type UpdateDedicatedServerOut struct {
 func UpdateDedicatedServer(ctx context.Context, in UpdateDedicatedServerIn) (UpdateDedicatedServerOut, error) {
 	fw := saga.Get[*addon.ProviderFramework](ctx)
 
-	server := &addon_v1alpha.ValkeyServer{
+	server := &addon_v1alpha.MemcacheServer{
 		AddonName:        AddonName,
 		Variant:          in.VariantName,
 		Status:           "active",
 		AssociationCount: 1,
-		Password:         in.Password,
 		SandboxPool:      in.PoolID,
 		Service:          in.ServiceID,
 	}
 	server.ID = in.ServerID
 
 	if err := fw.EC.Update(ctx, server); err != nil {
-		return UpdateDedicatedServerOut{}, fmt.Errorf("updating valkey server: %w", err)
+		return UpdateDedicatedServerOut{}, fmt.Errorf("updating memcache server: %w", err)
 	}
 
 	return UpdateDedicatedServerOut{Updated: true}, nil
@@ -197,7 +171,6 @@ func UndoUpdateDedicatedServer(ctx context.Context, in UpdateDedicatedServerIn, 
 
 type BuildDedicatedResultIn struct {
 	ServiceHost string    `saga:"servicehost"`
-	Password    string    `saga:"password"`
 	ServerID    entity.Id `saga:"serverid"`
 }
 
@@ -208,10 +181,10 @@ type BuildDedicatedResultOut struct {
 func BuildDedicatedResult(ctx context.Context, in BuildDedicatedResultIn) (BuildDedicatedResultOut, error) {
 	rc := saga.Get[*resultCapture](ctx)
 
-	envVars := buildEnvVars(in.ServiceHost, valkeyPort, in.Password)
+	envVars := buildEnvVars(in.ServiceHost, memcachePort)
 
-	dedicatedData := &addon_v1alpha.ValkeyDedicatedData{
-		ValkeyServer: in.ServerID,
+	dedicatedData := &addon_v1alpha.MemcacheDedicatedData{
+		MemcacheServer: in.ServerID,
 	}
 
 	rc.Result = &addon.ProvisionResult{
@@ -227,13 +200,13 @@ func UndoBuildDedicatedResult(ctx context.Context, in BuildDedicatedResultIn, ou
 }
 
 func RegisterDedicatedSaga(registry *saga.Registry, fw *addon.ProviderFramework, rc *resultCapture) error {
-	cfg := &dbsaga.AddonConfig{AddonName: AddonName, Port: valkeyPort, ReadyTimeout: poolReadyTimeout}
-	return saga.Define("provision-dedicated-valkey").
+	cfg := &dbsaga.AddonConfig{AddonName: AddonName, Port: memcachePort, ReadyTimeout: poolReadyTimeout}
+	return saga.Define("provision-dedicated-memcache").
 		Using(fw).
 		Using(rc).
 		Using(cfg).
-		Action(GenerateCredentials).Undo(UndoGenerateCredentials).
-		Action(CreateValkeyServer).Undo(UndoCreateValkeyServer).
+		Action(GenerateNames).Undo(UndoGenerateNames).
+		Action(CreateMemcacheServer).Undo(UndoCreateMemcacheServer).
 		Action(CreateDedicatedPool).Undo(UndoCreateDedicatedPool).
 		Action(dbsaga.WaitForDedicatedPool).Undo(dbsaga.UndoWaitForDedicatedPool).
 		Action(dbsaga.CreateDedicatedService).Undo(dbsaga.UndoCreateDedicatedService).
@@ -254,16 +227,16 @@ type DecodeDedicatedAttrsOut struct {
 }
 
 func DecodeDedicatedAttrs(ctx context.Context, in DecodeDedicatedAttrsIn) (DecodeDedicatedAttrsOut, error) {
-	var data addon_v1alpha.ValkeyDedicatedData
+	var data addon_v1alpha.MemcacheDedicatedData
 	if in.AssocEntity != nil {
 		data.Decode(in.AssocEntity)
 	}
 
-	if data.ValkeyServer == "" {
-		return DecodeDedicatedAttrsOut{}, fmt.Errorf("no valkey server ref found")
+	if data.MemcacheServer == "" {
+		return DecodeDedicatedAttrsOut{}, fmt.Errorf("no memcache server ref found")
 	}
 
-	return DecodeDedicatedAttrsOut{DedicatedServerID: data.ValkeyServer}, nil
+	return DecodeDedicatedAttrsOut{DedicatedServerID: data.MemcacheServer}, nil
 }
 
 func UndoDecodeDedicatedAttrs(ctx context.Context, in DecodeDedicatedAttrsIn, out DecodeDedicatedAttrsOut) error {
@@ -275,28 +248,21 @@ type LookupDedicatedServerIn struct {
 }
 
 type LookupDedicatedServerOut struct {
-	DedicatedServiceID  entity.Id `saga:"dedicatedserviceid"`
-	DedicatedPoolID     entity.Id `saga:"dedicatedpoolid"`
-	DedicatedServerName string    `saga:"dedicatedservername"`
+	DedicatedServiceID entity.Id `saga:"dedicatedserviceid"`
+	DedicatedPoolID    entity.Id `saga:"dedicatedpoolid"`
 }
 
 func LookupDedicatedServer(ctx context.Context, in LookupDedicatedServerIn) (LookupDedicatedServerOut, error) {
 	fw := saga.Get[*addon.ProviderFramework](ctx)
 
-	var server addon_v1alpha.ValkeyServer
+	var server addon_v1alpha.MemcacheServer
 	if err := fw.EC.GetById(ctx, in.DedicatedServerID, &server); err != nil {
-		return LookupDedicatedServerOut{}, fmt.Errorf("looking up valkey server: %w", err)
-	}
-
-	var meta core_v1alpha.Metadata
-	if err := fw.EC.GetById(ctx, in.DedicatedServerID, &meta); err != nil {
-		return LookupDedicatedServerOut{}, fmt.Errorf("looking up server metadata: %w", err)
+		return LookupDedicatedServerOut{}, fmt.Errorf("looking up memcache server: %w", err)
 	}
 
 	return LookupDedicatedServerOut{
-		DedicatedServiceID:  server.Service,
-		DedicatedPoolID:     server.SandboxPool,
-		DedicatedServerName: meta.Name,
+		DedicatedServiceID: server.Service,
+		DedicatedPoolID:    server.SandboxPool,
 	}, nil
 }
 
@@ -305,8 +271,7 @@ func UndoLookupDedicatedServer(ctx context.Context, in LookupDedicatedServerIn, 
 }
 
 type DeleteDedicatedServerEntityIn struct {
-	DedicatedServerID   entity.Id `saga:"dedicatedserverid"`
-	DedicatedServerName string    `saga:"dedicatedservername"`
+	DedicatedServerID entity.Id `saga:"dedicatedserverid"`
 
 	ServiceCleanedUp saga.Edge `saga:"dedicated_service_deleted"`
 	PoolCleanedUp    saga.Edge `saga:"dedicated_pool_deleted"`
@@ -319,15 +284,8 @@ type DeleteDedicatedServerEntityOut struct {
 func DeleteDedicatedServerEntity(ctx context.Context, in DeleteDedicatedServerEntityIn) (DeleteDedicatedServerEntityOut, error) {
 	fw := saga.Get[*addon.ProviderFramework](ctx)
 
-	if in.DedicatedServerName != "" {
-		diskName := fmt.Sprintf("vk-%s-data", in.DedicatedServerName)
-		if err := fw.DeleteDiskByName(ctx, diskName); err != nil {
-			return DeleteDedicatedServerEntityOut{}, fmt.Errorf("deleting dedicated data disk %s: %w", diskName, err)
-		}
-	}
-
 	if err := fw.EC.Delete(ctx, in.DedicatedServerID); err != nil {
-		return DeleteDedicatedServerEntityOut{}, fmt.Errorf("deleting valkey server: %w", err)
+		return DeleteDedicatedServerEntityOut{}, fmt.Errorf("deleting memcache server: %w", err)
 	}
 
 	return DeleteDedicatedServerEntityOut{ServerDeleted: true}, nil
@@ -338,7 +296,7 @@ func UndoDeleteDedicatedServerEntity(ctx context.Context, in DeleteDedicatedServ
 }
 
 func RegisterDeprovisionDedicatedSaga(registry *saga.Registry, fw *addon.ProviderFramework) error {
-	return saga.Define("deprovision-dedicated-valkey").
+	return saga.Define("deprovision-dedicated-memcache").
 		Using(fw).
 		Action(DecodeDedicatedAttrs).Undo(UndoDecodeDedicatedAttrs).
 		Action(LookupDedicatedServer).Undo(UndoLookupDedicatedServer).
@@ -349,7 +307,7 @@ func RegisterDeprovisionDedicatedSaga(registry *saga.Registry, fw *addon.Provide
 }
 
 func (p *Provider) provisionDedicated(ctx context.Context, app addon.App, variant addon.Variant) (*addon.ProvisionResult, error) {
-	p.Log.Info("provisioning dedicated Valkey",
+	p.Log.Info("provisioning dedicated Memcached",
 		"app", app.Name,
 		"variant", variant.Name)
 
@@ -363,7 +321,7 @@ func (p *Provider) provisionDedicated(ctx context.Context, app addon.App, varian
 	storage := p.Fw.Storage
 	executor := saga.NewExecutor(storage, saga.WithRegistry(registry), saga.WithLogger(p.Log))
 
-	err := executor.Start("provision-dedicated-valkey").
+	err := executor.Start("provision-dedicated-memcache").
 		Input("appname", app.Name).
 		Input("variantname", variant.Name).
 		Input("variantconfig", variant.Config).
@@ -376,12 +334,12 @@ func (p *Provider) provisionDedicated(ctx context.Context, app addon.App, varian
 		return nil, fmt.Errorf("saga completed but no result was captured")
 	}
 
-	p.Log.Info("dedicated Valkey provisioned", "app", app.Name)
+	p.Log.Info("dedicated Memcached provisioned", "app", app.Name)
 	return rc.Result, nil
 }
 
 func (p *Provider) deprovisionDedicated(ctx context.Context, assoc addon.AddonAssociation) error {
-	p.Log.Info("deprovisioning dedicated Valkey", "assoc", assoc.ID)
+	p.Log.Info("deprovisioning dedicated Memcached", "assoc", assoc.ID)
 
 	registry := saga.NewRegistry()
 
@@ -392,13 +350,13 @@ func (p *Provider) deprovisionDedicated(ctx context.Context, assoc addon.AddonAs
 	storage := p.Fw.Storage
 	executor := saga.NewExecutor(storage, saga.WithRegistry(registry), saga.WithLogger(p.Log))
 
-	err := executor.Start("deprovision-dedicated-valkey").
+	err := executor.Start("deprovision-dedicated-memcache").
 		Input("assocentity", assoc.Entity).
 		Execute(ctx)
 	if err != nil {
 		return err
 	}
 
-	p.Log.Info("dedicated Valkey deprovisioned", "assoc", assoc.ID)
+	p.Log.Info("dedicated Memcached deprovisioned", "assoc", assoc.ID)
 	return nil
 }

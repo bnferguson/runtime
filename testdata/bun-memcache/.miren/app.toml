@@ -1,0 +1,7 @@
+name = "bun-memcache"
+
+[services.web]
+command = "bun run index.ts"
+
+[addons.miren-memcache]
+variant = "small"
