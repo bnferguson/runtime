@@ -5,15 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"os"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
-	clientv3 "go.etcd.io/etcd/client/v3"
 	"miren.dev/runtime/pkg/cond"
+	"miren.dev/runtime/pkg/etcdtest"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/etcdreg"
 	"miren.dev/runtime/pkg/rpc/example"
@@ -483,21 +482,11 @@ func noTestActor(t *testing.T) {
 		r := require.New(t)
 		ctx := t.Context()
 
-		_, err := net.LookupHost("etcd")
-		if err != nil {
-			t.Skip("etcd not available")
-		}
+		ec, _ := etcdtest.TestEtcdClient(t)
 
 		s := example.AdaptMeter(&exampleMeter{temp: 42})
 
 		ss, err := rpc.NewState(ctx, rpc.WithSkipVerify, rpc.WithLogLevel(slog.LevelDebug))
-		r.NoError(err)
-
-		ec, err := clientv3.New(clientv3.Config{
-			Endpoints:       []string{"etcd:2379"},
-			DialTimeout:     2 * time.Second,
-			MaxUnaryRetries: 2,
-		})
 		r.NoError(err)
 
 		log := slog.New(slogfmt.NewTextHandler(os.Stdout, &slog.HandlerOptions{

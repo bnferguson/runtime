@@ -14,14 +14,14 @@ import (
 func TestMigrateEntityStore(t *testing.T) {
 	r := require.New(t)
 
-	client := setupTestEtcd(t)
+	client, basePrefix := setupTestEtcd(t)
 	ctx := context.Background()
 
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelDebug,
 	}))
 
-	prefix := "/test-migrate-entities/"
+	prefix := basePrefix + "/migrate-entities/"
 
 	// Create some entities in old format
 	oldEnt1 := OldEntity{
@@ -162,14 +162,14 @@ func TestMigrateEntityStore(t *testing.T) {
 func TestMigrateEntityWithMissingFields(t *testing.T) {
 	r := require.New(t)
 
-	client := setupTestEtcd(t)
+	client, basePrefix := setupTestEtcd(t)
 	ctx := context.Background()
 
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelDebug,
 	}))
 
-	prefix := "/test-migrate-partial/"
+	prefix := basePrefix + "/migrate-partial/"
 
 	// Create entity with only some old-style fields
 	oldEnt := OldEntity{
@@ -215,14 +215,14 @@ func TestMigrateEntityWithMissingFields(t *testing.T) {
 func TestMigrateEntityPreservesExistingAttributes(t *testing.T) {
 	r := require.New(t)
 
-	client := setupTestEtcd(t)
+	client, basePrefix := setupTestEtcd(t)
 	ctx := context.Background()
 
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelDebug,
 	}))
 
-	prefix := "/test-migrate-preserve/"
+	prefix := basePrefix + "/migrate-preserve/"
 
 	// Create entity that already has db/id in attributes (shouldn't happen but test it)
 	oldEnt := OldEntity{

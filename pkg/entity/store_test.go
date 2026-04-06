@@ -13,33 +13,24 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"miren.dev/runtime/pkg/etcdtest"
 )
 
-func setupTestEtcd(t *testing.T) *clientv3.Client {
-	client, err := clientv3.New(clientv3.Config{
-		Endpoints:       []string{"etcd:2379"},
-		DialTimeout:     2 * time.Second,
-		MaxUnaryRetries: 2,
-	})
-	require.NoError(t, err)
+func setupTestEtcd(t *testing.T) (*clientv3.Client, string) {
+	return etcdtest.TestEtcdClient(t)
+}
 
-	// Clean up any existing test data
-	ctx := context.Background()
-
-	_, err = client.Delete(ctx, "/test-entities/", clientv3.WithPrefix())
-	require.NoError(t, err)
-
-	t.Cleanup(func() {
-		client.Close()
-	})
-
-	return client
+// setupTestEtcdStore is a convenience wrapper that returns an EtcdStore
+// backed by a fresh etcd prefix.
+func setupTestEtcdStore(t *testing.T) (*EtcdStore, *clientv3.Client) {
+	client, prefix := setupTestEtcd(t)
+	store, err := NewEtcdStore(t.Context(), slog.Default(), client, prefix)
+	require.New(t).NoError(err)
+	return store, client
 }
 
 func TestEtcdStore_CreateEntity(t *testing.T) {
-	client := setupTestEtcd(t)
-	store, err := NewEtcdStore(t.Context(), slog.Default(), client, "/test-entities")
-	require.NoError(t, err)
+	store, _ := setupTestEtcdStore(t)
 
 	e, err := store.CreateEntity(t.Context(), New(
 		Ident, "test/addresses",
@@ -192,9 +183,7 @@ func TestEtcdStore_CreateEntity(t *testing.T) {
 }
 
 func TestEtcdStore_AttrPred(t *testing.T) {
-	client := setupTestEtcd(t)
-	store, err := NewEtcdStore(t.Context(), slog.Default(), client, "/test-entities")
-	require.NoError(t, err)
+	store, _ := setupTestEtcdStore(t)
 
 	e, err := store.CreateEntity(t.Context(), New(
 		Ident, "test/address",
@@ -263,9 +252,7 @@ func TestEtcdStore_AttrPred(t *testing.T) {
 }
 
 func TestEtcdStore_GetEntity(t *testing.T) {
-	client := setupTestEtcd(t)
-	store, err := NewEtcdStore(t.Context(), slog.Default(), client, "/test-entities")
-	require.NoError(t, err)
+	store, _ := setupTestEtcdStore(t)
 
 	// Create a test entity
 	created, err := store.CreateEntity(t.Context(), New(
@@ -309,9 +296,7 @@ func TestEtcdStore_GetEntity(t *testing.T) {
 }
 
 func TestEtcdStore_UpdateEntity(t *testing.T) {
-	client := setupTestEtcd(t)
-	store, err := NewEtcdStore(t.Context(), slog.Default(), client, "/test-entities")
-	require.NoError(t, err)
+	store, _ := setupTestEtcdStore(t)
 
 	// Create a test entity
 	entity, err := store.CreateEntity(t.Context(), New(
@@ -512,9 +497,7 @@ func TestEtcdStore_UpdateEntity(t *testing.T) {
 }
 
 func TestEtcdStore_GetEntities_Batching(t *testing.T) {
-	client := setupTestEtcd(t)
-	store, err := NewEtcdStore(t.Context(), slog.Default(), client, "/test-entities")
-	require.NoError(t, err)
+	store, _ := setupTestEtcdStore(t)
 
 	// Create test entities - more than maxEntitiesPerBatch to test batching
 	numEntities := 150 // This will require 3 batches (64 + 64 + 22)
@@ -624,9 +607,7 @@ func TestEtcdStore_GetEntities_Batching(t *testing.T) {
 }
 
 func TestEtcdStore_DeleteEntity(t *testing.T) {
-	client := setupTestEtcd(t)
-	store, err := NewEtcdStore(t.Context(), slog.Default(), client, "/test-entities")
-	require.NoError(t, err)
+	store, _ := setupTestEtcdStore(t)
 
 	// Create a test entity
 	entity, err := store.CreateEntity(t.Context(), New(
@@ -670,9 +651,7 @@ func TestEtcdStore_DeleteEntity(t *testing.T) {
 }
 
 func TestEtcdStore_ListIndex(t *testing.T) {
-	client := setupTestEtcd(t)
-	store, err := NewEtcdStore(t.Context(), slog.Default(), client, "/test-entities")
-	require.NoError(t, err)
+	store, _ := setupTestEtcdStore(t)
 
 	k, err := store.CreateEntity(t.Context(), New(
 		Any(Ident, KeywordValue("test/kind")),
@@ -759,9 +738,7 @@ func TestEtcdStore_ListIndex(t *testing.T) {
 
 func TestWatchIndex(t *testing.T) {
 	ctx := context.Background()
-	client := setupTestEtcd(t)
-	store, err := NewEtcdStore(t.Context(), slog.Default(), client, "/test-entities")
-	require.NoError(t, err)
+	store, _ := setupTestEtcdStore(t)
 
 	// Create a attr for an indexed attribute
 	attr, err := store.CreateEntity(ctx, New(
@@ -870,9 +847,7 @@ func TestWatchIndex(t *testing.T) {
 
 func TestWatchEntity_DeleteIncludesEntity(t *testing.T) {
 	ctx := context.Background()
-	client := setupTestEtcd(t)
-	store, err := NewEtcdStore(t.Context(), slog.Default(), client, "/test-entities")
-	require.NoError(t, err)
+	store, _ := setupTestEtcdStore(t)
 
 	// Create an entity
 	created, err := store.CreateEntity(ctx, New(
@@ -905,9 +880,7 @@ func TestWatchEntity_DeleteIncludesEntity(t *testing.T) {
 
 func TestWatchIndex_DBID(t *testing.T) {
 	ctx := context.Background()
-	client := setupTestEtcd(t)
-	store, err := NewEtcdStore(t.Context(), slog.Default(), client, "/test-entities")
-	require.NoError(t, err)
+	store, _ := setupTestEtcdStore(t)
 
 	// Create an entity with the indexed attribute
 	entity1, err := store.CreateEntity(ctx, New(
@@ -949,9 +922,7 @@ func TestWatchIndex_DBID(t *testing.T) {
 }
 
 func TestEtcdStore_UpdateIndexedAttribute_Bug(t *testing.T) {
-	client := setupTestEtcd(t)
-	store, err := NewEtcdStore(t.Context(), slog.Default(), client, "/test-entities")
-	require.NoError(t, err)
+	store, _ := setupTestEtcdStore(t)
 
 	// Create an index attribute that won't change
 	kindAttr, err := store.CreateEntity(t.Context(), New(
@@ -1029,9 +1000,7 @@ func TestEtcdStore_UpdateIndexedAttribute_Bug(t *testing.T) {
 }
 
 func TestEtcdStore_GetEntities(t *testing.T) {
-	client := setupTestEtcd(t)
-	store, err := NewEtcdStore(t.Context(), slog.Default(), client, "/test-entities")
-	require.NoError(t, err)
+	store, _ := setupTestEtcdStore(t)
 
 	// Create multiple test entities
 	entity1, err := store.CreateEntity(t.Context(), New(
@@ -1275,12 +1244,10 @@ func TestEtcdStore_GetEntities(t *testing.T) {
 }
 
 func TestEtcdStore_ReplaceEntity(t *testing.T) {
-	client := setupTestEtcd(t)
-	store, err := NewEtcdStore(t.Context(), slog.Default(), client, "/test-entities")
-	require.NoError(t, err)
+	store, _ := setupTestEtcdStore(t)
 
 	// Create schema for multi-valued attribute
-	_, err = store.CreateEntity(t.Context(), New(
+	_, err := store.CreateEntity(t.Context(), New(
 		Ident, "test/tags",
 		Doc, "Tags for testing",
 		Cardinality, CardinalityMany,
@@ -1414,12 +1381,10 @@ func TestEtcdStore_ReplaceEntity(t *testing.T) {
 }
 
 func TestEtcdStore_PatchEntity(t *testing.T) {
-	client := setupTestEtcd(t)
-	store, err := NewEtcdStore(t.Context(), slog.Default(), client, "/test-entities")
-	require.NoError(t, err)
+	store, _ := setupTestEtcdStore(t)
 
 	// Create schema for multi-valued attribute
-	_, err = store.CreateEntity(t.Context(), New(
+	_, err := store.CreateEntity(t.Context(), New(
 		Ident, "test/labels",
 		Doc, "Labels for testing",
 		Cardinality, CardinalityMany,
@@ -1567,9 +1532,7 @@ func TestEtcdStore_PatchEntity(t *testing.T) {
 }
 
 func TestEtcdStore_EnsureEntity(t *testing.T) {
-	client := setupTestEtcd(t)
-	store, err := NewEtcdStore(t.Context(), slog.Default(), client, "/test-entities")
-	require.NoError(t, err)
+	store, _ := setupTestEtcdStore(t)
 
 	t.Run("ensure creates entity when not exists", func(t *testing.T) {
 		entity, created, err := store.EnsureEntity(t.Context(), New(
@@ -1677,9 +1640,7 @@ func TestEtcdStore_EnsureEntity(t *testing.T) {
 }
 
 func TestEtcdStore_NestedComponentFieldIndexing(t *testing.T) {
-	client := setupTestEtcd(t)
-	store, err := NewEtcdStore(t.Context(), slog.Default(), client, "/test-entities")
-	require.NoError(t, err)
+	store, _ := setupTestEtcdStore(t)
 
 	t.Run("top-level indexed fields work", func(t *testing.T) {
 		// Create version entities first
@@ -1905,14 +1866,9 @@ func TestEtcdStore_NestedComponentFieldIndexing(t *testing.T) {
 //   - When the bug exists, this test shows 2 keys remain in etcd after deletion
 //   - When fixed, only 1 key remains (the non-deleted entity)
 func TestEtcdStore_DeleteEntity_IndexCleanup_DirectQuery(t *testing.T) {
-	client := setupTestEtcd(t)
+	client, etcdPrefix := setupTestEtcd(t)
 
-	// Clean up test data from previous runs
-	ctx := context.Background()
-	_, err := client.Delete(ctx, "/test-entities-debug/", clientv3.WithPrefix())
-	require.NoError(t, err)
-
-	store, err := NewEtcdStore(t.Context(), slog.Default(), client, "/test-entities-debug")
+	store, err := NewEtcdStore(t.Context(), slog.Default(), client, etcdPrefix)
 	require.NoError(t, err)
 
 	// Create schema for a component with a nested indexed field
@@ -2153,11 +2109,7 @@ func TestExtractEntityId(t *testing.T) {
 }
 
 func TestCreateEntity_UniqueValueCollisionRetry(t *testing.T) {
-	client := setupTestEtcd(t)
-
-	prefix := "/test-unique-retry"
-	_, err := client.Delete(t.Context(), prefix, clientv3.WithPrefix())
-	require.NoError(t, err)
+	client, prefix := setupTestEtcd(t)
 
 	store, err := NewEtcdStore(t.Context(), slog.Default(), client, prefix)
 	require.NoError(t, err)
@@ -2205,11 +2157,7 @@ func TestCreateEntity_UniqueValueCollisionRetry(t *testing.T) {
 }
 
 func TestCreateEntity_AllocatesShortId(t *testing.T) {
-	client := setupTestEtcd(t)
-
-	prefix := "/test-shortid-alloc"
-	_, err := client.Delete(t.Context(), prefix, clientv3.WithPrefix())
-	require.NoError(t, err)
+	client, prefix := setupTestEtcd(t)
 
 	store, err := NewEtcdStore(t.Context(), slog.Default(), client, prefix)
 	require.NoError(t, err)
@@ -2239,11 +2187,7 @@ func TestCreateEntity_AllocatesShortId(t *testing.T) {
 }
 
 func TestCreateEntity_NoShortIdForSystemEntities(t *testing.T) {
-	client := setupTestEtcd(t)
-
-	prefix := "/test-shortid-system"
-	_, err := client.Delete(t.Context(), prefix, clientv3.WithPrefix())
-	require.NoError(t, err)
+	client, prefix := setupTestEtcd(t)
 
 	store, err := NewEtcdStore(t.Context(), slog.Default(), client, prefix)
 	require.NoError(t, err)
@@ -2258,11 +2202,7 @@ func TestCreateEntity_NoShortIdForSystemEntities(t *testing.T) {
 }
 
 func TestDeleteEntity_CleansUpUniqueKey(t *testing.T) {
-	client := setupTestEtcd(t)
-
-	prefix := "/test-shortid-delete"
-	_, err := client.Delete(t.Context(), prefix, clientv3.WithPrefix())
-	require.NoError(t, err)
+	client, prefix := setupTestEtcd(t)
 
 	store, err := NewEtcdStore(t.Context(), slog.Default(), client, prefix)
 	require.NoError(t, err)
@@ -2298,11 +2238,7 @@ func TestDeleteEntity_CleansUpUniqueKey(t *testing.T) {
 }
 
 func TestGetOneIndex(t *testing.T) {
-	client := setupTestEtcd(t)
-
-	prefix := "/test-getoneindex"
-	_, err := client.Delete(t.Context(), prefix, clientv3.WithPrefix())
-	require.NoError(t, err)
+	client, prefix := setupTestEtcd(t)
 
 	store, err := NewEtcdStore(t.Context(), slog.Default(), client, prefix)
 	require.NoError(t, err)
@@ -2337,11 +2273,7 @@ func TestGetOneIndex(t *testing.T) {
 // attributes that sort after "db/entity.updated" (like "db/type") to be pushed
 // past the slice's length on the overwrite path.
 func TestCreateEntity_OverwritePreservesAllAttrs(t *testing.T) {
-	client := setupTestEtcd(t)
-
-	prefix := "/test-overwrite-attrs"
-	_, err := client.Delete(t.Context(), prefix, clientv3.WithPrefix())
-	require.NoError(t, err)
+	client, prefix := setupTestEtcd(t)
 
 	store, err := NewEtcdStore(t.Context(), slog.Default(), client, prefix)
 	require.NoError(t, err)
