@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"strings"
 	"time"
 
@@ -183,16 +184,37 @@ func (s *RegistrationServer) Join(ctx context.Context, req *runner_v1alpha.Runne
 		return nil
 	}
 
-	// Now that invite is claimed, issue the certificate
+	// Now that invite is claimed, issue the certificate with proper SANs
+	// so the coordinator can connect to the runner's API by IP.
 	runnerIDPrefix := runnerID
 	if len(runnerIDPrefix) > 8 {
 		runnerIDPrefix = runnerIDPrefix[:8]
 	}
 	certName := fmt.Sprintf("runner-%s", runnerIDPrefix)
+
+	ips := []net.IP{
+		net.ParseIP("127.0.0.1"),
+		net.ParseIP("::1"),
+	}
+	dnsNames := []string{"localhost"}
+
+	if listenAddr != "" {
+		host, _, err := net.SplitHostPort(listenAddr)
+		if err == nil && host != "" {
+			if ip := net.ParseIP(host); ip != nil {
+				ips = append(ips, ip)
+			} else if host != "localhost" {
+				dnsNames = append(dnsNames, host)
+			}
+		}
+	}
+
 	cc, err := s.Authority.IssueCertificate(caauth.Options{
 		CommonName:   certName,
 		Organization: "miren",
 		ValidFor:     365 * 24 * time.Hour,
+		IPs:          ips,
+		DNSNames:     dnsNames,
 	})
 	if err != nil {
 		s.Log.Error("Failed to issue certificate", "error", err, "runner_id", runnerID)

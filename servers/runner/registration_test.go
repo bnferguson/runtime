@@ -2,6 +2,9 @@ package runner
 
 import (
 	"context"
+	"crypto/x509"
+	"encoding/pem"
+	"net"
 	"testing"
 
 	"miren.dev/runtime/api/runner/runner_v1alpha"
@@ -88,5 +91,45 @@ func TestJoinCreatesNodeEntity(t *testing.T) {
 
 	if joinResult.CoordinatorAddr() != "127.0.0.1:8443" {
 		t.Errorf("Join returned coordinator addr %q, want %q", joinResult.CoordinatorAddr(), "127.0.0.1:8443")
+	}
+
+	// Verify the issued certificate includes proper IP SANs so the
+	// coordinator can connect to the runner by IP without TLS errors.
+	block, _ := pem.Decode(joinResult.CertPem())
+	if block == nil {
+		t.Fatal("failed to decode cert PEM")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatalf("failed to parse certificate: %v", err)
+	}
+
+	wantIPs := []net.IP{
+		net.ParseIP("127.0.0.1"),
+		net.ParseIP("::1"),
+		net.ParseIP("10.0.0.1"),
+	}
+	for _, wantIP := range wantIPs {
+		found := false
+		for _, gotIP := range cert.IPAddresses {
+			if gotIP.Equal(wantIP) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("certificate missing IP SAN %s, got %v", wantIP, cert.IPAddresses)
+		}
+	}
+
+	foundLocalhost := false
+	for _, name := range cert.DNSNames {
+		if name == "localhost" {
+			foundLocalhost = true
+			break
+		}
+	}
+	if !foundLocalhost {
+		t.Errorf("certificate missing DNS SAN 'localhost', got %v", cert.DNSNames)
 	}
 }
