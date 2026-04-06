@@ -187,6 +187,7 @@ func (e *EtcdComponent) Start(ctx context.Context, config EtcdConfig) error {
 			e.Log.Info("found existing etcd container, attempting restart", "container_id", existingContainer.ID())
 			err = e.restartExistingContainer(ctx, existingContainer, config)
 			if err == nil {
+				e.StartMaintenanceLoop(ctx)
 				return nil
 			}
 			// If restart failed (e.g., port mismatch), try deleting the container and creating fresh

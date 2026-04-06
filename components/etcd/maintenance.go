@@ -115,7 +115,7 @@ func (e *EtcdComponent) runMaintenanceCheck(ctx context.Context, client *clientv
 	attrs := []any{
 		"db_size_bytes", dbSize,
 		"db_size_in_use_bytes", dbSizeInUse,
-		"bloat_ratio", fmt.Sprintf("%.2f", bloatRatio),
+		"bloat_ratio", bloatRatio,
 	}
 
 	switch {
