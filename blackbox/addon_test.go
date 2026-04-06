@@ -62,10 +62,10 @@ func TestAddonCreateListDestroy(t *testing.T) {
 	harness.WaitForAddonReady(t, m, name, "miren-postgresql", 30*time.Second)
 	harness.WaitForEnvVar(t, m, name, "DATABASE_URL", 5*time.Minute)
 
-	// Destroy the addon and verify the association is removed.
-	// NOTE: WaitForEnvVarRemoved blocked by MIR-974.
+	// Destroy the addon and verify full async cleanup completes.
 	m.MustRun("addon", "destroy", "miren-postgresql", "-a", name, "--force")
 	harness.WaitForAddonRemoved(t, m, name, "miren-postgresql", 5*time.Minute)
+	harness.WaitForEnvVarRemoved(t, m, name, "DATABASE_URL", 5*time.Minute)
 }
 
 func TestAddonDeployWithAppToml(t *testing.T) {
@@ -200,10 +200,10 @@ func TestMysqlAddonCreateListDestroy(t *testing.T) {
 	harness.WaitForEnvVar(t, m, name, "MYSQL_HOST", 30*time.Second)
 	harness.WaitForEnvVar(t, m, name, "MYSQL_DATABASE", 30*time.Second)
 
-	// Destroy the addon and verify the association is removed.
-	// NOTE: WaitForEnvVarRemoved blocked by MIR-974.
+	// Destroy the addon and verify full async cleanup completes.
 	m.MustRun("addon", "destroy", "miren-mysql", "-a", name, "--force")
 	harness.WaitForAddonRemoved(t, m, name, "miren-mysql", 5*time.Minute)
+	harness.WaitForEnvVarRemoved(t, m, name, "DATABASE_URL", 5*time.Minute)
 }
 
 func TestValkeyAddonCreateListDestroy(t *testing.T) {
@@ -228,10 +228,10 @@ func TestValkeyAddonCreateListDestroy(t *testing.T) {
 	// Verify REDIS_* aliases are also injected
 	harness.WaitForEnvVar(t, m, name, "REDIS_URL", 30*time.Second)
 
-	// Destroy the addon and verify the association is removed.
-	// NOTE: WaitForEnvVarRemoved blocked by MIR-974.
+	// Destroy the addon and verify full async cleanup completes.
 	m.MustRun("addon", "destroy", "miren-valkey", "-a", name, "--force")
 	harness.WaitForAddonRemoved(t, m, name, "miren-valkey", 5*time.Minute)
+	harness.WaitForEnvVarRemoved(t, m, name, "VALKEY_URL", 5*time.Minute)
 }
 
 func TestAddonUnknownAddon(t *testing.T) {

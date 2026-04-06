@@ -29,12 +29,10 @@ func TestMemcacheAddonCreateListDestroy(t *testing.T) {
 	harness.WaitForEnvVar(t, m, name, "MEMCACHE_HOST", 30*time.Second)
 	harness.WaitForEnvVar(t, m, name, "MEMCACHE_PORT", 30*time.Second)
 
-	// Destroy the addon and verify the association is removed.
-	// NOTE: WaitForEnvVarRemoved is blocked by MIR-974 (Entity.Set
-	// overwrites many:true component attrs, so deprovision only removes
-	// 1 of N env vars). Add it back once that's fixed.
+	// Destroy the addon and verify full async cleanup completes.
 	m.MustRun("addon", "destroy", "miren-memcache", "-a", name, "--force")
 	harness.WaitForAddonRemoved(t, m, name, "miren-memcache", 5*time.Minute)
+	harness.WaitForEnvVarRemoved(t, m, name, "MEMCACHE_URL", 5*time.Minute)
 }
 
 func TestMemcacheAddonDeployWithAppToml(t *testing.T) {
