@@ -292,9 +292,18 @@ func (e *Entity) Merge(other *Entity) error {
 }
 
 func (e *Entity) Update(attrs []Attr) error {
+	// Collect the set of attr IDs being updated, then remove all existing
+	// attrs for those IDs. This ensures multi-valued (many:true) component
+	// attrs are fully replaced rather than having only the first overwritten.
+	seen := make(map[Id]bool, len(attrs))
 	for _, attr := range attrs {
-		e.Set(attr)
+		if !seen[attr.ID] {
+			seen[attr.ID] = true
+			e.Remove(attr.ID)
+		}
 	}
+
+	e.attrs = append(e.attrs, attrs...)
 	return e.Fixup()
 }
 

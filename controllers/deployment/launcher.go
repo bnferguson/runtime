@@ -1011,16 +1011,6 @@ func (l *Launcher) updatePool(ctx context.Context, poolWithEntity *PoolWithEntit
 	// Build new attributes from the pool
 	newAttrs := pool.Encode()
 
-	// Filter out ReferencedByVersions from encoded attrs - we'll add them separately
-	// (pool.Encode() includes them, but we need explicit control to handle empty arrays)
-	filteredAttrs := make([]entity.Attr, 0, len(newAttrs))
-	for _, attr := range newAttrs {
-		if attr.ID != compute_v1alpha.SandboxPoolReferencedByVersionsId {
-			filteredAttrs = append(filteredAttrs, attr)
-		}
-	}
-	newAttrs = filteredAttrs
-
 	// Add critical fields that Encode() filters out
 	// (Encode() uses entity.Empty() which filters out zero/empty values)
 
@@ -1053,12 +1043,13 @@ func (l *Launcher) updatePool(ctx context.Context, poolWithEntity *PoolWithEntit
 	// Build the final attribute list: metadata from existing + new pool attrs
 	finalAttrs := make([]entity.Attr, 0, len(ent.Attrs())+len(newAttrs))
 
-	// Collect IDs we're replacing (including multi-valued attrs we'll handle separately)
+	// Collect IDs we're replacing
 	replacingIDs := make(map[entity.Id]bool)
 	for _, attr := range newAttrs {
 		replacingIDs[attr.ID] = true
 	}
-	// Always replace ReferencedByVersions (even if empty) since we're explicitly setting them
+	// Always replace ReferencedByVersions (even if empty) since we're explicitly setting them.
+	// Encode() won't emit attrs for an empty slice, but we still need to clear old refs.
 	replacingIDs[compute_v1alpha.SandboxPoolReferencedByVersionsId] = true
 
 	// Add existing attrs except those we're replacing
@@ -1068,16 +1059,8 @@ func (l *Launcher) updatePool(ctx context.Context, poolWithEntity *PoolWithEntit
 		}
 	}
 
-	// Add all new attrs
+	// Add all new attrs (including multi-valued ReferencedByVersions from Encode())
 	finalAttrs = append(finalAttrs, newAttrs...)
-
-	// Now add ALL the references from the pool (multi-valued attribute)
-	// NOTE: We can't use entity.Update() for multi-valued attributes because
-	// entity.Set() replaces the first matching attribute instead of adding a new one.
-	// This is why we manually append each reference.
-	for _, ref := range pool.ReferencedByVersions {
-		finalAttrs = append(finalAttrs, entity.Ref(compute_v1alpha.SandboxPoolReferencedByVersionsId, ref))
-	}
 
 	// Use Replace with the combined attributes (preserves metadata)
 	_, err := l.EAC.Replace(ctx, finalAttrs, 0)
