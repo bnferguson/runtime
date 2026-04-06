@@ -14,7 +14,7 @@ import (
 func TestMigrateEntityStore(t *testing.T) {
 	r := require.New(t)
 
-	client := setupTestEtcd(t)
+	client, _ := setupTestEtcd(t)
 	ctx := context.Background()
 
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
@@ -162,7 +162,7 @@ func TestMigrateEntityStore(t *testing.T) {
 func TestMigrateEntityWithMissingFields(t *testing.T) {
 	r := require.New(t)
 
-	client := setupTestEtcd(t)
+	client, _ := setupTestEtcd(t)
 	ctx := context.Background()
 
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
@@ -215,7 +215,7 @@ func TestMigrateEntityWithMissingFields(t *testing.T) {
 func TestMigrateEntityPreservesExistingAttributes(t *testing.T) {
 	r := require.New(t)
 
-	client := setupTestEtcd(t)
+	client, _ := setupTestEtcd(t)
 	ctx := context.Background()
 
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{

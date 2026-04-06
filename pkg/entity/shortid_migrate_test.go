@@ -13,7 +13,7 @@ import (
 func TestMigrateShortIds(t *testing.T) {
 	r := require.New(t)
 
-	client := setupTestEtcd(t)
+	client, _ := setupTestEtcd(t)
 	ctx := context.Background()
 
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
@@ -102,7 +102,7 @@ func TestMigrateShortIds(t *testing.T) {
 func TestMigrateShortIdsDryRun(t *testing.T) {
 	r := require.New(t)
 
-	client := setupTestEtcd(t)
+	client, _ := setupTestEtcd(t)
 	ctx := context.Background()
 
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{

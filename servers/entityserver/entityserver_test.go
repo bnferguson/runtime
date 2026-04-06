@@ -12,34 +12,13 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 	v1alpha "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/entity"
-	"miren.dev/runtime/pkg/idgen"
+	"miren.dev/runtime/pkg/etcdtest"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
 func setupTestEtcd(t *testing.T) (*clientv3.Client, string) {
-	client, err := clientv3.New(clientv3.Config{
-		Endpoints:       []string{"etcd:2379"},
-		DialTimeout:     2 * time.Second,
-		MaxUnaryRetries: 2,
-	})
-	require.NoError(t, err)
-
-	// Generate random prefix for isolation
-	prefix := "/" + idgen.Gen("test")
-
-	t.Cleanup(func() {
-		// Delete all keys with this prefix
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_, err := client.Delete(ctx, prefix, clientv3.WithPrefix())
-		if err != nil {
-			t.Logf("warning: failed to cleanup etcd prefix %s: %v", prefix, err)
-		}
-		client.Close()
-	})
-
-	return client, prefix
+	return etcdtest.TestEtcdClient(t)
 }
 
 func TestEntityServer_Get(t *testing.T) {

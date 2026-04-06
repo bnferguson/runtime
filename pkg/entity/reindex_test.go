@@ -1,38 +1,21 @@
 package entity
 
 import (
-	"context"
 	"log/slog"
 	"testing"
-	"time"
 
 	"github.com/mr-tron/base58"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"miren.dev/runtime/pkg/etcdtest"
 )
 
 func setupReindexTestStore(t *testing.T) (*EtcdStore, *clientv3.Client) {
 	t.Helper()
-
-	client, err := clientv3.New(clientv3.Config{
-		Endpoints:       []string{"etcd:2379"},
-		DialTimeout:     2 * time.Second,
-		MaxUnaryRetries: 2,
-	})
+	client, prefix := etcdtest.TestEtcdClient(t)
+	store, err := NewEtcdStore(t.Context(), slog.Default(), client, prefix)
 	require.NoError(t, err)
-
-	ctx := context.Background()
-	_, err = client.Delete(ctx, "/test-reindex/", clientv3.WithPrefix())
-	require.NoError(t, err)
-
-	t.Cleanup(func() {
-		client.Close()
-	})
-
-	store, err := NewEtcdStore(ctx, slog.Default(), client, "/test-reindex")
-	require.NoError(t, err)
-
 	return store, client
 }
 
