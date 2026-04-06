@@ -251,6 +251,9 @@ func (e *EtcdComponent) Start(ctx context.Context, config EtcdConfig) error {
 	// Start monitoring for unexpected exits
 	e.StartExitMonitor(ctx)
 
+	// Start periodic maintenance (health logging + auto-defrag)
+	e.StartMaintenanceLoop(ctx)
+
 	// Persist the TLS state so we can detect config changes on restart
 	if err := e.saveState(&etcdState{TLSEnabled: e.tlsEnabled}); err != nil {
 		e.Log.Warn("failed to save etcd state", "error", err)
@@ -417,6 +420,7 @@ func (e *EtcdComponent) createContainer(ctx context.Context, image containerd.Im
 		oci.WithEnv([]string{
 			"ETCD_AUTO_COMPACTION_MODE=periodic",
 			"ETCD_AUTO_COMPACTION_RETENTION=1h",
+			"ETCD_EXPERIMENTAL_BACKEND_BBOLT_FREELIST_TYPE=map",
 		}),
 		oci.WithMounts(mounts),
 	}
