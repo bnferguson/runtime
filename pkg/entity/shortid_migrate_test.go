@@ -13,18 +13,14 @@ import (
 func TestMigrateShortIds(t *testing.T) {
 	r := require.New(t)
 
-	client, _ := setupTestEtcd(t)
+	client, basePrefix := setupTestEtcd(t)
 	ctx := context.Background()
 
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelDebug,
 	}))
 
-	prefix := "/test-migrate-shortids/"
-
-	// Clean up test data
-	_, err := client.Delete(ctx, prefix, clientv3.WithPrefix())
-	r.NoError(err)
+	prefix := basePrefix + "/migrate-shortids/"
 
 	// Create entity with entity/kind but no short-id (should get one)
 	ent1 := New(
@@ -102,18 +98,14 @@ func TestMigrateShortIds(t *testing.T) {
 func TestMigrateShortIdsDryRun(t *testing.T) {
 	r := require.New(t)
 
-	client, _ := setupTestEtcd(t)
+	client, basePrefix := setupTestEtcd(t)
 	ctx := context.Background()
 
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelDebug,
 	}))
 
-	prefix := "/test-migrate-shortids-dry/"
-
-	// Clean up test data
-	_, err := client.Delete(ctx, prefix, clientv3.WithPrefix())
-	r.NoError(err)
+	prefix := basePrefix + "/migrate-shortids-dry/"
 
 	// Create entity needing a short-id
 	ent := New(
