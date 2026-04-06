@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"testing"
+	"time"
 
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/pkg/entity"
@@ -231,6 +232,88 @@ func TestAutocertController_Init_PrePopulatesAllowedHosts(t *testing.T) {
 	// Verify unknown hosts are NOT in allowedHosts
 	if _, ok := c.allowedHosts.Load("unknown.com"); ok {
 		t.Error("unexpected host in allowed hosts")
+	}
+}
+
+func TestAutocertController_Reconcile_SkipsDuringFailureCooldown(t *testing.T) {
+	c := newTestAutocertController(t)
+	c.SetReady()
+
+	// Simulate a recent failure for this domain
+	c.failures.Store("cooldown.example.com", acmeFailure{when: time.Now(), cooldown: acmeFailureCooldown})
+
+	route, meta := testRouteMeta("cooldown-route", "cooldown.example.com")
+	if err := c.Reconcile(context.Background(), route, meta); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Domain should still be in allowedHosts (Reconcile always adds it)
+	if _, ok := c.allowedHosts.Load("cooldown.example.com"); !ok {
+		t.Error("expected domain to be in allowed hosts")
+	}
+
+	// Failure entry should still be present (not cleared by a successful provision)
+	if _, ok := c.failures.Load("cooldown.example.com"); !ok {
+		t.Error("expected failure entry to remain during cooldown")
+	}
+}
+
+func TestAutocertController_Reconcile_ClearsExpiredCooldown(t *testing.T) {
+	c := newTestAutocertController(t)
+	c.SetReady()
+
+	// Simulate an old failure (well past cooldown)
+	c.failures.Store("expired.example.com", acmeFailure{when: time.Now().Add(-10 * time.Minute), cooldown: acmeFailureCooldown})
+
+	route, meta := testRouteMeta("expired-route", "expired.example.com")
+	// This will attempt ACME (and fail since there's no real ACME server),
+	// but the important thing is it doesn't skip due to cooldown.
+	_ = c.Reconcile(context.Background(), route, meta)
+
+	// The old failure entry should have been deleted before the attempt.
+	// A new one may have been stored if the ACME attempt itself failed,
+	// but the original stale timestamp should be gone.
+	if v, ok := c.failures.Load("expired.example.com"); ok {
+		f := v.(acmeFailure)
+		if time.Since(f.when) > time.Minute {
+			t.Error("expected stale failure entry to be replaced, but old timestamp remains")
+		}
+	}
+}
+
+func TestAutocertController_GetCertificate_RecordsFailureOnTimeout(t *testing.T) {
+	c := newTestAutocertController(t)
+	c.allowedHosts.Store("timeout.example.com", struct{}{})
+
+	// GetCertificate will attempt autocert, which will fail/timeout since
+	// there's no real ACME server. It should record a failure.
+	hello := &tls.ClientHelloInfo{ServerName: "timeout.example.com"}
+	cert, err := c.GetCertificate(hello)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cert == nil {
+		t.Fatal("expected fallback cert, got nil")
+	}
+
+	// After the call completes (via timeout or error), the domain should be in failures
+	if _, ok := c.failures.Load("timeout.example.com"); !ok {
+		t.Error("expected failure to be recorded after GetCertificate timeout/error")
+	}
+}
+
+func TestAutocertController_GetCertificate_SkipsDuringCooldown(t *testing.T) {
+	c := newTestAutocertController(t)
+	c.allowedHosts.Store("cooldown.example.com", struct{}{})
+	c.failures.Store("cooldown.example.com", acmeFailure{when: time.Now(), cooldown: acmeFailureCooldown})
+
+	hello := &tls.ClientHelloInfo{ServerName: "cooldown.example.com"}
+	cert, err := c.GetCertificate(hello)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cert == nil {
+		t.Fatal("expected fallback cert, got nil")
 	}
 }
 
