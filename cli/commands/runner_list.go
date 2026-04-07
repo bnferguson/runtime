@@ -33,6 +33,7 @@ func RunnerList(ctx *Context, opts struct {
 	if opts.IsJSON() {
 		type RunnerJSON struct {
 			ID           string   `json:"id"`
+			ShortID      string   `json:"short_id,omitempty"`
 			RunnerID     string   `json:"runner_id"`
 			Name         string   `json:"name"`
 			Status       string   `json:"status"`
@@ -46,6 +47,7 @@ func RunnerList(ctx *Context, opts struct {
 		for _, r := range runners {
 			rj := RunnerJSON{
 				ID:         r.Id(),
+				ShortID:    r.ShortId(),
 				RunnerID:   r.RunnerId(),
 				Name:       r.Name(),
 				Status:     r.Status(),
@@ -67,10 +69,12 @@ func RunnerList(ctx *Context, opts struct {
 		return nil
 	}
 
-	headers := []string{"NAME", "STATUS", "VERSION", "ADDRESS", "REGISTERED"}
+	headers := []string{"ID", "NAME", "STATUS", "VERSION", "ADDRESS", "REGISTERED"}
 	var rows []ui.Row
 
 	for _, r := range runners {
+		id := ui.DisplayShortID(r.ShortId(), r.Id())
+
 		name := r.Name()
 		if name == "" {
 			name = r.RunnerId()
@@ -106,7 +110,7 @@ func RunnerList(ctx *Context, opts struct {
 			registered = formatDuration(time.Since(standard.FromTimestamp(r.RegisteredAt()))) + " ago"
 		}
 
-		rows = append(rows, ui.Row{name, status, version, addr, registered})
+		rows = append(rows, ui.Row{id, name, status, version, addr, registered})
 	}
 
 	sort.Slice(rows, func(i, j int) bool {

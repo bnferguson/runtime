@@ -117,6 +117,30 @@ interfaces:
             element: RunnerInfo
             doc: List of registered runners
 
+      - name: RemoveRunner
+        index: 5
+        doc: Remove a registered runner and clean up associated resources
+        parameters:
+          - name: query
+            type: string
+            doc: Runner to remove (name, ID, or short ID)
+          - name: force
+            type: bool
+            doc: Force removal even if the runner has active sandboxes
+        results:
+          - name: name
+            type: string
+            doc: Name of the removed runner
+          - name: runner_id
+            type: string
+            doc: Runner ID of the removed runner
+          - name: removed_resources
+            type: int32
+            doc: Number of associated resources that were cleaned up
+          - name: error
+            type: string
+            doc: Error message if removal failed
+
 types:
   - type: InviteInfo
     doc: Information about a runner invite
@@ -166,6 +190,10 @@ types:
         type: string
         index: 2
         doc: Node name
+      - name: short_id
+        type: string
+        index: 8
+        doc: Short identifier for display
       - name: status
         type: string
         index: 3

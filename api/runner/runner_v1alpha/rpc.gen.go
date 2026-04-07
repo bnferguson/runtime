@@ -146,6 +146,7 @@ type runnerInfoData struct {
 	ApiAddress   *string             `cbor:"5,keyasint,omitempty" json:"api_address,omitempty"`
 	Labels       *[]string           `cbor:"6,keyasint,omitempty" json:"labels,omitempty"`
 	RegisteredAt *standard.Timestamp `cbor:"7,keyasint,omitempty" json:"registered_at,omitempty"`
+	ShortId      *string             `cbor:"8,keyasint,omitempty" json:"short_id,omitempty"`
 }
 
 type RunnerInfo struct {
@@ -268,6 +269,21 @@ func (v *RunnerInfo) RegisteredAt() *standard.Timestamp {
 
 func (v *RunnerInfo) SetRegisteredAt(registered_at *standard.Timestamp) {
 	v.data.RegisteredAt = registered_at
+}
+
+func (v *RunnerInfo) HasShortId() bool {
+	return v.data.ShortId != nil
+}
+
+func (v *RunnerInfo) ShortId() string {
+	if v.data.ShortId == nil {
+		return ""
+	}
+	return *v.data.ShortId
+}
+
+func (v *RunnerInfo) SetShortId(short_id string) {
+	v.data.ShortId = &short_id
 }
 
 func (v *RunnerInfo) MarshalCBOR() ([]byte, error) {
@@ -713,6 +729,98 @@ func (v *RunnerRegistrationListRunnersResults) UnmarshalJSON(data []byte) error 
 	return json.Unmarshal(data, &v.data)
 }
 
+type runnerRegistrationRemoveRunnerArgsData struct {
+	Query *string `cbor:"0,keyasint,omitempty" json:"query,omitempty"`
+	Force *bool   `cbor:"1,keyasint,omitempty" json:"force,omitempty"`
+}
+
+type RunnerRegistrationRemoveRunnerArgs struct {
+	call rpc.Call
+	data runnerRegistrationRemoveRunnerArgsData
+}
+
+func (v *RunnerRegistrationRemoveRunnerArgs) HasQuery() bool {
+	return v.data.Query != nil
+}
+
+func (v *RunnerRegistrationRemoveRunnerArgs) Query() string {
+	if v.data.Query == nil {
+		return ""
+	}
+	return *v.data.Query
+}
+
+func (v *RunnerRegistrationRemoveRunnerArgs) HasForce() bool {
+	return v.data.Force != nil
+}
+
+func (v *RunnerRegistrationRemoveRunnerArgs) Force() bool {
+	if v.data.Force == nil {
+		return false
+	}
+	return *v.data.Force
+}
+
+func (v *RunnerRegistrationRemoveRunnerArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationRemoveRunnerArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunnerRegistrationRemoveRunnerArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationRemoveRunnerArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type runnerRegistrationRemoveRunnerResultsData struct {
+	Name             *string `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+	RunnerId         *string `cbor:"1,keyasint,omitempty" json:"runner_id,omitempty"`
+	RemovedResources *int32  `cbor:"2,keyasint,omitempty" json:"removed_resources,omitempty"`
+	Error            *string `cbor:"3,keyasint,omitempty" json:"error,omitempty"`
+}
+
+type RunnerRegistrationRemoveRunnerResults struct {
+	call rpc.Call
+	data runnerRegistrationRemoveRunnerResultsData
+}
+
+func (v *RunnerRegistrationRemoveRunnerResults) SetName(name string) {
+	v.data.Name = &name
+}
+
+func (v *RunnerRegistrationRemoveRunnerResults) SetRunnerId(runner_id string) {
+	v.data.RunnerId = &runner_id
+}
+
+func (v *RunnerRegistrationRemoveRunnerResults) SetRemovedResources(removed_resources int32) {
+	v.data.RemovedResources = &removed_resources
+}
+
+func (v *RunnerRegistrationRemoveRunnerResults) SetError(error string) {
+	v.data.Error = &error
+}
+
+func (v *RunnerRegistrationRemoveRunnerResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationRemoveRunnerResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunnerRegistrationRemoveRunnerResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationRemoveRunnerResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type RunnerRegistrationCreateInvite struct {
 	rpc.Call
 	args    RunnerRegistrationCreateInviteArgs
@@ -843,12 +951,39 @@ func (t *RunnerRegistrationListRunners) Results() *RunnerRegistrationListRunners
 	return results
 }
 
+type RunnerRegistrationRemoveRunner struct {
+	rpc.Call
+	args    RunnerRegistrationRemoveRunnerArgs
+	results RunnerRegistrationRemoveRunnerResults
+}
+
+func (t *RunnerRegistrationRemoveRunner) Args() *RunnerRegistrationRemoveRunnerArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *RunnerRegistrationRemoveRunner) Results() *RunnerRegistrationRemoveRunnerResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type RunnerRegistration interface {
 	CreateInvite(ctx context.Context, state *RunnerRegistrationCreateInvite) error
 	Join(ctx context.Context, state *RunnerRegistrationJoin) error
 	ListInvites(ctx context.Context, state *RunnerRegistrationListInvites) error
 	RevokeInvite(ctx context.Context, state *RunnerRegistrationRevokeInvite) error
 	ListRunners(ctx context.Context, state *RunnerRegistrationListRunners) error
+	RemoveRunner(ctx context.Context, state *RunnerRegistrationRemoveRunner) error
 }
 
 type reexportRunnerRegistration struct {
@@ -872,6 +1007,10 @@ func (reexportRunnerRegistration) RevokeInvite(ctx context.Context, state *Runne
 }
 
 func (reexportRunnerRegistration) ListRunners(ctx context.Context, state *RunnerRegistrationListRunners) error {
+	panic("not implemented")
+}
+
+func (reexportRunnerRegistration) RemoveRunner(ctx context.Context, state *RunnerRegistrationRemoveRunner) error {
 	panic("not implemented")
 }
 
@@ -924,6 +1063,15 @@ func AdaptRunnerRegistration(t RunnerRegistration) *rpc.Interface {
 			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.ListRunners(ctx, &RunnerRegistrationListRunners{Call: call})
+			},
+		},
+		{
+			Name:          "RemoveRunner",
+			InterfaceName: "RunnerRegistration",
+			Index:         5,
+			Public:        false,
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.RemoveRunner(ctx, &RunnerRegistrationRemoveRunner{Call: call})
 			},
 		},
 	}
@@ -1204,4 +1352,68 @@ func (v RunnerRegistrationClient) ListRunners(ctx context.Context) (*RunnerRegis
 	}
 
 	return &RunnerRegistrationClientListRunnersResults{client: v.Client, data: ret}, nil
+}
+
+type RunnerRegistrationClientRemoveRunnerResults struct {
+	client rpc.Client
+	data   runnerRegistrationRemoveRunnerResultsData
+}
+
+func (v *RunnerRegistrationClientRemoveRunnerResults) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *RunnerRegistrationClientRemoveRunnerResults) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *RunnerRegistrationClientRemoveRunnerResults) HasRunnerId() bool {
+	return v.data.RunnerId != nil
+}
+
+func (v *RunnerRegistrationClientRemoveRunnerResults) RunnerId() string {
+	if v.data.RunnerId == nil {
+		return ""
+	}
+	return *v.data.RunnerId
+}
+
+func (v *RunnerRegistrationClientRemoveRunnerResults) HasRemovedResources() bool {
+	return v.data.RemovedResources != nil
+}
+
+func (v *RunnerRegistrationClientRemoveRunnerResults) RemovedResources() int32 {
+	if v.data.RemovedResources == nil {
+		return 0
+	}
+	return *v.data.RemovedResources
+}
+
+func (v *RunnerRegistrationClientRemoveRunnerResults) HasError() bool {
+	return v.data.Error != nil
+}
+
+func (v *RunnerRegistrationClientRemoveRunnerResults) Error() string {
+	if v.data.Error == nil {
+		return ""
+	}
+	return *v.data.Error
+}
+
+func (v RunnerRegistrationClient) RemoveRunner(ctx context.Context, query string, force bool) (*RunnerRegistrationClientRemoveRunnerResults, error) {
+	args := RunnerRegistrationRemoveRunnerArgs{}
+	args.data.Query = &query
+	args.data.Force = &force
+
+	var ret runnerRegistrationRemoveRunnerResultsData
+
+	err := v.Call(ctx, "RemoveRunner", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &RunnerRegistrationClientRemoveRunnerResults{client: v.Client, data: ret}, nil
 }

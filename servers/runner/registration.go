@@ -13,6 +13,7 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/runner/runner_v1alpha"
+	"miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/pkg/caauth"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
@@ -409,6 +410,11 @@ func (s *RegistrationServer) ListRunners(ctx context.Context, req *runner_v1alph
 			name = string(node.ID)
 		}
 		info.SetName(name)
+
+		wrapper := &rpcEntityWrapper{entity: e}
+		if attr, ok := wrapper.Get(entity.DBShortId); ok {
+			info.SetShortId(attr.Value.String())
+		}
 		info.SetStatus(string(node.Status))
 		info.SetVersion(node.Version)
 		info.SetApiAddress(node.ApiAddress)
@@ -428,6 +434,168 @@ func (s *RegistrationServer) ListRunners(ctx context.Context, req *runner_v1alph
 
 	results.SetRunners(runners)
 	return nil
+}
+
+func (s *RegistrationServer) RemoveRunner(ctx context.Context, req *runner_v1alpha.RunnerRegistrationRemoveRunner) error {
+	args := req.Args()
+	results := req.Results()
+
+	if !args.HasQuery() || args.Query() == "" {
+		results.SetError("runner name or ID is required")
+		return nil
+	}
+
+	query := args.Query()
+	force := args.HasForce() && args.Force()
+
+	// Find the node entity matching the query
+	node, nodeID, err := s.findNodeByQuery(ctx, query)
+	if err != nil {
+		s.Log.Error("Failed to find runner", "query", query, "error", err)
+		results.SetError("failed to find runner")
+		return nil
+	}
+	if node == nil {
+		results.SetError(fmt.Sprintf("runner %q not found", query))
+		return nil
+	}
+
+	// Check for active schedules (sandboxes assigned to this node)
+	scheduleCount, err := s.countNodeSchedules(ctx, nodeID)
+	if err != nil {
+		s.Log.Error("Failed to check schedules", "node_id", nodeID, "error", err)
+		results.SetError("failed to check for active sandboxes")
+		return nil
+	}
+
+	if scheduleCount > 0 && !force {
+		results.SetError(fmt.Sprintf("runner has %d active sandbox schedule(s); use --force to remove anyway", scheduleCount))
+		return nil
+	}
+
+	// Clean up associated resources
+	removedResources := int32(0)
+
+	// Delete schedules for this node
+	if scheduleCount > 0 {
+		deleted, err := s.deleteNodeSchedules(ctx, nodeID)
+		if err != nil {
+			s.Log.Error("Failed to delete schedules", "node_id", nodeID, "error", err)
+			results.SetError("failed to clean up schedules")
+			return nil
+		}
+		removedResources += int32(deleted)
+	}
+
+	// Delete disk mounts, volumes, and leases for this node
+	for _, ref := range []entity.Attr{
+		entity.Ref(storage_v1alpha.DiskMountNodeIdId, nodeID),
+		entity.Ref(storage_v1alpha.DiskVolumeNodeIdId, nodeID),
+		entity.Ref(storage_v1alpha.DiskLeaseNodeIdId, nodeID),
+	} {
+		deleted, err := s.deleteEntitiesByIndex(ctx, ref)
+		if err != nil {
+			s.Log.Warn("Failed to clean up some resources", "index", ref.ID, "error", err)
+		}
+		removedResources += int32(deleted)
+	}
+
+	// Delete the node entity
+	_, err = s.EAC.Delete(ctx, string(nodeID))
+	if err != nil {
+		s.Log.Error("Failed to delete node entity", "node_id", nodeID, "error", err)
+		results.SetError("failed to delete runner")
+		return nil
+	}
+
+	name := node.Name
+	if name == "" {
+		name = string(nodeID)
+	}
+
+	s.Log.Info("Removed runner",
+		"name", name,
+		"runner_id", node.RunnerId,
+		"node_id", nodeID,
+		"removed_resources", removedResources)
+
+	results.SetName(name)
+	results.SetRunnerId(node.RunnerId)
+	results.SetRemovedResources(removedResources)
+	return nil
+}
+
+// findNodeByQuery looks up a node entity by name, runner ID, entity ID, or short ID prefix.
+func (s *RegistrationServer) findNodeByQuery(ctx context.Context, query string) (*compute_v1alpha.Node, entity.Id, error) {
+	listResp, err := s.EAC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindNode))
+	if err != nil {
+		return nil, "", err
+	}
+
+	query = strings.TrimSpace(query)
+
+	for _, e := range listResp.Values() {
+		var node compute_v1alpha.Node
+		decodeEntity(e, &node)
+
+		if node.RunnerId == "" {
+			continue
+		}
+
+		id := entity.Id(e.Id())
+
+		// Match by entity ID, runner ID, name, or short ID prefix
+		if string(id) == query ||
+			node.RunnerId == query ||
+			(node.Name != "" && node.Name == query) ||
+			strings.HasPrefix(string(id), query) {
+			return &node, id, nil
+		}
+	}
+
+	return nil, "", nil
+}
+
+func (s *RegistrationServer) countNodeSchedules(ctx context.Context, nodeID entity.Id) (int, error) {
+	listResp, err := s.EAC.List(ctx, entity.Ref(compute_v1alpha.KeyNodeId, nodeID))
+	if err != nil {
+		return 0, err
+	}
+	return len(listResp.Values()), nil
+}
+
+func (s *RegistrationServer) deleteNodeSchedules(ctx context.Context, nodeID entity.Id) (int, error) {
+	listResp, err := s.EAC.List(ctx, entity.Ref(compute_v1alpha.KeyNodeId, nodeID))
+	if err != nil {
+		return 0, err
+	}
+
+	deleted := 0
+	for _, e := range listResp.Values() {
+		if _, err := s.EAC.Delete(ctx, e.Id()); err != nil {
+			s.Log.Warn("Failed to delete schedule", "id", e.Id(), "error", err)
+			continue
+		}
+		deleted++
+	}
+	return deleted, nil
+}
+
+func (s *RegistrationServer) deleteEntitiesByIndex(ctx context.Context, ref entity.Attr) (int, error) {
+	listResp, err := s.EAC.List(ctx, ref)
+	if err != nil {
+		return 0, err
+	}
+
+	deleted := 0
+	for _, e := range listResp.Values() {
+		if _, err := s.EAC.Delete(ctx, e.Id()); err != nil {
+			s.Log.Warn("Failed to delete entity", "id", e.Id(), "error", err)
+			continue
+		}
+		deleted++
+	}
+	return deleted, nil
 }
 
 func (s *RegistrationServer) findInviteByHash(ctx context.Context, codeHash string) (*runner_v1alpha.RunnerInvite, int64, error) {

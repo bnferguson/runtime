@@ -655,6 +655,17 @@ miren deploy --analyze
 				Body: "miren runner invite list",
 			}),
 		))
+		d.Dispatch("runner remove", Infer("runner remove", "Remove a registered runner and clean up resources", RunnerRemove,
+			WithLabsFeature(labs.FeatureDistributedRunners),
+			WithExample(mflags.Example{
+				Name: "Remove a runner by name",
+				Body: "miren runner remove my-runner",
+			}),
+			WithExample(mflags.Example{
+				Name: "Force remove a runner with active sandboxes",
+				Body: "miren runner remove my-runner --force",
+			}),
+		))
 	}
 
 	// Server commands
