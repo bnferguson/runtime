@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
@@ -20,13 +21,22 @@ import (
 )
 
 const (
-	// How long to suppress ACME retries for a domain after a failure.
-	acmeFailureCooldown = 5 * time.Minute
+	// How long to suppress ACME retries for a domain after a failure. Matches
+	// autocert.Manager's internal createCertRetryAfter so we don't retry before
+	// the Manager has cleaned up its failed state. Server-sent Retry-After
+	// values override this when longer.
+	acmeFailureCooldown = time.Minute
 
 	// Max time to wait for autocert before falling back to the self-signed cert.
 	// The upstream autocert.Manager uses a hardcoded 5-minute timeout internally;
 	// this shorter deadline lets TLS handshakes complete promptly with the fallback.
 	inlineGetCertTimeout = 10 * time.Second
+
+	// Max time to wait for autocert during eager provisioning in Reconcile.
+	// Longer than inlineGetCertTimeout since we're not blocking a TLS handshake,
+	// but much shorter than the Manager's internal 5-minute timeout so we don't
+	// wedge the controller or prevent graceful shutdown.
+	reconcileGetCertTimeout = 30 * time.Second
 )
 
 // AutocertController provisions TLS certificates eagerly using HTTP-01 ACME challenges
@@ -42,7 +52,15 @@ type AutocertController struct {
 	allowedHosts sync.Map      // domain -> struct{}
 	ready        chan struct{} // closed when port-80 ACME challenge server is up
 	publicIPs    func() []net.IP
-	failures     sync.Map // domain -> time.Time of last failure
+	failures     sync.Map // domain -> acmeFailure
+}
+
+// acmeFailure records when an ACME attempt failed and how long to wait before
+// retrying. The cooldown is at least acmeFailureCooldown, but if the ACME
+// server returned a Retry-After header we honor that instead.
+type acmeFailure struct {
+	when     time.Time
+	cooldown time.Duration
 }
 
 type AutocertControllerOpts struct {
@@ -159,6 +177,14 @@ func (c *AutocertController) Reconcile(ctx context.Context, route *ingress_v1alp
 		}
 	}
 
+	// Skip ACME if this domain recently failed, matching the guard in GetCertificate.
+	// Without this, every Reconcile resync would fire a new ACME attempt even while
+	// rate-limited.
+	if c.inCooldown(domain) {
+		log.Debug("skipping eager provisioning: domain in failure cooldown")
+		return nil
+	}
+
 	// Wait for port-80 ACME challenge server to be ready before attempting provisioning
 	select {
 	case <-c.ready:
@@ -166,19 +192,60 @@ func (c *AutocertController) Reconcile(ctx context.Context, route *ingress_v1alp
 		return ctx.Err()
 	}
 
-	// Eagerly provision the certificate with a synthetic ClientHelloInfo
-	hello := &tls.ClientHelloInfo{ServerName: domain}
-	_, err := c.mgr.GetCertificate(hello)
-	if err != nil {
-		c.failures.Store(domain, time.Now())
-		log.Warn("eager cert provisioning failed (will retry on next TLS handshake)", "error", err)
-		// Don't return the error — the controller framework would retry, but autocert
-		// itself will handle this on the next actual TLS handshake or resync.
-		return nil
+	// Build a synthetic ClientHello with realistic parameters so autocert provisions
+	// an ECDSA certificate (what browsers actually prefer), not just RSA.
+	hello := &tls.ClientHelloInfo{
+		ServerName:        domain,
+		SupportedVersions: []uint16{tls.VersionTLS13, tls.VersionTLS12},
+		CipherSuites: []uint16{
+			tls.TLS_AES_128_GCM_SHA256,
+			tls.TLS_AES_256_GCM_SHA384,
+			tls.TLS_CHACHA20_POLY1305_SHA256,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+		},
+		SupportedCurves: []tls.CurveID{tls.X25519, tls.CurveP256, tls.CurveP384},
+		SignatureSchemes: []tls.SignatureScheme{
+			tls.ECDSAWithP256AndSHA256,
+			tls.ECDSAWithP384AndSHA384,
+			tls.PSSWithSHA256,
+			tls.PSSWithSHA384,
+			tls.PKCS1WithSHA256,
+			tls.PKCS1WithSHA384,
+		},
 	}
 
-	c.failures.Delete(domain)
-	log.Info("certificate provisioned successfully")
+	// Run with a timeout so we don't block the controller for the Manager's full
+	// 5-minute internal deadline, which also wedges graceful shutdown.
+	type certResult struct {
+		cert *tls.Certificate
+		err  error
+	}
+	ch := make(chan certResult, 1)
+	go func() {
+		cert, err := c.mgr.GetCertificate(hello)
+		ch <- certResult{cert, err}
+	}()
+
+	select {
+	case res := <-ch:
+		if res.err != nil {
+			c.recordFailure(domain, res.err)
+			log.Warn("eager cert provisioning failed (will retry on next TLS handshake)", "error", res.err)
+			return nil
+		}
+		c.failures.Delete(domain)
+		log.Info("certificate provisioned successfully")
+	case <-time.After(reconcileGetCertTimeout):
+		c.recordFailure(domain, nil)
+		log.Warn("eager cert provisioning timed out", "timeout", reconcileGetCertTimeout)
+	case <-ctx.Done():
+		c.recordFailure(domain, nil)
+		return ctx.Err()
+	}
+
 	return nil
 }
 
@@ -215,11 +282,8 @@ func (c *AutocertController) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Ce
 
 	// Skip ACME if this domain recently failed — prevents rapid-fire attempts
 	// from every incoming TLS handshake while rate-limited.
-	if lastFail, ok := c.failures.Load(host); ok {
-		if time.Since(lastFail.(time.Time)) < acmeFailureCooldown {
-			return &c.fallbackCert, nil
-		}
-		c.failures.Delete(host)
+	if c.inCooldown(host) {
+		return &c.fallbackCert, nil
 	}
 
 	// Run autocert with a deadline so handshakes fall back to the self-signed
@@ -239,9 +303,10 @@ func (c *AutocertController) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Ce
 		if res.err == nil {
 			return res.cert, nil
 		}
-		c.failures.Store(host, time.Now())
+		c.recordFailure(host, res.err)
 		c.log.Debug("autocert failed, using fallback", "host", host, "error", res.err)
 	case <-time.After(inlineGetCertTimeout):
+		c.recordFailure(host, nil)
 		c.log.Warn("autocert timed out, using fallback", "host", host, "timeout", inlineGetCertTimeout)
 	}
 
@@ -298,6 +363,33 @@ func (c *AutocertController) isAllowedHost(host string) bool {
 			return true
 		}
 	}
+	return false
+}
+
+// recordFailure stores a cooldown entry for a domain. If the error is an ACME
+// rate-limit with a Retry-After duration, we honor that instead of our default.
+func (c *AutocertController) recordFailure(domain string, err error) {
+	cooldown := acmeFailureCooldown
+	if err != nil {
+		if ra, ok := acme.RateLimit(err); ok && ra > cooldown {
+			cooldown = ra
+		}
+	}
+	c.failures.Store(domain, acmeFailure{when: time.Now(), cooldown: cooldown})
+}
+
+// inCooldown reports whether a domain is in the failure cooldown window.
+// Returns true if retries should be suppressed. Cleans up expired entries.
+func (c *AutocertController) inCooldown(domain string) bool {
+	v, ok := c.failures.Load(domain)
+	if !ok {
+		return false
+	}
+	f := v.(acmeFailure)
+	if time.Since(f.when) < f.cooldown {
+		return true
+	}
+	c.failures.Delete(domain)
 	return false
 }
 
