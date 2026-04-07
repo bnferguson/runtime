@@ -1,0 +1,51 @@
+---
+title: "miren server install"
+sidebar_label: "server install"
+description: "Install systemd service for miren server"
+---
+
+# miren server install
+
+Install systemd service for miren server
+
+## Usage
+
+```bash
+miren server install [flags]
+```
+
+## Flags
+
+- `--address, -a` — Server address to bind to (default: `0.0.0.0:8443`)
+- `--branch, -b` — Branch to download if release not found
+- `--force, -f` — Overwrite existing service file
+- `--name, -n` — Cluster name for cloud registration
+- `--no-start` — Do not start the service after installation
+- `--skip-system-check` — Skip minimum system requirements check
+- `--url, -u` — Cloud URL for registration (default: `https://miren.cloud`)
+- `--verbosity` — Verbosity level (default: `-vv`)
+- `--without-cloud` — Skip cloud registration setup
+
+## Global Options
+
+- `--options` — Path to file containing options
+- `--server-address` — Server address to connect to (default: `127.0.0.1:8443`)
+- `--verbose, -v` — Enable verbose output
+
+## Examples
+
+**Install with cloud registration:**
+
+```bash
+miren server install
+```
+
+**Install without cloud (local only):**
+
+```bash
+miren server install --without-cloud
+```
+
+## See also
+
+- [`miren server`](/command/server)

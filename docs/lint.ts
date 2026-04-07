@@ -10,15 +10,8 @@
  * command-sidebar.json which is populated at build time.
  */
 
-import {existsSync, readdirSync, readFileSync, writeFileSync} from 'fs';
+import {readdirSync, readFileSync} from 'fs';
 import {join, relative} from 'path';
-
-// sidebars.ts imports command-sidebar.json which is generated at build time.
-// Create an empty stub if it doesn't exist so the import succeeds.
-const commandSidebarPath = join(import.meta.dirname, 'command-sidebar.json');
-if (!existsSync(commandSidebarPath)) {
-  writeFileSync(commandSidebarPath, '[]');
-}
 
 const sidebars = (await import('./sidebars')).default;
 

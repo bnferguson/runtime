@@ -193,7 +193,7 @@ lint-pr: ## Run golangci-lint on changes from main
 docs-lint: ## Lint docs (no JS toolchain needed)
 	@bash hack/docs-lint.sh
 
-generate-check: ## Verify go generate is up to date
+generate-check: bin/miren ## Verify go generate is up to date
 	@echo "Checking if go generate produces any changes..."
 	@if [ -n "$$(git status --porcelain)" ]; then \
 		echo "Error: Working directory is not clean. Please commit or stash changes before running generate-check."; \
