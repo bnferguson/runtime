@@ -4,11 +4,10 @@
   "private": true,
   "scripts": {
     "docusaurus": "docusaurus",
-    "gen-commands": "cd .. && make bin/miren && hack/gen-command-docs --skip-build",
-    "dev": "bun run gen-commands && docusaurus start --port 3333",
+    "dev": "docusaurus start --port 3333",
     "start": "bun run dev",
     "lint": "bun run lint.ts",
-    "build": "bun run lint && bun run gen-commands && docusaurus build",
+    "build": "bun run lint && docusaurus build",
     "swizzle": "docusaurus swizzle",
     "deploy": "docusaurus deploy",
     "clear": "docusaurus clear",

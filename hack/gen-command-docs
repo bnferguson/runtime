@@ -5,7 +5,9 @@
 # Output: docs/docs/command/<name>.md for each command
 # URLs:   /command/deploy, /command/deploy-cancel, etc.
 #
-# Usage: ./hack/gen-command-docs [--skip-build]
+# Usage: ./hack/gen-command-docs
+#
+# Requires bin/miren to be built first (make bin/miren).
 
 set -euo pipefail
 
@@ -15,20 +17,6 @@ OUT_DIR="$ROOT_DIR/docs/docs/command"
 BINARY="$ROOT_DIR/bin/miren"
 WORK_DIR=$(mktemp -d)
 trap 'rm -rf "$WORK_DIR"' EXIT
-
-SKIP_BUILD=false
-for arg in "$@"; do
-  case "$arg" in
-    --skip-build) SKIP_BUILD=true ;;
-    *) echo "Unknown argument: $arg"; exit 1 ;;
-  esac
-done
-
-# Build binary if needed
-if [ "$SKIP_BUILD" = false ] && [ ! -f "$BINARY" ]; then
-  echo "Building miren binary..."
-  make -C "$ROOT_DIR" bin/miren
-fi
 
 if [ ! -f "$BINARY" ]; then
   echo "Error: $BINARY not found. Run 'make bin/miren' first." >&2

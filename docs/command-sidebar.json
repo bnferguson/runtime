@@ -1,0 +1,336 @@
+[
+  {
+    "type": "category",
+    "label": "addon",
+    "collapsed": true,
+    "link": {
+      "type": "doc",
+      "id": "command/addon"
+    },
+    "items": [
+      "command/addon-create",
+      "command/addon-destroy",
+      "command/addon-list",
+      "command/addon-list-available",
+      "command/addon-variants"
+    ]
+  },
+  "command/admin",
+  {
+    "type": "category",
+    "label": "alias",
+    "collapsed": true,
+    "link": {
+      "type": "doc",
+      "id": "command/alias"
+    },
+    "items": [
+      "command/alias-list"
+    ]
+  },
+  {
+    "type": "category",
+    "label": "app",
+    "collapsed": true,
+    "link": {
+      "type": "doc",
+      "id": "command/app"
+    },
+    "items": [
+      "command/app-delete",
+      "command/app-history",
+      "command/app-list",
+      "command/app-restart",
+      "command/app-run",
+      "command/app-status"
+    ]
+  },
+  "command/apps",
+  {
+    "type": "category",
+    "label": "auth",
+    "collapsed": true,
+    "link": {
+      "type": "doc",
+      "id": "command/auth"
+    },
+    "items": [
+      "command/auth-ci",
+      "command/auth-ci-add",
+      "command/auth-ci-list",
+      "command/auth-ci-remove",
+      "command/auth-generate"
+    ]
+  },
+  {
+    "type": "category",
+    "label": "cluster",
+    "collapsed": true,
+    "link": {
+      "type": "doc",
+      "id": "command/cluster"
+    },
+    "items": [
+      "command/cluster-add",
+      "command/cluster-current",
+      "command/cluster-export-address",
+      "command/cluster-list",
+      "command/cluster-remove",
+      "command/cluster-switch"
+    ]
+  },
+  {
+    "type": "category",
+    "label": "config",
+    "collapsed": true,
+    "link": {
+      "type": "doc",
+      "id": "command/config"
+    },
+    "items": [
+      "command/config-info",
+      "command/config-load"
+    ]
+  },
+  {
+    "type": "category",
+    "label": "debug",
+    "collapsed": true,
+    "link": {
+      "type": "doc",
+      "id": "command/debug"
+    },
+    "items": [
+      "command/debug-bundle",
+      "command/debug-colors",
+      "command/debug-connection",
+      "command/debug-ctr",
+      "command/debug-ctr-nuke",
+      "command/debug-disk",
+      "command/debug-disk-create",
+      "command/debug-disk-delete",
+      "command/debug-disk-lease",
+      "command/debug-disk-lease-delete",
+      "command/debug-disk-lease-list",
+      "command/debug-disk-lease-release",
+      "command/debug-disk-lease-status",
+      "command/debug-disk-list",
+      "command/debug-disk-migrate",
+      "command/debug-disk-mounts",
+      "command/debug-disk-status",
+      "command/debug-entity",
+      "command/debug-entity-create",
+      "command/debug-entity-delete",
+      "command/debug-entity-ensure",
+      "command/debug-entity-get",
+      "command/debug-entity-list",
+      "command/debug-entity-patch",
+      "command/debug-entity-put",
+      "command/debug-entity-replace",
+      "command/debug-netdb",
+      "command/debug-netdb-gc",
+      "command/debug-netdb-list",
+      "command/debug-netdb-release",
+      "command/debug-netdb-status",
+      "command/debug-rbac",
+      "command/debug-rbac-test",
+      "command/debug-reindex",
+      "command/debug-test",
+      "command/debug-test-load"
+    ]
+  },
+  {
+    "type": "category",
+    "label": "deploy",
+    "collapsed": true,
+    "link": {
+      "type": "doc",
+      "id": "command/deploy"
+    },
+    "items": [
+      "command/deploy-cancel"
+    ]
+  },
+  {
+    "type": "category",
+    "label": "disk",
+    "collapsed": true,
+    "link": {
+      "type": "doc",
+      "id": "command/disk"
+    },
+    "items": [
+      "command/disk-backup",
+      "command/disk-list-deleted",
+      "command/disk-restore",
+      "command/disk-undelete"
+    ]
+  },
+  {
+    "type": "category",
+    "label": "doctor",
+    "collapsed": true,
+    "link": {
+      "type": "doc",
+      "id": "command/doctor"
+    },
+    "items": [
+      "command/doctor-auth",
+      "command/doctor-config",
+      "command/doctor-server"
+    ]
+  },
+  {
+    "type": "category",
+    "label": "download",
+    "collapsed": true,
+    "link": {
+      "type": "doc",
+      "id": "command/download"
+    },
+    "items": [
+      "command/download-release"
+    ]
+  },
+  {
+    "type": "category",
+    "label": "env",
+    "collapsed": true,
+    "link": {
+      "type": "doc",
+      "id": "command/env"
+    },
+    "items": [
+      "command/env-delete",
+      "command/env-get",
+      "command/env-list",
+      "command/env-set"
+    ]
+  },
+  {
+    "type": "category",
+    "label": "help",
+    "collapsed": true,
+    "link": {
+      "type": "doc",
+      "id": "command/help"
+    },
+    "items": [
+      "command/help-alias"
+    ]
+  },
+  "command/init",
+  "command/login",
+  "command/logout",
+  {
+    "type": "category",
+    "label": "logs",
+    "collapsed": true,
+    "link": {
+      "type": "doc",
+      "id": "command/logs"
+    },
+    "items": [
+      "command/logs-app",
+      "command/logs-build",
+      "command/logs-sandbox",
+      "command/logs-system"
+    ]
+  },
+  "command/rollback",
+  {
+    "type": "category",
+    "label": "route",
+    "collapsed": true,
+    "link": {
+      "type": "doc",
+      "id": "command/route"
+    },
+    "items": [
+      "command/route-list",
+      "command/route-oidc",
+      "command/route-oidc-disable",
+      "command/route-oidc-enable",
+      "command/route-oidc-show",
+      "command/route-remove",
+      "command/route-set",
+      "command/route-set-default",
+      "command/route-show",
+      "command/route-unset-default"
+    ]
+  },
+  {
+    "type": "category",
+    "label": "runner",
+    "collapsed": true,
+    "link": {
+      "type": "doc",
+      "id": "command/runner"
+    },
+    "items": [
+      "command/runner-invite",
+      "command/runner-invite-list",
+      "command/runner-join",
+      "command/runner-list",
+      "command/runner-revoke",
+      "command/runner-start",
+      "command/runner-status"
+    ]
+  },
+  {
+    "type": "category",
+    "label": "sandbox",
+    "collapsed": true,
+    "link": {
+      "type": "doc",
+      "id": "command/sandbox"
+    },
+    "items": [
+      "command/sandbox-delete",
+      "command/sandbox-exec",
+      "command/sandbox-list",
+      "command/sandbox-stop"
+    ]
+  },
+  {
+    "type": "category",
+    "label": "sandbox-pool",
+    "collapsed": true,
+    "link": {
+      "type": "doc",
+      "id": "command/sandbox-pool"
+    },
+    "items": [
+      "command/sandbox-pool-list",
+      "command/sandbox-pool-set-desired"
+    ]
+  },
+  {
+    "type": "category",
+    "label": "server",
+    "collapsed": true,
+    "link": {
+      "type": "doc",
+      "id": "command/server"
+    },
+    "items": [
+      "command/server-config",
+      "command/server-config-generate",
+      "command/server-config-validate",
+      "command/server-docker",
+      "command/server-docker-install",
+      "command/server-docker-status",
+      "command/server-docker-uninstall",
+      "command/server-install",
+      "command/server-register",
+      "command/server-register-status",
+      "command/server-status",
+      "command/server-uninstall",
+      "command/server-upgrade",
+      "command/server-upgrade-rollback"
+    ]
+  },
+  "command/upgrade",
+  "command/version",
+  "command/whoami"
+]
