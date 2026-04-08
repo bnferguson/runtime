@@ -57,20 +57,16 @@ func SandboxList(ctx *Context, opts struct {
 		poolShortIdMap[pool.ID.String()] = ui.BriefId(e.Entity())
 	}
 
-	// Build a map of version ID -> short ID
-	versionKindRes, err := eac.LookupKind(ctx, "app_version")
-	if err != nil {
-		return err
-	}
-	versionsRes, err := eac.List(ctx, versionKindRes.Attr())
-	if err != nil {
-		return err
-	}
+	// Build a map of version ID -> short ID (best-effort for display)
 	versionShortIdMap := make(map[string]string)
-	for _, e := range versionsRes.Values() {
-		var v core_v1alpha.AppVersion
-		v.Decode(e.Entity())
-		versionShortIdMap[v.ID.String()] = ui.BriefId(e.Entity())
+	if versionKindRes, err := eac.LookupKind(ctx, "app_version"); err == nil {
+		if versionsRes, err := eac.List(ctx, versionKindRes.Attr()); err == nil {
+			for _, e := range versionsRes.Values() {
+				var v core_v1alpha.AppVersion
+				v.Decode(e.Entity())
+				versionShortIdMap[v.ID.String()] = ui.BriefId(e.Entity())
+			}
+		}
 	}
 
 	// Build a map of node entity ID -> human-readable name

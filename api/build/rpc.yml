@@ -218,11 +218,11 @@ interfaces:
         results:
           - name: version
             type: string
-          - name: version_short_id
-            type: string
           - name: access_info
             type: '*AccessInfo'
             doc: Information about how to access the deployed app
+          - name: version_short_id
+            type: string
 
       - name: analyzeApp
         doc: Analyze an app without building it, returning detected stack, services, and configuration
@@ -259,9 +259,9 @@ interfaces:
         results:
           - name: version
             type: string
-          - name: version_short_id
-            type: string
           - name: access_info
             type: '*AccessInfo'
             doc: Information about how to access the deployed app
+          - name: version_short_id
+            type: string
 
