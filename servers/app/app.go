@@ -54,6 +54,16 @@ func NewAppInfo(log *slog.Logger, ec *entityserver.Client, cpu *metrics.CPUUsage
 
 var _ app_v1alpha.Crud = &AppInfo{}
 
+// versionShortId looks up the short ID for a version entity by its full ID.
+func (r *AppInfo) versionShortId(ctx context.Context, versionId string) string {
+	var v core_v1alpha.AppVersion
+	ent, err := r.EC.GetByIdWithEntity(ctx, entity.Id(versionId), &v)
+	if err != nil {
+		return ""
+	}
+	return shortIDFromEntity(ent)
+}
+
 func shortIDFromEntity(ent *entityserver_v1alpha.Entity) string {
 	if ent == nil {
 		return ""
@@ -427,6 +437,9 @@ func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudS
 	}
 
 	state.Results().SetVersionId(appVer.Version)
+	if sid := r.versionShortId(ctx, string(avid)); sid != "" {
+		state.Results().SetVersionShortId(sid)
+	}
 
 	return nil
 }
@@ -525,6 +538,10 @@ func (r *AppInfo) GetConfiguration(ctx context.Context, state *app_v1alpha.CrudG
 	cfg.SetEntrypoint(spec.Entrypoint)
 
 	state.Results().SetConfiguration(&cfg)
+	state.Results().SetVersionId(appVer.Version)
+	if sid := r.versionShortId(ctx, string(appRec.ActiveVersion)); sid != "" {
+		state.Results().SetVersionShortId(sid)
+	}
 
 	return nil
 }
@@ -576,6 +593,9 @@ func (r *AppInfo) SetEnvVar(ctx context.Context, state *app_v1alpha.CrudSetEnvVa
 	}
 
 	state.Results().SetVersionId(versionId)
+	if sid := r.versionShortId(ctx, versionId); sid != "" {
+		state.Results().SetVersionShortId(sid)
+	}
 	return nil
 }
 
@@ -598,6 +618,9 @@ func (r *AppInfo) SetEnvVars(ctx context.Context, state *app_v1alpha.CrudSetEnvV
 	}
 
 	state.Results().SetVersionId(versionId)
+	if sid := r.versionShortId(ctx, versionId); sid != "" {
+		state.Results().SetVersionShortId(sid)
+	}
 	return nil
 }
 
@@ -610,6 +633,9 @@ func (r *AppInfo) DeleteEnvVar(ctx context.Context, state *app_v1alpha.CrudDelet
 	}
 
 	state.Results().SetVersionId(result.VersionID)
+	if sid := r.versionShortId(ctx, result.VersionID); sid != "" {
+		state.Results().SetVersionShortId(sid)
+	}
 	if len(result.DeletedSources) > 0 {
 		state.Results().SetDeletedSource(result.DeletedSources[0])
 	}

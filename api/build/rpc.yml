@@ -218,6 +218,8 @@ interfaces:
         results:
           - name: version
             type: string
+          - name: version_short_id
+            type: string
           - name: access_info
             type: '*AccessInfo'
             doc: Information about how to access the deployed app
@@ -256,6 +258,8 @@ interfaces:
             doc: Environment variables to set on the app (optional, applied with source=manual)
         results:
           - name: version
+            type: string
+          - name: version_short_id
             type: string
           - name: access_info
             type: '*AccessInfo'

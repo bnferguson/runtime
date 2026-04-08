@@ -1089,8 +1089,9 @@ func (v *BuilderBuildFromTarArgs) UnmarshalJSON(data []byte) error {
 }
 
 type builderBuildFromTarResultsData struct {
-	Version    *string      `cbor:"0,keyasint,omitempty" json:"version,omitempty"`
-	AccessInfo **AccessInfo `cbor:"1,keyasint,omitempty" json:"access_info,omitempty"`
+	Version        *string      `cbor:"0,keyasint,omitempty" json:"version,omitempty"`
+	VersionShortId *string      `cbor:"1,keyasint,omitempty" json:"version_short_id,omitempty"`
+	AccessInfo     **AccessInfo `cbor:"2,keyasint,omitempty" json:"access_info,omitempty"`
 }
 
 type BuilderBuildFromTarResults struct {
@@ -1100,6 +1101,10 @@ type BuilderBuildFromTarResults struct {
 
 func (v *BuilderBuildFromTarResults) SetVersion(version string) {
 	v.data.Version = &version
+}
+
+func (v *BuilderBuildFromTarResults) SetVersionShortId(version_short_id string) {
+	v.data.VersionShortId = &version_short_id
 }
 
 func (v *BuilderBuildFromTarResults) SetAccessInfo(access_info **AccessInfo) {
@@ -1337,8 +1342,9 @@ func (v *BuilderBuildFromPreparedArgs) UnmarshalJSON(data []byte) error {
 }
 
 type builderBuildFromPreparedResultsData struct {
-	Version    *string      `cbor:"0,keyasint,omitempty" json:"version,omitempty"`
-	AccessInfo **AccessInfo `cbor:"1,keyasint,omitempty" json:"access_info,omitempty"`
+	Version        *string      `cbor:"0,keyasint,omitempty" json:"version,omitempty"`
+	VersionShortId *string      `cbor:"1,keyasint,omitempty" json:"version_short_id,omitempty"`
+	AccessInfo     **AccessInfo `cbor:"2,keyasint,omitempty" json:"access_info,omitempty"`
 }
 
 type BuilderBuildFromPreparedResults struct {
@@ -1348,6 +1354,10 @@ type BuilderBuildFromPreparedResults struct {
 
 func (v *BuilderBuildFromPreparedResults) SetVersion(version string) {
 	v.data.Version = &version
+}
+
+func (v *BuilderBuildFromPreparedResults) SetVersionShortId(version_short_id string) {
+	v.data.VersionShortId = &version_short_id
 }
 
 func (v *BuilderBuildFromPreparedResults) SetAccessInfo(access_info **AccessInfo) {
@@ -1576,6 +1586,17 @@ func (v *BuilderClientBuildFromTarResults) Version() string {
 	return *v.data.Version
 }
 
+func (v *BuilderClientBuildFromTarResults) HasVersionShortId() bool {
+	return v.data.VersionShortId != nil
+}
+
+func (v *BuilderClientBuildFromTarResults) VersionShortId() string {
+	if v.data.VersionShortId == nil {
+		return ""
+	}
+	return *v.data.VersionShortId
+}
+
 func (v *BuilderClientBuildFromTarResults) HasAccessInfo() bool {
 	return v.data.AccessInfo != nil
 }
@@ -1693,6 +1714,17 @@ func (v *BuilderClientBuildFromPreparedResults) Version() string {
 		return ""
 	}
 	return *v.data.Version
+}
+
+func (v *BuilderClientBuildFromPreparedResults) HasVersionShortId() bool {
+	return v.data.VersionShortId != nil
+}
+
+func (v *BuilderClientBuildFromPreparedResults) VersionShortId() string {
+	if v.data.VersionShortId == nil {
+		return ""
+	}
+	return *v.data.VersionShortId
 }
 
 func (v *BuilderClientBuildFromPreparedResults) HasAccessInfo() bool {

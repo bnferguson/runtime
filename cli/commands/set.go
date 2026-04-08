@@ -36,7 +36,7 @@ func Set(ctx *Context, opts struct {
 		return err
 	}
 
-	ctx.Printf("new version id: %s\n", ui.CleanEntityID(setres.VersionId()))
+	ctx.Printf("new version id: %s\n", ui.DisplayShortID(setres.VersionShortId(), setres.VersionId()))
 
 	return nil
 }

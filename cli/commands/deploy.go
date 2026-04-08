@@ -553,6 +553,8 @@ func Deploy(ctx *Context, opts struct {
 	// buildCall wraps either BuildFromTar or BuildFromPrepared
 	type buildResults interface {
 		Version() string
+		HasVersionShortId() bool
+		VersionShortId() string
 		HasAccessInfo() bool
 		AccessInfo() *build_v1alpha.AccessInfo
 	}
@@ -813,9 +815,6 @@ func Deploy(ctx *Context, opts struct {
 
 	ctx.Log.Debug("Build completed", "version", results.Version())
 
-	// For now, use the version string as the app version identifier
-	// The build service creates app_version entities but we can't easily look them up yet
-	// TODO: Implement proper app version entity lookup when entity service access is available in CLI
 	appVersionId := results.Version()
 	if appVersionId == "" {
 		updateDeploymentOnError("Build did not return a version")
@@ -848,7 +847,8 @@ func Deploy(ctx *Context, opts struct {
 	}
 	finalizeSpan.End()
 
-	ctx.Printf("\n\nUpdated version %s deployed. All traffic moved to new version.\n", results.Version())
+	versionDisplay := ui.DisplayShortID(results.VersionShortId(), results.Version())
+	ctx.Printf("\n\nUpdated version %s deployed. All traffic moved to new version.\n", versionDisplay)
 
 	if len(deployWarnings) > 0 {
 		warnHeaderStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("208")).Bold(true)

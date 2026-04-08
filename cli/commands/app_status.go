@@ -83,7 +83,8 @@ func AppStatus(ctx *Context, opts struct {
 
 	// Version info
 	if appResult.HasVersionId() && appResult.VersionId() != "" {
-		ctx.Printf("%s %s\n", labelStyle.Render("Current Version:"), appResult.VersionId())
+		versionDisplay := ui.DisplayShortID(appResult.VersionShortId(), appResult.VersionId())
+		ctx.Printf("%s %s\n", labelStyle.Render("Current Version:"), versionDisplay)
 	} else {
 		ctx.Printf("%s %s\n", labelStyle.Render("Current Version:"), yellowStyle.Render("No version deployed"))
 	}

@@ -388,6 +388,8 @@ interfaces:
         results:
           - name: versionId
             type: string
+          - name: versionShortId
+            type: string
       - name: getConfiguration
         parameters:
           - name: app
@@ -396,6 +398,8 @@ interfaces:
           - name: configuration
             type: Configuration
           - name: versionId
+            type: string
+          - name: versionShortId
             type: string
       - name: setHost
         parameters:
@@ -428,6 +432,8 @@ interfaces:
         results:
           - name: versionId
             type: string
+          - name: versionShortId
+            type: string
       - name: setEnvVars
         parameters:
           - name: app
@@ -441,6 +447,8 @@ interfaces:
         results:
           - name: versionId
             type: string
+          - name: versionShortId
+            type: string
       - name: deleteEnvVar
         parameters:
           - name: app
@@ -452,6 +460,8 @@ interfaces:
             doc: "Optional service name for per-service env vars. Empty means global."
         results:
           - name: versionId
+            type: string
+          - name: versionShortId
             type: string
           - name: deletedSource
             type: string

@@ -930,6 +930,9 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	}
 
 	state.Results().SetVersion(result.version)
+	if result.versionShortId != "" {
+		state.Results().SetVersionShortId(result.versionShortId)
+	}
 	state.Results().SetAccessInfo(&result.accessInfo)
 
 	return nil
@@ -1064,14 +1067,18 @@ func (b *Builder) BuildFromPrepared(ctx context.Context, state *build_v1alpha.Bu
 	}
 
 	state.Results().SetVersion(result.version)
+	if result.versionShortId != "" {
+		state.Results().SetVersionShortId(result.versionShortId)
+	}
 	state.Results().SetAccessInfo(&result.accessInfo)
 
 	return nil
 }
 
 type buildResult struct {
-	version    string
-	accessInfo *build_v1alpha.AccessInfo
+	version        string
+	versionShortId string
+	accessInfo     *build_v1alpha.AccessInfo
 }
 
 func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
@@ -1472,9 +1479,21 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 
 	accessInfo := b.getAccessInfo(ctx, name)
 
+	// Look up the short ID for the newly created version entity
+	var versionShortId string
+	if ent, err := b.ec.GetByIdWithEntity(ctx, id, mrv); err == nil {
+		for _, attr := range ent.Attrs() {
+			if entity.Id(attr.ID) == entity.DBShortId {
+				versionShortId = attr.Value.String()
+				break
+			}
+		}
+	}
+
 	return &buildResult{
-		version:    mrv.Version,
-		accessInfo: accessInfo,
+		version:        mrv.Version,
+		versionShortId: versionShortId,
+		accessInfo:     accessInfo,
 	}, nil
 }
 

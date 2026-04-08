@@ -1986,7 +1986,8 @@ func (v *CrudSetConfigurationArgs) UnmarshalJSON(data []byte) error {
 }
 
 type crudSetConfigurationResultsData struct {
-	VersionId *string `cbor:"0,keyasint,omitempty" json:"versionId,omitempty"`
+	VersionId      *string `cbor:"0,keyasint,omitempty" json:"versionId,omitempty"`
+	VersionShortId *string `cbor:"1,keyasint,omitempty" json:"versionShortId,omitempty"`
 }
 
 type CrudSetConfigurationResults struct {
@@ -1996,6 +1997,10 @@ type CrudSetConfigurationResults struct {
 
 func (v *CrudSetConfigurationResults) SetVersionId(versionId string) {
 	v.data.VersionId = &versionId
+}
+
+func (v *CrudSetConfigurationResults) SetVersionShortId(versionShortId string) {
+	v.data.VersionShortId = &versionShortId
 }
 
 func (v *CrudSetConfigurationResults) MarshalCBOR() ([]byte, error) {
@@ -2051,8 +2056,9 @@ func (v *CrudGetConfigurationArgs) UnmarshalJSON(data []byte) error {
 }
 
 type crudGetConfigurationResultsData struct {
-	Configuration *Configuration `cbor:"0,keyasint,omitempty" json:"configuration,omitempty"`
-	VersionId     *string        `cbor:"1,keyasint,omitempty" json:"versionId,omitempty"`
+	Configuration  *Configuration `cbor:"0,keyasint,omitempty" json:"configuration,omitempty"`
+	VersionId      *string        `cbor:"1,keyasint,omitempty" json:"versionId,omitempty"`
+	VersionShortId *string        `cbor:"2,keyasint,omitempty" json:"versionShortId,omitempty"`
 }
 
 type CrudGetConfigurationResults struct {
@@ -2066,6 +2072,10 @@ func (v *CrudGetConfigurationResults) SetConfiguration(configuration *Configurat
 
 func (v *CrudGetConfigurationResults) SetVersionId(versionId string) {
 	v.data.VersionId = &versionId
+}
+
+func (v *CrudGetConfigurationResults) SetVersionShortId(versionShortId string) {
+	v.data.VersionShortId = &versionShortId
 }
 
 func (v *CrudGetConfigurationResults) MarshalCBOR() ([]byte, error) {
@@ -2352,7 +2362,8 @@ func (v *CrudSetEnvVarArgs) UnmarshalJSON(data []byte) error {
 }
 
 type crudSetEnvVarResultsData struct {
-	VersionId *string `cbor:"0,keyasint,omitempty" json:"versionId,omitempty"`
+	VersionId      *string `cbor:"0,keyasint,omitempty" json:"versionId,omitempty"`
+	VersionShortId *string `cbor:"1,keyasint,omitempty" json:"versionShortId,omitempty"`
 }
 
 type CrudSetEnvVarResults struct {
@@ -2362,6 +2373,10 @@ type CrudSetEnvVarResults struct {
 
 func (v *CrudSetEnvVarResults) SetVersionId(versionId string) {
 	v.data.VersionId = &versionId
+}
+
+func (v *CrudSetEnvVarResults) SetVersionShortId(versionShortId string) {
+	v.data.VersionShortId = &versionShortId
 }
 
 func (v *CrudSetEnvVarResults) MarshalCBOR() ([]byte, error) {
@@ -2441,7 +2456,8 @@ func (v *CrudSetEnvVarsArgs) UnmarshalJSON(data []byte) error {
 }
 
 type crudSetEnvVarsResultsData struct {
-	VersionId *string `cbor:"0,keyasint,omitempty" json:"versionId,omitempty"`
+	VersionId      *string `cbor:"0,keyasint,omitempty" json:"versionId,omitempty"`
+	VersionShortId *string `cbor:"1,keyasint,omitempty" json:"versionShortId,omitempty"`
 }
 
 type CrudSetEnvVarsResults struct {
@@ -2451,6 +2467,10 @@ type CrudSetEnvVarsResults struct {
 
 func (v *CrudSetEnvVarsResults) SetVersionId(versionId string) {
 	v.data.VersionId = &versionId
+}
+
+func (v *CrudSetEnvVarsResults) SetVersionShortId(versionShortId string) {
+	v.data.VersionShortId = &versionShortId
 }
 
 func (v *CrudSetEnvVarsResults) MarshalCBOR() ([]byte, error) {
@@ -2530,8 +2550,9 @@ func (v *CrudDeleteEnvVarArgs) UnmarshalJSON(data []byte) error {
 }
 
 type crudDeleteEnvVarResultsData struct {
-	VersionId     *string `cbor:"0,keyasint,omitempty" json:"versionId,omitempty"`
-	DeletedSource *string `cbor:"1,keyasint,omitempty" json:"deletedSource,omitempty"`
+	VersionId      *string `cbor:"0,keyasint,omitempty" json:"versionId,omitempty"`
+	VersionShortId *string `cbor:"1,keyasint,omitempty" json:"versionShortId,omitempty"`
+	DeletedSource  *string `cbor:"2,keyasint,omitempty" json:"deletedSource,omitempty"`
 }
 
 type CrudDeleteEnvVarResults struct {
@@ -2541,6 +2562,10 @@ type CrudDeleteEnvVarResults struct {
 
 func (v *CrudDeleteEnvVarResults) SetVersionId(versionId string) {
 	v.data.VersionId = &versionId
+}
+
+func (v *CrudDeleteEnvVarResults) SetVersionShortId(versionShortId string) {
+	v.data.VersionShortId = &versionShortId
 }
 
 func (v *CrudDeleteEnvVarResults) SetDeletedSource(deletedSource string) {
@@ -3121,6 +3146,17 @@ func (v *CrudClientSetConfigurationResults) VersionId() string {
 	return *v.data.VersionId
 }
 
+func (v *CrudClientSetConfigurationResults) HasVersionShortId() bool {
+	return v.data.VersionShortId != nil
+}
+
+func (v *CrudClientSetConfigurationResults) VersionShortId() string {
+	if v.data.VersionShortId == nil {
+		return ""
+	}
+	return *v.data.VersionShortId
+}
+
 func (v CrudClient) SetConfiguration(ctx context.Context, app string, configuration *Configuration) (*CrudClientSetConfigurationResults, error) {
 	args := CrudSetConfigurationArgs{}
 	args.data.App = &app
@@ -3158,6 +3194,17 @@ func (v *CrudClientGetConfigurationResults) VersionId() string {
 		return ""
 	}
 	return *v.data.VersionId
+}
+
+func (v *CrudClientGetConfigurationResults) HasVersionShortId() bool {
+	return v.data.VersionShortId != nil
+}
+
+func (v *CrudClientGetConfigurationResults) VersionShortId() string {
+	if v.data.VersionShortId == nil {
+		return ""
+	}
+	return *v.data.VersionShortId
 }
 
 func (v CrudClient) GetConfiguration(ctx context.Context, app string) (*CrudClientGetConfigurationResults, error) {
@@ -3258,6 +3305,17 @@ func (v *CrudClientSetEnvVarResults) VersionId() string {
 	return *v.data.VersionId
 }
 
+func (v *CrudClientSetEnvVarResults) HasVersionShortId() bool {
+	return v.data.VersionShortId != nil
+}
+
+func (v *CrudClientSetEnvVarResults) VersionShortId() string {
+	if v.data.VersionShortId == nil {
+		return ""
+	}
+	return *v.data.VersionShortId
+}
+
 func (v CrudClient) SetEnvVar(ctx context.Context, app string, key string, value string, sensitive bool, service string) (*CrudClientSetEnvVarResults, error) {
 	args := CrudSetEnvVarArgs{}
 	args.data.App = &app
@@ -3292,6 +3350,17 @@ func (v *CrudClientSetEnvVarsResults) VersionId() string {
 	return *v.data.VersionId
 }
 
+func (v *CrudClientSetEnvVarsResults) HasVersionShortId() bool {
+	return v.data.VersionShortId != nil
+}
+
+func (v *CrudClientSetEnvVarsResults) VersionShortId() string {
+	if v.data.VersionShortId == nil {
+		return ""
+	}
+	return *v.data.VersionShortId
+}
+
 func (v CrudClient) SetEnvVars(ctx context.Context, app string, vars []*NamedValue, service string) (*CrudClientSetEnvVarsResults, error) {
 	args := CrudSetEnvVarsArgs{}
 	args.data.App = &app
@@ -3323,6 +3392,17 @@ func (v *CrudClientDeleteEnvVarResults) VersionId() string {
 		return ""
 	}
 	return *v.data.VersionId
+}
+
+func (v *CrudClientDeleteEnvVarResults) HasVersionShortId() bool {
+	return v.data.VersionShortId != nil
+}
+
+func (v *CrudClientDeleteEnvVarResults) VersionShortId() string {
+	if v.data.VersionShortId == nil {
+		return ""
+	}
+	return *v.data.VersionShortId
 }
 
 func (v *CrudClientDeleteEnvVarResults) HasDeletedSource() bool {
