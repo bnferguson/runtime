@@ -10,9 +10,7 @@ import (
 func RunnerRevoke(ctx *Context, opts struct {
 	ConfigCentric
 
-	Args struct {
-		InviteID string `positional-arg-name:"invite-id" description:"ID of the invite to revoke" required:"true"`
-	} `positional-args:"yes" required:"true"`
+	InviteID string `position:"0" usage:"ID of the invite to revoke" required:"true"`
 }) error {
 	client, err := ctx.RPCClient(rpc.ServiceRunner)
 	if err != nil {
@@ -22,7 +20,7 @@ func RunnerRevoke(ctx *Context, opts struct {
 
 	rc := runner_v1alpha.NewRunnerRegistrationClient(client)
 
-	res, err := rc.RevokeInvite(ctx, opts.Args.InviteID)
+	res, err := rc.RevokeInvite(ctx, opts.InviteID)
 	if err != nil {
 		return err
 	}

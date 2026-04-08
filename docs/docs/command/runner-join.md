@@ -15,8 +15,13 @@ This command requires the `distributedrunners` [labs feature](/labs) to be enabl
 ## Usage
 
 ```bash
-miren runner join [flags]
+miren runner join <coordinatoraddr> <joincode> [flags]
 ```
+
+## Arguments
+
+- `coordinatoraddr` — Coordinator address (host:port)
+- `joincode` — Join code from 'miren runner invite'
 
 ## Flags
 

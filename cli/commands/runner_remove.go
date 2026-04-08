@@ -10,11 +10,8 @@ import (
 func RunnerRemove(ctx *Context, opts struct {
 	ConfigCentric
 
-	Force bool `long:"force" short:"f" description:"Force removal even if the runner has active sandboxes"`
-
-	Args struct {
-		Node string `positional-arg-name:"node" description:"Runner to remove (name, ID, or short ID)" required:"true"`
-	} `positional-args:"yes" required:"true"`
+	Force bool   `long:"force" short:"f" description:"Force removal even if the runner has active sandboxes"`
+	Node  string `position:"0" usage:"Runner to remove (name, ID, or short ID)" required:"true"`
 }) error {
 	client, err := ctx.RPCClient(rpc.ServiceRunner)
 	if err != nil {
@@ -24,7 +21,7 @@ func RunnerRemove(ctx *Context, opts struct {
 
 	rc := runner_v1alpha.NewRunnerRegistrationClient(client)
 
-	res, err := rc.RemoveRunner(ctx, opts.Args.Node, opts.Force)
+	res, err := rc.RemoveRunner(ctx, opts.Node, opts.Force)
 	if err != nil {
 		return err
 	}
