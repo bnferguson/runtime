@@ -15,8 +15,12 @@ This command requires the `distributedrunners` [labs feature](/labs) to be enabl
 ## Usage
 
 ```bash
-miren runner revoke [flags]
+miren runner revoke <inviteid> [flags]
 ```
+
+## Arguments
+
+- `inviteid` — ID of the invite to revoke
 
 ## Flags
 

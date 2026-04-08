@@ -15,8 +15,12 @@ This command requires the `distributedrunners` [labs feature](/labs) to be enabl
 ## Usage
 
 ```bash
-miren runner remove [flags]
+miren runner remove <node> [flags]
 ```
+
+## Arguments
+
+- `node` — Runner to remove (name, ID, or short ID)
 
 ## Flags
 

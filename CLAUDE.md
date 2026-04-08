@@ -62,6 +62,8 @@ Running commands:
 
 **Important**: The miren binary must be built **inside** the dev container (not on the host) so it has the correct architecture. Use `./hack/dev-exec make bin/miren` instead of `make bin/miren`.
 
+**Exception**: `go generate` and doc generation (`hack/gen-command-docs`) need host tools like `jq` that aren't in the dev container. For these, build the binary on the host with `make bin/miren` and run `go generate` on the host as well.
+
 **Managing the dev environment:**
 - `make dev-stop` - Stop and remove the persistent dev container
 - `make dev-restart` - Restart the dev environment (stop + start)

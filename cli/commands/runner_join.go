@@ -24,14 +24,12 @@ func RunnerJoin(ctx *Context, opts struct {
 	ConfigPath  string   `long:"config" description:"Path to save runner config" default:"/var/lib/miren/runner/config.yaml"`
 	RunnerID    string   `long:"runner-id" description:"Specific runner ID to use (for reconnecting)"`
 
-	Args struct {
-		Coordinator string `positional-arg-name:"coordinator" description:"Coordinator address (host:port)"`
-		JoinCode    string `positional-arg-name:"join-code" description:"Join code from 'miren runner invite'"`
-	} `positional-args:"yes"`
+	CoordinatorAddr string `position:"0" usage:"Coordinator address (host:port)"`
+	JoinCode        string `position:"1" usage:"Join code from 'miren runner invite'"`
 }) error {
 	coordinator := opts.Coordinator
 	if coordinator == "" {
-		coordinator = opts.Args.Coordinator
+		coordinator = opts.CoordinatorAddr
 	}
 	if coordinator == "" {
 		return fmt.Errorf("coordinator address is required")
@@ -50,7 +48,7 @@ func RunnerJoin(ctx *Context, opts struct {
 	// Resolve join code: --code flag > positional arg > stdin pipe > TTY prompt
 	code := opts.Code
 	if code == "" {
-		code = opts.Args.JoinCode
+		code = opts.JoinCode
 	}
 	if code == "" {
 		if stat, _ := os.Stdin.Stat(); stat.Mode()&os.ModeCharDevice == 0 {
