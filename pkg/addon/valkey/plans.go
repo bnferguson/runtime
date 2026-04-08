@@ -5,8 +5,9 @@ import (
 )
 
 const (
-	AddonName    = "miren-valkey"
-	DefaultImage = "docker.io/valkey/valkey:8"
+	AddonName      = "miren-valkey"
+	BaseImage      = "oci.miren.cloud/valkey"
+	DefaultVersion = "8"
 )
 
 const (
@@ -19,6 +20,8 @@ func Definition() addon.AddonDefinition {
 		DisplayName:    "Miren Valkey",
 		Description:    "Managed Valkey key-value store",
 		DefaultVariant: "small",
+		BaseImage:      BaseImage,
+		DefaultVersion: DefaultVersion,
 		Variants: []addon.VariantDefinition{
 			{
 				Name:        "small",

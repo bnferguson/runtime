@@ -640,6 +640,7 @@ type addonInstanceData struct {
 	Name    *string `cbor:"1,keyasint,omitempty" json:"name,omitempty"`
 	Addon   *string `cbor:"2,keyasint,omitempty" json:"addon,omitempty"`
 	Variant *string `cbor:"3,keyasint,omitempty" json:"variant,omitempty"`
+	Version *string `cbor:"4,keyasint,omitempty" json:"version,omitempty"`
 }
 
 type AddonInstance struct {
@@ -704,6 +705,21 @@ func (v *AddonInstance) Variant() string {
 
 func (v *AddonInstance) SetVariant(variant string) {
 	v.data.Variant = &variant
+}
+
+func (v *AddonInstance) HasVersion() bool {
+	return v.data.Version != nil
+}
+
+func (v *AddonInstance) Version() string {
+	if v.data.Version == nil {
+		return ""
+	}
+	return *v.data.Version
+}
+
+func (v *AddonInstance) SetVersion(version string) {
+	v.data.Version = &version
 }
 
 func (v *AddonInstance) MarshalCBOR() ([]byte, error) {
@@ -1908,6 +1924,7 @@ type addonsCreateInstanceArgsData struct {
 	Addon   *string `cbor:"1,keyasint,omitempty" json:"addon,omitempty"`
 	Variant *string `cbor:"2,keyasint,omitempty" json:"variant,omitempty"`
 	App     *string `cbor:"3,keyasint,omitempty" json:"app,omitempty"`
+	Version *string `cbor:"4,keyasint,omitempty" json:"version,omitempty"`
 }
 
 type AddonsCreateInstanceArgs struct {
@@ -1957,6 +1974,17 @@ func (v *AddonsCreateInstanceArgs) App() string {
 		return ""
 	}
 	return *v.data.App
+}
+
+func (v *AddonsCreateInstanceArgs) HasVersion() bool {
+	return v.data.Version != nil
+}
+
+func (v *AddonsCreateInstanceArgs) Version() string {
+	if v.data.Version == nil {
+		return ""
+	}
+	return *v.data.Version
 }
 
 func (v *AddonsCreateInstanceArgs) MarshalCBOR() ([]byte, error) {
@@ -2307,12 +2335,13 @@ func (v *AddonsClientCreateInstanceResults) Id() string {
 	return *v.data.Id
 }
 
-func (v AddonsClient) CreateInstance(ctx context.Context, name string, addon string, variant string, app string) (*AddonsClientCreateInstanceResults, error) {
+func (v AddonsClient) CreateInstance(ctx context.Context, name string, addon string, variant string, app string, version string) (*AddonsClientCreateInstanceResults, error) {
 	args := AddonsCreateInstanceArgs{}
 	args.data.Name = &name
 	args.data.Addon = &addon
 	args.data.Variant = &variant
 	args.data.App = &app
+	args.data.Version = &version
 
 	var ret addonsCreateInstanceResultsData
 

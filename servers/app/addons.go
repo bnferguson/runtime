@@ -16,18 +16,20 @@ import (
 
 // AddonsServer implements the app_v1alpha.Addons RPC interface.
 type AddonsServer struct {
-	log      *slog.Logger
-	ec       *entityserver.Client
-	registry *addon.Registry
+	log          *slog.Logger
+	ec           *entityserver.Client
+	registry     *addon.Registry
+	imageChecker addon.ImageChecker
 }
 
 var _ app_v1alpha.Addons = &AddonsServer{}
 
-func NewAddonsServer(log *slog.Logger, ec *entityserver.Client, registry *addon.Registry) *AddonsServer {
+func NewAddonsServer(log *slog.Logger, ec *entityserver.Client, registry *addon.Registry, imageChecker addon.ImageChecker) *AddonsServer {
 	return &AddonsServer{
-		log:      log.With("module", "addons-rpc"),
-		ec:       ec,
-		registry: registry,
+		log:          log.With("module", "addons-rpc"),
+		ec:           ec,
+		registry:     registry,
+		imageChecker: imageChecker,
 	}
 }
 
@@ -36,6 +38,7 @@ func (s *AddonsServer) CreateInstance(ctx context.Context, state *app_v1alpha.Ad
 	appName := args.App()
 	addonSpec := args.Addon()
 	variantOverride := args.Variant()
+	version := args.Version()
 
 	if appName == "" {
 		return fmt.Errorf("app name is required")
@@ -50,10 +53,22 @@ func (s *AddonsServer) CreateInstance(ctx context.Context, state *app_v1alpha.Ad
 		return err
 	}
 	if variantOverride != "" {
-		if _, err := s.registry.GetVariantConfig(addonName, variantOverride); err != nil {
+		if _, err := s.registry.GetVariantConfig(addonName, variantOverride, ""); err != nil {
 			return fmt.Errorf("invalid variant override: %w", err)
 		}
 		variantName = variantOverride
+	}
+
+	// Resolve and validate the container image
+	if s.imageChecker != nil {
+		variantConfig, err := s.registry.GetVariantConfig(addonName, variantName, version)
+		if err != nil {
+			return fmt.Errorf("resolving image: %w", err)
+		}
+		image := variantConfig[addon.ConfigImage]
+		if err := s.imageChecker.CheckImage(ctx, image); err != nil {
+			return err
+		}
 	}
 
 	// Look up the app entity
@@ -88,6 +103,7 @@ func (s *AddonsServer) CreateInstance(ctx context.Context, state *app_v1alpha.Ad
 		App:     app.ID,
 		Addon:   addonEntity.ID,
 		Variant: variantName,
+		Version: version,
 		Status:  "pending",
 	}
 
@@ -103,6 +119,7 @@ func (s *AddonsServer) CreateInstance(ctx context.Context, state *app_v1alpha.Ad
 		"app", appName,
 		"addon", addonName,
 		"variant", variantName,
+		"version", version,
 	)
 
 	return nil
@@ -136,6 +153,7 @@ func (s *AddonsServer) ListInstances(ctx context.Context, state *app_v1alpha.Add
 		instance.SetName(addon.NameFromRef(assoc.Addon))
 		instance.SetAddon(string(assoc.Addon))
 		instance.SetVariant(assoc.Variant)
+		instance.SetVersion(assoc.Version)
 		addons = append(addons, instance)
 	}
 

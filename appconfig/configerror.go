@@ -340,7 +340,7 @@ var validFields = map[string][]string{
 	"services.*.disks":       {"name", "provider", "mount_path", "read_only", "size_gb", "filesystem", "lease_timeout"},
 	"services.*.ports":       {"port", "name", "type", "node_port"},
 	"build":                  {"dockerfile", "onbuild", "version", "alpine_image"},
-	"addons.*":               {"variant"},
+	"addons.*":               {"variant", "version"},
 	"env":                    {"key", "value", "required", "sensitive", "description"},
 	"services.*.env":         {"key", "value", "required", "sensitive", "description"},
 }

@@ -1270,9 +1270,6 @@ func (c *SandboxController) setupHosts(sb *compute.Sandbox, name string) error {
 }
 
 func (c *SandboxController) resolver() remotes.Resolver {
-	headers := make(http.Header)
-	headers.Set("User-Agent", "containerd/2")
-
 	return docker.NewResolver(docker.ResolverOptions{
 		Hosts: func(host string) ([]docker.RegistryHost, error) {
 			switch host {
@@ -1292,19 +1289,7 @@ func (c *SandboxController) resolver() remotes.Resolver {
 
 				return []docker.RegistryHost{config}, nil
 			default:
-				config := docker.RegistryHost{
-					Client: http.DefaultClient,
-					Authorizer: docker.NewDockerAuthorizer(
-						docker.WithAuthHeader(headers)),
-					Host:         host,
-					Scheme:       "https",
-					Path:         "/v2",
-					Capabilities: docker.HostCapabilityPull | docker.HostCapabilityResolve | docker.HostCapabilityPush,
-				}
-
-				if host == "docker.io" {
-					config.Host = "registry-1.docker.io"
-				}
+				config := containerdx.DefaultRegistryHost(host)
 				return []docker.RegistryHost{config}, nil
 			}
 		},

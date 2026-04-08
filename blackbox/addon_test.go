@@ -234,6 +234,57 @@ func TestValkeyAddonCreateListDestroy(t *testing.T) {
 	harness.WaitForEnvVarRemoved(t, m, name, "VALKEY_URL", 5*time.Minute)
 }
 
+func TestAddonDeployWithVersionInAppToml(t *testing.T) {
+	c := harness.NewCluster(t)
+	m := harness.NewMiren(t, c)
+
+	name := harness.UniqueAppName(t, "bun-pg-ver")
+
+	hostDir := filepath.Join(c.TestdataDir, "bun-postgres-versioned")
+	containerDir := m.ContainerPath(hostDir)
+
+	t.Cleanup(func() {
+		t.Logf("cleaning up app %s", name)
+		m.Run("app", "delete", name, "-f")
+	})
+
+	m.MustRun("deploy", "-a", name, "-d", containerDir, "-f")
+
+	harness.WaitForAddonReady(t, m, name, "miren-postgresql", 30*time.Second)
+	harness.WaitForEnvVar(t, m, name, "DATABASE_URL", 5*time.Minute)
+
+	harness.WaitForAppReady(t, m, name, 3*time.Minute)
+
+	// Verify addon is listed with version
+	r := m.MustRun("addon", "list", "-a", name, "--format", "json")
+	r.RequireContains(t, "miren-postgresql")
+	r.RequireContains(t, `"version"`)
+	r.RequireContains(t, `"16"`)
+
+	// Set a route and verify the app responds with DB connectivity
+	host := name + ".test.local"
+	m.MustRun("route", "set", host, name)
+
+	harness.Poll(t, "app responds via route", 30*time.Second, 2*time.Second, func() (bool, string) {
+		code, body, err := harness.HTTPGet(m, host, "/health")
+		if err != nil {
+			return false, err.Error()
+		}
+		if code != 200 {
+			return false, "status " + body
+		}
+		return true, ""
+	})
+
+	code, body, err := harness.HTTPGet(m, host, "/")
+	if err != nil {
+		t.Fatalf("HTTP GET / failed: %v", err)
+	}
+	if code != 200 {
+		t.Fatalf("expected status 200, got %d: %s", code, body)
+	}
+}
+
 func TestAddonUnknownAddon(t *testing.T) {
 	c := harness.NewCluster(t)
 	m := harness.NewMiren(t, c)

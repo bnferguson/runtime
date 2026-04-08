@@ -112,9 +112,14 @@ func CreateDedicatedPool(ctx context.Context, in CreateDedicatedPoolIn) (CreateD
 		return CreateDedicatedPoolOut{}, fmt.Errorf("missing required config: %s", ConfigMemory)
 	}
 
+	image := in.VariantConfig[addon.ConfigImage]
+	if image == "" {
+		image = BaseImage + ":" + DefaultVersion
+	}
+
 	poolID, err := fw.CreateSandboxPool(ctx, addon.CreateSandboxPoolSpec{
 		Name:             in.ServerName,
-		Image:            DefaultImage,
+		Image:            image,
 		Command:          fmt.Sprintf("memcached -m %s", memory),
 		Ports:            memcacheContainerPorts(),
 		DesiredInstances: 1,

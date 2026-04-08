@@ -128,9 +128,14 @@ func CreateDedicatedPool(ctx context.Context, in CreateDedicatedPoolIn) (CreateD
 		"PGDATA=" + mountPath + "/pgdata",
 	}
 
+	image := in.VariantConfig[addon.ConfigImage]
+	if image == "" {
+		image = BaseImage + ":" + DefaultVersion
+	}
+
 	poolID, err := fw.CreateSandboxPool(ctx, addon.CreateSandboxPoolSpec{
 		Name:             in.ServerName,
-		Image:            DefaultImage,
+		Image:            image,
 		Env:              env,
 		Ports:            postgresContainerPorts(),
 		DesiredInstances: 1,

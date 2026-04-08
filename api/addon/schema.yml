@@ -11,6 +11,8 @@ kinds:
       type: string
     default_variant:
       type: string
+    default_version:
+      type: string
     locality_mode:
       type: string
     variants:
@@ -39,6 +41,8 @@ kinds:
       type: ref
       indexed: true
     variant:
+      type: string
+    version:
       type: string
     status:
       type: string

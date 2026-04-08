@@ -79,6 +79,7 @@ func (r *Registry) EnsureEntities(ctx context.Context, ec *entityserver.Client) 
 			DisplayName:    def.DisplayName,
 			Description:    def.Description,
 			DefaultVariant: def.DefaultVariant,
+			DefaultVersion: def.DefaultVersion,
 			LocalityMode:   string(ra.provider.LocalityMode()),
 			Variants:       variants,
 		}
@@ -118,8 +119,10 @@ func (r *Registry) ResolveAddonAndVariant(spec string) (addonName, variantName s
 	return "", "", fmt.Errorf("unknown variant %q for addon %q", variantName, addonName)
 }
 
-// GetVariantConfig returns the provider-internal config for a specific variant.
-func (r *Registry) GetVariantConfig(addonName, variantName string) (map[string]string, error) {
+// GetVariantConfig returns the provider-internal config for a specific variant,
+// with the resolved container image injected under the ConfigImage key.
+// If version is empty, the addon's default version is used.
+func (r *Registry) GetVariantConfig(addonName, variantName, version string) (map[string]string, error) {
 	_, def, ok := r.Get(addonName)
 	if !ok {
 		return nil, fmt.Errorf("unknown addon %q", addonName)
@@ -127,7 +130,13 @@ func (r *Registry) GetVariantConfig(addonName, variantName string) (map[string]s
 
 	for _, v := range def.Variants {
 		if v.Name == variantName {
-			return v.Config, nil
+			// Clone the config so we don't mutate the definition.
+			cfg := make(map[string]string, len(v.Config)+1)
+			for k, val := range v.Config {
+				cfg[k] = val
+			}
+			cfg[ConfigImage] = ResolveImage(def.BaseImage, def.DefaultVersion, version)
+			return cfg, nil
 		}
 	}
 

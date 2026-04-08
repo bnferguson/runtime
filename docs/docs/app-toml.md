@@ -265,13 +265,15 @@ When you deploy, Miren provisions declared addons and injects connection credent
 ```toml
 [addons.miren-postgresql]
 variant = "small"
+version = "16"
 ```
 
 | Field | Type | Description | Default |
 |-------|------|-------------|---------|
 | `variant` | string | Addon variant (e.g. `small`, `shared`) | Addon's default variant |
+| `version` | string | Software version tag, or a full image reference if it contains `:` | Addon's default version |
 
-Run `miren addon variants <addon-name>` to see available variants.
+Run `miren addon variants <addon-name>` to see available variants and `miren addon list-available` to see default versions.
 
 Addons removed from app.toml are automatically deprovisioned on the next deploy.
 

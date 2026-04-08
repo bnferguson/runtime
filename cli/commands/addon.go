@@ -38,6 +38,7 @@ func AddonListAvailable(ctx *Context, opts struct {
 			DisplayName    string   `json:"display_name"`
 			Description    string   `json:"description"`
 			DefaultVariant string   `json:"default_variant"`
+			DefaultVersion string   `json:"default_version"`
 			Variants       []string `json:"variants"`
 		}
 
@@ -54,6 +55,7 @@ func AddonListAvailable(ctx *Context, opts struct {
 				DisplayName:    addon.DisplayName,
 				Description:    addon.Description,
 				DefaultVariant: addon.DefaultVariant,
+				DefaultVersion: addon.DefaultVersion,
 				Variants:       variantNames,
 			})
 		}
@@ -61,7 +63,7 @@ func AddonListAvailable(ctx *Context, opts struct {
 	}
 
 	var rows []ui.Row
-	headers := []string{"ADDON", "DESCRIPTION", "VARIANTS", "DEFAULT VARIANT"}
+	headers := []string{"ADDON", "DESCRIPTION", "VARIANTS", "DEFAULT VARIANT", "DEFAULT VERSION"}
 
 	for _, e := range res.Values() {
 		var addon addon_v1alpha.Addon
@@ -77,6 +79,7 @@ func AddonListAvailable(ctx *Context, opts struct {
 			addon.Description,
 			strings.Join(variantNames, ", "),
 			addon.DefaultVariant,
+			addon.DefaultVersion,
 		})
 	}
 
@@ -185,7 +188,8 @@ func AddonVariants(ctx *Context, opts struct {
 
 func AddonCreate(ctx *Context, opts struct {
 	AppCentric
-	Spec string `position:"0" usage:"Addon spec (e.g., miren-postgresql:small)" required:"true"`
+	Spec    string `position:"0" usage:"Addon spec (e.g., miren-postgresql:small)" required:"true"`
+	Version string `long:"version" short:"V" description:"Software version or full image reference (e.g., 16, or registry.example.com/postgres:16-custom)"`
 }) error {
 	cl, err := ctx.RPCClient("dev.miren.runtime/addons")
 	if err != nil {
@@ -194,7 +198,7 @@ func AddonCreate(ctx *Context, opts struct {
 
 	addonsClient := app_v1alpha.NewAddonsClient(cl)
 
-	result, err := addonsClient.CreateInstance(ctx, "", opts.Spec, "", opts.App)
+	result, err := addonsClient.CreateInstance(ctx, "", opts.Spec, "", opts.App, opts.Version)
 	if err != nil {
 		return err
 	}
@@ -226,6 +230,7 @@ func AddonList(ctx *Context, opts struct {
 			ID      string `json:"id"`
 			Name    string `json:"name"`
 			Variant string `json:"variant"`
+			Version string `json:"version,omitempty"`
 		}
 
 		var infos []addonInfo
@@ -234,18 +239,24 @@ func AddonList(ctx *Context, opts struct {
 				ID:      a.Id(),
 				Name:    a.Name(),
 				Variant: a.Variant(),
+				Version: a.Version(),
 			})
 		}
 		return PrintJSON(infos)
 	}
 
 	var rows []ui.Row
-	headers := []string{"ADDON", "VARIANT"}
+	headers := []string{"ADDON", "VARIANT", "VERSION"}
 
 	for _, a := range addons {
+		version := a.Version()
+		if version == "" {
+			version = "(default)"
+		}
 		rows = append(rows, ui.Row{
 			a.Name(),
 			a.Variant(),
+			version,
 		})
 	}
 

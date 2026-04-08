@@ -117,9 +117,14 @@ func CreateDedicatedPool(ctx context.Context, in CreateDedicatedPoolIn) (CreateD
 	diskName := fmt.Sprintf("vk-%s-data", in.ServerName)
 	mountPath := "/data"
 
+	image := in.VariantConfig[addon.ConfigImage]
+	if image == "" {
+		image = BaseImage + ":" + DefaultVersion
+	}
+
 	poolID, err := fw.CreateSandboxPool(ctx, addon.CreateSandboxPoolSpec{
 		Name:             in.ServerName,
-		Image:            DefaultImage,
+		Image:            image,
 		Command:          "valkey-server --save 60 1",
 		Env:              []string{fmt.Sprintf("VALKEY_EXTRA_FLAGS=--requirepass %s", in.Password)},
 		Ports:            valkeyContainerPorts(),

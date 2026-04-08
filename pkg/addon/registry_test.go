@@ -14,6 +14,8 @@ func testDefinition() AddonDefinition {
 		DisplayName:    "Test Addon",
 		Description:    "A test addon",
 		DefaultVariant: "small",
+		BaseImage:      "docker.io/library/testdb",
+		DefaultVersion: "17",
 		Variants: []VariantDefinition{
 			{
 				Name:        "small",
@@ -124,19 +126,53 @@ func TestGetVariantConfig(t *testing.T) {
 	r := NewRegistry()
 	r.Register("test-addon", &mockProvider{}, testDefinition())
 
-	config, err := r.GetVariantConfig("test-addon", "small")
+	config, err := r.GetVariantConfig("test-addon", "small", "")
 	require.NoError(t, err)
 	assert.Equal(t, "500m", config["cpu"])
+	assert.Equal(t, "docker.io/library/testdb:17", config[ConfigImage])
 
-	config, err = r.GetVariantConfig("test-addon", "large")
+	config, err = r.GetVariantConfig("test-addon", "large", "")
 	require.NoError(t, err)
 	assert.Equal(t, "2000m", config["cpu"])
+	assert.Equal(t, "docker.io/library/testdb:17", config[ConfigImage])
+}
+
+func TestGetVariantConfigWithVersion(t *testing.T) {
+	r := NewRegistry()
+	r.Register("test-addon", &mockProvider{}, testDefinition())
+
+	config, err := r.GetVariantConfig("test-addon", "small", "16")
+	require.NoError(t, err)
+	assert.Equal(t, "docker.io/library/testdb:16", config[ConfigImage])
+}
+
+func TestGetVariantConfigWithFullImage(t *testing.T) {
+	r := NewRegistry()
+	r.Register("test-addon", &mockProvider{}, testDefinition())
+
+	config, err := r.GetVariantConfig("test-addon", "small", "registry.example.com/custom:v1")
+	require.NoError(t, err)
+	assert.Equal(t, "registry.example.com/custom:v1", config[ConfigImage])
+}
+
+func TestGetVariantConfigDoesNotMutateDefinition(t *testing.T) {
+	r := NewRegistry()
+	r.Register("test-addon", &mockProvider{}, testDefinition())
+
+	config1, err := r.GetVariantConfig("test-addon", "small", "16")
+	require.NoError(t, err)
+	assert.Equal(t, "docker.io/library/testdb:16", config1[ConfigImage])
+
+	// Second call with different version should not be affected
+	config2, err := r.GetVariantConfig("test-addon", "small", "15")
+	require.NoError(t, err)
+	assert.Equal(t, "docker.io/library/testdb:15", config2[ConfigImage])
 }
 
 func TestGetVariantConfigUnknownAddon(t *testing.T) {
 	r := NewRegistry()
 
-	_, err := r.GetVariantConfig("unknown", "small")
+	_, err := r.GetVariantConfig("unknown", "small", "")
 	assert.Error(t, err)
 }
 
@@ -144,6 +180,26 @@ func TestGetVariantConfigUnknownVariant(t *testing.T) {
 	r := NewRegistry()
 	r.Register("test-addon", &mockProvider{}, testDefinition())
 
-	_, err := r.GetVariantConfig("test-addon", "nonexistent")
+	_, err := r.GetVariantConfig("test-addon", "nonexistent", "")
 	assert.Error(t, err)
+}
+
+func TestResolveImage(t *testing.T) {
+	tests := []struct {
+		name     string
+		base     string
+		defVer   string
+		reqVer   string
+		expected string
+	}{
+		{"default version", "docker.io/library/postgres", "17", "", "docker.io/library/postgres:17"},
+		{"explicit version", "docker.io/library/postgres", "17", "16", "docker.io/library/postgres:16"},
+		{"full image ref", "docker.io/library/postgres", "17", "registry.example.com/pg:v1", "registry.example.com/pg:v1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, ResolveImage(tt.base, tt.defVer, tt.reqVer))
+		})
+	}
 }

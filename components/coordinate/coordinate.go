@@ -1057,7 +1057,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	var addonsClient *app_v1alpha.AddonsClient
 	if labs.Addons() {
-		addonsServer := app.NewAddonsServer(c.Log, ec, addonRegistry)
+		addonsServer := app.NewAddonsServer(c.Log, ec, addonRegistry, addon.NewRegistryImageChecker())
 		server.ExposeValue("dev.miren.runtime/addons", app_v1alpha.AdaptAddons(addonsServer))
 
 		addonsLoopback, err := rs.Connect(rs.LoopbackAddr(), "dev.miren.runtime/addons")

@@ -136,6 +136,9 @@ types:
       - name: variant
         type: string
         index: 3
+      - name: version
+        type: string
+        index: 4
 
 interfaces:
   - name: UserQuery
@@ -216,6 +219,8 @@ interfaces:
           - name: variant
             type: string
           - name: app
+            type: string
+          - name: version
             type: string
         results:
           - name: id

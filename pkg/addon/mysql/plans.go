@@ -5,8 +5,9 @@ import (
 )
 
 const (
-	AddonName    = "miren-mysql"
-	DefaultImage = "docker.io/library/mysql:8"
+	AddonName      = "miren-mysql"
+	BaseImage      = "oci.miren.cloud/mysql"
+	DefaultVersion = "8"
 )
 
 const (
@@ -20,6 +21,8 @@ func Definition() addon.AddonDefinition {
 		DisplayName:    "Miren MySQL",
 		Description:    "Managed MySQL database",
 		DefaultVariant: "small",
+		BaseImage:      BaseImage,
+		DefaultVersion: DefaultVersion,
 		Variants: []addon.VariantDefinition{
 			{
 				Name:        "small",

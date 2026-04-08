@@ -2,9 +2,14 @@ package addon
 
 import (
 	"context"
+	"strings"
 
 	"miren.dev/runtime/pkg/entity"
 )
+
+// ConfigImage is the well-known key used in variant config maps to pass
+// the resolved container image to provider saga actions.
+const ConfigImage = "_image"
 
 // LocalityMode describes where an addon's backing resources run.
 type LocalityMode string
@@ -74,6 +79,22 @@ type AddonDefinition struct {
 	Description    string
 	DefaultVariant string
 	Variants       []VariantDefinition
+	BaseImage      string // container image without tag (e.g., "oci.miren.cloud/postgres")
+	DefaultVersion string // default tag when no version is specified (e.g., "17")
+}
+
+// ResolveImage returns the container image for the given version.
+// If version is empty, the default version is used.
+// If version contains ":", it is used as the full image reference.
+// Otherwise, it is appended as a tag to the base image.
+func ResolveImage(baseImage, defaultVersion, requestedVersion string) string {
+	if requestedVersion == "" {
+		requestedVersion = defaultVersion
+	}
+	if strings.Contains(requestedVersion, ":") {
+		return requestedVersion
+	}
+	return baseImage + ":" + requestedVersion
 }
 
 // VariantDefinition describes a single variant within an addon.
@@ -82,6 +103,11 @@ type VariantDefinition struct {
 	Description string
 	Details     map[string]string // display key-value pairs shown to users
 	Config      map[string]string // provider-internal configuration
+}
+
+// ImageChecker validates that a container image is accessible in its registry.
+type ImageChecker interface {
+	CheckImage(ctx context.Context, image string) error
 }
 
 // NameFromRef extracts the addon name from an entity reference like "addon/postgresql".

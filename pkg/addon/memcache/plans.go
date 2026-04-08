@@ -5,8 +5,9 @@ import (
 )
 
 const (
-	AddonName    = "miren-memcache"
-	DefaultImage = "docker.io/library/memcached:1.6"
+	AddonName      = "miren-memcache"
+	BaseImage      = "oci.miren.cloud/memcached"
+	DefaultVersion = "1.6"
 )
 
 const (
@@ -19,6 +20,8 @@ func Definition() addon.AddonDefinition {
 		DisplayName:    "Miren Memcache",
 		Description:    "Managed Memcached in-memory cache",
 		DefaultVariant: "small",
+		BaseImage:      BaseImage,
+		DefaultVersion: DefaultVersion,
 		Variants: []addon.VariantDefinition{
 			{
 				Name:        "small",

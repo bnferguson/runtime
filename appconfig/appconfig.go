@@ -77,6 +77,7 @@ type ServiceConfig struct {
 // AddonConfig represents configuration for an addon in app.toml.
 type AddonConfig struct {
 	Variant string `toml:"variant"`
+	Version string `toml:"version"`
 }
 
 type AppConfig struct {

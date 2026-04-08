@@ -86,6 +86,9 @@ func TestSharedPostgreSQL_Integration(t *testing.T) {
 		err = env.executor.Start("ensure-shared-server").
 			WithID(execID).
 			Input("superuserpassword", superuserPassword).
+			Input("variantconfig", map[string]string{
+				addon.ConfigImage: postgresql.BaseImage + ":" + postgresql.DefaultVersion,
+			}).
 			Execute(ctx)
 		require.NoError(t, err)
 

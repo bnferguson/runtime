@@ -5,8 +5,9 @@ import (
 )
 
 const (
-	AddonName    = "miren-rabbitmq"
-	DefaultImage = "docker.io/library/rabbitmq:4"
+	AddonName      = "miren-rabbitmq"
+	BaseImage      = "oci.miren.cloud/rabbitmq"
+	DefaultVersion = "4"
 )
 
 const (
@@ -19,6 +20,8 @@ func Definition() addon.AddonDefinition {
 		DisplayName:    "Miren RabbitMQ",
 		Description:    "Managed RabbitMQ message broker",
 		DefaultVariant: "small",
+		BaseImage:      BaseImage,
+		DefaultVersion: DefaultVersion,
 		Variants: []addon.VariantDefinition{
 			{
 				Name:        "small",

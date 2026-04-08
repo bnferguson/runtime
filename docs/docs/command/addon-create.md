@@ -22,6 +22,10 @@ miren addon create <spec> [flags]
 
 - `spec` — Addon spec (e.g., miren-postgresql:small)
 
+## Flags
+
+- `--version, -V` — Software version or full image reference (e.g., `16`, or `registry.example.com/postgres:16-custom`)
+
 ## Config Options
 
 - `--cluster, -C` — Cluster name
@@ -44,6 +48,12 @@ miren addon create <spec> [flags]
 
 ```bash
 miren addon create miren-postgresql:small
+```
+
+**Attach a PostgreSQL addon with a specific version:**
+
+```bash
+miren addon create miren-postgresql:small --version 16
 ```
 
 ## See also

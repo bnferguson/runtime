@@ -5,8 +5,9 @@ import (
 )
 
 const (
-	AddonName    = "miren-postgresql"
-	DefaultImage = "docker.io/library/postgres:17"
+	AddonName      = "miren-postgresql"
+	BaseImage      = "oci.miren.cloud/postgres"
+	DefaultVersion = "17"
 )
 
 // Variant configuration keys
@@ -22,6 +23,8 @@ func Definition() addon.AddonDefinition {
 		DisplayName:    "Miren PostgreSQL",
 		Description:    "Managed PostgreSQL database",
 		DefaultVariant: "small",
+		BaseImage:      BaseImage,
+		DefaultVersion: DefaultVersion,
 		Variants: []addon.VariantDefinition{
 			{
 				Name:        "small",

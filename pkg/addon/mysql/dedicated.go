@@ -129,9 +129,14 @@ func CreateDedicatedPool(ctx context.Context, in CreateDedicatedPoolIn) (CreateD
 		"MYSQL_PASSWORD=" + in.Password,
 	}
 
+	image := in.VariantConfig[addon.ConfigImage]
+	if image == "" {
+		image = BaseImage + ":" + DefaultVersion
+	}
+
 	poolID, err := fw.CreateSandboxPool(ctx, addon.CreateSandboxPoolSpec{
 		Name:             in.ServerName,
-		Image:            DefaultImage,
+		Image:            image,
 		Env:              env,
 		Ports:            mysqlContainerPorts(),
 		DesiredInstances: 1,

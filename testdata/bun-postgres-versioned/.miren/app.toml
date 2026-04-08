@@ -1,0 +1,8 @@
+name = "bun-postgres-versioned"
+
+[services.web]
+command = "bun run index.ts"
+
+[addons.miren-postgresql]
+variant = "small"
+version = "16"

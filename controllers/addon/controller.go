@@ -76,8 +76,8 @@ func (c *Controller) provision(ctx context.Context, assoc *addon_v1alpha.AddonAs
 		return c.setError(meta, fmt.Errorf("unknown addon %q", addonName))
 	}
 
-	// Resolve variant config
-	variantConfig, err := c.registry.GetVariantConfig(addonName, assoc.Variant)
+	// Resolve variant config (includes resolved image based on version)
+	variantConfig, err := c.registry.GetVariantConfig(addonName, assoc.Variant, assoc.Version)
 	if err != nil {
 		return c.setError(meta, fmt.Errorf("resolving variant config: %w", err))
 	}

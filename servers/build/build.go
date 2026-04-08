@@ -1526,11 +1526,13 @@ func (b *Builder) getAccessInfo(ctx context.Context, appName string) *build_v1al
 func (b *Builder) provisionAddons(ctx context.Context, appName string, ac *appconfig.AppConfig) error {
 	for addonName, cfg := range ac.Addons {
 		variant := ""
+		version := ""
 		if cfg != nil {
 			variant = cfg.Variant
+			version = cfg.Version
 		}
 
-		_, err := b.addonsClient.CreateInstance(ctx, "", addonName, variant, appName)
+		_, err := b.addonsClient.CreateInstance(ctx, "", addonName, variant, appName, version)
 		if err != nil {
 			// "already attached" is expected on redeploys
 			if strings.Contains(err.Error(), "already attached") {
@@ -1539,7 +1541,7 @@ func (b *Builder) provisionAddons(ctx context.Context, appName string, ac *appco
 			}
 			return fmt.Errorf("provisioning addon %q for app %q: %w", addonName, appName, err)
 		}
-		b.Log.Info("addon provisioned from app.toml", "addon", addonName, "variant", variant, "app", appName)
+		b.Log.Info("addon provisioned from app.toml", "addon", addonName, "variant", variant, "version", version, "app", appName)
 	}
 
 	// Reconcile removals: if the addons section is explicitly present (even if

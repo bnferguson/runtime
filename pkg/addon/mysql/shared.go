@@ -60,7 +60,8 @@ func UndoCreateSharedServerEntity(ctx context.Context, in CreateSharedServerEnti
 }
 
 type CreateSharedPoolIn struct {
-	RootPassword string
+	RootPassword  string
+	VariantConfig map[string]string
 }
 
 type CreateSharedPoolOut struct {
@@ -89,9 +90,14 @@ func CreateSharedPool(ctx context.Context, in CreateSharedPoolIn) (CreateSharedP
 
 	diskName := sharedDiskNameForPassword(in.RootPassword)
 
+	image := in.VariantConfig[addon.ConfigImage]
+	if image == "" {
+		image = BaseImage + ":" + DefaultVersion
+	}
+
 	poolID, err := fw.CreateSandboxPool(ctx, addon.CreateSandboxPoolSpec{
 		Name:             sharedServerName,
-		Image:            DefaultImage,
+		Image:            image,
 		Env:              env,
 		Ports:            mysqlContainerPorts(),
 		DesiredInstances: 1,
@@ -178,7 +184,8 @@ func RegisterEnsureSharedServerSaga(registry *saga.Registry, fw *addon.ProviderF
 // --- Shared Provisioning Saga Actions ---
 
 type FindOrCreateSharedServerIn struct {
-	AppName string
+	AppName       string
+	VariantConfig map[string]string
 }
 
 type FindOrCreateSharedServerOut struct {
@@ -259,6 +266,7 @@ func FindOrCreateSharedServer(ctx context.Context, in FindOrCreateSharedServerIn
 
 	result, err := saga.RunNested(ctx, "ensure-shared-mysql-server",
 		saga.WithNestedInput("rootpassword", rootPassword),
+		saga.WithNestedInput("variantconfig", in.VariantConfig),
 	)
 	if err != nil {
 		return FindOrCreateSharedServerOut{}, fmt.Errorf("ensuring shared server: %w", err)
@@ -679,6 +687,7 @@ func (p *Provider) provisionShared(ctx context.Context, app addon.App, variant a
 
 	err := executor.Start("provision-shared-mysql").
 		Input("appname", app.Name).
+		Input("variantconfig", variant.Config).
 		Execute(ctx)
 	if err != nil {
 		return nil, err

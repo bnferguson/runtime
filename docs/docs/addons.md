@@ -13,13 +13,17 @@ Addons are managed services that Miren provisions and operates for your app. Ins
 | **Credentials** | Automatically injected as env vars | You configure manually |
 | **Best for** | Production databases, managed infrastructure | Custom software, full control |
 
-If you just need a PostgreSQL database for your app, use an addon. If you need custom PostgreSQL extensions, a specific version, or full control over the configuration, run it as a [service](/services).
+If you just need a PostgreSQL database for your app, use an addon. If you need custom PostgreSQL extensions or full control over the configuration, run it as a [service](/services).
 
 ## Available Addons
 
-| Addon | Description |
-|-------|-------------|
-| `miren-postgresql` | Managed PostgreSQL database |
+| Addon | Description | Supported Versions | Default |
+|-------|-------------|--------------------|---------|
+| `miren-postgresql` | Managed PostgreSQL database | 14, 15, 16, 17, 18 | 17 |
+| `miren-mysql` | Managed MySQL database | 8, 9 | 8 |
+| `miren-valkey` | Managed Valkey key-value store | 7, 8 | 8 |
+| `miren-rabbitmq` | Managed RabbitMQ message broker | 3, 4 | 4 |
+| `miren-memcache` | Managed Memcached in-memory cache | 1.4, 1.5, 1.6 | 1.6 |
 
 List available addons on your cluster:
 
@@ -54,6 +58,44 @@ Attach an addon to an existing app:
 miren addon create miren-postgresql:small -a myapp
 ```
 </CliCommand>
+
+## Version Selection
+
+Each addon uses a default software version (e.g., PostgreSQL 17). You can choose a different version when installing an addon.
+
+### Via app.toml
+
+```toml
+[addons.miren-postgresql]
+variant = "small"
+version = "16"
+```
+
+### Via CLI
+
+<CliCommand context="client">
+```miren
+miren addon create miren-postgresql:small -a myapp --version 16
+```
+</CliCommand>
+
+The `version` value is typically a tag from the [supported versions](#available-addons) listed above (e.g., `16` or `17`).
+
+If no version is specified, the addon's default version is used.
+
+Miren validates that the image is accessible in its registry before provisioning begins. If the image cannot be found, the `addon create` or deploy will fail immediately with a clear error.
+
+### Custom images
+
+If you need a custom build of the addon software (e.g., with additional extensions or patches), you can set `version` to a full OCI image reference:
+
+```toml
+[addons.miren-postgresql]
+variant = "small"
+version = "registry.example.com/custom-postgres:16-custom"
+```
+
+When the version value contains `:`, Miren uses it as the complete image reference instead of appending it as a tag to the addon's default base image. The image must be accessible from the cluster at provisioning time.
 
 ## Environment Variables
 
