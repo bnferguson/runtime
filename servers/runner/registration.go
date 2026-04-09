@@ -460,31 +460,35 @@ func (s *RegistrationServer) RemoveRunner(ctx context.Context, req *runner_v1alp
 		return nil
 	}
 
-	// Check for active schedules (sandboxes assigned to this node)
-	scheduleCount, err := s.countNodeSchedules(ctx, nodeID)
-	if err != nil {
-		s.Log.Error("Failed to check schedules", "node_id", nodeID, "error", err)
-		results.SetError("failed to check for active sandboxes")
-		return nil
-	}
+	// Check for active schedules (sandboxes assigned to this node).
+	// Skip the check entirely when --force is set so that a query error
+	// (e.g. missing index) can't block a forced removal.
+	if !force {
+		scheduleCount, err := s.countNodeSchedules(ctx, nodeID)
+		if err != nil {
+			s.Log.Error("Failed to check schedules", "node_id", nodeID, "error", err)
+			results.SetError("failed to check for active sandboxes")
+			return nil
+		}
 
-	if scheduleCount > 0 && !force {
-		results.SetError(fmt.Sprintf("runner has %d active sandbox schedule(s); use --force to remove anyway", scheduleCount))
-		return nil
+		if scheduleCount > 0 {
+			results.SetError(fmt.Sprintf("runner has %d active sandbox schedule(s); use --force to remove anyway", scheduleCount))
+			return nil
+		}
 	}
 
 	// Clean up associated resources
 	removedResources := int32(0)
 
-	// Delete schedules for this node
-	if scheduleCount > 0 {
+	// Delete schedules for this node (only needed on --force; the non-force
+	// path already rejected if any schedules existed).
+	if force {
 		deleted, err := s.deleteNodeSchedules(ctx, nodeID)
 		if err != nil {
-			s.Log.Error("Failed to delete schedules", "node_id", nodeID, "error", err)
-			results.SetError("failed to clean up schedules")
-			return nil
+			s.Log.Warn("Failed to delete schedules (continuing with --force)", "node_id", nodeID, "error", err)
+		} else {
+			removedResources += int32(deleted)
 		}
-		removedResources += int32(deleted)
 	}
 
 	// Delete disk mounts, volumes, and leases for this node
@@ -576,7 +580,7 @@ func (s *RegistrationServer) findNodeByQuery(ctx context.Context, query string) 
 }
 
 func (s *RegistrationServer) countNodeSchedules(ctx context.Context, nodeID entity.Id) (int, error) {
-	listResp, err := s.EAC.List(ctx, entity.Ref(compute_v1alpha.KeyNodeId, nodeID))
+	listResp, err := s.EAC.List(ctx, compute_v1alpha.Index(compute_v1alpha.KindSandbox, nodeID))
 	if err != nil {
 		return 0, err
 	}
@@ -584,7 +588,7 @@ func (s *RegistrationServer) countNodeSchedules(ctx context.Context, nodeID enti
 }
 
 func (s *RegistrationServer) deleteNodeSchedules(ctx context.Context, nodeID entity.Id) (int, error) {
-	listResp, err := s.EAC.List(ctx, entity.Ref(compute_v1alpha.KeyNodeId, nodeID))
+	listResp, err := s.EAC.List(ctx, compute_v1alpha.Index(compute_v1alpha.KindSandbox, nodeID))
 	if err != nil {
 		return 0, err
 	}
