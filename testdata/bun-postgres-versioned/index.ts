@@ -13,7 +13,7 @@ await sql`
 `;
 
 const server = Bun.serve({
-  port: process.env.PORT || 3000,
+  port: Number(process.env.PORT ?? 3000),
 
   async fetch(req) {
     const url = new URL(req.url);
