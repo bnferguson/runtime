@@ -24,7 +24,7 @@ miren addon create <spec> [flags]
 
 ## Flags
 
-- `--version, -V` — Software version or full image reference (e.g., `16`, or `registry.example.com/postgres:16-custom`)
+- `--version, -V` — Software version or full image reference (e.g., 16, or registry.example.com/postgres:16-custom)
 
 ## Config Options
 

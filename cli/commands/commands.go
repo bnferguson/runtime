@@ -420,6 +420,10 @@ miren deploy --analyze
 				Name: "Attach a PostgreSQL addon",
 				Body: "miren addon create miren-postgresql:small",
 			}),
+			WithExample(mflags.Example{
+				Name: "Attach a PostgreSQL addon with a specific version",
+				Body: "miren addon create miren-postgresql:small --version 16",
+			}),
 		))
 		d.Dispatch("addon list", Infer("addon list", "List addons attached to an application", AddonList,
 			WithLabsFeature(labs.FeatureAddons),
