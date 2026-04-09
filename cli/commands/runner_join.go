@@ -125,17 +125,29 @@ func RunnerJoin(ctx *Context, opts struct {
 		etcdEndpoints[i] = rewriteLoopbackEndpoint(ep, coordinatorHost)
 	}
 
+	// Rewrite loopback hosts in observability endpoints the same way we do for etcd.
+	vmAddress := res.VictoriametricsAddress()
+	if vmAddress != "" {
+		vmAddress = rewriteLoopbackEndpoint(vmAddress, coordinatorHost)
+	}
+	vlAddress := res.VictorialogsAddress()
+	if vlAddress != "" {
+		vlAddress = rewriteLoopbackEndpoint(vlAddress, coordinatorHost)
+	}
+
 	cfg := &runnerconfig.Config{
-		RunnerID:           runnerID,
-		Name:               name,
-		CoordinatorAddress: coordinator,
-		CACert:             string(res.CaPem()),
-		ClientCert:         string(res.CertPem()),
-		ClientKey:          string(res.KeyPem()),
-		Labels:             labels,
-		EtcdEndpoints:      etcdEndpoints,
-		EtcdPrefix:         res.EtcdPrefix(),
-		NetworkBackend:     res.NetworkBackend(),
+		RunnerID:               runnerID,
+		Name:                   name,
+		CoordinatorAddress:     coordinator,
+		CACert:                 string(res.CaPem()),
+		ClientCert:             string(res.CertPem()),
+		ClientKey:              string(res.KeyPem()),
+		Labels:                 labels,
+		EtcdEndpoints:          etcdEndpoints,
+		EtcdPrefix:             res.EtcdPrefix(),
+		NetworkBackend:         res.NetworkBackend(),
+		VictoriametricsAddress: vmAddress,
+		VictorialogsAddress:    vlAddress,
 	}
 
 	if err := cfg.Save(opts.ConfigPath); err != nil {

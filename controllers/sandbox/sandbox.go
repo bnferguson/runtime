@@ -457,6 +457,9 @@ func (c *SandboxController) Init(ctx context.Context) error {
 		c.Log.Error("failed to reconcile sandboxes on boot", "err", err)
 	}
 
+	if err := c.Metrics.Validate(); err != nil {
+		return fmt.Errorf("sandbox metrics validation failed: %w", err)
+	}
 	go c.Metrics.Monitor(c.topCtx)
 
 	// Initialize and start the container watchdog

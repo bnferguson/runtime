@@ -4,6 +4,7 @@ package sandbox
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -40,6 +41,20 @@ func NewMetrics() *Metrics {
 	return &Metrics{
 		namedEntries: make(map[string]*Cgroups),
 	}
+}
+
+// Validate checks that required fields are set so Monitor() won't nil-deref.
+func (m *Metrics) Validate() error {
+	if m.Log == nil {
+		return fmt.Errorf("sandbox metrics: Log is required")
+	}
+	if m.CPUUsage == nil {
+		return fmt.Errorf("sandbox metrics: CPUUsage is required")
+	}
+	if m.MemUsage == nil {
+		return fmt.Errorf("sandbox metrics: MemUsage is required")
+	}
+	return nil
 }
 
 func (m *Metrics) Add(name string, pathes map[string]string, attributes map[string]string) error {

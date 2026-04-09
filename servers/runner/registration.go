@@ -27,7 +27,7 @@ const (
 	MaxInviteExpiryHours     = 168 // 7 days
 )
 
-type RegistrationServer struct {
+type RegistrationServerConfig struct {
 	Log             *slog.Logger
 	Authority       *caauth.Authority
 	EAC             *entityserver_v1alpha.EntityAccessClient
@@ -35,20 +35,21 @@ type RegistrationServer struct {
 	EtcdEndpoints   []string
 	EtcdPrefix      string
 	NetworkBackend  string
+
+	// Observability endpoints provided to runners at join time
+	VictoriametricsAddress string
+	VictorialogsAddress    string
+}
+
+type RegistrationServer struct {
+	RegistrationServerConfig
 }
 
 var _ runner_v1alpha.RunnerRegistration = (*RegistrationServer)(nil)
 
-func NewRegistrationServer(log *slog.Logger, authority *caauth.Authority, eac *entityserver_v1alpha.EntityAccessClient, coordinatorAddr string, etcdEndpoints []string, etcdPrefix string, networkBackend string) *RegistrationServer {
-	return &RegistrationServer{
-		Log:             log.With("module", "runner-registration"),
-		Authority:       authority,
-		EAC:             eac,
-		CoordinatorAddr: coordinatorAddr,
-		EtcdEndpoints:   etcdEndpoints,
-		EtcdPrefix:      etcdPrefix,
-		NetworkBackend:  networkBackend,
-	}
+func NewRegistrationServer(cfg RegistrationServerConfig) *RegistrationServer {
+	cfg.Log = cfg.Log.With("module", "runner-registration")
+	return &RegistrationServer{RegistrationServerConfig: cfg}
 }
 
 func (s *RegistrationServer) CreateInvite(ctx context.Context, req *runner_v1alpha.RunnerRegistrationCreateInvite) error {
@@ -287,6 +288,12 @@ func (s *RegistrationServer) Join(ctx context.Context, req *runner_v1alpha.Runne
 	}
 	if s.NetworkBackend != "" {
 		results.SetNetworkBackend(s.NetworkBackend)
+	}
+	if s.VictoriametricsAddress != "" {
+		results.SetVictoriametricsAddress(s.VictoriametricsAddress)
+	}
+	if s.VictorialogsAddress != "" {
+		results.SetVictorialogsAddress(s.VictorialogsAddress)
 	}
 
 	return nil

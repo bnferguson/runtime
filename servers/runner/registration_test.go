@@ -48,13 +48,12 @@ func TestJoinCreatesNodeEntity(t *testing.T) {
 		t.Fatalf("failed to create CA: %v", err)
 	}
 
-	regServer := NewRegistrationServer(
-		testutils.TestLogger(t),
-		ca,
-		es.EAC,
-		"127.0.0.1:8443",
-		nil, "", "",
-	)
+	regServer := NewRegistrationServer(RegistrationServerConfig{
+		Log:             testutils.TestLogger(t),
+		Authority:       ca,
+		EAC:             es.EAC,
+		CoordinatorAddr: "127.0.0.1:8443",
+	})
 
 	localClient := rpc.LocalClient(runner_v1alpha.AdaptRunnerRegistration(regServer))
 	client := runner_v1alpha.NewRunnerRegistrationClient(localClient)
@@ -148,13 +147,12 @@ func TestRemoveRunner(t *testing.T) {
 		t.Fatalf("failed to create CA: %v", err)
 	}
 
-	regServer := NewRegistrationServer(
-		testutils.TestLogger(t),
-		ca,
-		es.EAC,
-		"127.0.0.1:8443",
-		nil, "", "",
-	)
+	regServer := NewRegistrationServer(RegistrationServerConfig{
+		Log:             testutils.TestLogger(t),
+		Authority:       ca,
+		EAC:             es.EAC,
+		CoordinatorAddr: "127.0.0.1:8443",
+	})
 
 	localClient := rpc.LocalClient(runner_v1alpha.AdaptRunnerRegistration(regServer))
 	client := runner_v1alpha.NewRunnerRegistrationClient(localClient)
@@ -221,13 +219,12 @@ func TestRemoveRunnerNotFound(t *testing.T) {
 		t.Fatalf("failed to create CA: %v", err)
 	}
 
-	regServer := NewRegistrationServer(
-		testutils.TestLogger(t),
-		ca,
-		es.EAC,
-		"127.0.0.1:8443",
-		nil, "", "",
-	)
+	regServer := NewRegistrationServer(RegistrationServerConfig{
+		Log:             testutils.TestLogger(t),
+		Authority:       ca,
+		EAC:             es.EAC,
+		CoordinatorAddr: "127.0.0.1:8443",
+	})
 
 	localClient := rpc.LocalClient(runner_v1alpha.AdaptRunnerRegistration(regServer))
 	client := runner_v1alpha.NewRunnerRegistrationClient(localClient)
@@ -255,13 +252,12 @@ func TestRemoveRunnerByRunnerId(t *testing.T) {
 		t.Fatalf("failed to create CA: %v", err)
 	}
 
-	regServer := NewRegistrationServer(
-		testutils.TestLogger(t),
-		ca,
-		es.EAC,
-		"127.0.0.1:8443",
-		nil, "", "",
-	)
+	regServer := NewRegistrationServer(RegistrationServerConfig{
+		Log:             testutils.TestLogger(t),
+		Authority:       ca,
+		EAC:             es.EAC,
+		CoordinatorAddr: "127.0.0.1:8443",
+	})
 
 	localClient := rpc.LocalClient(runner_v1alpha.AdaptRunnerRegistration(regServer))
 	client := runner_v1alpha.NewRunnerRegistrationClient(localClient)
