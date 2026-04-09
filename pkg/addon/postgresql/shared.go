@@ -40,6 +40,7 @@ const (
 
 type CreateSharedServerEntityIn struct {
 	SuperuserPassword string
+	VariantConfig     map[string]string
 }
 
 type CreateSharedServerEntityOut struct {
@@ -52,6 +53,7 @@ func CreateSharedServerEntity(ctx context.Context, in CreateSharedServerEntityIn
 	server := &addon_v1alpha.PostgresServer{
 		AddonName:         AddonName,
 		Variant:           "shared",
+		Image:             in.VariantConfig[addon.ConfigImage],
 		Status:            "provisioning",
 		AssociationCount:  0,
 		SuperuserPassword: in.SuperuserPassword,
@@ -269,6 +271,12 @@ func FindOrCreateSharedServer(ctx context.Context, in FindOrCreateSharedServerIn
 					return FindOrCreateSharedServerOut{}, fmt.Errorf("cleaning up stale shared server: %w", delErr)
 				}
 				break
+			}
+			requestedImage := in.VariantConfig[addon.ConfigImage]
+			if server.Image != "" && requestedImage != "" && server.Image != requestedImage {
+				return FindOrCreateSharedServerOut{}, fmt.Errorf(
+					"shared PostgreSQL server is running %s but version %s was requested; shared servers do not support mixed versions",
+					server.Image, requestedImage)
 			}
 			return FindOrCreateSharedServerOut{
 				ServerID:          server.ID,

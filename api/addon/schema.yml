@@ -66,6 +66,8 @@ kinds:
       indexed: true
     variant:
       type: string
+    image:
+      type: string
     sandbox_pool:
       type: ref
     service:
@@ -94,6 +96,8 @@ kinds:
       type: string
       indexed: true
     variant:
+      type: string
+    image:
       type: string
     sandbox_pool:
       type: ref
