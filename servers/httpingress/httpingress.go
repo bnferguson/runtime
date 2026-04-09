@@ -29,10 +29,12 @@ import (
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/httpingress/httpingress_v1alpha"
 	"miren.dev/runtime/api/ingress"
+	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/components/activator"
 	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/entity"
+	ephemeralx "miren.dev/runtime/pkg/ephemeral"
 	"miren.dev/runtime/pkg/httputil"
 	"miren.dev/runtime/pkg/oidc"
 	"miren.dev/runtime/pkg/rpc"
@@ -495,18 +497,41 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 
 	var targetAppId entity.Id
 	var routeType string
+	var ephemeralLabel string
 
 	if route != nil {
-		// Use the http route if found
+		// Exact or wildcard route matched
 		targetAppId = route.App
 		routeType = "route"
+
+		// Check for ephemeral subdomain label (only relevant for wildcard routes)
+		ephemeralLabel = ingress.ExtractSubdomainLabel(onlyHost, route.Host)
+		if ephemeralLabel != "" {
+			h.Log.Debug("detected ephemeral subdomain via wildcard route", "host", onlyHost, "label", ephemeralLabel, "app", targetAppId)
+		}
 
 		// Check if OIDC authentication is required
 		if !entity.Empty(route.OidcProvider) {
 			// Wrap the request handler with OIDC middleware
 			oidcWrapped := h.oidcMiddleware(route, func(w http.ResponseWriter, r *http.Request) {
 				// Continue with normal request handling after auth
-				h.serveAuthenticatedRequest(w, r, targetAppId, routeType, appName)
+				h.serveAuthenticatedRequest(w, r, targetAppId, routeType, ephemeralLabel, appName)
+			})
+			oidcWrapped(w, req)
+			return
+		}
+	} else if label, baseRoute, err := h.lookupEphemeralRoute(ctx, onlyHost); err == nil && baseRoute != nil {
+		// No exact or wildcard match, but stripping the first subdomain label
+		// matched an existing route — this is an ephemeral subdomain request.
+		route = baseRoute
+		targetAppId = baseRoute.App
+		routeType = "route"
+		ephemeralLabel = label
+		h.Log.Debug("detected ephemeral subdomain", "host", onlyHost, "label", label, "app", targetAppId)
+
+		if !entity.Empty(baseRoute.OidcProvider) {
+			oidcWrapped := h.oidcMiddleware(route, func(w http.ResponseWriter, r *http.Request) {
+				h.serveAuthenticatedRequest(w, r, targetAppId, routeType, ephemeralLabel, appName)
 			})
 			oidcWrapped(w, req)
 			return
@@ -539,7 +564,7 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 			route = defaultRoute
 			// Wrap with OIDC middleware
 			oidcWrapped := h.oidcMiddleware(route, func(w http.ResponseWriter, r *http.Request) {
-				h.serveAuthenticatedRequest(w, r, targetAppId, routeType, appName)
+				h.serveAuthenticatedRequest(w, r, targetAppId, routeType, ephemeralLabel, appName)
 			})
 			oidcWrapped(w, req)
 			return
@@ -547,11 +572,38 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 	}
 
 	// Continue with normal request handling
-	h.serveAuthenticatedRequest(w, req, targetAppId, routeType, appName)
+	h.serveAuthenticatedRequest(w, req, targetAppId, routeType, ephemeralLabel, appName)
+}
+
+// lookupEphemeralRoute checks whether the request host is an ephemeral
+// subdomain of an existing route. It strips the first DNS label and looks up
+// the remainder. For example, "feat-x.app.example.com" strips to
+// "app.example.com". If that matches a route, it returns the label ("feat-x")
+// and the matched route. This allows ephemeral subdomains to work with normal
+// (non-wildcard) routes — the user only needs a wildcard DNS record, not a
+// wildcard route entity.
+func (h *Server) lookupEphemeralRoute(ctx context.Context, host string) (string, *ingress_v1alpha.HttpRoute, error) {
+	idx := strings.Index(host, ".")
+	if idx <= 0 || idx == len(host)-1 {
+		return "", nil, nil
+	}
+
+	label := host[:idx]
+	base := host[idx+1:]
+
+	route, err := h.ingressClient.LookupWithWildcard(ctx, base)
+	if err != nil {
+		return "", nil, err
+	}
+	if route == nil {
+		return "", nil, nil
+	}
+
+	return label, route, nil
 }
 
 // serveAuthenticatedRequest handles the request after authentication (if any)
-func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Request, targetAppId entity.Id, routeType string, appName *string) {
+func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Request, targetAppId entity.Id, routeType string, ephemeralLabel string, appName *string) {
 	ctx := req.Context()
 
 	// Get app details first to have the name for metrics
@@ -621,25 +673,47 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 		// No cached lease — acquire a fresh one
 		leaseSpan.SetAttributes(attribute.Bool("miren.lease.cached", false))
 
-		if app.ActiveVersion == "" {
-			h.Log.Debug("no active version for app", "app", targetAppId)
-			http.Error(w, fmt.Sprintf("no active version for app: %s", targetAppId), http.StatusNotFound)
-			return
-		}
-
-		vr, err := h.eac.Get(ctx, app.ActiveVersion.String())
-		if err != nil {
-			h.Log.Error("error looking up application version", "error", err, "version", app.ActiveVersion)
-			http.Error(w, fmt.Sprintf("error looking up application version: %s", app.ActiveVersion), http.StatusInternalServerError)
-			return
-		}
-
 		var av core_v1alpha.AppVersion
-		av.Decode(vr.Entity().Entity())
 
-		leaseSpan.SetAttributes(
-			attribute.String("miren.app.version", app.ActiveVersion.String()),
-		)
+		if ephemeralLabel != "" {
+			// Resolve ephemeral version by label
+			ephVer, ephErr := ephemeralx.LookupByLabel(ctx, h.eac, targetAppId, ephemeralLabel)
+			if ephErr != nil {
+				h.Log.Error("error looking up ephemeral version", "error", ephErr, "label", ephemeralLabel)
+				http.Error(w, fmt.Sprintf("error looking up ephemeral version: %s", ephemeralLabel), http.StatusInternalServerError)
+				return
+			}
+			if ephVer == nil {
+				h.Log.Debug("no ephemeral version found", "label", ephemeralLabel, "app", targetAppId)
+				http.Error(w, fmt.Sprintf("ephemeral version %q not found or has expired", ephemeralLabel), http.StatusNotFound)
+				return
+			}
+			av = *ephVer
+			leaseSpan.SetAttributes(
+				attribute.String("miren.app.version", string(av.ID)),
+				attribute.String("miren.ephemeral.label", ephemeralLabel),
+			)
+		} else {
+			// Resolve active version
+			if app.ActiveVersion == "" {
+				h.Log.Debug("no active version for app", "app", targetAppId)
+				http.Error(w, fmt.Sprintf("no active version for app: %s", targetAppId), http.StatusNotFound)
+				return
+			}
+
+			vr, err := h.eac.Get(ctx, app.ActiveVersion.String())
+			if err != nil {
+				h.Log.Error("error looking up application version", "error", err, "version", app.ActiveVersion)
+				http.Error(w, fmt.Sprintf("error looking up application version: %s", app.ActiveVersion), http.StatusInternalServerError)
+				return
+			}
+
+			av.Decode(vr.Entity().Entity())
+
+			leaseSpan.SetAttributes(
+				attribute.String("miren.app.version", app.ActiveVersion.String()),
+			)
+		}
 
 		// Give lease acquisition a generous timeout to complete sandbox boot
 		// even if the client request times out. This prevents dangling resources.

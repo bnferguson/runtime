@@ -924,28 +924,28 @@ func TestDeployVersion(t *testing.T) {
 	}
 
 	t.Run("missing app_name returns error", func(t *testing.T) {
-		_, err := client.DeployVersion(ctx, "", "cluster1", "myapp-v1", false, nil)
+		_, err := client.DeployVersion(ctx, "", "cluster1", "myapp-v1", false, nil, "", "")
 		if err == nil {
 			t.Fatal("Expected error for empty app_name")
 		}
 	})
 
 	t.Run("missing cluster_id returns error", func(t *testing.T) {
-		_, err := client.DeployVersion(ctx, "myapp", "", "myapp-v1", false, nil)
+		_, err := client.DeployVersion(ctx, "myapp", "", "myapp-v1", false, nil, "", "")
 		if err == nil {
 			t.Fatal("Expected error for empty cluster_id")
 		}
 	})
 
 	t.Run("missing app_version_id returns error", func(t *testing.T) {
-		_, err := client.DeployVersion(ctx, "myapp", "cluster1", "", false, nil)
+		_, err := client.DeployVersion(ctx, "myapp", "cluster1", "", false, nil, "", "")
 		if err == nil {
 			t.Fatal("Expected error for empty app_version_id")
 		}
 	})
 
 	t.Run("non-existent version returns error in results", func(t *testing.T) {
-		result, err := client.DeployVersion(ctx, "myapp", "cluster1", "nonexistent-version", false, nil)
+		result, err := client.DeployVersion(ctx, "myapp", "cluster1", "nonexistent-version", false, nil, "", "")
 		if err != nil {
 			t.Fatalf("Unexpected RPC error: %v", err)
 		}
@@ -994,7 +994,7 @@ func TestDeployVersion(t *testing.T) {
 		}
 
 		// Deploy the version
-		result, err := client.DeployVersion(ctx, "testapp", "cluster1", "testapp-v1abc", false, nil)
+		result, err := client.DeployVersion(ctx, "testapp", "cluster1", "testapp-v1abc", false, nil, "", "")
 		if err != nil {
 			t.Fatalf("DeployVersion failed: %v", err)
 		}
@@ -1078,7 +1078,7 @@ func TestDeployVersion(t *testing.T) {
 		}
 
 		// Roll back to v1
-		result, err := client.DeployVersion(ctx, "rollback-app", "cluster1", "rollback-app-v1", true, nil)
+		result, err := client.DeployVersion(ctx, "rollback-app", "cluster1", "rollback-app-v1", true, nil, "", "")
 		if err != nil {
 			t.Fatalf("DeployVersion (rollback) failed: %v", err)
 		}
@@ -1131,7 +1131,7 @@ func TestDeployVersion(t *testing.T) {
 		}
 
 		// Try to deploy — should be blocked
-		result, err := client.DeployVersion(ctx, "locked-app", "cluster1", "locked-app-v1", false, nil)
+		result, err := client.DeployVersion(ctx, "locked-app", "cluster1", "locked-app-v1", false, nil, "", "")
 		if err != nil {
 			t.Fatalf("Unexpected RPC error: %v", err)
 		}
@@ -1143,6 +1143,143 @@ func TestDeployVersion(t *testing.T) {
 		}
 		if !result.HasLockInfo() || result.LockInfo() == nil {
 			t.Error("Expected lock info in response")
+		}
+	})
+}
+
+func TestDeployVersionEphemeral(t *testing.T) {
+	ctx := context.Background()
+
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	logger := slog.Default()
+	server, err := newTestDeploymentServer(t, logger, inmem)
+	if err != nil {
+		t.Fatalf("Failed to create deployment server: %v", err)
+	}
+
+	client := &deployment_v1alpha.DeploymentClient{
+		Client: rpc.LocalClient(deployment_v1alpha.AdaptDeployment(server)),
+	}
+
+	// Create an app entity
+	app := &core_v1alpha.App{}
+	_, err = inmem.Client.Create(ctx, "ephapp", app)
+	if err != nil {
+		t.Fatalf("Failed to create app: %v", err)
+	}
+
+	// Create an app version entity
+	appVersion := &core_v1alpha.AppVersion{
+		Version: "ephapp-v1abc",
+	}
+	_, err = inmem.Client.Create(ctx, "ephapp-v1abc", appVersion)
+	if err != nil {
+		t.Fatalf("Failed to create app version: %v", err)
+	}
+
+	t.Run("ephemeral deploy sets label and TTL without activating", func(t *testing.T) {
+		result, err := client.DeployVersion(ctx, "ephapp", "cluster1", "ephapp-v1abc", false, nil, "feat-preview", "48h")
+		if err != nil {
+			t.Fatalf("DeployVersion failed: %v", err)
+		}
+		if result.HasError() && result.Error() != "" {
+			t.Fatalf("DeployVersion returned error: %s", result.Error())
+		}
+
+		if !result.HasDeployment() || result.Deployment() == nil {
+			t.Fatal("Expected deployment in results")
+		}
+
+		dep := result.Deployment()
+		if dep.Status() != "active" {
+			t.Errorf("Expected deployment status 'active', got %q", dep.Status())
+		}
+
+		// Verify the app version was updated with ephemeral fields
+		var updatedVersion core_v1alpha.AppVersion
+		err = inmem.Client.Get(ctx, "ephapp-v1abc", &updatedVersion)
+		if err != nil {
+			t.Fatalf("Failed to get updated version: %v", err)
+		}
+
+		if updatedVersion.EphemeralLabel != "feat-preview" {
+			t.Errorf("Expected ephemeral label 'feat-preview', got %q", updatedVersion.EphemeralLabel)
+		}
+		if updatedVersion.EphemeralTtl != "48h" {
+			t.Errorf("Expected ephemeral TTL '48h', got %q", updatedVersion.EphemeralTtl)
+		}
+		if updatedVersion.EphemeralExpiresAt.IsZero() {
+			t.Error("Expected non-zero ephemeral expiry")
+		}
+
+		// Verify the app's active version was NOT changed
+		var appCheck core_v1alpha.App
+		err = inmem.Client.Get(ctx, "ephapp", &appCheck)
+		if err != nil {
+			t.Fatalf("Failed to get app: %v", err)
+		}
+		if appCheck.ActiveVersion != "" {
+			t.Errorf("Expected active version to remain empty for ephemeral deploy, got %q", appCheck.ActiveVersion)
+		}
+	})
+
+	t.Run("ephemeral deploy with invalid TTL returns error", func(t *testing.T) {
+		// Use a separate app to avoid deployment lock conflicts
+		badApp := &core_v1alpha.App{}
+		_, err := inmem.Client.Create(ctx, "ephapp-bad", badApp)
+		if err != nil {
+			t.Fatalf("Failed to create app: %v", err)
+		}
+
+		av2 := &core_v1alpha.AppVersion{Version: "ephapp-bad-v1"}
+		_, err = inmem.Client.Create(ctx, "ephapp-bad-v1", av2)
+		if err != nil {
+			t.Fatalf("Failed to create version: %v", err)
+		}
+
+		result, err := client.DeployVersion(ctx, "ephapp-bad", "cluster1", "ephapp-bad-v1", false, nil, "bad-ttl", "notaduration")
+		if err != nil {
+			t.Fatalf("DeployVersion failed: %v", err)
+		}
+		if !result.HasError() || result.Error() == "" {
+			t.Fatal("Expected error for invalid TTL")
+		}
+		if !containsString(result.Error(), "invalid ephemeral TTL") {
+			t.Errorf("Expected TTL error, got: %s", result.Error())
+		}
+	})
+
+	t.Run("ephemeral deploy defaults TTL to 24h", func(t *testing.T) {
+		// Use a separate app to avoid deployment lock conflicts
+		defaultApp := &core_v1alpha.App{}
+		_, err := inmem.Client.Create(ctx, "ephapp-default", defaultApp)
+		if err != nil {
+			t.Fatalf("Failed to create app: %v", err)
+		}
+
+		av3 := &core_v1alpha.AppVersion{Version: "ephapp-default-v1"}
+		_, err = inmem.Client.Create(ctx, "ephapp-default-v1", av3)
+		if err != nil {
+			t.Fatalf("Failed to create version: %v", err)
+		}
+
+		result, err := client.DeployVersion(ctx, "ephapp-default", "cluster1", "ephapp-default-v1", false, nil, "default-ttl", "")
+		if err != nil {
+			t.Fatalf("DeployVersion failed: %v", err)
+		}
+		if result.HasError() && result.Error() != "" {
+			t.Fatalf("DeployVersion returned error: %s", result.Error())
+		}
+
+		var updatedVersion core_v1alpha.AppVersion
+		err = inmem.Client.Get(ctx, "ephapp-default-v1", &updatedVersion)
+		if err != nil {
+			t.Fatalf("Failed to get version: %v", err)
+		}
+		if updatedVersion.EphemeralTtl != "24h" {
+			t.Errorf("Expected default TTL '24h', got %q", updatedVersion.EphemeralTtl)
 		}
 	})
 }

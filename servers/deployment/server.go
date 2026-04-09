@@ -16,6 +16,7 @@ import (
 	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
+	ephemeralx "miren.dev/runtime/pkg/ephemeral"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/standard"
@@ -777,6 +778,74 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 			"env_var_count", len(args.EnvVars()))
 	}
 
+	isEphemeral := args.HasEphemeralLabel() && args.EphemeralLabel() != ""
+
+	if isEphemeral {
+		// Ephemeral deploy: update version with ephemeral fields, skip activation.
+		// No deployment lock check or deployment record — ephemeral deploys are
+		// independent of the normal deployment lifecycle.
+		ephLabel := args.EphemeralLabel()
+		if err := ephemeralx.ValidateLabel(ephLabel); err != nil {
+			results.SetError(fmt.Sprintf("invalid ephemeral label: %v", err))
+			return nil
+		}
+		ephTTL := "24h"
+		if args.HasEphemeralTtl() && args.EphemeralTtl() != "" {
+			ephTTL = args.EphemeralTtl()
+		}
+		ttlDuration, parseErr := time.ParseDuration(ephTTL)
+		if parseErr != nil {
+			results.SetError(fmt.Sprintf("invalid ephemeral TTL %q: %v", ephTTL, parseErr))
+			return nil
+		}
+
+		// Replace existing ephemeral version with same label
+		appEntity, appErr := d.AppClient.GetByName(ctx, appName)
+		if appErr != nil {
+			results.SetError(fmt.Sprintf("failed to get app: %v", appErr))
+			return nil
+		}
+
+		if err := ephemeralx.ReplaceExisting(ctx, d.EAC, appEntity.ID, ephLabel, d.Log); err != nil {
+			d.Log.Warn("failed to replace existing ephemeral version", "label", ephLabel, "error", err)
+		}
+		if err := ephemeralx.EnforceLimit(ctx, d.EAC, appEntity.ID, ephemeralx.DefaultMaxEphemeral, d.Log); err != nil {
+			d.Log.Warn("failed to enforce ephemeral limit", "error", err)
+		}
+
+		// Update the AppVersion entity with ephemeral fields
+		appVersion.EphemeralLabel = ephLabel
+		appVersion.EphemeralTtl = ephTTL
+		appVersion.EphemeralExpiresAt = time.Now().Add(ttlDuration)
+
+		updateEntity := &entityserver_v1alpha.Entity{}
+		updateEntity.SetId(string(appVersion.ID))
+		updateEntity.SetAttrs(appVersion.Encode())
+		if current, getErr := d.EAC.Get(ctx, string(appVersion.ID)); getErr == nil {
+			updateEntity.SetRevision(current.Entity().Revision())
+			if _, putErr := d.EAC.Put(ctx, updateEntity); putErr != nil {
+				d.Log.Error("Failed to update version with ephemeral fields", "error", putErr)
+				results.SetError("failed to update version with ephemeral fields")
+				return nil
+			}
+		}
+
+		d.Log.Info("Created ephemeral version",
+			"app", appName, "version", appVersionId, "label", ephLabel,
+			"ttl", ephTTL, "expires_at", appVersion.EphemeralExpiresAt)
+
+		deploymentInfo := d.toDeploymentInfo(&core_v1alpha.Deployment{
+			AppName:    appName,
+			AppVersion: appVersionId,
+			ClusterId:  clusterId,
+			Status:     "active",
+		})
+		results.SetDeployment(deploymentInfo)
+		return nil
+	}
+
+	// --- Normal (non-ephemeral) deploy path below ---
+
 	// Check for existing in_progress deployments (deployment lock)
 	existingDeployments, err := d.listDeploymentsInternal(ctx, appName, clusterId, "in_progress", 1)
 	if err != nil {
@@ -828,13 +897,13 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 		existing.CompletedAt = time.Now().Format(time.RFC3339)
 
 		updateAttrs := existing.Encode()
-		updateEntity := &entityserver_v1alpha.Entity{}
-		updateEntity.SetId(string(existing.ID))
-		updateEntity.SetAttrs(updateAttrs)
+		lockUpdateEntity := &entityserver_v1alpha.Entity{}
+		lockUpdateEntity.SetId(string(existing.ID))
+		lockUpdateEntity.SetAttrs(updateAttrs)
 
 		if existingEntity, getErr := d.EAC.Get(ctx, string(existing.ID)); getErr == nil {
-			updateEntity.SetRevision(existingEntity.Entity().Revision())
-			if _, putErr := d.EAC.Put(ctx, updateEntity); putErr != nil {
+			lockUpdateEntity.SetRevision(existingEntity.Entity().Revision())
+			if _, putErr := d.EAC.Put(ctx, lockUpdateEntity); putErr != nil {
 				d.Log.Error("Failed to mark expired deployment as failed", "error", putErr)
 			}
 		}
@@ -890,48 +959,50 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 	deployment.ID = entity.Id(putResp.Id())
 	newDeploymentId := putResp.Id()
 
-	// Activate the version via AppClient
-	if err := d.AppClient.SetActiveVersion(ctx, appName, string(appVersion.ID)); err != nil {
-		d.Log.Error("Failed to set active version", "error", err, "app", appName, "version_id", string(appVersion.ID))
+	{
+		// Normal deploy: activate the version
+		if err := d.AppClient.SetActiveVersion(ctx, appName, string(appVersion.ID)); err != nil {
+			d.Log.Error("Failed to set active version", "error", err, "app", appName, "version_id", string(appVersion.ID))
 
-		deployment.Status = "failed"
-		deployment.ErrorMessage = fmt.Sprintf("failed to activate version: %v", err)
+			deployment.Status = "failed"
+			deployment.ErrorMessage = fmt.Sprintf("failed to activate version: %v", err)
+			deployment.CompletedAt = time.Now().Format(time.RFC3339)
+			if current, getErr := d.EAC.Get(ctx, newDeploymentId); getErr == nil {
+				failEntity := &entityserver_v1alpha.Entity{}
+				failEntity.SetId(newDeploymentId)
+				failEntity.SetAttrs(deployment.Encode())
+				failEntity.SetRevision(current.Entity().Revision())
+				if _, putErr := d.EAC.Put(ctx, failEntity); putErr != nil {
+					d.Log.Error("Failed to mark deployment as failed", "error", putErr)
+				}
+			}
+
+			results.SetError(fmt.Sprintf("failed to activate version: %v", err))
+			return nil
+		}
+
+		// Activation succeeded — mark deployment active
+		deployment.Status = "active"
 		deployment.CompletedAt = time.Now().Format(time.RFC3339)
 		if current, getErr := d.EAC.Get(ctx, newDeploymentId); getErr == nil {
-			failEntity := &entityserver_v1alpha.Entity{}
-			failEntity.SetId(newDeploymentId)
-			failEntity.SetAttrs(deployment.Encode())
-			failEntity.SetRevision(current.Entity().Revision())
-			if _, putErr := d.EAC.Put(ctx, failEntity); putErr != nil {
-				d.Log.Error("Failed to mark deployment as failed", "error", putErr)
+			activeEntity := &entityserver_v1alpha.Entity{}
+			activeEntity.SetId(newDeploymentId)
+			activeEntity.SetAttrs(deployment.Encode())
+			activeEntity.SetRevision(current.Entity().Revision())
+			if _, putErr := d.EAC.Put(ctx, activeEntity); putErr != nil {
+				d.Log.Error("Failed to update deployment status to active", "error", putErr)
 			}
 		}
 
-		results.SetError(fmt.Sprintf("failed to activate version: %v", err))
-		return nil
-	}
-
-	// Activation succeeded — mark deployment active
-	deployment.Status = "active"
-	deployment.CompletedAt = time.Now().Format(time.RFC3339)
-	if current, getErr := d.EAC.Get(ctx, newDeploymentId); getErr == nil {
-		activeEntity := &entityserver_v1alpha.Entity{}
-		activeEntity.SetId(newDeploymentId)
-		activeEntity.SetAttrs(deployment.Encode())
-		activeEntity.SetRevision(current.Entity().Revision())
-		if _, putErr := d.EAC.Put(ctx, activeEntity); putErr != nil {
-			d.Log.Error("Failed to update deployment status to active", "error", putErr)
+		// Mark previous active deployments
+		targetStatus := "succeeded"
+		if isRollback {
+			targetStatus = "rolled_back"
 		}
-	}
-
-	// Mark previous active deployments
-	targetStatus := "succeeded"
-	if isRollback {
-		targetStatus = "rolled_back"
-	}
-	if err := d.markPreviousActiveAs(ctx, appName, clusterId, newDeploymentId, targetStatus); err != nil {
-		d.Log.Error("Failed to mark previous active deployments", "error", err)
-		// Don't fail — the new deployment is already created and active
+		if err := d.markPreviousActiveAs(ctx, appName, clusterId, newDeploymentId, targetStatus); err != nil {
+			d.Log.Error("Failed to mark previous active deployments", "error", err)
+			// Don't fail — the new deployment is already created and active
+		}
 	}
 
 	deploymentInfo := d.toDeploymentInfo(deployment)
