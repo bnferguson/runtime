@@ -1,9 +1,9 @@
 {
   "summary": {
     "harness_overhead_s": 1.93,
-    "total_test_time_s": 604.75,
-    "package_count": 98,
-    "passed": 98,
+    "total_test_time_s": 632.76,
+    "package_count": 103,
+    "passed": 103,
     "failed": 0
   },
   "packages": [
@@ -52,6 +52,12 @@
     {
       "package": "miren.dev/runtime/controllers/sandbox/watchdogtest",
       "elapsed_s": 25.64,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/cli",
+      "elapsed_s": 22.09,
       "status": "pass",
       "returncode": 0
     },
@@ -592,6 +598,30 @@
     {
       "package": "miren.dev/runtime/pkg/shellwords",
       "elapsed_s": 2.03,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/addon/rabbitmq",
+      "elapsed_s": 1.5,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/addon/memcache",
+      "elapsed_s": 1.48,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/addon/mysql",
+      "elapsed_s": 1.47,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/addon/valkey",
+      "elapsed_s": 1.47,
       "status": "pass",
       "returncode": 0
     }
