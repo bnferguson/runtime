@@ -217,14 +217,7 @@ func (s *RegistrationServer) Join(ctx context.Context, req *runner_v1alpha.Runne
 		version = args.Version()
 	}
 
-	if invite.Reusable {
-		// Reusable invite: increment enrollment count, don't consume
-		if err := s.incrementEnrollmentCount(ctx, invite, inviteRevision); err != nil {
-			s.Log.Error("Failed to increment enrollment count", "error", err, "invite_id", invite.ID)
-			results.SetError("failed to complete registration")
-			return nil
-		}
-	} else {
+	if !invite.Reusable {
 		// One-time invite: claim it (PENDING->CLAIMED) with CAS to prevent
 		// concurrent joins from minting multiple certificates
 		invite.Status = runner_v1alpha.CLAIMED
@@ -322,6 +315,15 @@ func (s *RegistrationServer) Join(ctx context.Context, req *runner_v1alpha.Runne
 		s.Log.Error("Failed to create node entity", "error", err, "runner_id", runnerID)
 		results.SetError("failed to register runner")
 		return nil
+	}
+
+	// Increment enrollment count after everything succeeded, so the count
+	// only reflects runners that actually completed the join.
+	if invite.Reusable {
+		if err := s.incrementEnrollmentCount(ctx, invite, inviteRevision); err != nil {
+			s.Log.Warn("Failed to increment enrollment count (runner joined successfully)",
+				"error", err, "invite_id", invite.ID, "runner_id", runnerID)
+		}
 	}
 
 	s.Log.Info("Runner joined successfully",
