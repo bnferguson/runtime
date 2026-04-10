@@ -22,6 +22,18 @@ interfaces:
           - name: expires_in_hours
             type: int32
             doc: Hours until the invite expires (default 1)
+          - name: name
+            type: string
+            doc: Human-readable name for this invite
+          - name: reusable
+            type: bool
+            doc: Create a reusable invite (not consumed on use)
+          - name: ttl_seconds
+            type: int64
+            doc: Time-to-live in seconds (alternative to expires_in_hours)
+          - name: coordinator_addr
+            type: string
+            doc: Override coordinator address baked into the token
         results:
           - name: code
             type: string
@@ -180,6 +192,18 @@ types:
         type: standard.Timestamp
         index: 6
         doc: When the invite was claimed (if claimed)
+      - name: name
+        type: string
+        index: 7
+        doc: Human-readable name
+      - name: reusable
+        type: bool
+        index: 8
+        doc: Whether this is a reusable invite
+      - name: enrollment_count
+        type: int32
+        index: 9
+        doc: Number of runners enrolled via this invite
 
   - type: RunnerInfo
     doc: Information about a registered runner

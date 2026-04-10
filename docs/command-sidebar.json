@@ -268,14 +268,15 @@
       "id": "command/runner"
     },
     "items": [
-      "command/runner-invite",
-      "command/runner-invite-list",
       "command/runner-join",
       "command/runner-list",
       "command/runner-remove",
-      "command/runner-revoke",
       "command/runner-start",
-      "command/runner-status"
+      "command/runner-status",
+      "command/runner-token",
+      "command/runner-token-create",
+      "command/runner-token-list",
+      "command/runner-token-revoke"
     ]
   },
   {

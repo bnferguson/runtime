@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"miren.dev/runtime/api/runner/runner_v1alpha"
-	"miren.dev/runtime/pkg/joincode"
+	"miren.dev/runtime/pkg/enrolltoken"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/runnerconfig"
 	"miren.dev/runtime/pkg/ui"
@@ -16,63 +16,64 @@ import (
 )
 
 func RunnerJoin(ctx *Context, opts struct {
-	Coordinator string   `short:"c" long:"coordinator" description:"Coordinator address (host:port)"`
-	Code        string   `long:"code" description:"Join code (or pass via stdin)"`
+	Coordinator string   `short:"c" long:"coordinator" description:"Override coordinator address from the token"`
+	Token       string   `long:"token" description:"Enrollment token (or pass as positional arg / via stdin)"`
 	ListenAddr  string   `short:"l" long:"listen" description:"Address this runner will listen on"`
 	Name        string   `long:"name" description:"Human-readable name for this runner (defaults to hostname)"`
 	Labels      []string `long:"labels" description:"Additional labels for the runner (key=value)"`
 	ConfigPath  string   `long:"config" description:"Path to save runner config" default:"/var/lib/miren/runner/config.yaml"`
 	RunnerID    string   `long:"runner-id" description:"Specific runner ID to use (for reconnecting)"`
 
-	CoordinatorAddr string `position:"0" usage:"Coordinator address (host:port)"`
-	JoinCode        string `position:"1" usage:"Join code from 'miren runner invite'"`
+	TokenArg string `position:"0" usage:"Enrollment token from 'miren runner invite'"`
 }) error {
-	coordinator := opts.Coordinator
-	if coordinator == "" {
-		coordinator = opts.CoordinatorAddr
+	if runnerconfig.Exists(opts.ConfigPath) {
+		return fmt.Errorf("runner config already exists at %s; remove it first to re-register", opts.ConfigPath)
 	}
-	if coordinator == "" {
-		return fmt.Errorf("coordinator address is required")
+
+	// Resolve token: --token flag > positional arg > stdin pipe > TTY prompt
+	token := opts.Token
+	if token == "" {
+		token = opts.TokenArg
+	}
+	if token == "" {
+		if stat, _ := os.Stdin.Stat(); stat.Mode()&os.ModeCharDevice == 0 {
+			scanner := bufio.NewScanner(os.Stdin)
+			if scanner.Scan() {
+				token = strings.TrimSpace(scanner.Text())
+			}
+		}
+	}
+	if token == "" {
+		var err error
+		token, err = ui.PromptForInput(
+			ui.WithLabel("Enter enrollment token"),
+			ui.WithPlaceholder("mren_..."),
+		)
+		if err != nil {
+			return fmt.Errorf("failed to read token: %w", err)
+		}
+	}
+
+	if !enrolltoken.IsToken(token) {
+		return fmt.Errorf("invalid token format (expected mren_ prefix)")
+	}
+
+	addr, secret, err := enrolltoken.Decode(token)
+	if err != nil {
+		return fmt.Errorf("invalid token: %w", err)
+	}
+
+	// Use the address from the token, unless --coordinator overrides it
+	coordinator := addr
+	if opts.Coordinator != "" {
+		coordinator = opts.Coordinator
 	}
 
 	if _, _, err := net.SplitHostPort(coordinator); err != nil {
 		coordinator = net.JoinHostPort(coordinator, "8443")
 	}
 
-	if runnerconfig.Exists(opts.ConfigPath) {
-		return fmt.Errorf("runner config already exists at %s; remove it first to re-register", opts.ConfigPath)
-	}
-
 	ctx.Printf("Joining coordinator at %s\n", coordinator)
-
-	// Resolve join code: --code flag > positional arg > stdin pipe > TTY prompt
-	code := opts.Code
-	if code == "" {
-		code = opts.JoinCode
-	}
-	if code == "" {
-		if stat, _ := os.Stdin.Stat(); stat.Mode()&os.ModeCharDevice == 0 {
-			// stdin is a pipe, read the code from it
-			scanner := bufio.NewScanner(os.Stdin)
-			if scanner.Scan() {
-				code = strings.TrimSpace(scanner.Text())
-			}
-		}
-	}
-	if code == "" {
-		var err error
-		code, err = ui.PromptForInput(
-			ui.WithLabel("Enter join code"),
-			ui.WithPlaceholder("word-word-word-abc123"),
-		)
-		if err != nil {
-			return fmt.Errorf("failed to read code: %w", err)
-		}
-	}
-
-	if !joincode.Validate(code) {
-		return fmt.Errorf("invalid join code format")
-	}
 
 	name := opts.Name
 	if name == "" {
@@ -103,7 +104,7 @@ func RunnerJoin(ctx *Context, opts struct {
 	}
 
 	versionInfo := version.GetInfo()
-	res, err := rc.Join(ctx, code, opts.RunnerID, listenAddr, versionInfo.Version, opts.Labels, name)
+	res, err := rc.Join(ctx, secret, opts.RunnerID, listenAddr, versionInfo.Version, opts.Labels, name)
 	if err != nil {
 		return fmt.Errorf("join request failed: %w", err)
 	}
@@ -113,7 +114,7 @@ func RunnerJoin(ctx *Context, opts struct {
 	}
 
 	runnerID := res.RunnerId()
-	ctx.Printf("\n✓ Joined as runner '%s' (%s)\n", name, runnerID)
+	ctx.Printf("\nJoined as runner '%s' (%s)\n", name, runnerID)
 
 	labels := make(map[string]string)
 	for _, l := range opts.Labels {

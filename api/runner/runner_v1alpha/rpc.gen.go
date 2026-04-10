@@ -11,13 +11,16 @@ import (
 )
 
 type inviteInfoData struct {
-	Id        *string             `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
-	Status    *string             `cbor:"1,keyasint,omitempty" json:"status,omitempty"`
-	Labels    *[]string           `cbor:"2,keyasint,omitempty" json:"labels,omitempty"`
-	ExpiresAt *standard.Timestamp `cbor:"3,keyasint,omitempty" json:"expires_at,omitempty"`
-	CreatedAt *standard.Timestamp `cbor:"4,keyasint,omitempty" json:"created_at,omitempty"`
-	ClaimedBy *string             `cbor:"5,keyasint,omitempty" json:"claimed_by,omitempty"`
-	ClaimedAt *standard.Timestamp `cbor:"6,keyasint,omitempty" json:"claimed_at,omitempty"`
+	Id              *string             `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
+	Status          *string             `cbor:"1,keyasint,omitempty" json:"status,omitempty"`
+	Labels          *[]string           `cbor:"2,keyasint,omitempty" json:"labels,omitempty"`
+	ExpiresAt       *standard.Timestamp `cbor:"3,keyasint,omitempty" json:"expires_at,omitempty"`
+	CreatedAt       *standard.Timestamp `cbor:"4,keyasint,omitempty" json:"created_at,omitempty"`
+	ClaimedBy       *string             `cbor:"5,keyasint,omitempty" json:"claimed_by,omitempty"`
+	ClaimedAt       *standard.Timestamp `cbor:"6,keyasint,omitempty" json:"claimed_at,omitempty"`
+	Name            *string             `cbor:"7,keyasint,omitempty" json:"name,omitempty"`
+	Reusable        *bool               `cbor:"8,keyasint,omitempty" json:"reusable,omitempty"`
+	EnrollmentCount *int32              `cbor:"9,keyasint,omitempty" json:"enrollment_count,omitempty"`
 }
 
 type InviteInfo struct {
@@ -119,6 +122,51 @@ func (v *InviteInfo) ClaimedAt() *standard.Timestamp {
 
 func (v *InviteInfo) SetClaimedAt(claimed_at *standard.Timestamp) {
 	v.data.ClaimedAt = claimed_at
+}
+
+func (v *InviteInfo) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *InviteInfo) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *InviteInfo) SetName(name string) {
+	v.data.Name = &name
+}
+
+func (v *InviteInfo) HasReusable() bool {
+	return v.data.Reusable != nil
+}
+
+func (v *InviteInfo) Reusable() bool {
+	if v.data.Reusable == nil {
+		return false
+	}
+	return *v.data.Reusable
+}
+
+func (v *InviteInfo) SetReusable(reusable bool) {
+	v.data.Reusable = &reusable
+}
+
+func (v *InviteInfo) HasEnrollmentCount() bool {
+	return v.data.EnrollmentCount != nil
+}
+
+func (v *InviteInfo) EnrollmentCount() int32 {
+	if v.data.EnrollmentCount == nil {
+		return 0
+	}
+	return *v.data.EnrollmentCount
+}
+
+func (v *InviteInfo) SetEnrollmentCount(enrollment_count int32) {
+	v.data.EnrollmentCount = &enrollment_count
 }
 
 func (v *InviteInfo) MarshalCBOR() ([]byte, error) {
@@ -303,8 +351,12 @@ func (v *RunnerInfo) UnmarshalJSON(data []byte) error {
 }
 
 type runnerRegistrationCreateInviteArgsData struct {
-	Labels         *[]string `cbor:"0,keyasint,omitempty" json:"labels,omitempty"`
-	ExpiresInHours *int32    `cbor:"1,keyasint,omitempty" json:"expires_in_hours,omitempty"`
+	Labels          *[]string `cbor:"0,keyasint,omitempty" json:"labels,omitempty"`
+	ExpiresInHours  *int32    `cbor:"1,keyasint,omitempty" json:"expires_in_hours,omitempty"`
+	Name            *string   `cbor:"2,keyasint,omitempty" json:"name,omitempty"`
+	Reusable        *bool     `cbor:"3,keyasint,omitempty" json:"reusable,omitempty"`
+	TtlSeconds      *int64    `cbor:"4,keyasint,omitempty" json:"ttl_seconds,omitempty"`
+	CoordinatorAddr *string   `cbor:"5,keyasint,omitempty" json:"coordinator_addr,omitempty"`
 }
 
 type RunnerRegistrationCreateInviteArgs struct {
@@ -332,6 +384,50 @@ func (v *RunnerRegistrationCreateInviteArgs) ExpiresInHours() int32 {
 		return 0
 	}
 	return *v.data.ExpiresInHours
+}
+
+func (v *RunnerRegistrationCreateInviteArgs) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *RunnerRegistrationCreateInviteArgs) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *RunnerRegistrationCreateInviteArgs) HasReusable() bool {
+	return v.data.Reusable != nil
+}
+
+func (v *RunnerRegistrationCreateInviteArgs) Reusable() bool {
+	if v.data.Reusable == nil {
+		return false
+	}
+	return *v.data.Reusable
+}
+
+func (v *RunnerRegistrationCreateInviteArgs) HasTtlSeconds() bool {
+	return v.data.TtlSeconds != nil
+}
+
+func (v *RunnerRegistrationCreateInviteArgs) TtlSeconds() int64 {
+	if v.data.TtlSeconds == nil {
+		return 0
+	}
+	return *v.data.TtlSeconds
+}
+
+func (v *RunnerRegistrationCreateInviteArgs) HasCoordinatorAddr() bool {
+	return v.data.CoordinatorAddr != nil
+}
+
+func (v *RunnerRegistrationCreateInviteArgs) CoordinatorAddr() string {
+	if v.data.CoordinatorAddr == nil {
+		return ""
+	}
+	return *v.data.CoordinatorAddr
 }
 
 func (v *RunnerRegistrationCreateInviteArgs) MarshalCBOR() ([]byte, error) {
@@ -1125,11 +1221,15 @@ func (v *RunnerRegistrationClientCreateInviteResults) ExpiresAt() *standard.Time
 	return v.data.ExpiresAt
 }
 
-func (v RunnerRegistrationClient) CreateInvite(ctx context.Context, labels []string, expires_in_hours int32) (*RunnerRegistrationClientCreateInviteResults, error) {
+func (v RunnerRegistrationClient) CreateInvite(ctx context.Context, labels []string, expires_in_hours int32, name string, reusable bool, ttl_seconds int64, coordinator_addr string) (*RunnerRegistrationClientCreateInviteResults, error) {
 	args := RunnerRegistrationCreateInviteArgs{}
 	x := slices.Clone(labels)
 	args.data.Labels = &x
 	args.data.ExpiresInHours = &expires_in_hours
+	args.data.Name = &name
+	args.data.Reusable = &reusable
+	args.data.TtlSeconds = &ttl_seconds
+	args.data.CoordinatorAddr = &coordinator_addr
 
 	var ret runnerRegistrationCreateInviteResultsData
 

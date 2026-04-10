@@ -34,3 +34,16 @@ kinds:
     created_at:
       type: time
       doc: When the invite was created
+
+    reusable:
+      type: bool
+      doc: Whether this invite can be used multiple times
+
+    name:
+      type: string
+      doc: Human-readable name for audit and management
+      indexed: true
+
+    enrollment_count:
+      type: int
+      doc: Number of runners that have joined using this invite
