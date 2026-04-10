@@ -92,8 +92,18 @@ func RunnerJoin(ctx *Context, opts struct {
 
 	rc := runner_v1alpha.NewRunnerRegistrationClient(client)
 
+	listenAddr := opts.ListenAddr
+	if listenAddr == "" {
+		ip, err := discoverOutboundIP(coordinator)
+		if err != nil {
+			return fmt.Errorf("could not discover outbound IP for listen address (use --listen to set manually): %w", err)
+		}
+		listenAddr = net.JoinHostPort(ip.String(), "8444")
+		ctx.Log.Info("discovered listen address", "addr", listenAddr)
+	}
+
 	versionInfo := version.GetInfo()
-	res, err := rc.Join(ctx, code, opts.RunnerID, opts.ListenAddr, versionInfo.Version, opts.Labels, name)
+	res, err := rc.Join(ctx, code, opts.RunnerID, listenAddr, versionInfo.Version, opts.Labels, name)
 	if err != nil {
 		return fmt.Errorf("join request failed: %w", err)
 	}
