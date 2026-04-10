@@ -212,6 +212,39 @@ To get started with iso:
 - Blackbox CLI tests in `blackbox/` directory (run via `make test-blackbox`)
 - Test data in various `testdata/` directories
 
+### Distributed Runner Development
+
+For testing distributed runners locally, the project uses iso peers to run a coordinator and runner in separate containers on a shared network.
+
+```bash
+# Start the distributed environment (coordinator + runner1)
+make dev-distributed
+
+# Check status
+make dev-distributed-status
+
+# Open shells into peers
+hack/dev-distributed shell coordinator
+hack/dev-distributed shell runner1
+
+# View logs
+hack/dev-distributed logs          # coordinator
+hack/dev-distributed runner-logs   # runner
+
+# Rebuild after code changes
+hack/dev-distributed rebuild
+
+# Run the blackbox test suite against the distributed topology
+make test-blackbox-distributed
+
+# Tear down
+make dev-distributed-down
+```
+
+The distributed environment uses `.iso/peers.yml` to define two peers (coordinator and runner1) and connects them to the existing services (etcd, VictoriaMetrics, VictoriaLogs). The `MIREN_LABS=distributedrunners` feature flag is set on both peers.
+
+Blackbox tests that are specific to distributed topologies (runner list, metrics pipeline, log pipeline) live in `blackbox/distributed_runner_test.go` and self-skip when not running in peers mode.
+
 ### Saga Framework (`pkg/saga/`)
 
 The saga framework determines action execution order via **topological sort on data dependencies** (input/output field matching). Actions at the same dependency level are sorted alphabetically. This means registration order does NOT determine execution order.

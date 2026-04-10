@@ -23,6 +23,9 @@ type Config struct {
 	EtcdPrefix     string   `yaml:"etcd_prefix,omitempty" json:"etcd_prefix,omitempty"`
 	NetworkBackend string   `yaml:"network_backend,omitempty" json:"network_backend,omitempty"`
 	DiskMode       string   `yaml:"disk_mode,omitempty" json:"disk_mode,omitempty"`
+	// Observability endpoints for metrics and logs
+	VictoriametricsAddress string `yaml:"victoriametrics_address,omitempty" json:"victoriametrics_address,omitempty"`
+	VictorialogsAddress    string `yaml:"victorialogs_address,omitempty" json:"victorialogs_address,omitempty"`
 }
 
 func Load(path string) (*Config, error) {

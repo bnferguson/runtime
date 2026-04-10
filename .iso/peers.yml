@@ -1,0 +1,23 @@
+# Distributed runner testing with iso peers.
+#
+# The coordinator peer runs the miren server in standalone mode.
+# The runner peer joins the coordinator and runs as a distributed runner.
+#
+# Services (etcd, VictoriaMetrics, VictoriaLogs) from services.yml are
+# automatically connected to the peers network, so they're reachable by
+# service name from all peers.
+
+peers:
+  coordinator:
+    hostname: coordinator
+    environment:
+      ROLE: coordinator
+      MIREN_LABS: distributedrunners
+    ports:
+      - "8443:8443"
+
+  runner1:
+    hostname: runner1
+    environment:
+      ROLE: runner
+      MIREN_LABS: distributedrunners

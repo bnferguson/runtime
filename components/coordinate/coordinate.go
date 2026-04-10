@@ -120,6 +120,10 @@ type CoordinatorConfig struct {
 	Logs      *observability.LogReader
 	LogWriter observability.LogWriter
 
+	// Observability addresses for distributed runners
+	VictoriametricsAddress string
+	VictorialogsAddress    string
+
 	// BuildKit is the persistent BuildKit component for container image builds
 	BuildKit *buildkit.Component
 
@@ -1106,7 +1110,17 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		server.ExposeValue("dev.miren.runtime/admin", admin_v1alpha.AdaptAdmin(adminServer))
 	}
 
-	runnerReg := runnerserver.NewRegistrationServer(c.Log, c.authority, eac, c.Address, c.EtcdEndpoints, c.Prefix, c.NetworkBackend)
+	runnerReg := runnerserver.NewRegistrationServer(runnerserver.RegistrationServerConfig{
+		Log:                    c.Log,
+		Authority:              c.authority,
+		EAC:                    eac,
+		CoordinatorAddr:        c.Address,
+		EtcdEndpoints:          c.EtcdEndpoints,
+		EtcdPrefix:             c.Prefix,
+		NetworkBackend:         c.NetworkBackend,
+		VictoriametricsAddress: c.VictoriametricsAddress,
+		VictorialogsAddress:    c.VictorialogsAddress,
+	})
 	server.ExposeValue(rpc.ServiceRunner, runner_v1alpha.AdaptRunnerRegistration(runnerReg))
 
 	ts := telemetrysrv.NewServer(c.Log)

@@ -481,15 +481,17 @@ func (v *RunnerRegistrationJoinArgs) UnmarshalJSON(data []byte) error {
 }
 
 type runnerRegistrationJoinResultsData struct {
-	CertPem         *[]byte   `cbor:"0,keyasint,omitempty" json:"cert_pem,omitempty"`
-	KeyPem          *[]byte   `cbor:"1,keyasint,omitempty" json:"key_pem,omitempty"`
-	CaPem           *[]byte   `cbor:"2,keyasint,omitempty" json:"ca_pem,omitempty"`
-	CoordinatorAddr *string   `cbor:"3,keyasint,omitempty" json:"coordinator_addr,omitempty"`
-	RunnerId        *string   `cbor:"4,keyasint,omitempty" json:"runner_id,omitempty"`
-	EtcdEndpoints   *[]string `cbor:"5,keyasint,omitempty" json:"etcd_endpoints,omitempty"`
-	EtcdPrefix      *string   `cbor:"6,keyasint,omitempty" json:"etcd_prefix,omitempty"`
-	NetworkBackend  *string   `cbor:"7,keyasint,omitempty" json:"network_backend,omitempty"`
-	Error           *string   `cbor:"8,keyasint,omitempty" json:"error,omitempty"`
+	CertPem                *[]byte   `cbor:"0,keyasint,omitempty" json:"cert_pem,omitempty"`
+	KeyPem                 *[]byte   `cbor:"1,keyasint,omitempty" json:"key_pem,omitempty"`
+	CaPem                  *[]byte   `cbor:"2,keyasint,omitempty" json:"ca_pem,omitempty"`
+	CoordinatorAddr        *string   `cbor:"3,keyasint,omitempty" json:"coordinator_addr,omitempty"`
+	RunnerId               *string   `cbor:"4,keyasint,omitempty" json:"runner_id,omitempty"`
+	EtcdEndpoints          *[]string `cbor:"5,keyasint,omitempty" json:"etcd_endpoints,omitempty"`
+	EtcdPrefix             *string   `cbor:"6,keyasint,omitempty" json:"etcd_prefix,omitempty"`
+	NetworkBackend         *string   `cbor:"7,keyasint,omitempty" json:"network_backend,omitempty"`
+	VictoriametricsAddress *string   `cbor:"8,keyasint,omitempty" json:"victoriametrics_address,omitempty"`
+	VictorialogsAddress    *string   `cbor:"9,keyasint,omitempty" json:"victorialogs_address,omitempty"`
+	Error                  *string   `cbor:"10,keyasint,omitempty" json:"error,omitempty"`
 }
 
 type RunnerRegistrationJoinResults struct {
@@ -531,6 +533,14 @@ func (v *RunnerRegistrationJoinResults) SetEtcdPrefix(etcd_prefix string) {
 
 func (v *RunnerRegistrationJoinResults) SetNetworkBackend(network_backend string) {
 	v.data.NetworkBackend = &network_backend
+}
+
+func (v *RunnerRegistrationJoinResults) SetVictoriametricsAddress(victoriametrics_address string) {
+	v.data.VictoriametricsAddress = &victoriametrics_address
+}
+
+func (v *RunnerRegistrationJoinResults) SetVictorialogsAddress(victorialogs_address string) {
+	v.data.VictorialogsAddress = &victorialogs_address
 }
 
 func (v *RunnerRegistrationJoinResults) SetError(error string) {
@@ -1222,6 +1232,28 @@ func (v *RunnerRegistrationClientJoinResults) NetworkBackend() string {
 		return ""
 	}
 	return *v.data.NetworkBackend
+}
+
+func (v *RunnerRegistrationClientJoinResults) HasVictoriametricsAddress() bool {
+	return v.data.VictoriametricsAddress != nil
+}
+
+func (v *RunnerRegistrationClientJoinResults) VictoriametricsAddress() string {
+	if v.data.VictoriametricsAddress == nil {
+		return ""
+	}
+	return *v.data.VictoriametricsAddress
+}
+
+func (v *RunnerRegistrationClientJoinResults) HasVictorialogsAddress() bool {
+	return v.data.VictorialogsAddress != nil
+}
+
+func (v *RunnerRegistrationClientJoinResults) VictorialogsAddress() string {
+	if v.data.VictorialogsAddress == nil {
+		return ""
+	}
+	return *v.data.VictorialogsAddress
 }
 
 func (v *RunnerRegistrationClientJoinResults) HasError() bool {

@@ -21,6 +21,7 @@ import (
 	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/components/runner"
 	"miren.dev/runtime/controllers/sandbox"
+	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/runnerconfig"
 )
@@ -168,6 +169,17 @@ func RunnerStart(ctx *Context, opts struct {
 	if addr, err := netip.ParseAddr(coordinatorHost); err == nil {
 		hostMapper.SetHost("cluster.local", addr)
 		ctx.Log.Info("mapped cluster.local to coordinator", "addr", addr)
+	} else {
+		// Coordinator address is a hostname, resolve it to an IP.
+		addrs, lookupErr := net.LookupHost(coordinatorHost)
+		if lookupErr == nil && len(addrs) > 0 {
+			if resolved, parseErr := netip.ParseAddr(addrs[0]); parseErr == nil {
+				hostMapper.SetHost("cluster.local", resolved)
+				ctx.Log.Info("mapped cluster.local to coordinator (resolved)", "hostname", coordinatorHost, "addr", resolved)
+			}
+		} else {
+			ctx.Log.Warn("could not resolve coordinator hostname for cluster.local mapping", "host", coordinatorHost, "error", lookupErr)
+		}
 	}
 
 	// Build runner dependencies
@@ -182,11 +194,8 @@ func RunnerStart(ctx *Context, opts struct {
 		// Distributed runner doesn't use local network for sandboxes
 		DisableLocalNet: true,
 
-		// Observability - create minimal instances
 		LogsMaintainer: observability.NewLogsMaintainer(),
-		LogWriter:      observability.NewDebugLogWriter(ctx.Log),
 		StatusMon:      observability.NewStatusMonitor(ctx.Log),
-		SandboxMetrics: sandbox.NewMetrics(),
 
 		// Resolver for network operations
 		Resolver: resolver,
@@ -227,8 +236,37 @@ func RunnerStart(ctx *Context, opts struct {
 		deps.EtcdTLSCAFile = caFile
 	}
 
-	// Initialize sandbox metrics
-	deps.SandboxMetrics.Log = ctx.Log
+	// Initialize observability subsystems. When the coordinator provided
+	// VictoriaMetrics/VictoriaLogs addresses at join time, the runner ships
+	// metrics and logs over flannel to the coordinator's instances. Otherwise
+	// we fall back to debug logging.
+	var metricsWriter *metrics.VictoriaMetricsWriter
+	if cfg.VictoriametricsAddress != "" {
+		metricsWriter = metrics.NewVictoriaMetricsWriter(ctx.Log, cfg.VictoriametricsAddress, 30*time.Second)
+		metricsWriter.Start()
+		defer func() {
+			if err := metricsWriter.Close(); err != nil {
+				ctx.Log.Error("failed to close metrics writer", "error", err)
+			}
+		}()
+		ctx.Log.Info("metrics writer started", "address", cfg.VictoriametricsAddress)
+	} else {
+		ctx.Log.Warn("no VictoriaMetrics address configured, sandbox metrics will not be recorded")
+	}
+
+	sbMetrics := sandbox.NewMetrics()
+	sbMetrics.Log = ctx.Log
+	sbMetrics.CPUUsage = metrics.NewCPUUsage(ctx.Log, metricsWriter, nil)
+	sbMetrics.MemUsage = metrics.NewMemoryUsage(ctx.Log, metricsWriter, nil)
+	deps.SandboxMetrics = sbMetrics
+
+	if cfg.VictorialogsAddress != "" {
+		deps.LogWriter = observability.NewPersistentLogWriter(cfg.VictorialogsAddress, 30*time.Second)
+		ctx.Log.Info("log writer started", "address", cfg.VictorialogsAddress)
+	} else {
+		deps.LogWriter = observability.NewDebugLogWriter(ctx.Log)
+		ctx.Log.Warn("no VictoriaLogs address configured, sandbox logs will only be written to debug output")
+	}
 
 	// Create runner
 	r, err := runner.NewRunner(ctx.Log, deps, runnerCfg)

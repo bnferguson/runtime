@@ -1,0 +1,241 @@
+#!/usr/bin/env bash
+# dev-distributed - Manage a distributed runner dev environment using iso peers.
+#
+# Usage:
+#   hack/dev-distributed up       - Build, start peers, start coordinator server, join+start runner
+#   hack/dev-distributed down     - Tear everything down
+#   hack/dev-distributed status   - Show peer and server status
+#   hack/dev-distributed logs     - Tail coordinator server logs
+#   hack/dev-distributed runner-logs - Tail runner logs
+#   hack/dev-distributed shell <peer> - Open a shell in a peer (coordinator or runner1)
+#   hack/dev-distributed rebuild  - Rebuild binary on all peers and restart services
+
+set -e
+
+COORDINATOR_LOGFILE="/tmp/miren-server.log"
+COORDINATOR_PIDFILE="/tmp/miren-server.pid"
+RUNNER_LOGFILE="/tmp/miren-runner.log"
+RUNNER_PIDFILE="/tmp/miren-runner.pid"
+RUNNER_CONFIG="/var/lib/miren/runner/config.yaml"
+
+peer_exec() {
+  local peer="$1"
+  shift
+  iso peers exec "$peer" -- "$@"
+}
+
+bootstrap_peer() {
+  local peer="$1"
+  echo "    Bootstrapping $peer..."
+  # Run the common setup (cgroups, kernel mounts, dirs, host user, etc.)
+  peer_exec "$peer" bash -c "source hack/common-setup.sh && setup_cgroups && setup_environment && setup_host_user && setup_kernel_mounts"
+  # Build binary
+  peer_exec "$peer" make bin/miren
+  # Symlinks
+  peer_exec "$peer" bash -c "ln -sf /src/bin/miren /bin/m && ln -sf /src/bin/miren /usr/local/bin/miren"
+  # Auth config
+  peer_exec "$peer" bash -c "mkdir -p /var/lib/miren/server && mkdir -p ~/.config/miren && ./bin/miren auth generate -c ~/.config/miren/clientconfig.yaml"
+}
+
+setup_release_dir() {
+  local peer="$1"
+  echo "    Setting up release directory on $peer..."
+  peer_exec "$peer" bash -c "mkdir -p /var/lib/miren/release && \
+    cp bin/miren /var/lib/miren/release/ && \
+    cp /usr/local/bin/runc /var/lib/miren/release/ && \
+    cp /usr/local/bin/containerd-shim-runc-v2 /var/lib/miren/release/ && \
+    cp /usr/local/bin/containerd /var/lib/miren/release/ && \
+    cp /usr/local/bin/nerdctl /var/lib/miren/release/ && \
+    cp /usr/local/bin/ctr /var/lib/miren/release/"
+}
+
+start_coordinator() {
+  echo "==> Starting coordinator server..."
+  # --dns-names coordinator: include "coordinator" hostname in etcd TLS cert SANs
+  # so runners can connect to etcd via the peer hostname.
+  peer_exec coordinator bash -c \
+    "nohup ./bin/miren server -vv --mode standalone --self-signed-tls --dns-names coordinator >$COORDINATOR_LOGFILE 2>&1 </dev/null & echo \$! >$COORDINATOR_PIDFILE; disown"
+
+  echo -n "    Waiting for coordinator to be ready"
+  for i in $(seq 1 300); do
+    if peer_exec coordinator grep -q "Miren server started" "$COORDINATOR_LOGFILE" 2>/dev/null; then
+      echo " ready!"
+      return 0
+    fi
+    # Check if process died
+    if ! peer_exec coordinator kill -0 "$(peer_exec coordinator cat "$COORDINATOR_PIDFILE" 2>/dev/null)" 2>/dev/null; then
+      echo " failed!"
+      echo "Error: Coordinator server died. Check logs with: hack/dev-distributed logs"
+      return 1
+    fi
+    if [ $((i % 10)) -eq 0 ]; then echo -n "."; fi
+    sleep 0.1
+  done
+  echo " timeout!"
+  return 1
+}
+
+stop_coordinator() {
+  echo "==> Stopping coordinator server..."
+  peer_exec coordinator bash -c \
+    "if [ -f $COORDINATOR_PIDFILE ]; then kill \$(cat $COORDINATOR_PIDFILE) 2>/dev/null; rm -f $COORDINATOR_PIDFILE; fi" || true
+}
+
+create_invite() {
+  echo "==> Creating runner invite..."
+  local output
+  output=$(peer_exec coordinator ./bin/miren runner invite 2>&1)
+  # Extract the join code from "Join code: <code>" line
+  local code
+  code=$(echo "$output" | grep "Join code:" | awk '{print $3}')
+  if [ -z "$code" ]; then
+    echo "Error: Failed to create invite. Output:"
+    echo "$output"
+    return 1
+  fi
+  echo "    Invite code: ${code:0:20}..."
+  # Return code via a global variable since we need stdout for status messages
+  INVITE_CODE="$code"
+}
+
+join_runner() {
+  local code="$1"
+  echo "==> Runner joining coordinator at coordinator:8443..."
+  # Clean up any previous runner state
+  peer_exec runner1 bash -c "rm -rf /var/lib/miren/runner"
+  peer_exec runner1 mkdir -p "$(dirname "$RUNNER_CONFIG")"
+  # Discover the runner's IP on the peers network so the join cert includes
+  # it as a SAN. Without this, the coordinator can't proxy exec/run to the
+  # runner because TLS verification fails on the network IP.
+  local runner_ip
+  runner_ip=$(peer_exec runner1 bash -c "hostname -I | awk '{print \$1}'")
+  echo "    Runner IP: $runner_ip"
+  peer_exec runner1 ./bin/miren runner join \
+    coordinator:8443 "$code" \
+    --listen "${runner_ip}:8444" \
+    --config "$RUNNER_CONFIG"
+  echo "    Runner joined successfully"
+}
+
+start_runner() {
+  echo "==> Starting runner..."
+  peer_exec runner1 bash -c \
+    "nohup ./bin/miren runner start -vv --config $RUNNER_CONFIG >$RUNNER_LOGFILE 2>&1 </dev/null & echo \$! >$RUNNER_PIDFILE; disown"
+
+  echo -n "    Waiting for runner to start"
+  for i in $(seq 1 300); do
+    # The runner logs "start sandbox resource monitoring" near the end of startup
+    if peer_exec runner1 grep -q "sandbox resource monitoring" "$RUNNER_LOGFILE" 2>/dev/null; then
+      echo " ready!"
+      return 0
+    fi
+    # Check if runner process died
+    if ! peer_exec runner1 bash -c "kill -0 \$(cat $RUNNER_PIDFILE 2>/dev/null) 2>/dev/null"; then
+      echo " failed!"
+      echo "==> Runner logs (last 20 lines):"
+      peer_exec runner1 tail -20 "$RUNNER_LOGFILE" || true
+      return 1
+    fi
+    if [ $((i % 10)) -eq 0 ]; then echo -n "."; fi
+    sleep 0.1
+  done
+  echo " (timed out, but runner may still be starting)"
+  echo "    Check logs: hack/dev-distributed runner-logs"
+}
+
+stop_runner() {
+  echo "==> Stopping runner..."
+  peer_exec runner1 bash -c \
+    "if [ -f $RUNNER_PIDFILE ]; then kill \$(cat $RUNNER_PIDFILE) 2>/dev/null; rm -f $RUNNER_PIDFILE; fi" || true
+}
+
+case "${1:-}" in
+  up)
+    echo "Starting distributed runner dev environment..."
+    echo ""
+
+    # Bring up peers and services
+    echo "==> Starting peers..."
+    iso peers up
+
+    # Bootstrap both peers (setup cgroups, build binary, release dir, auth)
+    echo "==> Bootstrapping peers..."
+    bootstrap_peer coordinator
+    setup_release_dir coordinator
+    bootstrap_peer runner1
+
+    # Start coordinator
+    start_coordinator
+
+    # Create invite and join runner
+    create_invite
+    join_runner "$INVITE_CODE"
+
+    # Start runner
+    start_runner
+
+    echo ""
+    echo "Distributed environment is up!"
+    echo ""
+    echo "  Coordinator:     iso peers shell coordinator"
+    echo "  Runner:          iso peers shell runner1"
+    echo "  Coordinator logs: hack/dev-distributed logs"
+    echo "  Runner logs:     hack/dev-distributed runner-logs"
+    echo "  Status:          hack/dev-distributed status"
+    echo "  Tear down:       hack/dev-distributed down"
+    echo ""
+    echo "  VictoriaMetrics: http://localhost:8428 (query metrics)"
+    echo "  VictoriaLogs:    http://localhost:9428 (query logs)"
+    ;;
+
+  down)
+    echo "Tearing down distributed environment..."
+    stop_runner
+    stop_coordinator
+    iso peers down
+    echo "Done."
+    ;;
+
+  status)
+    echo "==> Peer status:"
+    iso peers status
+    echo ""
+    echo "==> Coordinator server:"
+    peer_exec coordinator bash -c \
+      "if [ -f $COORDINATOR_PIDFILE ] && kill -0 \$(cat $COORDINATOR_PIDFILE) 2>/dev/null; then echo 'running (PID '\$(cat $COORDINATOR_PIDFILE)')'; else echo 'not running'; fi" || echo "peer not available"
+    echo ""
+    echo "==> Runner:"
+    peer_exec runner1 bash -c \
+      "if [ -f $RUNNER_PIDFILE ] && kill -0 \$(cat $RUNNER_PIDFILE) 2>/dev/null; then echo 'running (PID '\$(cat $RUNNER_PIDFILE)')'; else echo 'not running'; fi" || echo "peer not available"
+    ;;
+
+  logs)
+    peer_exec coordinator tail -f "$COORDINATOR_LOGFILE"
+    ;;
+
+  runner-logs)
+    peer_exec runner1 tail -f "$RUNNER_LOGFILE"
+    ;;
+
+  shell)
+    peer="${2:-coordinator}"
+    iso peers shell "$peer"
+    ;;
+
+  rebuild)
+    echo "Rebuilding and restarting..."
+    stop_runner
+    stop_coordinator
+    echo "==> Building on all peers..."
+    iso peers exec --all -- make bin/miren
+    setup_release_dir coordinator
+    start_coordinator
+    start_runner
+    echo "Done."
+    ;;
+
+  *)
+    echo "Usage: $0 {up|down|status|logs|runner-logs|shell [peer]|rebuild}"
+    exit 1
+    ;;
+esac

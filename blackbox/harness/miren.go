@@ -39,6 +39,11 @@ func (m *Miren) Run(args ...string) *Result {
 		cmd.Dir = m.cluster.RepoRoot
 	case ModeLocal:
 		cmd = exec.Command(m.cluster.MirenBin, args...)
+	case ModePeers:
+		// iso peers exec coordinator -- m <args>
+		execArgs := append([]string{"peers", "exec", "coordinator", "--", "m"}, args...)
+		cmd = exec.Command("iso", execArgs...)
+		cmd.Dir = m.cluster.RepoRoot
 	default:
 		m.t.Fatalf("unknown mode: %s", m.cluster.Mode)
 		return nil
@@ -67,7 +72,7 @@ func (m *Miren) Run(args ...string) *Result {
 		Stderr:   stderr.String(),
 	}
 
-	m.t.Logf("miren %s → exit %d", strings.Join(args, " "), exitCode)
+	m.t.Logf("miren %s -> exit %d", strings.Join(args, " "), exitCode)
 	if r.Stdout != "" {
 		m.t.Logf("stdout: %s", r.Stdout)
 	}
@@ -104,6 +109,10 @@ func (m *Miren) RunCmd(args ...string) *Result {
 		cmd.Dir = m.cluster.RepoRoot
 	case ModeLocal:
 		cmd = exec.Command(args[0], args[1:]...)
+	case ModePeers:
+		execArgs := append([]string{"peers", "exec", "coordinator", "--"}, args...)
+		cmd = exec.Command("iso", execArgs...)
+		cmd.Dir = m.cluster.RepoRoot
 	default:
 		m.t.Fatalf("unknown mode: %s", m.cluster.Mode)
 		return nil
@@ -131,7 +140,53 @@ func (m *Miren) RunCmd(args ...string) *Result {
 		Stderr:   stderr.String(),
 	}
 
-	m.t.Logf("cmd %s → exit %d", strings.Join(args, " "), exitCode)
+	m.t.Logf("cmd %s -> exit %d", strings.Join(args, " "), exitCode)
+	if r.Stdout != "" {
+		m.t.Logf("stdout: %s", r.Stdout)
+	}
+	if r.Stderr != "" {
+		m.t.Logf("stderr: %s", r.Stderr)
+	}
+
+	return r
+}
+
+// PeerExec runs a command on a specific iso peer container. This is only
+// meaningful in ModePeers and is used for verification tasks like querying
+// runner-side state or hitting internal HTTP endpoints.
+func (m *Miren) PeerExec(peer string, args ...string) *Result {
+	m.t.Helper()
+	if m.cluster.Mode != ModePeers {
+		m.t.Fatalf("PeerExec requires ModePeers (current: %s)", m.cluster.Mode)
+		return nil
+	}
+
+	execArgs := append([]string{"peers", "exec", peer, "--"}, args...)
+	cmd := exec.Command("iso", execArgs...)
+	cmd.Dir = m.cluster.RepoRoot
+	cmd.Env = append(cmd.Environ(), "TERM=dumb")
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	exitCode := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			m.t.Fatalf("PeerExec(%s) failed: %v", peer, err)
+		}
+	}
+
+	r := &Result{
+		ExitCode: exitCode,
+		Stdout:   stdout.String(),
+		Stderr:   stderr.String(),
+	}
+
+	m.t.Logf("peer(%s) %s -> exit %d", peer, strings.Join(args, " "), exitCode)
 	if r.Stdout != "" {
 		m.t.Logf("stdout: %s", r.Stdout)
 	}
@@ -285,7 +340,7 @@ func shellQuote(s string) string {
 // ContainerPath translates a host-side path to a container-internal path.
 // In dev mode, the repo is mounted at /src inside the iso container.
 func (m *Miren) ContainerPath(hostPath string) string {
-	if m.cluster.Mode != ModeDev {
+	if m.cluster.Mode != ModeDev && m.cluster.Mode != ModePeers {
 		return hostPath
 	}
 	rel, err := filepath.Rel(m.cluster.RepoRoot, hostPath)

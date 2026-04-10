@@ -90,10 +90,23 @@ dev-status: ## Check dev environment status
 dev-rebuild: ## Rebuild dev environment image
 	ISO_SESSION=$(ISO_SESSION) iso build --rebuild
 
+#
+# Distributed runner development (iso peers)
+#
+
+dev-distributed: ## Start distributed runner dev environment (coordinator + runner)
+	@hack/dev-distributed up
+
+dev-distributed-down: ## Stop distributed runner dev environment
+	@hack/dev-distributed down
+
+dev-distributed-status: ## Check distributed environment status
+	@hack/dev-distributed status
+
 .PHONY: dev dev-start dev-shell dev-server-start dev-server-stop \
         dev-server-restart dev-server-status dev-server-logs \
         dev-stop dev-restart dev-status dev-rebuild \
-        dev-stop dev-restart dev-status
+        dev-distributed dev-distributed-down dev-distributed-status
 
 #
 # Testing (iso)
@@ -169,7 +182,10 @@ build-cloud-test: ## Build cloud and POP binaries for POP blackbox tests
 test-blackbox-pop: ## Run POP blackbox tests (requires `make dev` and cloud repo)
 	go test -tags blackbox -timeout 15m -v -count=1 -p 1 -run TestPOP ./blackbox/...
 
-.PHONY: test test-shell test-blackbox test-blackbox-pop build-cloud-test test-coverage test-coverage-ci coverage-report coverage-percent coverage-by-package coverage-pr test-groups update-test-groups
+test-blackbox-distributed: ## Run blackbox tests against distributed environment (requires hack/dev-distributed up)
+	BLACKBOX_MODE=peers go test -tags blackbox -timeout 10m -v -count=1 -p 1 ./blackbox/...
+
+.PHONY: test test-shell test-blackbox test-blackbox-pop build-cloud-test test-blackbox-distributed test-coverage test-coverage-ci coverage-report coverage-percent coverage-by-package coverage-pr test-groups update-test-groups
 
 #
 # Building

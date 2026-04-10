@@ -80,6 +80,12 @@ interfaces:
           - name: network_backend
             type: string
             doc: Network backend type (vxlan or wireguard)
+          - name: victoriametrics_address
+            type: string
+            doc: Address of the VictoriaMetrics instance for metrics ingestion
+          - name: victorialogs_address
+            type: string
+            doc: Address of the VictoriaLogs instance for log ingestion
           - name: error
             type: string
             doc: Error message if join failed

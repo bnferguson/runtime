@@ -15,6 +15,10 @@ const (
 
 	// ModeLocal calls the miren binary directly on the host.
 	ModeLocal Mode = "local"
+
+	// ModePeers routes commands through iso peers exec into the coordinator
+	// container. Used for testing distributed runner topologies.
+	ModePeers Mode = "peers"
 )
 
 // Cluster holds targeting information for a test run.
@@ -33,10 +37,10 @@ func NewCluster(t *testing.T) *Cluster {
 	mode := ModeDev
 	if m := os.Getenv("BLACKBOX_MODE"); m != "" {
 		switch Mode(m) {
-		case ModeDev, ModeLocal:
+		case ModeDev, ModeLocal, ModePeers:
 			mode = Mode(m)
 		default:
-			t.Fatalf("invalid BLACKBOX_MODE %q (expected %q or %q)", m, ModeDev, ModeLocal)
+			t.Fatalf("invalid BLACKBOX_MODE %q (expected %q, %q, or %q)", m, ModeDev, ModeLocal, ModePeers)
 		}
 	}
 
@@ -59,6 +63,11 @@ func NewCluster(t *testing.T) *Cluster {
 	}
 
 	return c
+}
+
+// IsPeers returns true when the cluster is running in distributed peers mode.
+func (c *Cluster) IsPeers() bool {
+	return c.Mode == ModePeers
 }
 
 // detectRepoRoot walks up from the working directory looking for the .iso
