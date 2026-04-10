@@ -206,8 +206,11 @@ func Deploy(ctx *Context, opts struct {
 					info := result.AccessInfo()
 					if info.HasHostnames() {
 						for _, h := range *info.Hostnames() {
-							ctx.Printf("  URL:   https://%s.%s\n", ephemeralLabel, h)
+							ctx.Printf("  URL:   https://%s\n", h)
 						}
+					}
+					if info.HasClusterHostname() && info.ClusterHostname() != "" {
+						ctx.Printf("  URL:   https://%s.%s\n", ephemeralLabel, info.ClusterHostname())
 					}
 				}
 			} else {

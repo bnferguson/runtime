@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"time"
 
 	appclient "miren.dev/runtime/api/app"
@@ -798,6 +799,10 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 			results.SetError(fmt.Sprintf("invalid ephemeral TTL %q: %v", ephTTL, parseErr))
 			return nil
 		}
+		if ttlDuration <= 0 {
+			results.SetError(fmt.Sprintf("invalid ephemeral TTL %q: must be greater than 0", ephTTL))
+			return nil
+		}
 
 		// Replace existing ephemeral version with same label
 		appEntity, appErr := d.AppClient.GetByName(ctx, appName)
@@ -807,10 +812,12 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 		}
 
 		if err := ephemeralx.ReplaceExisting(ctx, d.EAC, appEntity.ID, ephLabel, d.Log); err != nil {
-			d.Log.Warn("failed to replace existing ephemeral version", "label", ephLabel, "error", err)
+			results.SetError(fmt.Sprintf("failed to replace existing ephemeral version %q: %v", ephLabel, err))
+			return nil
 		}
 		if err := ephemeralx.EnforceLimit(ctx, d.EAC, appEntity.ID, ephemeralx.DefaultMaxEphemeral, d.Log); err != nil {
-			d.Log.Warn("failed to enforce ephemeral limit", "error", err)
+			results.SetError(fmt.Sprintf("failed to enforce ephemeral limit: %v", err))
+			return nil
 		}
 
 		// Update the AppVersion entity with ephemeral fields
@@ -821,13 +828,17 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 		updateEntity := &entityserver_v1alpha.Entity{}
 		updateEntity.SetId(string(appVersion.ID))
 		updateEntity.SetAttrs(appVersion.Encode())
-		if current, getErr := d.EAC.Get(ctx, string(appVersion.ID)); getErr == nil {
-			updateEntity.SetRevision(current.Entity().Revision())
-			if _, putErr := d.EAC.Put(ctx, updateEntity); putErr != nil {
-				d.Log.Error("Failed to update version with ephemeral fields", "error", putErr)
-				results.SetError("failed to update version with ephemeral fields")
-				return nil
-			}
+		current, getErr := d.EAC.Get(ctx, string(appVersion.ID))
+		if getErr != nil {
+			d.Log.Error("Failed to fetch app version for ephemeral update", "version_id", appVersion.ID, "error", getErr)
+			results.SetError(fmt.Sprintf("failed to fetch app version %s: %v", appVersion.ID, getErr))
+			return nil
+		}
+		updateEntity.SetRevision(current.Entity().Revision())
+		if _, putErr := d.EAC.Put(ctx, updateEntity); putErr != nil {
+			d.Log.Error("Failed to update version with ephemeral fields", "error", putErr)
+			results.SetError("failed to update version with ephemeral fields")
+			return nil
 		}
 
 		d.Log.Info("Created ephemeral version",
@@ -841,6 +852,10 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 			Status:     "active",
 		})
 		results.SetDeployment(deploymentInfo)
+
+		accessInfo := d.getAccessInfo(ctx, appName, ephLabel)
+		results.SetAccessInfo(&accessInfo)
+
 		return nil
 	}
 
@@ -1012,7 +1027,7 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 	}
 	results.SetDeployment(deploymentInfo)
 
-	accessInfo := d.getAccessInfo(ctx, appName)
+	accessInfo := d.getAccessInfo(ctx, appName, "")
 	results.SetAccessInfo(&accessInfo)
 
 	d.Log.Info("Deployed version",
@@ -1233,7 +1248,7 @@ func (d *DeploymentServer) createEnvVarDeployment(ctx context.Context, appName, 
 	}
 	results.SetDeployment(deploymentInfo)
 
-	accessInfo := d.getAccessInfo(ctx, appName)
+	accessInfo := d.getAccessInfo(ctx, appName, "")
 	results.SetAccessInfo(&accessInfo)
 
 	d.Log.Info("Env var deployment completed",
@@ -1246,7 +1261,11 @@ func (d *DeploymentServer) createEnvVarDeployment(ctx context.Context, appName, 
 }
 
 // getAccessInfo queries routes to determine how the app can be accessed
-func (d *DeploymentServer) getAccessInfo(ctx context.Context, appName string) *deployment_v1alpha.AccessInfo {
+// getAccessInfo queries routes to determine how the app can be accessed.
+// When ephemeralLabel is non-empty, route hostnames are resolved to concrete
+// ephemeral hostnames (wildcard routes have * replaced, normal routes get
+// the label prepended).
+func (d *DeploymentServer) getAccessInfo(ctx context.Context, appName string, ephemeralLabel string) *deployment_v1alpha.AccessInfo {
 	info := &deployment_v1alpha.AccessInfo{}
 
 	appEntity, err := d.AppClient.GetByName(ctx, appName)
@@ -1271,9 +1290,18 @@ func (d *DeploymentServer) getAccessInfo(ctx context.Context, appName string) *d
 		if r.Route.Default {
 			hasDefaultRoute = true
 		}
-		if r.Route.Host != "" {
-			hostnames = append(hostnames, r.Route.Host)
+		if r.Route.Host == "" {
+			continue
 		}
+		host := r.Route.Host
+		if ephemeralLabel != "" {
+			if strings.HasPrefix(host, "*.") {
+				host = ephemeralLabel + "." + host[2:]
+			} else {
+				host = ephemeralLabel + "." + host
+			}
+		}
+		hostnames = append(hostnames, host)
 	}
 
 	info.SetHostnames(&hostnames)

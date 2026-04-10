@@ -1458,18 +1458,21 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 		if parseErr != nil {
 			return nil, fmt.Errorf("invalid ephemeral TTL %q: %w", ephemeral.ttl, parseErr)
 		}
+		if ttlDuration <= 0 {
+			return nil, fmt.Errorf("invalid ephemeral TTL %q: must be greater than 0", ephemeral.ttl)
+		}
 		mrv.EphemeralLabel = ephemeral.label
 		mrv.EphemeralTtl = ephemeral.ttl
 		mrv.EphemeralExpiresAt = time.Now().Add(ttlDuration)
 
 		// Replace-on-same-label: delete existing ephemeral version with the same label
 		if err := ephemeralx.ReplaceExisting(ctx, b.ec.EAC(), appRec.ID, ephemeral.label, b.Log); err != nil {
-			b.Log.Warn("failed to replace existing ephemeral version", "label", ephemeral.label, "error", err)
+			return nil, fmt.Errorf("failed to replace existing ephemeral version %q: %w", ephemeral.label, err)
 		}
 
 		// Enforce per-app ephemeral version limit
 		if err := ephemeralx.EnforceLimit(ctx, b.ec.EAC(), appRec.ID, ephemeralx.DefaultMaxEphemeral, b.Log); err != nil {
-			b.Log.Warn("failed to enforce ephemeral limit", "error", err)
+			return nil, fmt.Errorf("failed to enforce ephemeral limit: %w", err)
 		}
 	}
 

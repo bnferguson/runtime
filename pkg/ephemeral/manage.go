@@ -2,6 +2,7 @@ package ephemeral
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -128,22 +129,32 @@ func DeleteVersion(ctx context.Context, eac *entityserver_v1alpha.EntityAccessCl
 }
 
 func deleteEphemeralVersion(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient, versionID entity.Id, log *slog.Logger) error {
-	// Delete sandbox pools that reference this version
+	// Delete sandbox pools that reference this version. If pool cleanup fails,
+	// abort deletion of the AppVersion entity — the version must remain so a
+	// future GC pass can retry pool cleanup. Otherwise we'd permanently leak
+	// sandbox pools that can no longer be traced back to any version.
 	poolResp, err := eac.List(ctx, entity.Ref(
 		compute_v1alpha.SandboxPoolReferencedByVersionsId,
 		versionID,
 	))
 	if err != nil {
-		log.Warn("failed to list pools for ephemeral version", "version_id", versionID, "error", err)
-	} else {
-		for _, p := range poolResp.Values() {
-			poolID := p.Id()
-			if _, err := eac.Delete(ctx, poolID); err != nil {
-				log.Warn("failed to delete sandbox pool", "pool_id", poolID, "error", err)
-			} else {
-				log.Debug("deleted sandbox pool for ephemeral version", "pool_id", poolID)
-			}
+		return fmt.Errorf("failed to list pools for ephemeral version %s: %w", versionID, err)
+	}
+
+	var poolErrs []error
+	for _, p := range poolResp.Values() {
+		poolID := p.Id()
+		if _, err := eac.Delete(ctx, poolID); err != nil {
+			log.Warn("failed to delete sandbox pool", "pool_id", poolID, "error", err)
+			poolErrs = append(poolErrs, fmt.Errorf("pool %s: %w", poolID, err))
+		} else {
+			log.Debug("deleted sandbox pool for ephemeral version", "pool_id", poolID)
 		}
+	}
+
+	if len(poolErrs) > 0 {
+		return fmt.Errorf("failed to delete %d sandbox pool(s) for ephemeral version %s; retaining version for retry: %w",
+			len(poolErrs), versionID, errors.Join(poolErrs...))
 	}
 
 	// Delete the AppVersion entity itself
