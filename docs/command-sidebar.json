@@ -42,7 +42,8 @@
       "command/app-list",
       "command/app-restart",
       "command/app-run",
-      "command/app-status"
+      "command/app-status",
+      "command/app-versions"
     ]
   },
   "command/apps",
