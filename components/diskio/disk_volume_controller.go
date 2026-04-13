@@ -966,6 +966,15 @@ func (c *DiskVolumeController) ensureVolumeMount(ctx context.Context, entityId s
 		}
 	}
 
+	// rollbackDetach releases the loop device, logging any failure
+	// rather than silently discarding it so unclean cleanup is visible.
+	rollbackDetach := func(reason string) {
+		if derr := c.mntOps.LoopDetach(devicePath); derr != nil {
+			c.log.Warn("rollback: failed to detach loop device",
+				"entity_id", entityId, "device", devicePath, "reason", reason, "error", derr)
+		}
+	}
+
 	filesystem := volState.Filesystem
 	if filesystem == "" {
 		filesystem = "ext4"
@@ -973,7 +982,7 @@ func (c *DiskVolumeController) ensureVolumeMount(ctx context.Context, entityId s
 
 	formatted, err := c.mntOps.IsFormatted(ctx, devicePath, filesystem)
 	if err != nil {
-		c.mntOps.LoopDetach(devicePath)
+		rollbackDetach("IsFormatted failed")
 		return fmt.Errorf("failed to check if formatted: %w", err)
 	}
 
@@ -992,13 +1001,13 @@ func (c *DiskVolumeController) ensureVolumeMount(ctx context.Context, entityId s
 			c.log.Error("format device failed, will retry", "device", devicePath, "error", err)
 
 			if time.Now().After(formatDeadline) {
-				c.mntOps.LoopDetach(devicePath)
+				rollbackDetach("format device retries exhausted")
 				return fmt.Errorf("failed to format device after retries: %w", err)
 			}
 
 			select {
 			case <-ctx.Done():
-				c.mntOps.LoopDetach(devicePath)
+				rollbackDetach("context canceled during format")
 				return ctx.Err()
 			case <-time.After(backoff):
 			}
@@ -1011,12 +1020,12 @@ func (c *DiskVolumeController) ensureVolumeMount(ctx context.Context, entityId s
 	}
 
 	if err := c.mntOps.CreateDir(mountPath, 0755); err != nil {
-		c.mntOps.LoopDetach(devicePath)
+		rollbackDetach("CreateDir failed")
 		return fmt.Errorf("failed to create mount point: %w", err)
 	}
 
 	if err := c.mntOps.Mount(devicePath, mountPath, filesystem, false); err != nil {
-		c.mntOps.LoopDetach(devicePath)
+		rollbackDetach("Mount failed")
 		return fmt.Errorf("failed to mount: %w", err)
 	}
 
