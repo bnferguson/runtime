@@ -246,6 +246,53 @@ func TestProvisionCompensatesOnPostProvisionFailure(t *testing.T) {
 	assert.True(t, provider.deprovisionCalled, "Deprovision should have been called as compensation after post-provision failure")
 }
 
+// TestProvisionSkipsWhenAssociationNoLongerPending verifies the pre-flight
+// re-read: if a stale Reconcile event routes through provision() but the
+// association has since moved to "deprovisioning" (e.g. on startup resync
+// after the user ran `addon destroy`), provision() must be a no-op so the
+// subsequent deprovisioning event can run.
+func TestProvisionSkipsWhenAssociationNoLongerPending(t *testing.T) {
+	ctx, ctrl, ec, provider := setupControllerTest(t)
+
+	appID, err := ec.Create(ctx, "myapp", &core_v1alpha.App{})
+	require.NoError(t, err)
+
+	addonID, err := ec.Create(ctx, "miren-postgresql", &addon_v1alpha.Addon{
+		Name: "miren-postgresql",
+	})
+	require.NoError(t, err)
+
+	assocID, err := ec.Create(ctx, "test-assoc", &addon_v1alpha.AddonAssociation{
+		App:     appID,
+		Addon:   addonID,
+		Variant: "small",
+		Status:  "pending",
+	})
+	require.NoError(t, err)
+
+	// Capture a stale "pending" view of the association.
+	var stale addon_v1alpha.AddonAssociation
+	meta, err := getMeta(ctx, ec, assocID, &stale)
+	require.NoError(t, err)
+
+	// In the meantime, the user destroys the addon and the status flips.
+	require.NoError(t, ec.Patch(ctx, assocID, 0,
+		(&addon_v1alpha.AddonAssociation{Status: "deprovisioning"}).Encode()...,
+	))
+
+	// Now reconcile the stale event. provision() should re-read, see the
+	// association is no longer "pending", and skip without calling the provider.
+	require.NoError(t, ctrl.Reconcile(ctx, &stale, meta))
+
+	assert.False(t, provider.provisionCalled, "Provision should NOT be called when association is no longer pending")
+
+	// The on-disk status should remain "deprovisioning" — provision() must not
+	// have overwritten it.
+	var current addon_v1alpha.AddonAssociation
+	require.NoError(t, ec.GetById(ctx, assocID, &current))
+	assert.Equal(t, "deprovisioning", current.Status)
+}
+
 func TestDeprovisionCompletesWhenAppDeleted(t *testing.T) {
 	ctx, ctrl, ec, provider := setupControllerTest(t)
 
