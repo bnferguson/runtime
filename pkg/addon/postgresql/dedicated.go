@@ -141,6 +141,9 @@ func CreateDedicatedPool(ctx context.Context, in CreateDedicatedPoolIn) (CreateD
 		DesiredInstances: 1,
 		Labels:           labels,
 		SandboxPrefix:    fmt.Sprintf("%s-pg", in.AppName),
+		// Postgres first-boot runs initdb before binding; can exceed the
+		// default 15s on loaded dev hardware. 60s matches the MySQL budget.
+		PortWaitTimeout: "60s",
 		Mounts: []compute_v1alpha.SandboxSpecContainerMount{
 			{Source: "pgdata", Destination: mountPath},
 		},

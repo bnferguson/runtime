@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
-	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/errdefs"
@@ -293,9 +292,10 @@ type bootContainersIn struct {
 }
 
 type bootContainersOut struct {
-	WaitPortIDs   []string          `json:"wait_port_ids" saga:"wait_port_ids"`
-	WaitPortPorts []int             `json:"wait_port_ports" saga:"wait_port_ports"`
-	AllCgroups    map[string]string `json:"all_cgroups" saga:"all_cgroups"`
+	WaitPortIDs     []string          `json:"wait_port_ids" saga:"wait_port_ids"`
+	WaitPortPorts   []int             `json:"wait_port_ports" saga:"wait_port_ports"`
+	PortWaitTimeout string            `json:"port_wait_timeout" saga:"port_wait_timeout"`
+	AllCgroups      map[string]string `json:"all_cgroups" saga:"all_cgroups"`
 }
 
 func bootContainers(ctx context.Context, in bootContainersIn) (bootContainersOut, error) {
@@ -337,7 +337,12 @@ func bootContainers(ctx context.Context, in bootContainersIn) (bootContainersOut
 	}
 
 	log.Debug("saga: booted containers", "sandbox", in.SandboxID, "ports", len(waitPorts))
-	return bootContainersOut{WaitPortIDs: wpIDs, WaitPortPorts: wpPorts, AllCgroups: cgroups}, nil
+	return bootContainersOut{
+		WaitPortIDs:     wpIDs,
+		WaitPortPorts:   wpPorts,
+		PortWaitTimeout: sb.Spec.PortWaitTimeout,
+		AllCgroups:      cgroups,
+	}, nil
 }
 
 func undoBootContainers(ctx context.Context, in bootContainersIn, _ bootContainersOut) error {
@@ -405,9 +410,10 @@ func undoAddMetrics(ctx context.Context, _ addMetricsIn, out addMetricsOut) erro
 // --- Wait ports ---
 
 type waitPortsIn struct {
-	SandboxID     string   `json:"sandbox_id" saga:"sandbox_id"`
-	WaitPortIDs   []string `json:"wait_port_ids" saga:"wait_port_ids"`
-	WaitPortPorts []int    `json:"wait_port_ports" saga:"wait_port_ports"`
+	SandboxID       string   `json:"sandbox_id" saga:"sandbox_id"`
+	WaitPortIDs     []string `json:"wait_port_ids" saga:"wait_port_ids"`
+	WaitPortPorts   []int    `json:"wait_port_ports" saga:"wait_port_ports"`
+	PortWaitTimeout string   `json:"port_wait_timeout" saga:"port_wait_timeout"`
 }
 
 type waitPortsOut struct {
@@ -418,7 +424,7 @@ func waitPorts(ctx context.Context, in waitPortsIn) (waitPortsOut, error) {
 	deps := saga.Get[*createSandboxDeps](ctx)
 	log := saga.Get[*slog.Logger](ctx)
 
-	portTimeout := portWaitTimeout
+	portTimeout := resolvePortWaitTimeout(in.PortWaitTimeout)
 	if len(in.WaitPortIDs) != len(in.WaitPortPorts) {
 		return waitPortsOut{}, fmt.Errorf(
 			"wait port ids/ports mismatch: %d != %d",
@@ -518,9 +524,6 @@ func updateServices(ctx context.Context, in updateServicesIn) (updateServicesOut
 func undoUpdateServices(_ context.Context, _ updateServicesIn, _ updateServicesOut) error {
 	return nil
 }
-
-// portWaitTimeout is the timeout for waiting for ports to bind.
-var portWaitTimeout = 15 * time.Second
 
 // registerCreateSandboxSaga registers the saga definition for sandbox creation.
 func registerCreateSandboxSaga(

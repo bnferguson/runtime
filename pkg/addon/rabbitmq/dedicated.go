@@ -142,6 +142,10 @@ func CreateDedicatedPool(ctx context.Context, in CreateDedicatedPoolIn) (CreateD
 		DesiredInstances: 1,
 		Labels:           labels,
 		SandboxPrefix:    fmt.Sprintf("%s-rmq", in.AppName),
+		// RabbitMQ first-boot brings up the Erlang VM and initializes the
+		// mnesia schema before binding AMQP — often 20-30s on loaded dev
+		// hardware, sometimes more. 90s gives comfortable headroom.
+		PortWaitTimeout: "90s",
 		Mounts: []compute_v1alpha.SandboxSpecContainerMount{
 			{Source: "rmqdata", Destination: mountPath},
 		},

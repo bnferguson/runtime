@@ -1010,11 +1010,10 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 
 	c.Log.Info("sandbox started", "id", co.ID, "namespace", c.Namespace)
 
-	// Wait for ports to verify network connectivity before marking RUNNING
-	// Fast-path: most healthy apps bind within 1-2 seconds
-	// Slow-path: allow up to 15 seconds for slow-starting apps
-	// Fail-hard: if ports never bind, fail the sandbox so pool can retry
-	portTimeout := 15 * time.Second
+	// Wait for ports to verify network connectivity before marking RUNNING.
+	// Fail-hard: if ports never bind, fail the sandbox so pool can retry.
+	// Default 15s; spec.PortWaitTimeout overrides for slow-cold-init images.
+	portTimeout := resolvePortWaitTimeout(co.Spec.PortWaitTimeout)
 	for _, wp := range waitPorts {
 		c.Log.Info("waiting for ports to be bound", "id", cid, "port", wp.Port, "timeout", portTimeout)
 		if err := c.WaitForPort(ctx, wp.ID, wp.Port, portTimeout); err != nil {
@@ -1536,6 +1535,22 @@ func (c *SandboxController) BootInitialTask(
 type WaitPort struct {
 	ID   string
 	Port int
+}
+
+const defaultPortWaitTimeout = 15 * time.Second
+
+// resolvePortWaitTimeout parses a user-supplied duration string from
+// SandboxSpec.PortWaitTimeout, falling back to the default on empty, invalid,
+// or non-positive values so a typo doesn't brick a pool.
+func resolvePortWaitTimeout(spec string) time.Duration {
+	if spec == "" {
+		return defaultPortWaitTimeout
+	}
+	d, err := time.ParseDuration(spec)
+	if err != nil || d <= 0 {
+		return defaultPortWaitTimeout
+	}
+	return d
 }
 
 // CleanupContainer removes a container and its snapshot during failure scenarios
