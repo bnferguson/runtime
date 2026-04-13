@@ -23,7 +23,7 @@ miren runner upgrade [flags]
 - `--channel` — Channel to use: 'latest' (stable releases, default) or 'main' (bleeding edge)
 - `--check, -c` — Check for available updates only
 - `--force, -f` — Force upgrade even if already up to date
-- `--health-timeout` — Health check timeout in seconds (default: 60) (default: `0`)
+- `--health-timeout` — Health check timeout in seconds (default: `60`)
 - `--no-auto-rollback` — Disable automatic rollback on failure
 - `--skip-health` — Skip health check after upgrade
 - `--version, -V` — Specific version to upgrade to (e.g., v0.2.0)

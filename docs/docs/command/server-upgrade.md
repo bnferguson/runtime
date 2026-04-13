@@ -19,7 +19,7 @@ miren server upgrade [flags]
 - `--channel` — Channel to use: 'latest' (stable releases, default) or 'main' (bleeding edge)
 - `--check, -c` — Check for available updates only
 - `--force, -f` — Force upgrade even if already up to date
-- `--health-timeout` — Health check timeout in seconds (default: 60) (default: `0`)
+- `--health-timeout` — Health check timeout in seconds (default: `60`)
 - `--no-auto-rollback` — Disable automatic rollback on failure
 - `--release, -r` — Upgrade full release package (not just base)
 - `--skip-health` — Skip health check after upgrade

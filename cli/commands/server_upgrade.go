@@ -17,7 +17,7 @@ func ServerUpgrade(ctx *Context, opts struct {
 	Release        bool   `short:"r" long:"release" description:"Upgrade full release package (not just base)"`
 	SkipHealth     bool   `long:"skip-health" description:"Skip health check after upgrade"`
 	NoAutoRollback bool   `long:"no-auto-rollback" description:"Disable automatic rollback on failure"`
-	HealthTimeout  int    `long:"health-timeout" description:"Health check timeout in seconds (default: 60)"`
+	HealthTimeout  int    `long:"health-timeout" default:"60" description:"Health check timeout in seconds"`
 }) error {
 	// Check if running with sufficient privileges
 	if os.Geteuid() != 0 {

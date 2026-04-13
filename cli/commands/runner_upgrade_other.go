@@ -12,7 +12,7 @@ func RunnerUpgrade(ctx *Context, opts struct {
 	Force          bool   `short:"f" long:"force" description:"Force upgrade even if already up to date"`
 	SkipHealth     bool   `long:"skip-health" description:"Skip health check after upgrade"`
 	NoAutoRollback bool   `long:"no-auto-rollback" description:"Disable automatic rollback on failure"`
-	HealthTimeout  int    `long:"health-timeout" description:"Health check timeout in seconds (default: 60)"`
+	HealthTimeout  int    `long:"health-timeout" default:"60" description:"Health check timeout in seconds"`
 }) error {
 	return fmt.Errorf("runner upgrade is only available on Linux")
 }
