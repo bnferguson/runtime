@@ -268,15 +268,18 @@
       "id": "command/runner"
     },
     "items": [
+      "command/runner-install",
       "command/runner-join",
       "command/runner-list",
       "command/runner-remove",
+      "command/runner-service-status",
       "command/runner-start",
       "command/runner-status",
       "command/runner-token",
       "command/runner-token-create",
       "command/runner-token-list",
-      "command/runner-token-revoke"
+      "command/runner-token-revoke",
+      "command/runner-uninstall"
     ]
   },
   {

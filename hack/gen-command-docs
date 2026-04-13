@@ -23,9 +23,9 @@ if [ ! -f "$BINARY" ]; then
   exit 1
 fi
 
-# Get help JSON
+# Get help JSON — enable all labs features so gated commands appear in docs
 echo "Extracting command metadata..."
-MIREN_HELP_JSON=1 "$BINARY" > "$WORK_DIR/help.json"
+MIREN_HELP_JSON=1 MIREN_LABS=all "$BINARY" > "$WORK_DIR/help.json"
 
 # Flatten all commands (recursive) and enrich with subcommand paths
 jq -c '

@@ -15,62 +15,28 @@ import (
 	"miren.dev/runtime/version"
 )
 
-func RunnerJoin(ctx *Context, opts struct {
-	Coordinator string   `short:"c" long:"coordinator" description:"Override coordinator address from the token"`
-	Token       string   `long:"token" description:"Enrollment token (or pass as positional arg / via stdin)"`
-	ListenAddr  string   `short:"l" long:"listen" description:"Address this runner will listen on"`
-	Name        string   `long:"name" description:"Human-readable name for this runner (defaults to hostname)"`
-	Labels      []string `long:"labels" description:"Additional labels for the runner (key=value)"`
-	ConfigPath  string   `long:"config" description:"Path to save runner config" default:"/var/lib/miren/runner/config.yaml"`
-	RunnerID    string   `long:"runner-id" description:"Specific runner ID to use (for reconnecting)"`
+// runnerJoinOpts holds the parameters for performing a runner join operation.
+type runnerJoinOpts struct {
+	Coordinator string
+	Secret      string
+	Name        string
+	ListenAddr  string
+	Labels      []string
+	ConfigPath  string
+	RunnerID    string
+}
 
-	TokenArg string `position:"0" usage:"Join token from 'miren runner token create'"`
-}) error {
-	if runnerconfig.Exists(opts.ConfigPath) {
-		return fmt.Errorf("runner config already exists at %s; remove it first to re-register", opts.ConfigPath)
-	}
-
-	// Resolve token: --token flag > positional arg > stdin pipe > TTY prompt
-	token := opts.Token
-	if token == "" {
-		token = opts.TokenArg
-	}
-	if token == "" {
-		if stat, _ := os.Stdin.Stat(); stat.Mode()&os.ModeCharDevice == 0 {
-			scanner := bufio.NewScanner(os.Stdin)
-			if scanner.Scan() {
-				token = strings.TrimSpace(scanner.Text())
-			}
-		}
-	}
-	if token == "" {
-		var err error
-		token, err = ui.PromptForInput(
-			ui.WithLabel("Enter enrollment token"),
-			ui.WithPlaceholder("mren_..."),
-		)
-		if err != nil {
-			return fmt.Errorf("failed to read token: %w", err)
-		}
-	}
-
-	if !enrolltoken.IsToken(token) {
-		return fmt.Errorf("invalid token format (expected mren_ prefix)")
-	}
-
-	addr, secret, err := enrolltoken.Decode(token)
-	if err != nil {
-		return fmt.Errorf("invalid token: %w", err)
-	}
-
-	// Use the address from the token, unless --coordinator overrides it
-	coordinator := addr
-	if opts.Coordinator != "" {
-		coordinator = opts.Coordinator
-	}
-
+// performRunnerJoin executes the core join flow: connects to the coordinator,
+// exchanges the enrollment secret for credentials, and saves the runner config.
+// Both RunnerJoin and RunnerInstall use this.
+func performRunnerJoin(ctx *Context, opts runnerJoinOpts) error {
+	coordinator := opts.Coordinator
 	if _, _, err := net.SplitHostPort(coordinator); err != nil {
 		coordinator = net.JoinHostPort(coordinator, "8443")
+	}
+
+	if runnerconfig.Exists(opts.ConfigPath) {
+		return fmt.Errorf("runner config already exists at %s; remove it first to re-register", opts.ConfigPath)
 	}
 
 	ctx.Printf("Joining coordinator at %s\n", coordinator)
@@ -104,7 +70,7 @@ func RunnerJoin(ctx *Context, opts struct {
 	}
 
 	versionInfo := version.GetInfo()
-	res, err := rc.Join(ctx, secret, opts.RunnerID, listenAddr, versionInfo.Version, opts.Labels, name)
+	res, err := rc.Join(ctx, opts.Secret, opts.RunnerID, listenAddr, versionInfo.Version, opts.Labels, name)
 	if err != nil {
 		return fmt.Errorf("join request failed: %w", err)
 	}
@@ -166,6 +132,74 @@ func RunnerJoin(ctx *Context, opts struct {
 	}
 
 	ctx.Printf("Config saved to %s\n", opts.ConfigPath)
+	return nil
+}
+
+func RunnerJoin(ctx *Context, opts struct {
+	Coordinator string   `short:"c" long:"coordinator" description:"Override coordinator address from the token"`
+	Token       string   `long:"token" description:"Enrollment token (or pass as positional arg / via stdin)"`
+	ListenAddr  string   `short:"l" long:"listen" description:"Address this runner will listen on"`
+	Name        string   `long:"name" description:"Human-readable name for this runner (defaults to hostname)"`
+	Labels      []string `long:"labels" description:"Additional labels for the runner (key=value)"`
+	ConfigPath  string   `long:"config" description:"Path to save runner config" default:"/var/lib/miren/runner/config.yaml"`
+	RunnerID    string   `long:"runner-id" description:"Specific runner ID to use (for reconnecting)"`
+
+	TokenArg string `position:"0" usage:"Join token from 'miren runner token create'"`
+}) error {
+	// Resolve token: --token flag > positional arg > stdin pipe > TTY prompt
+	token := opts.Token
+	if token == "" {
+		token = opts.TokenArg
+	}
+	if token == "" {
+		if stat, err := os.Stdin.Stat(); err == nil && stat.Mode()&os.ModeCharDevice == 0 {
+			scanner := bufio.NewScanner(os.Stdin)
+			if scanner.Scan() {
+				token = strings.TrimSpace(scanner.Text())
+			}
+			if err := scanner.Err(); err != nil {
+				return fmt.Errorf("failed to read token from stdin: %w", err)
+			}
+		}
+	}
+	if token == "" {
+		var err error
+		token, err = ui.PromptForInput(
+			ui.WithLabel("Enter enrollment token"),
+			ui.WithPlaceholder("mren_..."),
+		)
+		if err != nil {
+			return fmt.Errorf("failed to read token: %w", err)
+		}
+	}
+
+	if !enrolltoken.IsToken(token) {
+		return fmt.Errorf("invalid token format (expected mren_ prefix)")
+	}
+
+	addr, secret, err := enrolltoken.Decode(token)
+	if err != nil {
+		return fmt.Errorf("invalid token: %w", err)
+	}
+
+	// Use the address from the token, unless --coordinator overrides it
+	coordinator := addr
+	if opts.Coordinator != "" {
+		coordinator = opts.Coordinator
+	}
+
+	if err := performRunnerJoin(ctx, runnerJoinOpts{
+		Coordinator: coordinator,
+		Secret:      secret,
+		Name:        opts.Name,
+		ListenAddr:  opts.ListenAddr,
+		Labels:      opts.Labels,
+		ConfigPath:  opts.ConfigPath,
+		RunnerID:    opts.RunnerID,
+	}); err != nil {
+		return err
+	}
+
 	ctx.Printf("\nTo start this runner, run:\n")
 	ctx.Printf("  miren runner start\n")
 

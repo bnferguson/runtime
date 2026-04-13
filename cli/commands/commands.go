@@ -679,6 +679,39 @@ miren deploy --analyze
 				Body: "miren runner remove my-runner --force",
 			}),
 		))
+		d.Dispatch("runner install", Infer("runner install", "Install systemd service for miren runner", RunnerInstall,
+			WithLabsFeature(labs.FeatureDistributedRunners),
+			WithExample(mflags.Example{
+				Name: "Install interactively",
+				Body: "miren runner install",
+			}),
+			WithExample(mflags.Example{
+				Name: "Install with token (for automation)",
+				Body: "miren runner install --token mren_...",
+			}),
+		))
+		d.Dispatch("runner uninstall", Infer("runner uninstall", "Remove systemd service for miren runner", RunnerUninstall,
+			WithLabsFeature(labs.FeatureDistributedRunners),
+			WithExample(mflags.Example{
+				Name: "Uninstall the runner service",
+				Body: "miren runner uninstall",
+			}),
+			WithExample(mflags.Example{
+				Name: "Uninstall and remove all runner data",
+				Body: "miren runner uninstall --remove-data",
+			}),
+		))
+		d.Dispatch("runner service-status", Infer("runner service-status", "Show miren-runner systemd service status", RunnerServiceStatus,
+			WithLabsFeature(labs.FeatureDistributedRunners),
+			WithExample(mflags.Example{
+				Name: "Show service status",
+				Body: "miren runner service-status",
+			}),
+			WithExample(mflags.Example{
+				Name: "Follow service logs",
+				Body: "miren runner service-status --follow",
+			}),
+		))
 	}
 
 	// Server commands
