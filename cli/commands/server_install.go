@@ -226,7 +226,7 @@ func ensureReleaseBundlePresent(ctx *Context, branch string) error {
 		if err := PerformDownloadRelease(ctx, DownloadReleaseOptions{
 			Branch: branch,
 			Global: true,
-			Force:  false,
+			Force:  true,
 			Output: releaseDir,
 		}); err != nil {
 			return fmt.Errorf("failed to download release: %w", err)
