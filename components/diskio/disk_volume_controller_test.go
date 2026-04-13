@@ -2,6 +2,7 @@ package diskio
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -1402,6 +1403,71 @@ func TestDiskVolumeControllerUniversalAdoptsExistingLoopDevice(t *testing.T) {
 	require.NotNil(t, volState)
 	assert.True(t, volState.Mounted)
 	assert.Equal(t, staleLoopDev, volState.DevicePath)
+}
+
+// TestDiskVolumeControllerUniversalFailsClosedWhenFindLoopErrors verifies
+// that if the kernel's loop state cannot be read, ensureVolumeMount
+// refuses to allocate a fresh loop device. Without this guard, a sysfs
+// read failure would bypass the adoption check and could produce a
+// double-attach.
+func TestDiskVolumeControllerUniversalFailsClosedWhenFindLoopErrors(t *testing.T) {
+	ctx := t.Context()
+	log := testutils.TestLogger(t)
+
+	es, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	dataPath := t.TempDir()
+	nodeId := "test-node-1"
+	state := NewState()
+	volOps := newMockDiskVolumeOps()
+	mntOps := newMockDiskMountOps()
+
+	volPath := filepath.Join(dataPath, "volumes", "vol-fcl")
+	mountPath := filepath.Join(dataPath, "vol-fcl")
+
+	state.SetVolume("disk_volume/vol-fcl", &VolumeState{
+		EntityId:   "disk_volume/vol-fcl",
+		VolumeId:   "vol-fcl",
+		DiskPath:   volPath,
+		SizeBytes:  10 * 1024 * 1024 * 1024,
+		Filesystem: "ext4",
+		Mode:       storage_v1alpha.VM_UNIVERSAL,
+		Mounted:    false,
+		MountPath:  mountPath,
+	})
+	volOps.existingPaths[volPath] = true
+
+	// Simulate sysfs being unreadable.
+	mntOps.findLoopErr = errors.New("sysfs read error")
+
+	vc := NewDiskVolumeController(log, dataPath, nodeId, state, volOps, mntOps)
+	vc.SetEAC(es.EAC)
+
+	vol := &storage_v1alpha.DiskVolume{
+		ID:           "disk_volume/vol-fcl",
+		NodeId:       entity.Id("node/" + nodeId),
+		SizeGb:       10,
+		Filesystem:   "ext4",
+		VolumeMode:   storage_v1alpha.VM_UNIVERSAL,
+		DesiredState: storage_v1alpha.DV_PRESENT,
+		ActualState:  storage_v1alpha.DV_READY,
+	}
+	createDiskVolumeEntity(ctx, t, es, vol)
+
+	// Reconcile records per-volume errors internally and returns nil,
+	// but we verify the behavior via side effects.
+	err := vc.ReconcileWithEntities(ctx)
+	require.NoError(t, err)
+
+	// Critically: LoopAttach must NOT have been called. We failed
+	// closed rather than risking a double-attach.
+	assert.Empty(t, mntOps.attachedLoops, "LoopAttach must not be called when FindLoopByBacking fails")
+	assert.Empty(t, mntOps.mounts, "Mount must not happen when FindLoopByBacking fails")
+
+	volState := state.GetVolume("disk_volume/vol-fcl")
+	require.NotNil(t, volState)
+	assert.False(t, volState.Mounted)
 }
 
 // TestDiskVolumeControllerOrphanLoopSweep verifies that at boot, a loop

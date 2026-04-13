@@ -288,10 +288,13 @@ func (c *DiskMountController) attachAndMount(ctx context.Context, mount *storage
 		// corrupts the filesystem.
 		existing, findErr := c.ops.FindLoopByBacking(imagePath)
 		if findErr != nil {
-			c.log.Warn("FindLoopByBacking failed, falling back to fresh attach",
-				"entity_id", entityId,
-				"image_path", imagePath,
-				"error", findErr)
+			// Fail closed: if we can't see the kernel's loop state, we
+			// can't tell whether attaching would double-attach. Record
+			// the error and return a retriable reconcile error so the
+			// next tick tries again once sysfs is healthy.
+			msg := fmt.Sprintf("find loop device for backing file %s: %v", imagePath, findErr)
+			c.setMountError(ctx, mount.ID, msg)
+			return fmt.Errorf("find loop device for backing file %s: %w", imagePath, findErr)
 		}
 		if existing != "" {
 			c.log.Info("adopting existing loop device for backing file",
