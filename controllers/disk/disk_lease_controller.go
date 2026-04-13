@@ -2,15 +2,18 @@ package disk
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
 	"sync"
 	"time"
 
+	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
 )
@@ -71,6 +74,88 @@ func (d *DiskLeaseController) ForceUniversalMode() {
 func (d *DiskLeaseController) Init(ctx context.Context) error {
 	d.diskMode = detectDiskMode(d.configuredMode)
 	d.Log.Info("disk lease controller initialized", "mode", d.diskMode)
+
+	if err := d.reconcileOrphanLeases(ctx); err != nil {
+		// Orphan sweep is best-effort — log and continue. Individual
+		// leases may still transition normally via their entity events.
+		d.Log.Warn("orphan lease reconciliation failed", "error", err)
+	}
+	return nil
+}
+
+// reconcileOrphanLeases releases leases whose owning sandbox no longer
+// exists or is already DEAD. On a clean shutdown the sandbox controller
+// releases leases via StopSandbox → ReleaseDiskLeases, but after a
+// SIGKILL the sandbox may be torn down without that path ever running.
+// A BOUND lease left pointing at a dead sandbox then blocks every
+// future sandbox that wants the same disk; clearing those leases at
+// boot turns a latent deadlock into a transient, self-healing one.
+func (d *DiskLeaseController) reconcileOrphanLeases(ctx context.Context) error {
+	// Entity-only unit tests instantiate the controller without an EAC
+	// and call Init; skip the sweep cleanly in that case.
+	if d.EAC == nil {
+		return nil
+	}
+
+	resp, err := d.EAC.List(ctx, entity.Ref(entity.EntityKind, storage_v1alpha.KindDiskLease))
+	if err != nil {
+		return fmt.Errorf("list disk leases: %w", err)
+	}
+
+	var released int
+	for _, e := range resp.Values() {
+		var lease storage_v1alpha.DiskLease
+		lease.Decode(e.Entity())
+
+		if lease.Status != storage_v1alpha.BOUND && lease.Status != storage_v1alpha.PENDING {
+			continue
+		}
+		if lease.SandboxId == "" {
+			continue
+		}
+
+		sbResp, err := d.EAC.Get(ctx, lease.SandboxId.String())
+		var sandboxDead bool
+		switch {
+		case err == nil:
+			var sb compute.Sandbox
+			sb.Decode(sbResp.Entity().Entity())
+			sandboxDead = sb.Status == compute.DEAD
+		case errors.Is(err, cond.ErrNotFound{}):
+			sandboxDead = true
+		default:
+			d.Log.Warn("orphan lease sweep: failed to load sandbox",
+				"lease", lease.ID, "sandbox", lease.SandboxId, "error", err)
+			continue
+		}
+		if !sandboxDead {
+			continue
+		}
+
+		d.Log.Info("orphan lease sweep: releasing lease for dead/missing sandbox",
+			"lease", lease.ID,
+			"disk", lease.DiskId,
+			"sandbox", lease.SandboxId,
+			"prior_status", lease.Status,
+		)
+
+		_, patchErr := d.EAC.Patch(ctx, entity.New(
+			entity.DBId, lease.ID,
+			(&storage_v1alpha.DiskLease{
+				Status: storage_v1alpha.RELEASED,
+			}).Encode,
+		).Attrs(), 0)
+		if patchErr != nil {
+			d.Log.Warn("orphan lease sweep: patch to RELEASED failed",
+				"lease", lease.ID, "error", patchErr)
+			continue
+		}
+		released++
+	}
+
+	if released > 0 {
+		d.Log.Info("orphan lease sweep complete", "released", released)
+	}
 	return nil
 }
 
