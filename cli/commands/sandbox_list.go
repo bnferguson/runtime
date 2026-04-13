@@ -59,8 +59,9 @@ func SandboxList(ctx *Context, opts struct {
 		}
 	}
 
-	// Build a map of version ID -> short ID (best-effort for display)
+	// Build maps of version ID -> short ID and version ID -> app name (best-effort for display)
 	versionShortIdMap := make(map[string]string)
+	versionAppMap := make(map[string]string)
 	if versionKindRes, err := eac.LookupKind(ctx, "app_version"); err == nil {
 		if versionsRes, err := eac.List(ctx, versionKindRes.Attr()); err == nil {
 			for _, e := range versionsRes.Values() {
@@ -68,6 +69,9 @@ func SandboxList(ctx *Context, opts struct {
 				v.Decode(e.Entity())
 				if sid := e.Entity().ShortId(); sid != "" {
 					versionShortIdMap[v.ID.String()] = sid
+				}
+				if !entity.Empty(v.App) {
+					versionAppMap[v.ID.String()] = v.App.String()
 				}
 			}
 		}
@@ -107,6 +111,7 @@ func SandboxList(ctx *Context, opts struct {
 	if opts.IsJSON() {
 		var sandboxes []struct {
 			compute_v1alpha.Sandbox
+			App     string `json:"app,omitempty"`
 			Pool    string `json:"pool,omitempty"`
 			Service string `json:"service,omitempty"`
 			Address string `json:"address,omitempty"`
@@ -152,14 +157,22 @@ func SandboxList(ctx *Context, opts struct {
 				runner = nodeNameMap[sch.Key.Node]
 			}
 
+			// Resolve app name from version
+			appName := ""
+			if name, ok := versionAppMap[sandbox.Spec.Version.String()]; ok {
+				appName = name
+			}
+
 			entry := struct {
 				compute_v1alpha.Sandbox
+				App     string `json:"app,omitempty"`
 				Pool    string `json:"pool,omitempty"`
 				Service string `json:"service,omitempty"`
 				Address string `json:"address,omitempty"`
 				Runner  string `json:"runner,omitempty"`
 			}{
 				Sandbox: sandbox,
+				App:     appName,
 				Pool:    poolLabel,
 				Service: service,
 				Address: address,
@@ -174,7 +187,7 @@ func SandboxList(ctx *Context, opts struct {
 	// Table output - all the UI formatting logic
 	var rows []ui.Row
 	var deadCount int
-	headers := []string{"ID", "VERSION", "SERVICE", "POOL", "ADDRESS", "RUNNER", "STATUS", "CREATED", "UPDATED"}
+	headers := []string{"ID", "APP", "VERSION", "SERVICE", "POOL", "ADDRESS", "RUNNER", "STATUS", "CREATED", "UPDATED"}
 
 	for _, e := range res.Values() {
 		// Decode the sandbox entity
@@ -250,8 +263,15 @@ func SandboxList(ctx *Context, opts struct {
 			poolLabelDisplay = shortId
 		}
 
+		// Resolve app name from version
+		appName := "-"
+		if name, ok := versionAppMap[sandbox.Spec.Version.String()]; ok {
+			appName = ui.CleanEntityID(name)
+		}
+
 		rows = append(rows, ui.Row{
 			sandboxId,
+			appName,
 			versionDisplay,
 			service,
 			poolLabelDisplay,
