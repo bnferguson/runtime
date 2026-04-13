@@ -1033,7 +1033,10 @@ func (c *Coordinator) Start(ctx context.Context) error {
 			eac,
 			controller.AdaptReconcileController[addon_v1alpha.AddonAssociation](addonController),
 			time.Minute,
-			1,
+			// Multiple workers so a long-running provisioning saga for one
+			// association does not block reconciliation of others. Same-entity
+			// concurrency is already prevented by ReconcileController.inFlight.
+			4,
 		)
 		c.cm.AddController(addonReconciler)
 	}

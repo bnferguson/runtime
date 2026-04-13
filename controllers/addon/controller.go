@@ -64,6 +64,20 @@ func (c *Controller) Reconcile(ctx context.Context, assoc *addon_v1alpha.AddonAs
 func (c *Controller) provision(ctx context.Context, assoc *addon_v1alpha.AddonAssociation, meta *entity.Meta) error {
 	c.log.Info("provisioning addon", "association", assoc.ID, "addon", assoc.Addon, "variant", assoc.Variant)
 
+	// Re-read the association to guard against stale events (e.g. on startup
+	// resync, the reconcile event may carry an older revision than what's
+	// now in the store). If the user has already marked this association for
+	// deprovisioning, skip; the subsequent deprovisioning event will handle it.
+	var current addon_v1alpha.AddonAssociation
+	if err := c.ec.GetById(ctx, assoc.ID, &current); err != nil {
+		return fmt.Errorf("re-reading association: %w", err)
+	}
+	if current.Status != "pending" {
+		c.log.Info("association no longer pending, skipping provision",
+			"association", assoc.ID, "status", current.Status)
+		return nil
+	}
+
 	// Step 1: Set status to provisioning
 	if err := meta.Update((&addon_v1alpha.AddonAssociation{Status: "provisioning"}).Encode()); err != nil {
 		return fmt.Errorf("setting status to provisioning: %w", err)
