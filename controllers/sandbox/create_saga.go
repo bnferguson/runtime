@@ -321,6 +321,13 @@ func bootContainers(ctx context.Context, in bootContainersIn) (bootContainersOut
 
 	volumeMounts, err := deps.runtime.ConfigureVolumes(ctx, sb, meta)
 	if err != nil {
+		// Emit the failure on the sandbox's normal log stream so
+		// operators see it via `miren logs sandbox <id>`. Volume-stage
+		// failures happen before any container produces output, so the
+		// log stream would otherwise be empty and the reason would only
+		// be visible in journalctl on the node.
+		deps.obs.LogSandboxEvent(sb,
+			fmt.Sprintf("volume configuration failed: %v", err))
 		return bootContainersOut{}, fmt.Errorf("configuring volumes: %w", err)
 	}
 

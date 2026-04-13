@@ -155,3 +155,7 @@ func (o *sandboxOps) RemoveMetrics(logEntity string) {
 func (o *sandboxOps) UpdateServices(ctx context.Context, co *compute.Sandbox, meta *entity.Meta, ep *network.EndpointConfig) error {
 	return o.ctrl.UpdateServices(ctx, co, meta, ep)
 }
+
+func (o *sandboxOps) LogSandboxEvent(sb *compute.Sandbox, line string) {
+	o.ctrl.EmitSandboxEvent(sb, line)
+}

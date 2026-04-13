@@ -267,6 +267,8 @@ type mockObservability struct {
 	lastLogEntity string
 	lastCgroups   map[string]string
 	lastAttrs     map[string]string
+
+	loggedEvents []string
 }
 
 func (m *mockObservability) AddMetrics(logEntity string, cgroups map[string]string, attrs map[string]string) error {
@@ -293,6 +295,12 @@ func (m *mockObservability) UpdateServices(ctx context.Context, co *compute.Sand
 	defer m.mu.Unlock()
 	m.updateSvcsCalls++
 	return m.updateSvcsErr
+}
+
+func (m *mockObservability) LogSandboxEvent(sb *compute.Sandbox, line string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.loggedEvents = append(m.loggedEvents, line)
 }
 
 // =============================================================================
@@ -581,6 +589,33 @@ func TestCreateSandboxSaga_BootContainersFails(t *testing.T) {
 
 	// undoAllocNetwork: IP released
 	assert.Equal(t, 1, h.networking.releaseCalls)
+}
+
+// TestCreateSandboxSaga_ConfigureVolumesFailsLogsEvent verifies that when
+// ConfigureVolumes returns an error, the saga logs a synthetic event on
+// the sandbox's log stream so operators can see the reason via
+// `miren logs sandbox <id>`. Without this, volume-stage failures never
+// surface to the user without ssh access to the node.
+func TestCreateSandboxSaga_ConfigureVolumesFailsLogsEvent(t *testing.T) {
+	h := newTestHarness(t)
+	h.runtime.configureVolumesErr = fmt.Errorf("disk image /foo/disk.img is already attached to /dev/loop5")
+
+	// Set up container Task() for undo cleanup.
+	h.runtime.mockContainer.taskFn = func(ctx context.Context, attach cio.Attach) (containerd.Task, error) {
+		return h.runtime.mockTask, nil
+	}
+
+	err := h.execute(t)
+	require.Error(t, err)
+
+	exec := h.execution(t)
+	assert.Equal(t, saga.StatusFailed, exec.Status)
+	assert.Equal(t, 1, h.runtime.configureVolumesCalls)
+
+	// A lifecycle event was logged on the sandbox's log stream.
+	require.Len(t, h.obs.loggedEvents, 1)
+	assert.Contains(t, h.obs.loggedEvents[0], "volume configuration failed")
+	assert.Contains(t, h.obs.loggedEvents[0], "already attached")
 }
 
 func TestCreateSandboxSaga_WaitPortsFails(t *testing.T) {

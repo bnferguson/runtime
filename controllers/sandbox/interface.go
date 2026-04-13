@@ -60,4 +60,10 @@ type SandboxObservability interface {
 	AddMetrics(logEntity string, cgroups map[string]string, attrs map[string]string) error
 	RemoveMetrics(logEntity string)
 	UpdateServices(ctx context.Context, co *compute.Sandbox, meta *entity.Meta, ep *network.EndpointConfig) error
+	// LogSandboxEvent writes a runtime lifecycle message to the
+	// sandbox's normal log stream, so `miren logs sandbox <id>`
+	// surfaces it alongside container output. Intended for startup
+	// or teardown events where a container never produced logs of
+	// its own (e.g. volume mount failures).
+	LogSandboxEvent(sb *compute.Sandbox, line string)
 }

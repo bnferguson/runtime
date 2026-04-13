@@ -1472,7 +1472,12 @@ func (c *SandboxController) writeResolve(path string, ep *network.EndpointConfig
 	return nil
 }
 
-func (c *SandboxController) logConsumer(sb *compute.Sandbox, container string) *SandboxLogs {
+// sandboxLogMeta returns the log entity and attribute map used when
+// writing log entries for a sandbox. Both container stdout/stderr
+// streaming (via logConsumer) and runtime lifecycle events (via
+// EmitSandboxEvent) share this so the two sources appear with the
+// same identity and metadata in the log stream.
+func sandboxLogMeta(sb *compute.Sandbox, container string) (string, map[string]string) {
 	le := sb.Spec.LogEntity
 	if le == "" {
 		le = sb.ID.String()
@@ -1495,7 +1500,31 @@ func (c *SandboxController) logConsumer(sb *compute.Sandbox, container string) *
 		attrs[lbl.Key] = lbl.Value
 	}
 
+	return le, attrs
+}
+
+func (c *SandboxController) logConsumer(sb *compute.Sandbox, container string) *SandboxLogs {
+	le, attrs := sandboxLogMeta(sb, container)
 	return NewSandboxLogs(c.Log, le, attrs, c.LogWriter)
+}
+
+// EmitSandboxEvent writes a single runtime lifecycle line to the
+// sandbox's log stream, using the same entity and attrs the container
+// stdio pipeline uses. Events go on the Stderr stream so operators see
+// them in `miren logs sandbox <id>` and can distinguish them from
+// application output via the [miren] prefix.
+func (c *SandboxController) EmitSandboxEvent(sb *compute.Sandbox, line string) {
+	le, attrs := sandboxLogMeta(sb, "")
+	err := c.LogWriter.WriteEntry(le, observability.LogEntry{
+		Timestamp:  time.Now(),
+		Stream:     observability.Stderr,
+		Body:       "[miren] " + line,
+		Attributes: attrs,
+	})
+	if err != nil {
+		c.Log.Error("failed to write sandbox lifecycle event",
+			"sandbox", sb.ID, "error", err)
+	}
 }
 
 func (c *SandboxController) BootInitialTask(
