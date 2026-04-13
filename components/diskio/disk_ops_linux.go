@@ -343,6 +343,49 @@ func (r *realDiskMountOps) IsFormatted(ctx context.Context, device, filesystem s
 	return detectedFS == filesystem, nil
 }
 
+// Fsck runs a filesystem check-and-repair on device. For ext4 we use
+// `fsck.ext4 -y -f` (answer yes to all questions, force even if the
+// journal looks clean). xfs uses `xfs_repair`. btrfs uses `btrfs check
+// --repair`. The caller is responsible for ensuring the device is
+// detached from any mountpoint before calling this.
+func (r *realDiskMountOps) Fsck(ctx context.Context, device, filesystem string) error {
+	filesystem = normalizeFilesystem(filesystem)
+	var cmd *exec.Cmd
+	switch filesystem {
+	case "ext4":
+		cmd = exec.CommandContext(ctx, "fsck.ext4", "-y", "-f", device)
+	case "xfs":
+		cmd = exec.CommandContext(ctx, "xfs_repair", device)
+	case "btrfs":
+		cmd = exec.CommandContext(ctx, "btrfs", "check", "--repair", device)
+	default:
+		return fmt.Errorf("unsupported filesystem for fsck: %s", filesystem)
+	}
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		// fsck.ext4 exits non-zero for a variety of recoverable
+		// conditions (e.g. 1 = filesystem errors corrected). Treat the
+		// "corrected" exit code as success so we can retry the mount.
+		if filesystem == "ext4" {
+			if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+				r.log.Info("fsck.ext4 corrected filesystem errors",
+					"device", device,
+					"output", string(output),
+				)
+				return nil
+			}
+		}
+		return fmt.Errorf("fsck.%s failed: %w\noutput: %s", filesystem, err, string(output))
+	}
+
+	r.log.Info("fsck completed",
+		"device", device,
+		"filesystem", filesystem,
+	)
+	return nil
+}
+
 func (r *realDiskMountOps) FormatDevice(ctx context.Context, device, filesystem string) error {
 	filesystem = normalizeFilesystem(filesystem)
 	var cmd *exec.Cmd

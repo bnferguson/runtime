@@ -443,7 +443,7 @@ func (c *DiskMountController) mountVolume(ctx context.Context, mount *storage_v1
 		}
 	}
 
-	if err := c.ops.Mount(mountState.DevicePath, mount.MountPath, filesystem, mount.ReadOnly); err != nil {
+	if err := mountWithFsckRetry(ctx, c.log, c.ops, mountState.DevicePath, mount.MountPath, filesystem, mount.ReadOnly); err != nil {
 		c.setMountError(ctx, mount.ID, fmt.Sprintf("failed to mount: %v", err))
 		return fmt.Errorf("failed to mount: %w", err)
 	}

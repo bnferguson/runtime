@@ -108,6 +108,10 @@ func (s *stubDiskMountOps) FormatDevice(_ context.Context, _, _ string) error {
 	return fmt.Errorf("not supported on darwin")
 }
 
+func (s *stubDiskMountOps) Fsck(_ context.Context, _, _ string) error {
+	return fmt.Errorf("not supported on darwin")
+}
+
 func EnsureLoopDevices(_ *slog.Logger) error {
 	return fmt.Errorf("loop devices not supported on darwin")
 }

@@ -1028,7 +1028,7 @@ func (c *DiskVolumeController) ensureVolumeMount(ctx context.Context, entityId s
 		return fmt.Errorf("failed to create mount point: %w", err)
 	}
 
-	if err := c.mntOps.Mount(devicePath, mountPath, filesystem, false); err != nil {
+	if err := mountWithFsckRetry(ctx, c.log, c.mntOps, devicePath, mountPath, filesystem, false); err != nil {
 		rollbackDetach("Mount failed")
 		return fmt.Errorf("failed to mount: %w", err)
 	}

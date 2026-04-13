@@ -156,6 +156,10 @@ func (m *mockDiskMountOps) FormatDevice(_ context.Context, device, filesystem st
 	return nil
 }
 
+func (m *mockDiskMountOps) Fsck(_ context.Context, _, _ string) error {
+	return nil
+}
+
 func (m *mockDiskMountOps) FindMounts(_ string) []diskio.ActiveMount {
 	return nil
 }

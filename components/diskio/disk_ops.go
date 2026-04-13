@@ -45,6 +45,11 @@ type DiskMountOps interface {
 	IsMounted(path string) bool
 	IsFormatted(ctx context.Context, device, filesystem string) (bool, error)
 	FormatDevice(ctx context.Context, device, filesystem string) error
+	// Fsck runs a filesystem check-and-repair on device. The device must
+	// not be mounted anywhere when this is called. Used to recover from
+	// EUCLEAN ("Structure needs cleaning") mount failures after an
+	// unclean shutdown.
+	Fsck(ctx context.Context, device, filesystem string) error
 
 	// FindMounts returns all mounts whose mount path starts with the given prefix.
 	FindMounts(pathPrefix string) []ActiveMount

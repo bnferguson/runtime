@@ -116,6 +116,9 @@ type mockDiskMountOps struct {
 	unmountErr    error
 	isFormattedFn func(device, filesystem string) (bool, error)
 	formatErr     error
+	fsckCalls     []diskMockFsck
+	fsckErr       error
+	fsckFn        func(device, filesystem string) error
 
 	nextLoopDevice string
 	nextLbdDevice  string
@@ -134,6 +137,11 @@ type diskMockMount struct {
 }
 
 type diskMockFormat struct {
+	device     string
+	filesystem string
+}
+
+type diskMockFsck struct {
 	device     string
 	filesystem string
 }
@@ -281,4 +289,12 @@ func (m *mockDiskMountOps) FormatDevice(_ context.Context, device, filesystem st
 	m.formatCalls = append(m.formatCalls, diskMockFormat{device: device, filesystem: filesystem})
 	m.formattedDevs[device] = filesystem
 	return nil
+}
+
+func (m *mockDiskMountOps) Fsck(_ context.Context, device, filesystem string) error {
+	m.fsckCalls = append(m.fsckCalls, diskMockFsck{device: device, filesystem: filesystem})
+	if m.fsckFn != nil {
+		return m.fsckFn(device, filesystem)
+	}
+	return m.fsckErr
 }
