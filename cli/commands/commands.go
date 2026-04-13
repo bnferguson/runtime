@@ -686,8 +686,8 @@ miren deploy --analyze
 				Body: "miren runner install",
 			}),
 			WithExample(mflags.Example{
-				Name: "Install with coordinator (for automation)",
-				Body: "miren runner install --coordinator host:8443 --invite-code abc123",
+				Name: "Install with token (for automation)",
+				Body: "miren runner install --token mren_...",
 			}),
 		))
 		d.Dispatch("runner uninstall", Infer("runner uninstall", "Remove systemd service for miren runner", RunnerUninstall,

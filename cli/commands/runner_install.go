@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"golang.org/x/term"
+	"miren.dev/runtime/pkg/enrolltoken"
 	"miren.dev/runtime/pkg/runnerconfig"
 	"miren.dev/runtime/pkg/ui"
 	"miren.dev/runtime/version"
@@ -25,8 +26,8 @@ const (
 // joining a coordinator (interactively or via flags), creating the systemd
 // service, and enabling it.
 func RunnerInstall(ctx *Context, opts struct {
-	Coordinator     string   `short:"c" long:"coordinator" description:"Coordinator address (host:port)"`
-	InviteCode      string   `long:"invite-code" description:"Join code from 'miren runner invite'"`
+	Token           string   `short:"t" long:"token" description:"Enrollment token from 'miren runner token create'"`
+	Coordinator     string   `short:"c" long:"coordinator" description:"Override coordinator address from the token"`
 	Name            string   `long:"name" description:"Human-readable name for this runner (defaults to hostname)"`
 	ListenAddr      string   `short:"l" long:"listen" description:"Address this runner will listen on"`
 	Labels          []string `long:"labels" description:"Runner labels (key=value)"`
@@ -89,7 +90,7 @@ func RunnerInstall(ctx *Context, opts struct {
 	}
 
 	// Join flow: use existing config, flags, interactive prompts, or error
-	if err := resolveRunnerJoin(ctx, opts.Coordinator, opts.InviteCode, opts.Name, opts.ListenAddr, opts.Labels, opts.ConfigPath); err != nil {
+	if err := resolveRunnerJoin(ctx, opts.Token, opts.Coordinator, opts.Name, opts.ListenAddr, opts.Labels, opts.ConfigPath); err != nil {
 		return err
 	}
 
@@ -198,9 +199,9 @@ WantedBy=multi-user.target
 }
 
 // resolveRunnerJoin handles the join step of runner installation. It picks the
-// right strategy based on what's available: existing config on disk, flags
-// passed on the command line, or interactive prompts when there's a TTY.
-func resolveRunnerJoin(ctx *Context, coordinator, inviteCode, name, listenAddr string, labels []string, configPath string) error {
+// right strategy based on what's available: existing config on disk, an
+// enrollment token passed via flag, or interactive prompts when there's a TTY.
+func resolveRunnerJoin(ctx *Context, token, coordinatorOverride, name, listenAddr string, labels []string, configPath string) error {
 	// Case 1: config already exists (previous runner join)
 	if runnerconfig.Exists(configPath) {
 		cfg, err := runnerconfig.Load(configPath)
@@ -211,12 +212,19 @@ func resolveRunnerJoin(ctx *Context, coordinator, inviteCode, name, listenAddr s
 		return nil
 	}
 
-	// Case 2: coordinator and invite code provided via flags
-	if coordinator != "" && inviteCode != "" {
+	// Case 2: token provided via flag
+	if token != "" {
+		coordinator, secret, err := decodeToken(token)
+		if err != nil {
+			return err
+		}
+		if coordinatorOverride != "" {
+			coordinator = coordinatorOverride
+		}
 		ctx.Info("Joining coordinator...")
 		return performRunnerJoin(ctx, runnerJoinOpts{
 			Coordinator: coordinator,
-			Code:        inviteCode,
+			Secret:      secret,
 			Name:        name,
 			ListenAddr:  listenAddr,
 			Labels:      labels,
@@ -224,38 +232,33 @@ func resolveRunnerJoin(ctx *Context, coordinator, inviteCode, name, listenAddr s
 		})
 	}
 
-	// Case 3: interactive TTY, prompt for missing values
+	// Case 3: interactive TTY, prompt for the token
 	if term.IsTerminal(int(os.Stdin.Fd())) {
 		ctx.Info("No runner config found. Let's join a coordinator.")
 		fmt.Println()
 
-		if coordinator == "" {
-			var err error
-			coordinator, err = ui.PromptForInput(
-				ui.WithLabel("Coordinator address (host:port)"),
-				ui.WithPlaceholder("coordinator.example.com:8443"),
-			)
-			if err != nil {
-				return fmt.Errorf("failed to read coordinator address: %w", err)
-			}
+		var err error
+		token, err = ui.PromptForInput(
+			ui.WithLabel("Enter enrollment token"),
+			ui.WithPlaceholder("mren_..."),
+		)
+		if err != nil {
+			return fmt.Errorf("failed to read token: %w", err)
 		}
 
-		if inviteCode == "" {
-			var err error
-			inviteCode, err = ui.PromptForInput(
-				ui.WithLabel("Join code"),
-				ui.WithPlaceholder("word-word-word-abc123"),
-			)
-			if err != nil {
-				return fmt.Errorf("failed to read join code: %w", err)
-			}
+		coordinator, secret, err := decodeToken(token)
+		if err != nil {
+			return err
+		}
+		if coordinatorOverride != "" {
+			coordinator = coordinatorOverride
 		}
 
 		fmt.Println()
 		ctx.Info("Joining coordinator...")
 		return performRunnerJoin(ctx, runnerJoinOpts{
 			Coordinator: coordinator,
-			Code:        inviteCode,
+			Secret:      secret,
 			Name:        name,
 			ListenAddr:  listenAddr,
 			Labels:      labels,
@@ -264,12 +267,25 @@ func resolveRunnerJoin(ctx *Context, coordinator, inviteCode, name, listenAddr s
 	}
 
 	// Case 4: non-interactive, missing required info
-	return fmt.Errorf("no runner config found at %s and no coordinator info provided\n\n"+
-		"  Run interactively, or pass --coordinator and --invite-code:\n"+
-		"    miren runner install --coordinator host:port --invite-code <code>\n\n"+
+	return fmt.Errorf("no runner config found at %s and no token provided\n\n"+
+		"  Run interactively, or pass --token:\n"+
+		"    miren runner install --token <enrollment-token>\n\n"+
 		"  Or join first, then install:\n"+
-		"    miren runner join coordinator:8443 <code>\n"+
+		"    miren runner join <token>\n"+
 		"    miren runner install", configPath)
+}
+
+// decodeToken validates and decodes an enrollment token into a coordinator
+// address and secret.
+func decodeToken(token string) (coordinator, secret string, err error) {
+	if !enrolltoken.IsToken(token) {
+		return "", "", fmt.Errorf("invalid token format (expected mren_ prefix)")
+	}
+	coordinator, secret, err = enrolltoken.Decode(token)
+	if err != nil {
+		return "", "", fmt.Errorf("invalid token: %w", err)
+	}
+	return coordinator, secret, nil
 }
 
 // printRunnerPrerequisiteGuidance prints guidance when prerequisites aren't met.
