@@ -15,23 +15,22 @@ This command requires the `distributedrunners` [labs feature](/labs) to be enabl
 ## Usage
 
 ```bash
-miren runner join <coordinatoraddr> <joincode> [flags]
+miren runner join <tokenarg> [flags]
 ```
 
 ## Arguments
 
-- `coordinatoraddr` — Coordinator address (host:port)
-- `joincode` — Join code from 'miren runner invite'
+- `tokenarg` — Join token from 'miren runner token create'
 
 ## Flags
 
-- `--code` — Join code (or pass via stdin)
 - `--config` — Path to save runner config (default: `/var/lib/miren/runner/config.yaml`)
-- `--coordinator, -c` — Coordinator address (host:port)
+- `--coordinator, -c` — Override coordinator address from the token
 - `--labels` — Additional labels for the runner (key=value)
 - `--listen, -l` — Address this runner will listen on
 - `--name` — Human-readable name for this runner (defaults to hostname)
 - `--runner-id` — Specific runner ID to use (for reconnecting)
+- `--token` — Enrollment token (or pass as positional arg / via stdin)
 
 ## Global Options
 
@@ -41,10 +40,16 @@ miren runner join <coordinatoraddr> <joincode> [flags]
 
 ## Examples
 
-**Join using a coordinator address and invite code:**
+**Join using a token:**
 
 ```bash
-miren runner join coordinator.example.com:8443 abc123
+miren runner join mren_...
+```
+
+**Join with coordinator address override:**
+
+```bash
+miren runner join mren_... --coordinator 10.0.0.5:8443
 ```
 
 ## See also

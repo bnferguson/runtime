@@ -1,12 +1,12 @@
 ---
-title: "miren runner revoke"
-sidebar_label: "runner revoke"
-description: "Revoke a runner invitation"
+title: "miren runner token revoke"
+sidebar_label: "runner token revoke"
+description: "Revoke a join token"
 ---
 
-# miren runner revoke
+# miren runner token revoke
 
-Revoke a runner invitation
+Revoke a join token
 
 :::note
 This command requires the `distributedrunners` [labs feature](/labs) to be enabled.
@@ -15,12 +15,12 @@ This command requires the `distributedrunners` [labs feature](/labs) to be enabl
 ## Usage
 
 ```bash
-miren runner revoke <inviteid> [flags]
+miren runner token revoke <tokenid> [flags]
 ```
 
 ## Arguments
 
-- `inviteid` — ID of the invite to revoke
+- `tokenid` — ID of the token to revoke
 
 ## Flags
 
@@ -35,12 +35,12 @@ miren runner revoke <inviteid> [flags]
 
 ## Examples
 
-**Revoke an invite:**
+**Revoke a token:**
 
 ```bash
-miren runner revoke inv_abc123
+miren runner token revoke inv_abc123
 ```
 
 ## See also
 
-- [`miren runner`](/command/runner)
+- [`miren runner token`](/command/runner-token)

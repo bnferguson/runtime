@@ -185,14 +185,15 @@ Complete reference for all `miren` CLI commands.
 | Command | Description |
 |---------|-------------|
 | [`miren runner`](/command/runner) | Runner management commands |
-| [`miren runner invite`](/command/runner-invite) | Create a join code for a new runner _(`distributedrunners`)_ |
-| [`miren runner invite list`](/command/runner-invite-list) | List all runner invitations _(`distributedrunners`)_ |
 | [`miren runner join`](/command/runner-join) | Join this machine to a coordinator as a runner _(`distributedrunners`)_ |
 | [`miren runner list`](/command/runner-list) | List all registered runners _(`distributedrunners`)_ |
 | [`miren runner remove`](/command/runner-remove) | Remove a registered runner and clean up resources _(`distributedrunners`)_ |
-| [`miren runner revoke`](/command/runner-revoke) | Revoke a runner invitation _(`distributedrunners`)_ |
 | [`miren runner start`](/command/runner-start) | Start this machine as a distributed runner _(`distributedrunners`)_ |
 | [`miren runner status`](/command/runner-status) | Show runner health and configuration _(`distributedrunners`)_ |
+| [`miren runner token`](/command/runner-token) | Manage join tokens |
+| [`miren runner token create`](/command/runner-token-create) | Create a join token for a runner _(`distributedrunners`)_ |
+| [`miren runner token list`](/command/runner-token-list) | List all join tokens _(`distributedrunners`)_ |
+| [`miren runner token revoke`](/command/runner-token-revoke) | Revoke a join token _(`distributedrunners`)_ |
 
 ## sandbox
 

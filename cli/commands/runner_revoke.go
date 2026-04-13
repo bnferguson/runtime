@@ -7,10 +7,10 @@ import (
 	"miren.dev/runtime/pkg/rpc"
 )
 
-func RunnerRevoke(ctx *Context, opts struct {
+func RunnerTokenRevoke(ctx *Context, opts struct {
 	ConfigCentric
 
-	InviteID string `position:"0" usage:"ID of the invite to revoke" required:"true"`
+	TokenID string `position:"0" usage:"ID of the token to revoke" required:"true"`
 }) error {
 	client, err := ctx.RPCClient(rpc.ServiceRunner)
 	if err != nil {
@@ -20,7 +20,7 @@ func RunnerRevoke(ctx *Context, opts struct {
 
 	rc := runner_v1alpha.NewRunnerRegistrationClient(client)
 
-	res, err := rc.RevokeInvite(ctx, opts.InviteID)
+	res, err := rc.RevokeInvite(ctx, opts.TokenID)
 	if err != nil {
 		return err
 	}
@@ -33,6 +33,6 @@ func RunnerRevoke(ctx *Context, opts struct {
 		return fmt.Errorf("revoke failed")
 	}
 
-	ctx.Printf("Invite revoked.\n")
+	ctx.Printf("Token revoked.\n")
 	return nil
 }

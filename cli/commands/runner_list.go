@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -65,7 +66,7 @@ func RunnerList(ctx *Context, opts struct {
 
 	if len(runners) == 0 {
 		ctx.Printf("No runners registered\n")
-		ctx.Printf("\nUse 'miren runner invite' to create a join code\n")
+		ctx.Printf("\nUse 'miren runner token create' to create a join token\n")
 		return nil
 	}
 
@@ -127,7 +128,7 @@ func RunnerList(ctx *Context, opts struct {
 	return nil
 }
 
-func RunnerInviteList(ctx *Context, opts struct {
+func RunnerTokenList(ctx *Context, opts struct {
 	FormatOptions
 	ConfigCentric
 }) error {
@@ -148,23 +149,29 @@ func RunnerInviteList(ctx *Context, opts struct {
 
 	if opts.IsJSON() {
 		type InviteJSON struct {
-			ID        string   `json:"id"`
-			Status    string   `json:"status"`
-			Labels    []string `json:"labels,omitempty"`
-			ExpiresAt string   `json:"expires_at"`
-			CreatedAt string   `json:"created_at"`
-			ClaimedBy string   `json:"claimed_by,omitempty"`
-			ClaimedAt string   `json:"claimed_at,omitempty"`
+			ID              string   `json:"id"`
+			Name            string   `json:"name,omitempty"`
+			Status          string   `json:"status"`
+			Reusable        bool     `json:"reusable"`
+			Labels          []string `json:"labels,omitempty"`
+			ExpiresAt       string   `json:"expires_at,omitempty"`
+			CreatedAt       string   `json:"created_at"`
+			ClaimedBy       string   `json:"claimed_by,omitempty"`
+			ClaimedAt       string   `json:"claimed_at,omitempty"`
+			EnrollmentCount int64    `json:"enrollment_count"`
 		}
 
 		var output []InviteJSON
 		for _, inv := range invites {
 			ij := InviteJSON{
-				ID:        inv.Id(),
-				Status:    strings.TrimPrefix(inv.Status(), "status."),
-				Labels:    inv.Labels(),
-				ExpiresAt: standard.FromTimestamp(inv.ExpiresAt()).Format(time.RFC3339),
-				CreatedAt: standard.FromTimestamp(inv.CreatedAt()).Format(time.RFC3339),
+				ID:              inv.Id(),
+				Name:            inv.Name(),
+				Status:          strings.TrimPrefix(inv.Status(), "status."),
+				Reusable:        inv.Reusable(),
+				Labels:          inv.Labels(),
+				ExpiresAt:       formatExpiresAt(inv),
+				CreatedAt:       standard.FromTimestamp(inv.CreatedAt()).Format(time.RFC3339),
+				EnrollmentCount: inv.EnrollmentCount(),
 			}
 			if inv.ClaimedBy() != "" {
 				ij.ClaimedBy = inv.ClaimedBy()
@@ -176,17 +183,27 @@ func RunnerInviteList(ctx *Context, opts struct {
 	}
 
 	if len(invites) == 0 {
-		ctx.Printf("No invites\n")
+		ctx.Printf("No tokens\n")
 		return nil
 	}
 
-	headers := []string{"ID", "STATUS", "LABELS", "EXPIRES", "CLAIMED BY"}
+	headers := []string{"ID", "NAME", "TYPE", "STATUS", "LABELS", "EXPIRES", "ENROLLED"}
 	var rows []ui.Row
 
 	for _, inv := range invites {
 		id := inv.Id()
 		if len(id) > 12 {
 			id = id[:12]
+		}
+
+		name := inv.Name()
+		if name == "" {
+			name = "-"
+		}
+
+		invType := "one-time"
+		if inv.Reusable() {
+			invType = "reusable"
 		}
 
 		status := strings.TrimPrefix(inv.Status(), "status.")
@@ -206,21 +223,21 @@ func RunnerInviteList(ctx *Context, opts struct {
 			labels = strings.Join(inv.Labels(), ", ")
 		}
 
-		expiresAt := standard.FromTimestamp(inv.ExpiresAt())
-		expires := formatDuration(time.Until(expiresAt))
-		if time.Now().After(expiresAt) {
-			expires = infoGray.Render("expired")
-		}
-
-		claimedBy := "-"
-		if inv.ClaimedBy() != "" {
-			claimedBy = inv.ClaimedBy()
-			if len(claimedBy) > 12 {
-				claimedBy = claimedBy[:12]
+		expires := "never"
+		if inv.HasExpiresAt() {
+			expiresAt := standard.FromTimestamp(inv.ExpiresAt())
+			if expiresAt.IsZero() {
+				expires = "never"
+			} else if time.Now().After(expiresAt) {
+				expires = infoGray.Render("expired")
+			} else {
+				expires = formatDuration(time.Until(expiresAt))
 			}
 		}
 
-		rows = append(rows, ui.Row{id, status, labels, expires, claimedBy})
+		enrolled := fmt.Sprintf("%d", inv.EnrollmentCount())
+
+		rows = append(rows, ui.Row{id, name, invType, status, labels, expires, enrolled})
 	}
 
 	columns := ui.AutoSizeColumns(headers, rows, nil)
@@ -231,4 +248,15 @@ func RunnerInviteList(ctx *Context, opts struct {
 
 	ctx.Printf("%s\n", table.Render())
 	return nil
+}
+
+func formatExpiresAt(inv *runner_v1alpha.InviteInfo) string {
+	if !inv.HasExpiresAt() {
+		return ""
+	}
+	t := standard.FromTimestamp(inv.ExpiresAt())
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format(time.RFC3339)
 }

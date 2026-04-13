@@ -606,22 +606,31 @@ miren deploy --analyze
 	// Runner commands (distributed runners) - behind feature flag
 	if labs.DistributedRunners() {
 		d.Dispatch("runner", Section("runner", "Runner management commands", ""))
-		d.Dispatch("runner invite", Infer("runner invite", "Create a join code for a new runner", RunnerInvite,
+		d.Dispatch("runner token", Section("runner token", "Manage join tokens", ""))
+		d.Dispatch("runner token create", Infer("runner token create", "Create a join token for a runner", RunnerTokenCreate,
 			WithLabsFeature(labs.FeatureDistributedRunners),
 			WithExample(mflags.Example{
-				Name: "Create an invite",
-				Body: "miren runner invite",
+				Name: "Create a one-time join token",
+				Body: "miren runner token create",
 			}),
 			WithExample(mflags.Example{
-				Name: "Create an invite with labels and custom expiry",
-				Body: "miren runner invite -l region=us-east -e 24",
+				Name: "Create a reusable token for automation",
+				Body: "miren runner token create --reusable --name infra-terraform --ttl 0",
+			}),
+			WithExample(mflags.Example{
+				Name: "Create a token with a specific coordinator address",
+				Body: "miren runner token create --addr 10.0.0.5:8443",
 			}),
 		))
 		d.Dispatch("runner join", Infer("runner join", "Join this machine to a coordinator as a runner", RunnerJoin,
 			WithLabsFeature(labs.FeatureDistributedRunners),
 			WithExample(mflags.Example{
-				Name: "Join using a coordinator address and invite code",
-				Body: "miren runner join coordinator.example.com:8443 abc123",
+				Name: "Join using a token",
+				Body: "miren runner join mren_...",
+			}),
+			WithExample(mflags.Example{
+				Name: "Join with coordinator address override",
+				Body: "miren runner join mren_... --coordinator 10.0.0.5:8443",
 			}),
 		))
 		d.Dispatch("runner start", Infer("runner start", "Start this machine as a distributed runner", RunnerStart,
@@ -645,18 +654,18 @@ miren deploy --analyze
 				Body: "miren runner status",
 			}),
 		))
-		d.Dispatch("runner revoke", Infer("runner revoke", "Revoke a runner invitation", RunnerRevoke,
+		d.Dispatch("runner token revoke", Infer("runner token revoke", "Revoke a join token", RunnerTokenRevoke,
 			WithLabsFeature(labs.FeatureDistributedRunners),
 			WithExample(mflags.Example{
-				Name: "Revoke an invite",
-				Body: "miren runner revoke inv_abc123",
+				Name: "Revoke a token",
+				Body: "miren runner token revoke inv_abc123",
 			}),
 		))
-		d.Dispatch("runner invite list", Infer("runner invite list", "List all runner invitations", RunnerInviteList,
+		d.Dispatch("runner token list", Infer("runner token list", "List all join tokens", RunnerTokenList,
 			WithLabsFeature(labs.FeatureDistributedRunners),
 			WithExample(mflags.Example{
-				Name: "List invitations",
-				Body: "miren runner invite list",
+				Name: "List tokens",
+				Body: "miren runner token list",
 			}),
 		))
 		d.Dispatch("runner remove", Infer("runner remove", "Remove a registered runner and clean up resources", RunnerRemove,

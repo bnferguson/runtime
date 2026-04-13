@@ -81,26 +81,26 @@ stop_coordinator() {
     "if [ -f $COORDINATOR_PIDFILE ]; then kill \$(cat $COORDINATOR_PIDFILE) 2>/dev/null; rm -f $COORDINATOR_PIDFILE; fi" || true
 }
 
-create_invite() {
-  echo "==> Creating runner invite..."
+create_token() {
+  echo "==> Creating join token..."
   local output
-  output=$(peer_exec coordinator ./bin/miren runner invite 2>&1)
-  # Extract the join code from "Join code: <code>" line
-  local code
-  code=$(echo "$output" | grep "Join code:" | awk '{print $3}')
-  if [ -z "$code" ]; then
-    echo "Error: Failed to create invite. Output:"
+  output=$(peer_exec coordinator ./bin/miren runner token create --addr coordinator:8443 2>&1)
+  # Extract the token from "Token: <token>" line
+  local token
+  token=$(echo "$output" | grep "Token:" | awk '{print $2}')
+  if [ -z "$token" ]; then
+    echo "Error: Failed to create token. Output:"
     echo "$output"
     return 1
   fi
-  echo "    Invite code: ${code:0:20}..."
-  # Return code via a global variable since we need stdout for status messages
-  INVITE_CODE="$code"
+  echo "    Token: ${token:0:20}..."
+  # Return token via a global variable since we need stdout for status messages
+  JOIN_TOKEN="$token"
 }
 
 join_runner() {
-  local code="$1"
-  echo "==> Runner joining coordinator at coordinator:8443..."
+  local token="$1"
+  echo "==> Runner joining coordinator..."
   # Clean up any previous runner state
   peer_exec runner1 bash -c "rm -rf /var/lib/miren/runner"
   peer_exec runner1 mkdir -p "$(dirname "$RUNNER_CONFIG")"
@@ -110,8 +110,7 @@ join_runner() {
   local runner_ip
   runner_ip=$(peer_exec runner1 bash -c "hostname -I | awk '{print \$1}'")
   echo "    Runner IP: $runner_ip"
-  peer_exec runner1 ./bin/miren runner join \
-    coordinator:8443 "$code" \
+  peer_exec runner1 ./bin/miren runner join "$token" \
     --listen "${runner_ip}:8444" \
     --config "$RUNNER_CONFIG"
   echo "    Runner joined successfully"
@@ -168,8 +167,8 @@ case "${1:-}" in
     start_coordinator
 
     # Create invite and join runner
-    create_invite
-    join_runner "$INVITE_CODE"
+    create_token
+    join_runner "$JOIN_TOKEN"
 
     # Start runner
     start_runner

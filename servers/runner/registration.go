@@ -16,6 +16,7 @@ import (
 	"miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/pkg/caauth"
 	"miren.dev/runtime/pkg/cond"
+	"miren.dev/runtime/pkg/enrolltoken"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/joincode"
@@ -25,6 +26,8 @@ import (
 const (
 	DefaultInviteExpiryHours = 1
 	MaxInviteExpiryHours     = 168 // 7 days
+
+	enrollmentCountRetries = 3
 )
 
 type RegistrationServerConfig struct {
@@ -56,29 +59,62 @@ func (s *RegistrationServer) CreateInvite(ctx context.Context, req *runner_v1alp
 	args := req.Args()
 	results := req.Results()
 
-	expiryHours := int32(DefaultInviteExpiryHours)
-	if args.HasExpiresInHours() && args.ExpiresInHours() > 0 {
-		expiryHours = args.ExpiresInHours()
-	}
-	if expiryHours > MaxInviteExpiryHours {
-		return cond.ValidationFailure("invalid-expiry", fmt.Sprintf("expiry cannot exceed %d hours", MaxInviteExpiryHours))
-	}
+	reusable := args.HasReusable() && args.Reusable()
 
-	code, err := joincode.Generate()
-	if err != nil {
-		s.Log.Error("Failed to generate join code", "error", err)
-		return cond.Error("failed to generate join code")
-	}
-
-	codeHash := joincode.Hash(code)
+	// Determine expiry
 	now := time.Now()
-	expiresAt := now.Add(time.Duration(expiryHours) * time.Hour)
+	var expiresAt time.Time
+
+	// The generated client always sends ttl_seconds, so we use a negative
+	// sentinel (-1) to mean "not specified." The CLI sends -1 when --ttl
+	// is omitted, 0 for --ttl 0 (no expiry), and >0 for an explicit TTL.
+	ttl := int64(-1)
+	if args.HasTtlSeconds() {
+		ttl = args.TtlSeconds()
+	}
+
+	switch {
+	case ttl < -1:
+		return cond.ValidationFailure("invalid-ttl", "TTL must be non-negative (use 0 for no expiry)")
+	case ttl == 0 && reusable:
+		// --ttl 0 on a reusable token means no expiry
+		expiresAt = time.Time{}
+	case ttl > 0:
+		if !reusable && ttl > int64(MaxInviteExpiryHours)*3600 {
+			return cond.ValidationFailure("invalid-ttl", fmt.Sprintf("TTL cannot exceed %d hours for one-time tokens", MaxInviteExpiryHours))
+		}
+		expiresAt = now.Add(time.Duration(ttl) * time.Second)
+	default:
+		// ttl == -1 (not specified) or ttl == 0 on a non-reusable token:
+		// fall through to expires_in_hours
+		expiryHours := int32(DefaultInviteExpiryHours)
+		if args.HasExpiresInHours() && args.ExpiresInHours() > 0 {
+			expiryHours = args.ExpiresInHours()
+		}
+		if !reusable && expiryHours > int32(MaxInviteExpiryHours) {
+			return cond.ValidationFailure("invalid-expiry", fmt.Sprintf("expiry cannot exceed %d hours", MaxInviteExpiryHours))
+		}
+		expiresAt = now.Add(time.Duration(expiryHours) * time.Hour)
+	}
+
+	secret, err := enrolltoken.GenerateSecret()
+	if err != nil {
+		s.Log.Error("Failed to generate secret", "error", err)
+		return cond.Error("failed to generate invite secret")
+	}
+
+	codeHash := joincode.Hash(secret)
 
 	invite := &runner_v1alpha.RunnerInvite{
 		CodeHash:  codeHash,
 		Status:    runner_v1alpha.PENDING,
 		CreatedAt: now,
 		ExpiresAt: expiresAt,
+		Reusable:  reusable,
+	}
+
+	if args.HasName() {
+		invite.Name = args.Name()
 	}
 
 	if args.HasLabels() {
@@ -90,9 +126,14 @@ func (s *RegistrationServer) CreateInvite(ctx context.Context, req *runner_v1alp
 		}
 	}
 
-	attrs := invite.Encode()
+	// Build entity with an ident so it gets a stable, unique key
+	inviteIdent := "runner_invite/" + codeHash[:16]
 	rpcEntity := &entityserver_v1alpha.Entity{}
-	rpcEntity.SetAttrs(attrs)
+	rpcEntity.SetAttrs(
+		entity.New(
+			invite.Encode,
+			entity.Ident, types.Keyword(inviteIdent),
+		).Attrs())
 
 	putResp, err := s.EAC.Put(ctx, rpcEntity)
 	if err != nil {
@@ -100,12 +141,21 @@ func (s *RegistrationServer) CreateInvite(ctx context.Context, req *runner_v1alp
 		return cond.Error("failed to create invite")
 	}
 
+	// Build the token with the coordinator address baked in
+	addr := s.CoordinatorAddr
+	if args.HasCoordinatorAddr() && args.CoordinatorAddr() != "" {
+		addr = args.CoordinatorAddr()
+	}
+	token := enrolltoken.Encode(addr, secret)
+
 	s.Log.Info("Created runner invite",
 		"invite_id", putResp.Id(),
+		"reusable", reusable,
+		"name", invite.Name,
 		"expires_at", expiresAt.Format(time.RFC3339),
 		"label_count", len(invite.Labels))
 
-	results.SetCode(code)
+	results.SetCode(token)
 	results.SetExpiresAt(standard.ToTimestamp(expiresAt))
 
 	return nil
@@ -121,7 +171,7 @@ func (s *RegistrationServer) Join(ctx context.Context, req *runner_v1alpha.Runne
 	}
 
 	code := args.Code()
-	if !joincode.Validate(code) {
+	if !enrolltoken.IsHexSecret(code) {
 		results.SetError("invalid join code format")
 		return nil
 	}
@@ -144,7 +194,7 @@ func (s *RegistrationServer) Join(ctx context.Context, req *runner_v1alpha.Runne
 		return nil
 	}
 
-	if time.Now().After(invite.ExpiresAt) {
+	if !invite.ExpiresAt.IsZero() && time.Now().After(invite.ExpiresAt) {
 		results.SetError("join code has expired")
 		return nil
 	}
@@ -167,23 +217,25 @@ func (s *RegistrationServer) Join(ctx context.Context, req *runner_v1alpha.Runne
 		version = args.Version()
 	}
 
-	// Claim the invite first (with CAS via revision) to prevent concurrent joins
-	// from minting multiple valid certificates for the same invite
-	invite.Status = runner_v1alpha.CLAIMED
-	invite.ClaimedBy = runnerID
-	invite.ClaimedAt = time.Now()
+	if !invite.Reusable {
+		// One-time invite: claim it (PENDING->CLAIMED) with CAS to prevent
+		// concurrent joins from minting multiple certificates
+		invite.Status = runner_v1alpha.CLAIMED
+		invite.ClaimedBy = runnerID
+		invite.ClaimedAt = time.Now()
 
-	updateAttrs := invite.Encode()
-	updateEntity := &entityserver_v1alpha.Entity{}
-	updateEntity.SetId(string(invite.ID))
-	updateEntity.SetAttrs(updateAttrs)
-	updateEntity.SetRevision(inviteRevision)
+		updateAttrs := invite.Encode()
+		updateEntity := &entityserver_v1alpha.Entity{}
+		updateEntity.SetId(string(invite.ID))
+		updateEntity.SetAttrs(updateAttrs)
+		updateEntity.SetRevision(inviteRevision)
 
-	_, err = s.EAC.Put(ctx, updateEntity)
-	if err != nil {
-		s.Log.Error("Failed to update invite status", "error", err, "invite_id", invite.ID)
-		results.SetError("failed to complete registration")
-		return nil
+		_, err = s.EAC.Put(ctx, updateEntity)
+		if err != nil {
+			s.Log.Error("Failed to update invite status", "error", err, "invite_id", invite.ID)
+			results.SetError("failed to complete registration")
+			return nil
+		}
 	}
 
 	// Now that invite is claimed, issue the certificate with proper SANs
@@ -265,6 +317,15 @@ func (s *RegistrationServer) Join(ctx context.Context, req *runner_v1alpha.Runne
 		return nil
 	}
 
+	// Increment enrollment count after everything succeeded, so the count
+	// only reflects runners that actually completed the join.
+	if invite.Reusable {
+		if err := s.incrementEnrollmentCount(ctx, invite, inviteRevision); err != nil {
+			s.Log.Warn("Failed to increment enrollment count (runner joined successfully)",
+				"error", err, "invite_id", invite.ID, "runner_id", runnerID)
+		}
+	}
+
 	s.Log.Info("Runner joined successfully",
 		"runner_id", runnerID,
 		"name", name,
@@ -315,12 +376,12 @@ func (s *RegistrationServer) ListInvites(ctx context.Context, req *runner_v1alph
 		var invite runner_v1alpha.RunnerInvite
 		decodeEntity(e, &invite)
 
-		if invite.Status == runner_v1alpha.PENDING && now.After(invite.ExpiresAt) {
+		if invite.Status == runner_v1alpha.PENDING && !invite.ExpiresAt.IsZero() && now.After(invite.ExpiresAt) {
 			continue
 		}
 
 		info := &runner_v1alpha.InviteInfo{}
-		info.SetId(string(invite.ID))
+		info.SetId(e.Id())
 		info.SetStatus(string(invite.Status))
 
 		labelStrs := make([]string, 0, len(invite.Labels))
@@ -335,6 +396,14 @@ func (s *RegistrationServer) ListInvites(ctx context.Context, req *runner_v1alph
 		if invite.ClaimedBy != "" {
 			info.SetClaimedBy(invite.ClaimedBy)
 			info.SetClaimedAt(standard.ToTimestamp(invite.ClaimedAt))
+		}
+
+		if invite.Name != "" {
+			info.SetName(invite.Name)
+		}
+		info.SetReusable(invite.Reusable)
+		if invite.EnrollmentCount > 0 {
+			info.SetEnrollmentCount(invite.EnrollmentCount)
 		}
 
 		invites = append(invites, info)
@@ -626,6 +695,53 @@ func (s *RegistrationServer) deleteEntitiesByIndex(ctx context.Context, ref enti
 		deleted++
 	}
 	return deleted, nil
+}
+
+// incrementEnrollmentCount atomically increments the enrollment count on a
+// reusable invite. It retries on CAS contention.
+func (s *RegistrationServer) incrementEnrollmentCount(ctx context.Context, invite *runner_v1alpha.RunnerInvite, revision int64) error {
+	for attempt := 0; attempt < enrollmentCountRetries; attempt++ {
+		if attempt > 0 {
+			// Re-read the invite to get the latest revision and count
+			refreshed, rev, err := s.findInviteByHash(ctx, invite.CodeHash)
+			if err != nil {
+				return fmt.Errorf("re-reading invite: %w", err)
+			}
+			if refreshed == nil {
+				return fmt.Errorf("invite no longer exists")
+			}
+			invite = refreshed
+			revision = rev
+		}
+
+		// Re-check state in case the invite was revoked or expired
+		// between the initial check and this attempt
+		if invite.Status != runner_v1alpha.PENDING {
+			return fmt.Errorf("invite is no longer pending")
+		}
+		if !invite.ExpiresAt.IsZero() && time.Now().After(invite.ExpiresAt) {
+			return fmt.Errorf("invite has expired")
+		}
+
+		invite.EnrollmentCount++
+
+		updateAttrs := invite.Encode()
+		updateEntity := &entityserver_v1alpha.Entity{}
+		updateEntity.SetId(string(invite.ID))
+		updateEntity.SetAttrs(updateAttrs)
+		updateEntity.SetRevision(revision)
+
+		_, err := s.EAC.Put(ctx, updateEntity)
+		if err == nil {
+			return nil
+		}
+
+		s.Log.Warn("CAS contention incrementing enrollment count, retrying",
+			"attempt", attempt+1,
+			"invite_id", invite.ID,
+			"error", err)
+	}
+	return fmt.Errorf("failed to increment enrollment count after %d retries", enrollmentCountRetries)
 }
 
 func (s *RegistrationServer) findInviteByHash(ctx context.Context, codeHash string) (*runner_v1alpha.RunnerInvite, int64, error) {

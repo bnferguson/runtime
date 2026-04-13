@@ -1,12 +1,12 @@
 ---
-title: "miren runner invite list"
-sidebar_label: "runner invite list"
-description: "List all runner invitations"
+title: "miren runner token list"
+sidebar_label: "runner token list"
+description: "List all join tokens"
 ---
 
-# miren runner invite list
+# miren runner token list
 
-List all runner invitations
+List all join tokens
 
 :::note
 This command requires the `distributedrunners` [labs feature](/labs) to be enabled.
@@ -15,7 +15,7 @@ This command requires the `distributedrunners` [labs feature](/labs) to be enabl
 ## Usage
 
 ```bash
-miren runner invite list [flags]
+miren runner token list [flags]
 ```
 
 ## Flags
@@ -33,12 +33,12 @@ miren runner invite list [flags]
 
 ## Examples
 
-**List invitations:**
+**List tokens:**
 
 ```bash
-miren runner invite list
+miren runner token list
 ```
 
 ## See also
 
-- [`miren runner invite`](/command/runner-invite)
+- [`miren runner token`](/command/runner-token)
