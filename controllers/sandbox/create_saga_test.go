@@ -140,6 +140,7 @@ type mockContainerRuntime struct {
 	releaseDiskLeasesCalls   int
 	unconfigureFirewallCalls int
 	waitForPortCalls         int
+	lastWaitForPortTimeout   time.Duration
 
 	buildSpecErr         error
 	createContainerErr   error
@@ -253,6 +254,7 @@ func (m *mockContainerRuntime) WaitForPort(ctx context.Context, id string, port 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.waitForPortCalls++
+	m.lastWaitForPortTimeout = timeout
 	return m.waitForPortErr
 }
 
@@ -616,6 +618,29 @@ func TestCreateSandboxSaga_WaitPortsFails(t *testing.T) {
 	assert.Equal(t, 1, h.runtime.unconfigureFirewallCalls)
 	assert.Equal(t, 1, h.runtime.cleanupContainerCalls)
 	assert.Equal(t, 1, h.networking.releaseCalls)
+}
+
+func TestCreateSandboxSaga_PortWaitTimeoutDefault(t *testing.T) {
+	h := newTestHarness(t)
+
+	err := h.execute(t)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, h.runtime.waitForPortCalls)
+	assert.Equal(t, defaultPortWaitTimeout, h.runtime.lastWaitForPortTimeout,
+		"empty PortWaitTimeout should resolve to default")
+}
+
+func TestCreateSandboxSaga_PortWaitTimeoutOverride(t *testing.T) {
+	h := newTestHarness(t)
+	h.entities.sandbox.Spec.PortWaitTimeout = "30s"
+
+	err := h.execute(t)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, h.runtime.waitForPortCalls)
+	assert.Equal(t, 30*time.Second, h.runtime.lastWaitForPortTimeout,
+		"spec.PortWaitTimeout should override the default")
 }
 
 func TestCreateSandboxSaga_UndoContainerAlreadyGone(t *testing.T) {

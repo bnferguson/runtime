@@ -23,6 +23,15 @@ components:
       type: bool
       doc: Whether to use host networking
 
+    port_wait_timeout:
+      type: string
+      doc: |
+        Max time to wait for declared container ports to bind before marking
+        the sandbox DEAD. Parsed via time.ParseDuration (e.g. "60s"). Empty,
+        invalid, or non-positive values (including "0s") fall back to 15s.
+        Addons with slow cold-init (e.g. MySQL first-boot ~20s) should set
+        this to a larger value.
+
     route:
       type: component
       doc: Network route configuration

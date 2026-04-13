@@ -49,6 +49,10 @@ type CreateSandboxPoolSpec struct {
 	Command          string
 	Mounts           []compute_v1alpha.SandboxSpecContainerMount
 	Volumes          []compute_v1alpha.SandboxSpecVolume
+	// PortWaitTimeout overrides the sandbox controller's port-bind health
+	// check budget. Parsed via time.ParseDuration (e.g. "60s"). Empty means
+	// use the default (15s). Addons with slow cold-init should set this.
+	PortWaitTimeout string
 }
 
 // CreateSandboxPool creates a fixed-mode SandboxPool entity.
@@ -61,7 +65,8 @@ func (fw *ProviderFramework) CreateSandboxPool(ctx context.Context, spec CreateS
 		SandboxLabels:    spec.Labels,
 		SandboxPrefix:    spec.SandboxPrefix,
 		SandboxSpec: compute_v1alpha.SandboxSpec{
-			LogAttribute: spec.Labels,
+			LogAttribute:    spec.Labels,
+			PortWaitTimeout: spec.PortWaitTimeout,
 		},
 	}
 

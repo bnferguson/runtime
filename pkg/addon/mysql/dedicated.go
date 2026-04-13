@@ -142,6 +142,10 @@ func CreateDedicatedPool(ctx context.Context, in CreateDedicatedPoolIn) (CreateD
 		DesiredInstances: 1,
 		Labels:           labels,
 		SandboxPrefix:    fmt.Sprintf("%s-my", in.AppName),
+		// MySQL 8 first-boot cold init runs initialize, a temporary setup
+		// server, then the real server — ~20s on loaded dev hardware. 60s
+		// gives ~3x headroom over the default 15s port-bind budget.
+		PortWaitTimeout: "60s",
 		Mounts: []compute_v1alpha.SandboxSpecContainerMount{
 			{Source: "mydata", Destination: mountPath},
 		},

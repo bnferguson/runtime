@@ -843,6 +843,10 @@ func specsMatch(spec1, spec2 *compute_v1alpha.SandboxSpec) (string, bool) {
 		return "volume mismatch", false
 	}
 
+	if spec1.PortWaitTimeout != spec2.PortWaitTimeout {
+		return fmt.Sprintf("port wait timeout mismatch: %s vs %s", spec1.PortWaitTimeout, spec2.PortWaitTimeout), false
+	}
+
 	// All fields match (excluding version)
 	return "", true
 }
