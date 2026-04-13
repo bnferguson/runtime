@@ -197,6 +197,8 @@ Complete reference for all `miren` CLI commands.
 | [`miren runner token list`](/command/runner-token-list) | List all join tokens _(`distributedrunners`)_ |
 | [`miren runner token revoke`](/command/runner-token-revoke) | Revoke a join token _(`distributedrunners`)_ |
 | [`miren runner uninstall`](/command/runner-uninstall) | Remove systemd service for miren runner _(`distributedrunners`)_ |
+| [`miren runner upgrade`](/command/runner-upgrade) | Upgrade miren runner to the latest or specified version _(`distributedrunners`)_ |
+| [`miren runner upgrade rollback`](/command/runner-upgrade-rollback) | Rollback runner to previous version _(`distributedrunners`)_ |
 
 ## sandbox
 

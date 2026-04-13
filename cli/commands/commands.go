@@ -712,6 +712,28 @@ miren deploy --analyze
 				Body: "miren runner service-status --follow",
 			}),
 		))
+		d.Dispatch("runner upgrade", Infer("runner upgrade", "Upgrade miren runner to the latest or specified version", RunnerUpgrade,
+			WithLabsFeature(labs.FeatureDistributedRunners),
+			WithExample(mflags.Example{
+				Name: "Upgrade to the latest version",
+				Body: "miren runner upgrade",
+			}),
+			WithExample(mflags.Example{
+				Name: "Check for available updates",
+				Body: "miren runner upgrade --check",
+			}),
+			WithExample(mflags.Example{
+				Name: "Upgrade to a specific version",
+				Body: "miren runner upgrade --version v0.2.0",
+			}),
+		))
+		d.Dispatch("runner upgrade rollback", Infer("runner upgrade rollback", "Rollback runner to previous version", RunnerUpgradeRollback,
+			WithLabsFeature(labs.FeatureDistributedRunners),
+			WithExample(mflags.Example{
+				Name: "Rollback to the previous version",
+				Body: "miren runner upgrade rollback",
+			}),
+		))
 	}
 
 	// Server commands

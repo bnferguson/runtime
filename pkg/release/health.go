@@ -171,12 +171,20 @@ func (n *NoOpHealthVerifier) VerifyHealth(ctx context.Context, timeout time.Dura
 
 // IsServerRunning checks if the miren server is currently running as a systemd service
 func IsServerRunning() bool {
-	// Require root for systemd service checks
+	return isSystemdServiceActive("miren")
+}
+
+// IsRunnerRunning checks if the miren runner is currently running as a systemd service
+func IsRunnerRunning() bool {
+	return isSystemdServiceActive("miren-runner")
+}
+
+func isSystemdServiceActive(unit string) bool {
 	if os.Geteuid() != 0 {
 		return false
 	}
 
-	cmd := exec.Command("systemctl", "is-active", "miren")
+	cmd := exec.Command("systemctl", "is-active", unit)
 	output, err := cmd.Output()
 	if err != nil {
 		return false

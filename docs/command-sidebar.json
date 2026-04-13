@@ -279,7 +279,9 @@
       "command/runner-token-create",
       "command/runner-token-list",
       "command/runner-token-revoke",
-      "command/runner-uninstall"
+      "command/runner-uninstall",
+      "command/runner-upgrade",
+      "command/runner-upgrade-rollback"
     ]
   },
   {

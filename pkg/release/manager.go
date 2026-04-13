@@ -45,6 +45,15 @@ func DefaultManagerOptions() ManagerOptions {
 	}
 }
 
+// RunnerManagerOptions returns manager options configured for the runner service.
+// The install path is the same as the server (shared binary), but the service
+// name targets the miren-runner systemd unit.
+func RunnerManagerOptions() ManagerOptions {
+	opts := DefaultManagerOptions()
+	opts.ServiceName = "miren-runner"
+	return opts
+}
+
 // NewManager creates a new upgrade manager
 func NewManager(opts ManagerOptions) *Manager {
 	installOpts := InstallOptions{

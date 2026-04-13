@@ -25,3 +25,4 @@ miren runner [flags]
 - [`miren runner status`](/command/runner-status) — Show runner health and configuration
 - [`miren runner token`](/command/runner-token) — Manage join tokens
 - [`miren runner uninstall`](/command/runner-uninstall) — Remove systemd service for miren runner
+- [`miren runner upgrade`](/command/runner-upgrade) — Upgrade miren runner to the latest or specified version
