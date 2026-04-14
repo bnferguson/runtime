@@ -7,6 +7,38 @@ All notable changes to Miren Runtime will be documented in this file.
 
 ---
 
+## v0.7.0
+*2026-04-14*
+
+**Breaking Changes**
+- **Local shared storage is now opt-in** - Apps that need persistent local storage now declare it explicitly as a disk with `provider = "local"` in app.toml instead of getting an automatic bind mount at `/miren/data/local`. This makes storage dependencies visible to the scheduler, which needs to know about them as we build out multi-node cluster support. If your app has existing data in local storage, Miren detects it automatically, keeps mounting it, and shows a warning during deploy with a link to add the config. No data loss, just a nudge to make the dependency explicit at your own pace. See [Migrating from automatic local storage](https://miren.md/disks#migrating-from-automatic-local-storage) for details. ([#700](https://github.com/mirendev/runtime/pull/700), [#719](https://github.com/mirendev/runtime/pull/719))
+
+**Features**
+- **Managed addons** - Miren now provisions and manages backing services alongside your apps. Add a database or cache with `miren addon add`, and Miren handles the container lifecycle, networking, and credential injection. Launch includes PostgreSQL, MySQL, Valkey, Memcache, and RabbitMQ, with version selection and custom OCI image support. ([#688](https://github.com/mirendev/runtime/pull/688), [#706](https://github.com/mirendev/runtime/pull/706), [#720](https://github.com/mirendev/runtime/pull/720), [#726](https://github.com/mirendev/runtime/pull/726), [#727](https://github.com/mirendev/runtime/pull/727), [#743](https://github.com/mirendev/runtime/pull/743), [#755](https://github.com/mirendev/runtime/pull/755), [#758](https://github.com/mirendev/runtime/pull/758), [#760](https://github.com/mirendev/runtime/pull/760))
+- **Short entity IDs** - Entities now get short 3-8 character identifiers that work anywhere a full ID does. CLI tables are easier to read and IDs are easy to type from memory. ([#696](https://github.com/mirendev/runtime/pull/696), [#721](https://github.com/mirendev/runtime/pull/721), [#741](https://github.com/mirendev/runtime/pull/741))
+- **CLI aliases** - Define custom command shortcuts in `.miren/app.toml` under `[aliases]`. Supports multi-word names and appends extra arguments. ([#693](https://github.com/mirendev/runtime/pull/693))
+- **Disk undelete** - Deleted disks are now soft-deleted with a 7-day retention window. `disk undelete` restores them, and `disk list-deleted` shows what's recoverable. ([#694](https://github.com/mirendev/runtime/pull/694))
+- **`miren app restart`** - New command to restart an app immediately. Deploys also now reset crash cooldown, so a new deploy isn't blocked by stale backoff from a previous crash. ([#702](https://github.com/mirendev/runtime/pull/702))
+
+**Improvements**
+- **Better config error messages** - Typos and validation errors in `.miren/app.toml` now show file location, underline the problem, and suggest corrections with color output. ([#709](https://github.com/mirendev/runtime/pull/709))
+- **Faster `app list`** - App list aggregation moved server-side, significantly reducing round trips for clusters with many apps. ([#701](https://github.com/mirendev/runtime/pull/701))
+- **Disk-aware pool draining** - Services with disks now drain old pools before starting new ones, preventing data conflicts during deploys. ([#725](https://github.com/mirendev/runtime/pull/725))
+- **Hardened embedded etcd** - Defenses against bbolt freelist bloat that could cause etcd to slow down over time. ([#733](https://github.com/mirendev/runtime/pull/733))
+- **App name in sandbox list** - `sandbox list` now shows which app each sandbox belongs to. ([#757](https://github.com/mirendev/runtime/pull/757))
+- **Dual-stack IP discovery** - Cluster address reporting now discovers both IPv4 and IPv6 public addresses, and TLS certificates include public IP SANs automatically. ([#708](https://github.com/mirendev/runtime/pull/708), [#712](https://github.com/mirendev/runtime/pull/712))
+
+**Bug Fixes**
+- **Fixed deploy from subdirectory using wrong source directory** ([#716](https://github.com/mirendev/runtime/pull/716))
+- **Friendlier TLS certificate behavior when DNS isn't ready yet** - ACME challenges now back off gracefully instead of burning through rate limits when a domain's DNS isn't fully propagated. ([#710](https://github.com/mirendev/runtime/pull/710), [#730](https://github.com/mirendev/runtime/pull/730))
+- **Fixed overlay IP allocator assigning duplicate IPs after restart** ([#707](https://github.com/mirendev/runtime/pull/707))
+- **Fixed sandbox hostname resolution for addon sub-containers** ([#728](https://github.com/mirendev/runtime/pull/728))
+- **Fixed stale pool reuse when volume/mount config changes** ([#718](https://github.com/mirendev/runtime/pull/718))
+- **Self-healing loop-backed volumes after unclean shutdown** - After a SIGKILL, miren now detects and cleans up stale loop devices instead of mounting a second one and corrupting the filesystem. ([#756](https://github.com/mirendev/runtime/pull/756))
+- **Fixed release bundle detection for CLI-only installs** ([#759](https://github.com/mirendev/runtime/pull/759))
+
+---
+
 ## v0.6.1
 *2026-03-24*
 
