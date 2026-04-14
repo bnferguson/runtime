@@ -306,10 +306,10 @@ func (r *realDiskMountOps) IsMounted(path string) bool {
 	return false
 }
 
-func (r *realDiskMountOps) IsDeviceMounted(device string) bool {
+func (r *realDiskMountOps) IsDeviceMounted(device string) (bool, error) {
 	f, err := os.Open("/proc/mounts")
 	if err != nil {
-		return false
+		return false, fmt.Errorf("open /proc/mounts: %w", err)
 	}
 	defer f.Close()
 
@@ -317,10 +317,13 @@ func (r *realDiskMountOps) IsDeviceMounted(device string) bool {
 	for scanner.Scan() {
 		fields := strings.Fields(scanner.Text())
 		if len(fields) >= 1 && fields[0] == device {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	if err := scanner.Err(); err != nil {
+		return false, fmt.Errorf("scan /proc/mounts: %w", err)
+	}
+	return false, nil
 }
 
 func (r *realDiskMountOps) FindMounts(pathPrefix string) []ActiveMount {

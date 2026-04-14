@@ -47,13 +47,20 @@ func mountWithFsckRetry(
 	}
 
 	// Safety check: never fsck a device that's mounted anywhere in the
-	// kernel mount table. Running fsck on a live filesystem will corrupt
-	// it. In practice this should not happen because our caller just
-	// tried to mount this device and failed, but better a wasted check
-	// than a corrupted filesystem. We match on the device itself
-	// because the same device can be mounted at multiple paths and
-	// checking only the target mountPath would miss those.
-	if ops.IsDeviceMounted(device) {
+	// kernel mount table. Running fsck on a live filesystem will
+	// corrupt it. In practice this should not happen because our
+	// caller just tried to mount this device and failed, but better a
+	// wasted check than a corrupted filesystem. We match on the device
+	// itself because the same device can be mounted at multiple paths
+	// and checking only the target mountPath would miss those.
+	//
+	// Fail closed: if we cannot read the mount table at all, we have
+	// no way to know whether the device is live, so we must refuse.
+	mounted, err2 := ops.IsDeviceMounted(device)
+	if err2 != nil {
+		return fmt.Errorf("cannot determine whether device %s is mounted (refusing to fsck): check=%v mount=%w", device, err2, err)
+	}
+	if mounted {
 		return fmt.Errorf("mount returned dirty filesystem but device %s is mounted elsewhere; refusing to fsck: %w", device, err)
 	}
 

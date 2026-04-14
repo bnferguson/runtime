@@ -112,9 +112,10 @@ type mockDiskMountOps struct {
 	// calls, so tests can assert ordering without parallel slices.
 	opsLog []string
 
-	createDirErr  error
-	attachErr     error
-	detachErr     error
+	createDirErr       error
+	attachErr          error
+	detachErr          error
+	isDeviceMountedErr error
 	lbdAttachErr  error
 	lbdDetachErr  error
 	lbdAvailable  bool
@@ -273,16 +274,19 @@ func (m *mockDiskMountOps) IsMounted(path string) bool {
 	return m.mountedPaths[path]
 }
 
-func (m *mockDiskMountOps) IsDeviceMounted(device string) bool {
+func (m *mockDiskMountOps) IsDeviceMounted(device string) (bool, error) {
+	if m.isDeviceMountedErr != nil {
+		return false, m.isDeviceMountedErr
+	}
 	for path, mounted := range m.mountedPaths {
 		if !mounted {
 			continue
 		}
 		if m.mountDevices[path] == device {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 func (m *mockDiskMountOps) FindMounts(pathPrefix string) []ActiveMount {

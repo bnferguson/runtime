@@ -94,6 +94,27 @@ func TestMountWithFsckRetryRefusesWhenDeviceStillMounted(t *testing.T) {
 	assert.Empty(t, ops.fsckCalls)
 }
 
+// TestMountWithFsckRetryRefusesWhenMountTableUnreadable verifies that
+// if IsDeviceMounted returns an error (e.g. /proc/mounts can't be
+// read), the fsck safety check fails closed instead of assuming the
+// device is not mounted.
+func TestMountWithFsckRetryRefusesWhenMountTableUnreadable(t *testing.T) {
+	log := testutils.TestLogger(t)
+	ctx := t.Context()
+
+	ops := newMockDiskMountOps()
+	ops.mountErr = errors.New("mount /dev/loop0 failed: structure needs cleaning")
+	ops.isDeviceMountedErr = errors.New("read /proc/mounts: permission denied")
+
+	err := mountWithFsckRetry(ctx, log, ops, "/dev/loop0", "/mnt/data", "ext4", false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot determine whether device")
+	assert.Contains(t, err.Error(), "/dev/loop0")
+
+	// Fsck must not have been called.
+	assert.Empty(t, ops.fsckCalls)
+}
+
 // TestMountWithFsckRetrySkipsNonDirtyErrors verifies that non-EUCLEAN
 // mount errors are returned immediately without running fsck.
 func TestMountWithFsckRetrySkipsNonDirtyErrors(t *testing.T) {

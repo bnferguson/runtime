@@ -146,8 +146,8 @@ func (m *mockDiskMountOps) IsMounted(path string) bool {
 	return m.existingMounts[path]
 }
 
-func (m *mockDiskMountOps) IsDeviceMounted(_ string) bool {
-	return false
+func (m *mockDiskMountOps) IsDeviceMounted(_ string) (bool, error) {
+	return false, nil
 }
 
 func (m *mockDiskMountOps) IsFormatted(_ context.Context, device, _ string) (bool, error) {
