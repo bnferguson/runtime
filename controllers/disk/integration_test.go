@@ -102,12 +102,12 @@ func TestDiskControllerUpgradeLSVDToUniversal(t *testing.T) {
 		// Create a disk entity that looks like it was provisioned under the old LSVD system:
 		// Status=PROVISIONED, LsvdVolumeId set, VolumeId empty
 		disk := &storage_v1alpha.Disk{
-			ID:             "disk/old-lsvd-disk",
-			Name:           "my-data",
-			SizeGb:         10,
-			Filesystem:     storage_v1alpha.EXT4,
-			Status:         storage_v1alpha.PROVISIONED,
-			LsvdVolumeId:   "some-lsvd-vol-id",
+			ID:           "disk/old-lsvd-disk",
+			Name:         "my-data",
+			SizeGb:       10,
+			Filesystem:   storage_v1alpha.EXT4,
+			Status:       storage_v1alpha.PROVISIONED,
+			LsvdVolumeId: "some-lsvd-vol-id",
 		}
 
 		_, err := es.EAC.Create(ctx, entity.New(

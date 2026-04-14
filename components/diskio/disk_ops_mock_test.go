@@ -116,16 +116,16 @@ type mockDiskMountOps struct {
 	attachErr          error
 	detachErr          error
 	isDeviceMountedErr error
-	lbdAttachErr  error
-	lbdDetachErr  error
-	lbdAvailable  bool
-	mountErr      error
-	unmountErr    error
-	isFormattedFn func(device, filesystem string) (bool, error)
-	formatErr     error
-	fsckCalls     []diskMockFsck
-	fsckErr       error
-	fsckFn        func(device, filesystem string) error
+	lbdAttachErr       error
+	lbdDetachErr       error
+	lbdAvailable       bool
+	mountErr           error
+	unmountErr         error
+	isFormattedFn      func(device, filesystem string) (bool, error)
+	formatErr          error
+	fsckCalls          []diskMockFsck
+	fsckErr            error
+	fsckFn             func(device, filesystem string) error
 
 	nextLoopDevice string
 	nextLbdDevice  string

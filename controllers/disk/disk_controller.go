@@ -57,11 +57,11 @@ type DiskController struct {
 // for auto-detection.
 func NewDiskController(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, nodeId string, diskMode string) *DiskController {
 	return &DiskController{
-		Log:              log.With("module", "disk"),
-		EAC:              eac,
-		NodeId:           nodeId,
-		mountBasePath:    "/var/lib/miren/disks",
-		configuredMode:   diskMode,
+		Log:            log.With("module", "disk"),
+		EAC:            eac,
+		NodeId:         nodeId,
+		mountBasePath:  "/var/lib/miren/disks",
+		configuredMode: diskMode,
 	}
 }
 
