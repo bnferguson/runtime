@@ -33,7 +33,9 @@ const (
 	minStorageBytes         = 50 * 1024 * 1024 * 1024  // 50 GB
 	recommendedStorageBytes = 100 * 1024 * 1024 * 1024 // 100 GB
 
-	mirenDataDir = "/var/lib/miren"
+	mirenDataDir   = "/var/lib/miren"
+	releaseDir     = "/var/lib/miren/release"
+	releaseBinPath = "/var/lib/miren/release/miren"
 )
 
 // systemRequirements holds detected system resource information
@@ -207,6 +209,35 @@ func printInstallPrerequisiteGuidance(ctx *Context, prereqs installPrerequisites
 	}
 }
 
+// ensureReleaseBundlePresent checks whether the full release bundle has been
+// downloaded to /var/lib/miren/release. It uses the containerd binary as the
+// sentinel rather than the miren binary, because the CLI-only bash installer
+// also places a miren binary at that path. If containerd is missing, the full
+// bundle is downloaded.
+func ensureReleaseBundlePresent(ctx *Context, branch string) error {
+	sentinelPath := filepath.Join(releaseDir, "containerd")
+
+	if _, err := os.Stat(sentinelPath); err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("failed to inspect %s: %w", sentinelPath, err)
+		}
+		ctx.Info("Release bundle not found at %s, downloading...", releaseDir)
+
+		if err := PerformDownloadRelease(ctx, DownloadReleaseOptions{
+			Branch: branch,
+			Global: true,
+			Force:  true,
+			Output: releaseDir,
+		}); err != nil {
+			return fmt.Errorf("failed to download release: %w", err)
+		}
+
+		ctx.Completed("Release downloaded successfully")
+		fixSELinuxContext(ctx, releaseBinPath)
+	}
+	return nil
+}
+
 // fixSELinuxContext sets the proper SELinux context on the miren binary
 // so systemd can execute it. This is needed on systems like RHEL/Oracle Linux
 // where SELinux is enforcing and /var/lib files get var_lib_t context by default.
@@ -313,25 +344,8 @@ func ServerInstall(ctx *Context, opts struct {
 		ctx.Info("Skipping system requirements check (--skip-system-check specified)")
 	}
 
-	// Check if miren binary exists, download if not
-	mirenPath := "/var/lib/miren/release/miren"
-	if _, err := os.Stat(mirenPath); err != nil {
-		ctx.Info("Miren release not found at %s, downloading...", mirenPath)
-
-		// Download the release
-		if err := PerformDownloadRelease(ctx, DownloadReleaseOptions{
-			Branch: opts.Branch,
-			Global: true,
-			Force:  false,
-			Output: "/var/lib/miren/release",
-		}); err != nil {
-			return fmt.Errorf("failed to download release: %w", err)
-		}
-
-		ctx.Completed("Release downloaded successfully")
-
-		// Fix SELinux context if needed (RHEL/Oracle Linux with SELinux enforcing)
-		fixSELinuxContext(ctx, mirenPath)
+	if err := ensureReleaseBundlePresent(ctx, opts.Branch); err != nil {
+		return err
 	}
 
 	// Register with cloud unless --without-cloud is specified
@@ -413,7 +427,7 @@ func ServerInstall(ctx *Context, opts struct {
 	if !serviceExists || opts.Force {
 		// Build ExecStart command
 		var execStartParts []string
-		execStartParts = append(execStartParts, mirenPath, "server")
+		execStartParts = append(execStartParts, releaseBinPath, "server")
 
 		if opts.Verbosity != "" {
 			execStartParts = append(execStartParts, opts.Verbosity)
@@ -827,8 +841,6 @@ func waitForSystemdServerReady(ctx *Context, serverAddress string) error {
 
 // configureLocalClient generates and saves client configuration for the local server
 func configureLocalClient(ctx *Context, serverAddress string) error {
-	mirenPath := "/var/lib/miren/release/miren"
-
 	// Extract port from server address (format: host:port)
 	port := "8443"
 	if idx := strings.LastIndex(serverAddress, ":"); idx != -1 {
@@ -839,7 +851,7 @@ func configureLocalClient(ctx *Context, serverAddress string) error {
 	ctx.Log.Debug("generating client config", "target", target)
 
 	// Generate client config by running miren auth generate
-	cmd := exec.Command(mirenPath, "auth", "generate", "-C", "local", "-t", target, "-c", "-")
+	cmd := exec.Command(releaseBinPath, "auth", "generate", "-C", "local", "-t", target, "-c", "-")
 	output, err := cmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
