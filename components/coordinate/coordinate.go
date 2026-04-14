@@ -45,6 +45,7 @@ import (
 	artifactctrl "miren.dev/runtime/controllers/artifact"
 	certctrl "miren.dev/runtime/controllers/certificate"
 	deploymentctrl "miren.dev/runtime/controllers/deployment"
+	nodehealthctrl "miren.dev/runtime/controllers/nodehealth"
 	"miren.dev/runtime/controllers/sandboxpool"
 	schedulerctrl "miren.dev/runtime/controllers/scheduler"
 	"miren.dev/runtime/metrics"
@@ -968,6 +969,25 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		1,           // Single worker
 	)
 	c.cm.AddController(schedulerController)
+
+	// Add node health controller (marks sandboxes DEAD when their runner
+	// has been non-READY for longer than the grace period)
+	nodeHealth := nodehealthctrl.NewController(c.Log, eac)
+	if err := nodeHealth.Init(ctx); err != nil {
+		c.Log.Error("failed to initialize node health controller", "error", err)
+		return err
+	}
+
+	nodeHealthRC := controller.NewReconcileController(
+		"nodehealth",
+		c.Log,
+		entity.Ref(entity.EntityKind, compute_v1alpha.KindNode),
+		eac,
+		controller.AdaptReconcileController[compute_v1alpha.Node](nodeHealth),
+		30*time.Second, // Resync to check grace period expiry
+		1,
+	)
+	c.cm.AddController(nodeHealthRC)
 
 	// Add certificate controller — DNS-01 when a DNS provider is configured,
 	// otherwise HTTP-01 via autocert for eager cert provisioning on route set.
