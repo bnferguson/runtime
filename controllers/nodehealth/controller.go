@@ -2,6 +2,7 @@ package nodehealth
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -160,6 +161,7 @@ func (c *Controller) markNodeSandboxesDead(ctx context.Context, nodeID entity.Id
 	}
 
 	marked := 0
+	var patchErr error
 	for _, e := range results.Values() {
 		var sb compute_v1alpha.Sandbox
 		sb.Decode(e.Entity())
@@ -181,6 +183,7 @@ func (c *Controller) markNodeSandboxesDead(ctx context.Context, nodeID entity.Id
 		).Attrs(), 0)
 		if err != nil {
 			c.log.Error("failed to mark sandbox dead", "sandbox", sb.ID, "error", err)
+			patchErr = errors.Join(patchErr, err)
 			continue
 		}
 		marked++
@@ -192,5 +195,5 @@ func (c *Controller) markNodeSandboxesDead(ctx context.Context, nodeID entity.Id
 			"count", marked)
 	}
 
-	return nil
+	return patchErr
 }
