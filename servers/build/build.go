@@ -1100,7 +1100,11 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 
 	ac, err := b.loadAppConfig(tr)
 	if err != nil {
-		b.Log.Warn("error loading app config, ignoring", "error", err)
+		setupSpan.RecordError(err)
+		setupSpan.SetStatus(codes.Error, err.Error())
+		setupSpan.End()
+		b.sendErrorStatus(ctx, status, "Invalid app.toml: %v", err)
+		return nil, fmt.Errorf("error loading app config: %w", err)
 	}
 	if ac != nil {
 		b.Log.Info("loaded app config", "name", ac.Name, "envVarCount", len(ac.EnvVars), "serviceCount", len(ac.Services))
@@ -1702,7 +1706,7 @@ func (b *Builder) AnalyzeApp(ctx context.Context, state *build_v1alpha.BuilderAn
 	// Load app config
 	ac, err := b.loadAppConfig(tr)
 	if err != nil {
-		b.Log.Warn("error loading app config, ignoring", "error", err)
+		return fmt.Errorf("error loading app config: %w", err)
 	}
 	if ac != nil {
 		var event build_v1alpha.DetectionEvent
