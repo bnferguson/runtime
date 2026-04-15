@@ -1246,6 +1246,28 @@ bogus = true
 		assert.Contains(t, err.Error(), "bogus")
 	})
 
+	// A newer CLI may send fields that an older server doesn't recognize.
+	// The server must reject the config rather than silently dropping
+	// services.
+	t.Run("unknown top-level section rejects cleanly (version skew)", func(t *testing.T) {
+		config := `
+name = "test-app"
+
+[services.web]
+command = "bin/server"
+
+[services.valkey]
+image = "oci.miren.cloud/valkey:8"
+
+[future_feature]
+setting = "value"
+`
+		_, err := Parse([]byte(config))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unknown field")
+		assert.Contains(t, err.Error(), "future_feature")
+	})
+
 	t.Run("valid config still works", func(t *testing.T) {
 		config := `
 name = "test-app"
