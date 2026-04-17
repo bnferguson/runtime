@@ -124,16 +124,9 @@ func (s *RustStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 		cpCmd = fmt.Sprintf("cp target/release/%s /bin/app", binaryName)
 	}
 
-	// Force-rebuild our crate: buildkit normalizes source mtimes, so cargo's
-	// fingerprint check can skip a real source change and ship a stale binary.
-	buildCmd := "cargo build --release"
-	if s.packageName != "" {
-		buildCmd = fmt.Sprintf("cargo clean --release -p %s && cargo build --release", s.packageName)
-	}
-
 	state = state.Dir("/app").Run(
 		llb.Args([]string{"/bin/sh", "-c",
-			fmt.Sprintf("%s && %s", buildCmd, cpCmd)}),
+			fmt.Sprintf("%s && %s", s.buildCommand(), cpCmd)}),
 		h.CacheMount("/usr/local/cargo/registry"),
 		h.CacheMount("/app/target"),
 		llb.WithCustomName("[phase] Building Rust application"),
@@ -144,6 +137,14 @@ func (s *RustStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 	state = s.applyOnBuild(state, opts)
 
 	return &state, nil
+}
+
+// buildCommand force-rebuilds the workspace crate to dodge the buildkit-mtime / cargo-fingerprint staleness bug (MIR-1027).
+func (s *RustStack) buildCommand() string {
+	if s.packageName != "" {
+		return fmt.Sprintf("cargo clean --release -p %s && cargo build --release", s.packageName)
+	}
+	return "cargo build --release"
 }
 
 func (s *RustStack) WebCommand() string {

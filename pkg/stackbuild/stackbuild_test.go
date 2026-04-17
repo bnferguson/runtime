@@ -1107,3 +1107,28 @@ func TestRustWebCommand(t *testing.T) {
 
 	require.Equal(t, "/bin/app", stack.WebCommand())
 }
+
+func TestRustBuildCommand(t *testing.T) {
+	t.Run("with package name force-rebuilds workspace crate", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "Cargo.toml"), []byte("[package]\nname = \"my-app\"\nversion = \"0.1.0\"\n"), 0644))
+
+		stack := &RustStack{MetaStack: MetaStack{dir: dir}}
+		require.True(t, stack.Detect())
+		stack.Init(BuildOptions{})
+
+		require.Equal(t, "cargo clean --release -p my-app && cargo build --release", stack.buildCommand())
+	})
+
+	t.Run("virtual workspace falls back to bare cargo build", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "Cargo.toml"), []byte("[workspace]\nmembers = [\"member-a\"]\n"), 0644))
+
+		stack := &RustStack{MetaStack: MetaStack{dir: dir}}
+		require.True(t, stack.Detect())
+		stack.Init(BuildOptions{})
+
+		require.Empty(t, stack.packageName)
+		require.Equal(t, "cargo build --release", stack.buildCommand())
+	})
+}
