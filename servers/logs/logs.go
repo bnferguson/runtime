@@ -201,7 +201,7 @@ const defaultTailLimit = 100
 func (s *Server) resolveSandboxID(ctx context.Context, sandboxID string) (string, error) {
 	ret, err := s.EC.EAC().Get(ctx, sandboxID)
 	if err != nil {
-		return "", fmt.Errorf("sandbox %q not found: %w", sandboxID, err)
+		return "", fmt.Errorf("failed to resolve sandbox %q: %w", sandboxID, err)
 	}
 	return ret.Entity().Id(), nil
 }
