@@ -48,6 +48,11 @@ func (s *Server) Exec(ctx context.Context, req *exec_v1alpha.SandboxExecExec) er
 
 	id := args.Value()
 
+	// Resolve short IDs to full entity IDs for the containerd label lookup
+	if resolved, err := s.EAC.Get(ctx, id); err == nil {
+		id = resolved.Entity().Id()
+	}
+
 	containers, err := s.CC.Containers(ctx, `labels."runtime.computer/entity-id"==`+id)
 	if err != nil {
 		return err
