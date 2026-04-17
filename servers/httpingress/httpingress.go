@@ -506,9 +506,6 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 
 		// Check for ephemeral subdomain label (only relevant for wildcard routes)
 		ephemeralLabel = ingress.ExtractSubdomainLabel(onlyHost, route.Host)
-		if ephemeralLabel != "" {
-			h.Log.Debug("detected ephemeral subdomain via wildcard route", "host", onlyHost, "label", ephemeralLabel, "app", targetAppId)
-		}
 
 		// Check if OIDC authentication is required
 		if !entity.Empty(route.OidcProvider) {
@@ -527,7 +524,6 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 		targetAppId = baseRoute.App
 		routeType = "route"
 		ephemeralLabel = label
-		h.Log.Debug("detected ephemeral subdomain", "host", onlyHost, "label", label, "app", targetAppId)
 
 		if !entity.Empty(baseRoute.OidcProvider) {
 			oidcWrapped := h.oidcMiddleware(route, func(w http.ResponseWriter, r *http.Request) {
