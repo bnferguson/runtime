@@ -14,6 +14,33 @@ Route protection lets you put single sign-on in front of an application at the r
 
 Your app receives identity information as plain HTTP headers (e.g., `X-User-Email`) — no in-app auth code required. OIDC is the underlying mechanism, so any standards-compliant identity provider works.
 
+## Quick Start
+
+**Step 1: Add an identity provider**
+
+<CliCommand context="client">
+```miren
+miren auth provider add my-google \
+  --provider-url https://accounts.google.com \
+  --client-id $GOOGLE_CLIENT_ID \
+  --client-secret $GOOGLE_CLIENT_SECRET \
+  --scope email --scope profile
+```
+</CliCommand>
+
+**Step 2: Protect a route**
+
+<CliCommand context="client">
+```miren
+miren route protect myapp.example.com \
+  --provider my-google \
+  --claim-header email:X-User-Email \
+  --claim-header name:X-User-Name
+```
+</CliCommand>
+
+That's it. Unauthenticated requests to `myapp.example.com` are now redirected to Google for login. After authentication, your app receives `X-User-Email` and `X-User-Name` headers.
+
 ## Authentication vs Authorization
 
 This feature handles **authentication** — verifying _who_ a user is — not **authorization** — deciding _what_ they can access.
@@ -34,7 +61,8 @@ The `--claim-header` option maps JWT claims from the identity provider to HTTP h
 
 <CliCommand context="client">
 ```miren
-miren route protect oidc myapp.example.com \
+miren route protect myapp.example.com \
+  --provider my-google \
   --claim-header email:X-User-Email \
   --claim-header sub:X-User-ID \
   --claim-header name:X-User-Name
@@ -54,13 +82,11 @@ Google's identity provider works well when you want to restrict access by email 
 
 <CliCommand context="client">
 ```miren
-miren route protect oidc myapp.example.com \
+miren auth provider add my-google \
   --provider-url https://accounts.google.com \
   --client-id $GOOGLE_CLIENT_ID \
   --client-secret $GOOGLE_CLIENT_SECRET \
-  --scope openid email profile \
-  --claim-header email:X-User-Email \
-  --claim-header name:X-User-Name
+  --scope email --scope profile
 ```
 </CliCommand>
 
@@ -76,13 +102,11 @@ GitLab has a built-in OIDC provider — no federation layer needed. Register an 
 
 <CliCommand context="client">
 ```miren
-miren route protect oidc myapp.example.com \
+miren auth provider add my-gitlab \
   --provider-url https://gitlab.com \
   --client-id $GITLAB_CLIENT_ID \
   --client-secret $GITLAB_CLIENT_SECRET \
-  --scope openid email profile \
-  --claim-header email:X-User-Email \
-  --claim-header name:X-User-Name
+  --scope email --scope profile
 ```
 </CliCommand>
 
@@ -92,54 +116,62 @@ miren route protect oidc myapp.example.com \
 
 <CliCommand context="client">
 ```miren
-miren route protect oidc myapp.example.com \
+miren auth provider add my-keycloak \
   --provider-url https://keycloak.example.com/realms/myrealm \
   --client-id $KEYCLOAK_CLIENT_ID \
   --client-secret $KEYCLOAK_CLIENT_SECRET \
-  --scope openid email profile \
-  --claim-header email:X-User-Email \
-  --claim-header preferred_username:X-User-Name
+  --scope email --scope profile
 ```
 </CliCommand>
 
 ## Reusing Providers Across Routes
 
-The examples above create a new identity provider inline for each route. If you use the same provider for multiple routes, you can reference an existing provider by name instead of repeating the configuration:
+Once you've added a provider, you can use it to protect any number of routes:
 
 <CliCommand context="client">
 ```miren
-miren route protect oidc another-app.example.com \
-  --provider google-oauth \
-  --claim-header email:X-User-Email
+miren route protect app1.example.com --provider my-google --claim-header email:X-User-Email
+miren route protect app2.example.com --provider my-google --claim-header email:X-User-Email
 ```
 </CliCommand>
-
-Providers created inline are preserved when you remove protection from a route, so they can be reused later.
 
 ## Default Route Support
 
-All `miren route protect` commands support the `--default` flag for the default route (which has no static hostname). When used with the default route, the OAuth2 redirect URL is derived from the request's `Host` header at runtime.
+`route protect` and `route unprotect` support the `--default` flag for the default route (which has no static hostname). When used with the default route, the OAuth2 redirect URL is derived from the request's `Host` header at runtime.
 
 <CliCommand context="client">
 ```miren
-miren route protect oidc --default \
-  --provider-url https://accounts.google.com \
-  --client-id $GOOGLE_CLIENT_ID \
-  --client-secret $GOOGLE_CLIENT_SECRET \
+miren route protect --default \
+  --provider my-google \
   --claim-header email:X-User-Email
 ```
 </CliCommand>
 
-## Managing Route Protection
+## Managing Identity Providers
 
 <CliCommand context="client">
 ```miren
-# Show current protection for a route
-miren route protect show myapp.example.com
+# List all providers
+miren auth provider list
 
-# Remove protection from a route (provider is preserved for reuse)
-miren route protect disable myapp.example.com
+# Show details of a provider
+miren auth provider show my-google
+
+# Remove a provider
+miren auth provider remove my-google
 ```
 </CliCommand>
 
-See the [CLI reference](/command/route-protect-oidc) for the full list of options.
+## Removing Route Protection
+
+<CliCommand context="client">
+```miren
+# Remove protection from a route (provider is preserved for reuse)
+miren route unprotect myapp.example.com
+
+# Check route status including protection info
+miren route show myapp.example.com
+```
+</CliCommand>
+
+See the [CLI reference](/command/route-protect) for the full list of options.

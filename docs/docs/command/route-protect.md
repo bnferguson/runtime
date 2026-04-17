@@ -1,24 +1,54 @@
 ---
 title: "miren route protect"
 sidebar_label: "route protect"
-description: "Protect routes from unauthenticated access"
+description: "Protect an HTTP route with an identity provider"
 ---
 
 # miren route protect
 
-Protect routes from unauthenticated access
+Protect an HTTP route with an identity provider
+
+:::note
+This command requires the `routeoidc` [labs feature](/labs) to be enabled.
+:::
 
 ## Usage
 
 ```bash
-miren route protect [flags]
+miren route protect <host> [flags]
 ```
 
-## Subcommands
+## Arguments
 
-- [`miren route protect disable`](/command/route-protect-disable) — Remove protection from an HTTP route
-- [`miren route protect oidc`](/command/route-protect-oidc) — Protect an HTTP route with an OIDC identity provider
-- [`miren route protect show`](/command/route-protect-show) — Show protection for an HTTP route
+- `host` — Hostname for the route (e.g., example.com)
+
+## Flags
+
+- `--claim-header` — Claim to header mapping in format 'claim:header' (e.g., 'email:X-User-Email')
+- `--cluster, -C` — Cluster name
+- `--config` — Path to the config file
+- `--default` — Protect the default route
+- `--provider` — Name of the identity provider
+
+## Global Options
+
+- `--options` — Path to file containing options
+- `--server-address` — Server address to connect to (default: `127.0.0.1:8443`)
+- `--verbose, -v` — Enable verbose output
+
+## Examples
+
+**Protect a route with an identity provider:**
+
+```bash
+miren route protect example.com --provider my-google-oidc --claim-header email:X-User-Email
+```
+
+**Protect the default route:**
+
+```bash
+miren route protect --default --provider my-google-oidc
+```
 
 ## See also
 

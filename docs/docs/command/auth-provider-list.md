@@ -1,12 +1,12 @@
 ---
-title: "miren route protect show"
-sidebar_label: "route protect show"
-description: "Show protection for an HTTP route"
+title: "miren auth provider list"
+sidebar_label: "auth provider list"
+description: "List identity providers"
 ---
 
-# miren route protect show
+# miren auth provider list
 
-Show protection for an HTTP route
+List identity providers
 
 :::note
 This command requires the `routeoidc` [labs feature](/labs) to be enabled.
@@ -15,18 +15,13 @@ This command requires the `routeoidc` [labs feature](/labs) to be enabled.
 ## Usage
 
 ```bash
-miren route protect show <host> [flags]
+miren auth provider list [flags]
 ```
-
-## Arguments
-
-- `host` — Hostname for the route (e.g., example.com)
 
 ## Flags
 
 - `--cluster, -C` — Cluster name
 - `--config` — Path to the config file
-- `--default` — Show protection for the default route
 - `--format` — Output format (text, json) (default: `text`)
 - `--json` — Shorthand for --format json
 
@@ -36,14 +31,6 @@ miren route protect show <host> [flags]
 - `--server-address` — Server address to connect to (default: `127.0.0.1:8443`)
 - `--verbose, -v` — Enable verbose output
 
-## Examples
-
-**Show route protection:**
-
-```bash
-miren route protect show example.com
-```
-
 ## See also
 
-- [`miren route protect`](/command/route-protect)
+- [`miren auth provider`](/command/auth-provider)

@@ -38,9 +38,10 @@ miren route
 ## Subcommands
 
 - [`miren route list`](/command/route-list) — List all HTTP routes
-- [`miren route protect`](/command/route-protect) — Protect routes from unauthenticated access
+- [`miren route protect`](/command/route-protect) — Protect an HTTP route with an identity provider
 - [`miren route remove`](/command/route-remove) — Remove an HTTP route
 - [`miren route set`](/command/route-set) — Create or update an HTTP route
 - [`miren route set-default`](/command/route-set-default) — Set an app as the default route
 - [`miren route show`](/command/route-show) — Show details of an HTTP route
+- [`miren route unprotect`](/command/route-unprotect) — Remove identity-provider protection from an HTTP route
 - [`miren route unset-default`](/command/route-unset-default) — Remove the default route

@@ -9,7 +9,7 @@ import (
 	"miren.dev/runtime/pkg/labs"
 )
 
-func RouteOidcDisable(ctx *Context, opts struct {
+func RouteUnprotect(ctx *Context, opts struct {
 	Host    string `position:"0" usage:"Hostname for the route (e.g., example.com)"`
 	Default bool   `long:"default" description:"Remove protection from the default route"`
 	ConfigCentric

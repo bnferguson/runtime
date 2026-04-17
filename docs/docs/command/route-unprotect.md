@@ -1,12 +1,12 @@
 ---
-title: "miren route protect disable"
-sidebar_label: "route protect disable"
-description: "Remove protection from an HTTP route"
+title: "miren route unprotect"
+sidebar_label: "route unprotect"
+description: "Remove identity-provider protection from an HTTP route"
 ---
 
-# miren route protect disable
+# miren route unprotect
 
-Remove protection from an HTTP route
+Remove identity-provider protection from an HTTP route
 
 :::note
 This command requires the `routeoidc` [labs feature](/labs) to be enabled.
@@ -15,7 +15,7 @@ This command requires the `routeoidc` [labs feature](/labs) to be enabled.
 ## Usage
 
 ```bash
-miren route protect disable <host> [flags]
+miren route unprotect <host> [flags]
 ```
 
 ## Arguments
@@ -39,9 +39,9 @@ miren route protect disable <host> [flags]
 **Remove protection from a route:**
 
 ```bash
-miren route protect disable example.com
+miren route unprotect example.com
 ```
 
 ## See also
 
-- [`miren route protect`](/command/route-protect)
+- [`miren route`](/command/route)
