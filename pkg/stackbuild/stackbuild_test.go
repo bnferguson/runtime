@@ -718,6 +718,8 @@ func TestRust(t *testing.T) {
 			dir: dir,
 		},
 	}
+	require.True(t, stack.Detect())
+	stack.Init(BuildOptions{Version: "1"})
 	state, err := stack.GenerateLLB(dir, BuildOptions{Version: "1"})
 	require.NoError(t, err)
 

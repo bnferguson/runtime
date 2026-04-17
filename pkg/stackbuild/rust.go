@@ -124,9 +124,16 @@ func (s *RustStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 		cpCmd = fmt.Sprintf("cp target/release/%s /bin/app", binaryName)
 	}
 
+	// Force-rebuild our crate: buildkit normalizes source mtimes, so cargo's
+	// fingerprint check can skip a real source change and ship a stale binary.
+	buildCmd := "cargo build --release"
+	if s.packageName != "" {
+		buildCmd = fmt.Sprintf("cargo clean --release -p %s && cargo build --release", s.packageName)
+	}
+
 	state = state.Dir("/app").Run(
 		llb.Args([]string{"/bin/sh", "-c",
-			fmt.Sprintf("cargo build --release && %s", cpCmd)}),
+			fmt.Sprintf("%s && %s", buildCmd, cpCmd)}),
 		h.CacheMount("/usr/local/cargo/registry"),
 		h.CacheMount("/app/target"),
 		llb.WithCustomName("[phase] Building Rust application"),
