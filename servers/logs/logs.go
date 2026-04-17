@@ -106,9 +106,14 @@ func (s *Server) SandboxLogs(ctx context.Context, state *app_v1alpha.LogsSandbox
 		opts = append(opts, observability.WithFromTime(fromTime))
 	}
 
-	s.Log.Debug("reading logs", "sandbox", args.Sandbox(), "from", args.From())
+	sandboxID, err := s.resolveSandboxID(ctx, args.Sandbox())
+	if err != nil {
+		return err
+	}
 
-	entries, err := s.LogReader.ReadBySandbox(ctx, args.Sandbox(), opts...)
+	s.Log.Debug("reading logs", "sandbox", sandboxID, "from", args.From())
+
+	entries, err := s.LogReader.ReadBySandbox(ctx, sandboxID, opts...)
 	if err != nil {
 		s.Log.Error("failed to read logs", "sandbox", args.Sandbox(), "err", err)
 		return err
@@ -191,6 +196,16 @@ func (s *Server) StreamLogs(ctx context.Context, state *app_v1alpha.LogsStreamLo
 const defaultChunkSize = 100
 const defaultTailLimit = 100
 
+// resolveSandboxID resolves a sandbox identifier (full entity ID, short ID,
+// or sandbox/-prefixed short ID) to the full sandbox entity ID string.
+func (s *Server) resolveSandboxID(ctx context.Context, sandboxID string) (string, error) {
+	ret, err := s.EC.EAC().Get(ctx, sandboxID)
+	if err != nil {
+		return "", fmt.Errorf("sandbox %q not found: %w", sandboxID, err)
+	}
+	return ret.Entity().Id(), nil
+}
+
 // resolveLogTarget converts an RPC LogTarget into an observability.LogTarget,
 // resolving app names to entity IDs as needed.
 func (s *Server) resolveLogTarget(ctx context.Context, target *app_v1alpha.LogTarget) (observability.LogTarget, error) {
@@ -220,7 +235,11 @@ func (s *Server) resolveLogTarget(ctx context.Context, target *app_v1alpha.LogTa
 	}
 
 	if hasSandbox {
-		logTarget.SandboxID = target.Sandbox()
+		resolved, err := s.resolveSandboxID(ctx, target.Sandbox())
+		if err != nil {
+			return logTarget, err
+		}
+		logTarget.SandboxID = resolved
 		return logTarget, nil
 	}
 

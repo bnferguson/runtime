@@ -666,7 +666,7 @@ func (d *DeploymentServer) CancelDeployment(ctx context.Context, req *deployment
 
 	deploymentId := args.DeploymentId()
 
-	// Get the deployment by ID
+	// Get the deployment by ID (resolves short IDs via the entity server)
 	deploymentResp, err := d.EAC.Get(ctx, deploymentId)
 	if err != nil {
 		if errors.Is(err, cond.ErrNotFound{}) {
@@ -677,6 +677,9 @@ func (d *DeploymentServer) CancelDeployment(ctx context.Context, req *deployment
 		}
 		return nil
 	}
+
+	// Use the resolved entity ID for all subsequent operations
+	deploymentId = deploymentResp.Entity().Id()
 
 	// Decode to Deployment struct
 	var deployment core_v1alpha.Deployment
