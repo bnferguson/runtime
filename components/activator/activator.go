@@ -302,12 +302,21 @@ func (a *localActivator) waitForSandbox(ctx context.Context, ver *core_v1alpha.A
 	// This lets us distinguish between:
 	// 1. Old DEAD sandboxes from previous scale-down cycles (should be ignored)
 	// 2. New sandboxes created for THIS request that died (real boot failure)
+	//
+	// Scope the count to sandboxes belonging to THIS app version. When a pool
+	// is reused across versions (MIR-1023), dead sandboxes from a previous
+	// version share the pool but must not doom a freshly-deployed version
+	// before it has a chance to boot its own sandbox.
 	var sandboxCountBeforeIncrement int
 	if incrementPool {
 		a.mu.RLock()
 		if versionRef, ok := a.versions[key]; ok {
 			if ps, poolOk := a.poolSandboxes[versionRef.poolID]; poolOk {
-				sandboxCountBeforeIncrement = len(ps.sandboxes)
+				for _, s := range ps.sandboxes {
+					if s.sandbox.Spec.Version == ver.ID {
+						sandboxCountBeforeIncrement++
+					}
+				}
 			}
 		}
 		a.mu.RUnlock()
@@ -423,23 +432,34 @@ func (a *localActivator) waitForSandbox(ctx context.Context, ver *core_v1alpha.A
 		}
 
 		// Check if all sandboxes have failed (no RUNNING, no PENDING)
-		// If so, fail fast instead of waiting for timeout
+		// If so, fail fast instead of waiting for timeout.
+		//
+		// hasPendingOrRunning looks at the whole pool: a RUNNING sandbox from
+		// any version can serve this request (pool reuse means spec matches),
+		// so we shouldn't fail fast while one exists.
+		//
+		// currentSandboxCount / sandboxStatuses are scoped to THIS version.
+		// When a pool is reused across versions (MIR-1023), dead sandboxes
+		// from a previous version share the pool; they shouldn't count as
+		// failures against the freshly-deployed version that hasn't even
+		// had a sandbox created for it yet.
 		a.mu.RLock()
 		versionRef, ok := a.versions[key]
 		hasPendingOrRunning := false
 		var sandboxStatuses []string
 		var currentSandboxCount int
 		if ok {
-			// Look up the pool's sandboxes
 			ps, poolOk := a.poolSandboxes[versionRef.poolID]
 			if poolOk {
-				currentSandboxCount = len(ps.sandboxes)
 				for _, s := range ps.sandboxes {
-					sandboxStatuses = append(sandboxStatuses, fmt.Sprintf("%s:%s", s.sandbox.ID, s.sandbox.Status))
 					if s.sandbox.Status == compute_v1alpha.RUNNING || s.sandbox.Status == compute_v1alpha.PENDING {
 						hasPendingOrRunning = true
-						break
 					}
+					if s.sandbox.Spec.Version != ver.ID {
+						continue
+					}
+					sandboxStatuses = append(sandboxStatuses, fmt.Sprintf("%s:%s", s.sandbox.ID, s.sandbox.Status))
+					currentSandboxCount++
 				}
 			}
 		}
