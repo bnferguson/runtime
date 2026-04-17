@@ -48,7 +48,7 @@ func DebugAdvertise(ctx *Context, opts struct {
 		return err
 	}
 
-	var discoveredIPs []net.IP
+	ipSet := coordinate.NewIPSet()
 	for _, a := range discovery.Addresses {
 		ip := net.ParseIP(a.IP)
 		if ip == nil {
@@ -60,20 +60,20 @@ func DebugAdvertise(ctx *Context, opts struct {
 			ctx.Info("  %-15s %-40s [skipped: link-local]", a.Interface, a.IP)
 			continue
 		}
-		ctx.Info("  %-15s %-40s", a.Interface, a.IP)
-		discoveredIPs = append(discoveredIPs, ip)
+		ctx.Info("  %-15s %-40s (discovered)", a.Interface, a.IP)
+		ipSet.AddDiscovered(ip)
 	}
-	ctx.Info("")
 
-	var additionalIPs []net.IP
 	for _, s := range opts.AdditionalIPs {
 		ip := net.ParseIP(s)
 		if ip == nil {
 			ctx.Warn("--additional-ip %q is not a valid IP, skipping", s)
 			continue
 		}
-		additionalIPs = append(additionalIPs, ip)
+		ctx.Info("  %-15s %-40s (explicit)", "user", ip.String())
+		ipSet.AddExplicit(ip)
 	}
+	ctx.Info("")
 
 	ctx.Info("Step 2: dual-stack netcheck")
 	var netcheckResult *cloudauth.NetcheckDualStackResult
@@ -96,10 +96,9 @@ func DebugAdvertise(ctx *Context, opts struct {
 	ctx.Info("")
 
 	candidates, final := coordinate.ComputeAdvertise(coordinate.AdvertiseInput{
-		ListenAddr:    listenAddr,
-		AdditionalIPs: additionalIPs,
-		DiscoveredIPs: discoveredIPs,
-		Netcheck:      netcheckResult,
+		ListenAddr: listenAddr,
+		IPs:        ipSet.All(),
+		Netcheck:   netcheckResult,
 	})
 
 	ctx.Info("Step 3: per-candidate classification and inclusion decision")

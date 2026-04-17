@@ -97,8 +97,7 @@ type CoordinatorConfig struct {
 	TempDir         string              `json:"temp_dir" yaml:"temp_dir"`
 	DataPath        string              `json:"data_path" yaml:"data_path"`
 	AdditionalNames []string            `json:"additional_names" yaml:"additional_names"`
-	AdditionalIPs   []net.IP            `json:"additional_ips" yaml:"additional_ips"`
-	DiscoveredIPs   []net.IP            `json:"discovered_ips" yaml:"discovered_ips"`
+	IPs             *IPSet              `json:"ips" yaml:"ips"`
 
 	// ACME certificate configuration
 	AcmeEmail       string `json:"acme_email" yaml:"acme_email"`
@@ -477,8 +476,7 @@ func (c *Coordinator) LoadAPICert(ctx context.Context) error {
 		net.ParseIP("::1"),
 	}
 
-	ips = append(ips, c.AdditionalIPs...)
-	ips = append(ips, c.DiscoveredIPs...)
+	ips = append(ips, c.IPs.RawIPs()...)
 
 	cert := filepath.Join(c.DataPath, "server", "api.crt")
 	keyPath := filepath.Join(c.DataPath, "server", "api.key")
@@ -1297,7 +1295,8 @@ func (c *Coordinator) PublicIPs() []net.IP {
 	}
 
 	if len(ips) == 0 {
-		for _, ip := range append(c.AdditionalIPs, c.DiscoveredIPs...) {
+		for _, sip := range c.IPs.All() {
+			ip := sip.IP
 			if ip == nil || !ip.IsGlobalUnicast() || ip.IsPrivate() {
 				continue
 			}
@@ -1321,22 +1320,21 @@ func (c *Coordinator) apiAddresses() []string {
 	c.netcheckMu.RUnlock()
 
 	_, final := ComputeAdvertise(AdvertiseInput{
-		ListenAddr:    c.Address,
-		AdditionalIPs: c.AdditionalIPs,
-		DiscoveredIPs: c.DiscoveredIPs,
-		Netcheck:      netcheck,
+		ListenAddr: c.Address,
+		IPs:        c.IPs.All(),
+		Netcheck:   netcheck,
 	})
 
 	c.logAddressesOnce.Do(func() {
-		additional := []string{}
-		for _, ip := range c.AdditionalIPs {
-			additional = append(additional, ip.String())
+		var explicit, discovered []string
+		for _, sip := range c.IPs.All() {
+			if sip.Explicit {
+				explicit = append(explicit, sip.IP.String())
+			} else {
+				discovered = append(discovered, sip.IP.String())
+			}
 		}
-		discovered := []string{}
-		for _, ip := range c.DiscoveredIPs {
-			discovered = append(discovered, ip.String())
-		}
-		c.Log.Info("reporting API addresses", "listen", c.Address, "configured", additional, "discovered", discovered, "result", final)
+		c.Log.Info("reporting API addresses", "listen", c.Address, "configured", explicit, "discovered", discovered, "result", final)
 	})
 
 	return final

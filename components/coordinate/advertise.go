@@ -7,18 +7,104 @@ import (
 	"miren.dev/runtime/pkg/cloudauth"
 )
 
+// SourcedIP is an IP address tagged with how it was obtained. Explicit IPs
+// (user-configured via AdditionalIPs or the server config) always pass
+// through to the advertised list. Discovered IPs (auto-scanned from local
+// interfaces) are subject to netcheck pruning, CGNAT filtering, etc.
+type SourcedIP struct {
+	IP       net.IP
+	Explicit bool // true = user-configured, false = auto-discovered
+}
+
+// IPSet is an ordered, de-duplicated collection of SourcedIP entries.
+// When a duplicate IP is added, the Explicit flag is sticky: adding an
+// IP as explicit promotes a previously-discovered entry, but adding it
+// as discovered never demotes an explicit one. Iteration order matches
+// first-insertion order.
+type IPSet struct {
+	entries []SourcedIP
+	index   map[string]int // IP string → index into entries
+}
+
+// NewIPSet creates an empty IPSet.
+func NewIPSet() *IPSet {
+	return &IPSet{index: make(map[string]int)}
+}
+
+// Add inserts an IP. If the IP already exists and the new entry is
+// explicit, it promotes the existing entry. Discovered duplicates are
+// silently ignored.
+func (s *IPSet) Add(sip SourcedIP) {
+	if sip.IP == nil {
+		return
+	}
+	key := sip.IP.String()
+	if i, ok := s.index[key]; ok {
+		if sip.Explicit && !s.entries[i].Explicit {
+			s.entries[i].Explicit = true
+		}
+		return
+	}
+	s.index[key] = len(s.entries)
+	s.entries = append(s.entries, sip)
+}
+
+// AddDiscovered is a convenience for Add(SourcedIP{IP: ip, Explicit: false}).
+func (s *IPSet) AddDiscovered(ip net.IP) {
+	s.Add(SourcedIP{IP: ip, Explicit: false})
+}
+
+// AddExplicit is a convenience for Add(SourcedIP{IP: ip, Explicit: true}).
+func (s *IPSet) AddExplicit(ip net.IP) {
+	s.Add(SourcedIP{IP: ip, Explicit: true})
+}
+
+// All returns the entries in insertion order. The returned slice is a
+// copy — callers may not modify it. Safe to call on a nil receiver.
+func (s *IPSet) All() []SourcedIP {
+	if s == nil {
+		return nil
+	}
+	out := make([]SourcedIP, len(s.entries))
+	copy(out, s.entries)
+	return out
+}
+
+// RawIPs extracts just the net.IP values in insertion order.
+// Safe to call on a nil receiver.
+func (s *IPSet) RawIPs() []net.IP {
+	if s == nil {
+		return nil
+	}
+	out := make([]net.IP, 0, len(s.entries))
+	for _, e := range s.entries {
+		out = append(out, e.IP)
+	}
+	return out
+}
+
+// Len returns the number of unique IPs in the set.
+// Safe to call on a nil receiver.
+func (s *IPSet) Len() int {
+	if s == nil {
+		return 0
+	}
+	return len(s.entries)
+}
+
 // AdvertiseInput is the raw input for computing the set of API addresses
 // the server should advertise to clients and to miren.cloud.
 type AdvertiseInput struct {
 	// ListenAddr is the server's own listen address (e.g. "0.0.0.0:8443").
-	// Included in the advertised list only if it has a literal IP host.
+	// Included in the advertised list only if it has a literal,
+	// non-loopback, non-unspecified IP.
 	ListenAddr string
 
-	// AdditionalIPs are user-configured IPs that must always be advertised.
-	AdditionalIPs []net.IP
-
-	// DiscoveredIPs are interface-scanned IPs from the local host.
-	DiscoveredIPs []net.IP
+	// IPs is the unified list of all candidate IP addresses, each
+	// tagged as explicit (user-configured) or discovered (interface scan).
+	// Explicit IPs bypass all filtering except loopback / unspecified.
+	// Discovered IPs are subject to CGNAT, netcheck, and other pruning.
+	IPs []SourcedIP
 
 	// Netcheck is the result of the dual-stack netcheck, if one has run.
 	// A nil pointer means netcheck never ran / failed entirely.
@@ -33,7 +119,7 @@ type AdvertiseInput struct {
 // both production (building the final list) and debug tooling (explaining
 // the decision for every IP).
 type AdvertiseCandidate struct {
-	Source         string // "listen", "localhost", "additional", "discovered", "netcheck"
+	Source         string // "listen", "explicit", "discovered", "netcheck"
 	HostPort       string
 	IP             net.IP
 	Classification string // loopback / link-local / private / global-unicast / other
@@ -57,23 +143,18 @@ type AdvertiseCandidate struct {
 //
 //  1. Listen address: included if it parses as host:port with a literal,
 //     non-loopback, non-unspecified IP.
-//  2. AdditionalIPs: always included (user-curated), except loopback
+//
+//  2. Explicit IPs (user-configured): always included, except loopback
 //     and unspecified which are dropped with a reason.
-//  3. DiscoveredIPs:
-//     a. CGNAT addresses (100.64.0.0/10) are dropped. This range is used
-//     by tailscale tailnets and carrier-grade NAT; advertising them to
-//     a generic client is misleading. Users who want a CGNAT address
-//     advertised can pass it via AdditionalIPs.
-//     b. Other private / loopback / link-local IPs are always included —
-//     they may serve clients on the same LAN and we can't tell from
-//     here which private ranges are reachable.
+//
+//  3. Discovered IPs (auto-scanned from interfaces):
+//     a. Loopback and unspecified are dropped.
+//     b. CGNAT addresses (100.64.0.0/10) are dropped.
 //     c. Public (global-unicast, non-private) IPs are dropped if netcheck
 //     ran for that address family and proved the family unreachable
-//     (valid public source IP, zero reachable ports), or if netcheck
-//     found reachable addresses (in which case the confirmed netcheck
-//     source is advertised instead).
-//     d. Otherwise (netcheck didn't run or source was invalid) they are
-//     kept as a fallback.
+//     or found reachable addresses (replaced by netcheck-confirmed ones).
+//     d. Otherwise kept as a fallback.
+//
 //  4. Netcheck public addresses: included when reachable on at least one port.
 func ComputeAdvertise(in AdvertiseInput) ([]AdvertiseCandidate, []string) {
 	port := in.Port
@@ -140,47 +221,53 @@ func ComputeAdvertise(in AdvertiseInput) ([]AdvertiseCandidate, []string) {
 		}
 	}
 
-	// 2. AdditionalIPs.
-	for _, ip := range in.AdditionalIPs {
-		if ip == nil {
-			continue
-		}
-		cand := AdvertiseCandidate{
-			Source:         "additional",
-			HostPort:       net.JoinHostPort(ip.String(), portStr),
-			IP:             ip,
-			Classification: classify(ip),
-		}
-		switch {
-		case ip.IsUnspecified():
-			cand.Included = false
-			cand.Reason = "unspecified address (0.0.0.0 / ::) is not routable"
-		case ip.IsLoopback():
-			cand.Included = false
-			cand.Reason = "loopback is not reachable from remote clients"
-		default:
-			cand.Included = true
-			cand.Reason = "user-configured"
-		}
-		add(cand)
-	}
-
 	// Compute per-family netcheck state.
 	v4State := netcheckFamilyState(familyIPv4, in.Netcheck)
 	v6State := netcheckFamilyState(familyIPv6, in.Netcheck)
 
-	// 3. DiscoveredIPs.
-	for _, ip := range in.DiscoveredIPs {
+	// 2 & 3. IPs — explicit pass through, discovered are filtered.
+	for _, sip := range in.IPs {
+		ip := sip.IP
 		if ip == nil {
 			continue
 		}
 		hp := net.JoinHostPort(ip.String(), portStr)
+
+		source := "discovered"
+		if sip.Explicit {
+			source = "explicit"
+		}
+
 		cand := AdvertiseCandidate{
-			Source:         "discovered",
+			Source:         source,
 			HostPort:       hp,
 			IP:             ip,
 			Classification: classify(ip),
 		}
+
+		// Loopback / unspecified always rejected regardless of source.
+		if ip.IsUnspecified() {
+			cand.Included = false
+			cand.Reason = "unspecified address is not routable"
+			add(cand)
+			continue
+		}
+		if ip.IsLoopback() {
+			cand.Included = false
+			cand.Reason = "loopback is not reachable from remote clients"
+			add(cand)
+			continue
+		}
+
+		// Explicit IPs pass through with no further filtering.
+		if sip.Explicit {
+			cand.Included = true
+			cand.Reason = "user-configured"
+			add(cand)
+			continue
+		}
+
+		// --- Discovered IP filtering below ---
 
 		if isCGNAT(ip) {
 			cand.Included = false
@@ -192,7 +279,7 @@ func ComputeAdvertise(in AdvertiseInput) ([]AdvertiseCandidate, []string) {
 		isPublicCandidate := !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsLinkLocalUnicast()
 		if !isPublicCandidate {
 			cand.Included = true
-			cand.Reason = "private/loopback/link-local, kept for LAN clients"
+			cand.Reason = "private/link-local, kept for LAN clients"
 			add(cand)
 			continue
 		}
@@ -279,8 +366,7 @@ func netcheckFamilyState(fam netcheckFamily, result *cloudauth.NetcheckDualStack
 }
 
 // publicAddressesFromNetcheck returns netcheck-confirmed reachable host:port
-// strings. Mirrors the old (*Coordinator).publicAddresses() but as a pure
-// function so it can be shared with debug tooling.
+// strings.
 func publicAddressesFromNetcheck(result *cloudauth.NetcheckDualStackResult) []string {
 	if result == nil {
 		return nil

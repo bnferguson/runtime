@@ -9,16 +9,22 @@ import (
 	"miren.dev/runtime/pkg/cloudauth"
 )
 
+func explicit(ip string) SourcedIP  { return SourcedIP{IP: net.ParseIP(ip), Explicit: true} }
+func discovered(ip string) SourcedIP { return SourcedIP{IP: net.ParseIP(ip), Explicit: false} }
+
+func makeIPSet(entries ...SourcedIP) *IPSet {
+	s := NewIPSet()
+	for _, e := range entries {
+		s.Add(e)
+	}
+	return s
+}
+
 func TestApiAddresses(t *testing.T) {
-	// Default listen is the wildcard 0.0.0.0:8443. This is what most
-	// servers actually run with, and it must never end up in the
-	// advertised list that gets shipped to miren.cloud. A client reached
-	// via cloud can't connect to 0.0.0.0 or to loopback.
 	const wildcardListen = "0.0.0.0:8443"
 
 	// Addresses that must never appear in the advertised list for any
-	// case below, since a remote client reached via miren.cloud can't
-	// use them.
+	// case, since a remote client reached via miren.cloud can't use them.
 	nonRoutable := []string{
 		"0.0.0.0:8443",
 		"[::]:8443",
@@ -26,31 +32,22 @@ func TestApiAddresses(t *testing.T) {
 		"[::1]:8443",
 	}
 
-	publicIPv4 := net.ParseIP("203.0.113.10")
-	publicIPv6 := net.ParseIP("2001:db8::10")
-	privateIP := net.ParseIP("10.0.0.5")
-
 	tests := []struct {
 		name           string
 		listenAddr     string
-		additionalIPs  []net.IP
-		discoveredIPs  []net.IP
+		ips            *IPSet
 		netcheckResult *cloudauth.NetcheckDualStackResult
 		wantContains   []string
 		wantExcludes   []string
 	}{
 		{
-			name:          "no netcheck with discovered public IPs",
-			discoveredIPs: []net.IP{publicIPv4, privateIP},
-			wantContains:  []string{"203.0.113.10:8443", "10.0.0.5:8443"},
+			name:         "no netcheck with discovered public IPs",
+			ips:          makeIPSet(discovered("203.0.113.10"), discovered("10.0.0.5")),
+			wantContains: []string{"203.0.113.10:8443", "10.0.0.5:8443"},
 		},
 		{
-			// MIR-1018: when netcheck ran with a valid public source IP
-			// but every probed port failed, we now trust the negative
-			// result and drop global-unicast discovered IPs in that
-			// family. Private LAN IPs are still kept.
-			name:          "netcheck proved IPv4 unreachable drops public discovered IP",
-			discoveredIPs: []net.IP{publicIPv4, privateIP},
+			name: "netcheck proved IPv4 unreachable drops discovered public IP",
+			ips:  makeIPSet(discovered("203.0.113.10"), discovered("10.0.0.5")),
 			netcheckResult: &cloudauth.NetcheckDualStackResult{
 				IPv4: &cloudauth.NetcheckResponse{
 					SourceAddress: "203.0.113.10",
@@ -63,31 +60,41 @@ func TestApiAddresses(t *testing.T) {
 			wantExcludes: []string{"203.0.113.10:8443"},
 		},
 		{
-			// Netcheck failing entirely (e.g. no cloud connectivity) still
-			// lets discovered public IPs pass through as a fallback.
+			// Explicit IPs are never pruned by netcheck — the user asked
+			// for them specifically, even if netcheck says unreachable.
+			name: "explicit IP survives negative netcheck",
+			ips:  makeIPSet(explicit("203.0.113.10"), discovered("10.0.0.5")),
+			netcheckResult: &cloudauth.NetcheckDualStackResult{
+				IPv4: &cloudauth.NetcheckResponse{
+					SourceAddress: "203.0.113.10",
+					Results: []cloudauth.NetcheckResult{
+						{Port: 8443, Protocol: "tcp", Reachable: false},
+					},
+				},
+			},
+			wantContains: []string{"203.0.113.10:8443", "10.0.0.5:8443"},
+		},
+		{
 			name:           "netcheck not run keeps discovered public IPs",
-			discoveredIPs:  []net.IP{publicIPv4, privateIP},
+			ips:            makeIPSet(discovered("203.0.113.10"), discovered("10.0.0.5")),
 			netcheckResult: nil,
 			wantContains:   []string{"203.0.113.10:8443", "10.0.0.5:8443"},
 		},
 		{
-			// MIR-1018: CGNAT addresses (tailscale tailnet / ISP CGNAT)
-			// are filtered out of the discovered list by default.
-			name:          "CGNAT discovered IP is filtered",
-			discoveredIPs: []net.IP{net.ParseIP("100.107.209.9"), privateIP},
-			wantContains:  []string{"10.0.0.5:8443"},
-			wantExcludes:  []string{"100.107.209.9:8443"},
+			name:         "CGNAT discovered IP is filtered",
+			ips:          makeIPSet(discovered("100.107.209.9"), discovered("10.0.0.5")),
+			wantContains: []string{"10.0.0.5:8443"},
+			wantExcludes: []string{"100.107.209.9:8443"},
 		},
 		{
-			// Users who explicitly want a CGNAT address advertised can
-			// still set it as an AdditionalIP.
-			name:          "CGNAT AdditionalIP is kept",
-			additionalIPs: []net.IP{net.ParseIP("100.107.209.9")},
-			wantContains:  []string{"100.107.209.9:8443"},
+			// Explicit CGNAT is kept — the user asked for it.
+			name:         "CGNAT explicit IP is kept",
+			ips:          makeIPSet(explicit("100.107.209.9")),
+			wantContains: []string{"100.107.209.9:8443"},
 		},
 		{
-			name:          "netcheck ran and found reachable addresses",
-			discoveredIPs: []net.IP{publicIPv4, privateIP},
+			name: "netcheck ran and found reachable addresses",
+			ips:  makeIPSet(discovered("203.0.113.10"), discovered("10.0.0.5")),
 			netcheckResult: &cloudauth.NetcheckDualStackResult{
 				IPv4: &cloudauth.NetcheckResponse{
 					SourceAddress: "203.0.113.10",
@@ -99,15 +106,13 @@ func TestApiAddresses(t *testing.T) {
 			wantContains: []string{"10.0.0.5:8443", "203.0.113.10:8443"},
 		},
 		{
-			// Nothing to advertise. Should produce an empty list, not
-			// a list of nonsense loopback / wildcard entries.
 			name:         "no IPs and no netcheck yields empty list",
 			wantContains: nil,
 			wantExcludes: nonRoutable,
 		},
 		{
-			name:          "netcheck replaces discovered public IP with different source",
-			discoveredIPs: []net.IP{publicIPv4, privateIP},
+			name: "netcheck replaces discovered public IP with different source",
+			ips:  makeIPSet(discovered("203.0.113.10"), discovered("10.0.0.5")),
 			netcheckResult: &cloudauth.NetcheckDualStackResult{
 				IPv4: &cloudauth.NetcheckResponse{
 					SourceAddress: "198.51.100.1",
@@ -120,8 +125,8 @@ func TestApiAddresses(t *testing.T) {
 			wantExcludes: []string{"203.0.113.10:8443"},
 		},
 		{
-			name:          "dual-stack netcheck with both families reachable",
-			discoveredIPs: []net.IP{publicIPv4, privateIP},
+			name: "dual-stack netcheck with both families reachable",
+			ips:  makeIPSet(discovered("203.0.113.10"), discovered("10.0.0.5")),
 			netcheckResult: &cloudauth.NetcheckDualStackResult{
 				IPv4: &cloudauth.NetcheckResponse{
 					SourceAddress: "203.0.113.10",
@@ -139,8 +144,8 @@ func TestApiAddresses(t *testing.T) {
 			wantContains: []string{"203.0.113.10:8443", "[2001:db8::1]:8443", "10.0.0.5:8443"},
 		},
 		{
-			name:          "dual-stack netcheck with only IPv4 reachable",
-			discoveredIPs: []net.IP{publicIPv4, privateIP},
+			name: "dual-stack netcheck with only IPv4 reachable",
+			ips:  makeIPSet(discovered("203.0.113.10"), discovered("10.0.0.5")),
 			netcheckResult: &cloudauth.NetcheckDualStackResult{
 				IPv4: &cloudauth.NetcheckResponse{
 					SourceAddress: "203.0.113.10",
@@ -153,9 +158,8 @@ func TestApiAddresses(t *testing.T) {
 			wantContains: []string{"203.0.113.10:8443", "10.0.0.5:8443"},
 		},
 		{
-			name:          "user-provided AdditionalIPs always included even with netcheck",
-			additionalIPs: []net.IP{publicIPv4},
-			discoveredIPs: []net.IP{privateIP},
+			name: "explicit IPs always included even with netcheck",
+			ips:  makeIPSet(explicit("203.0.113.10"), discovered("10.0.0.5")),
 			netcheckResult: &cloudauth.NetcheckDualStackResult{
 				IPv4: &cloudauth.NetcheckResponse{
 					SourceAddress: "198.51.100.1",
@@ -167,8 +171,8 @@ func TestApiAddresses(t *testing.T) {
 			wantContains: []string{"203.0.113.10:8443", "198.51.100.1:8443", "10.0.0.5:8443"},
 		},
 		{
-			name:          "mixed-family: IPv4 reachable, discovered IPv6 preserved",
-			discoveredIPs: []net.IP{publicIPv4, publicIPv6, privateIP},
+			name: "mixed-family: IPv4 reachable, discovered IPv6 preserved",
+			ips:  makeIPSet(discovered("203.0.113.10"), discovered("2001:db8::10"), discovered("10.0.0.5")),
 			netcheckResult: &cloudauth.NetcheckDualStackResult{
 				IPv4: &cloudauth.NetcheckResponse{
 					SourceAddress: "203.0.113.10",
@@ -181,18 +185,39 @@ func TestApiAddresses(t *testing.T) {
 			wantContains: []string{"203.0.113.10:8443", "[2001:db8::10]:8443", "10.0.0.5:8443"},
 		},
 		{
-			// A non-wildcard, non-loopback listen address IS advertised,
-			// because it's a real routable bind.
 			name:         "explicit non-wildcard listen address is advertised",
 			listenAddr:   "198.51.100.7:8443",
 			wantContains: []string{"198.51.100.7:8443"},
 		},
 		{
-			// AdditionalIPs that are loopback/unspecified get rejected.
-			name:          "loopback AdditionalIP is dropped",
-			additionalIPs: []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1"), net.ParseIP("0.0.0.0"), publicIPv4},
-			wantContains:  []string{"203.0.113.10:8443"},
-			wantExcludes:  nonRoutable,
+			name:         "loopback explicit IP is dropped",
+			ips:          makeIPSet(explicit("127.0.0.1"), explicit("::1"), explicit("0.0.0.0"), explicit("203.0.113.10")),
+			wantContains: []string{"203.0.113.10:8443"},
+			wantExcludes: nonRoutable,
+		},
+		{
+			// IPSet dedup: when an IP is discovered first and then added
+			// again as explicit, it promotes to explicit and bypasses
+			// netcheck filtering.
+			name: "discovered IP promoted to explicit by IPSet dedup",
+			ips: func() *IPSet {
+				s := NewIPSet()
+				s.AddDiscovered(net.ParseIP("203.0.113.10"))
+				s.AddExplicit(net.ParseIP("203.0.113.10"))
+				s.AddDiscovered(net.ParseIP("10.0.0.5"))
+				return s
+			}(),
+			netcheckResult: &cloudauth.NetcheckDualStackResult{
+				IPv4: &cloudauth.NetcheckResponse{
+					SourceAddress: "203.0.113.10",
+					Results: []cloudauth.NetcheckResult{
+						{Port: 8443, Protocol: "tcp", Reachable: false},
+					},
+				},
+			},
+			// 203.0.113.10 was promoted from discovered → explicit, so
+			// it survives the negative netcheck.
+			wantContains: []string{"203.0.113.10:8443", "10.0.0.5:8443"},
 		},
 	}
 
@@ -204,9 +229,8 @@ func TestApiAddresses(t *testing.T) {
 			}
 			c := &Coordinator{
 				CoordinatorConfig: CoordinatorConfig{
-					Address:       listen,
-					AdditionalIPs: tt.additionalIPs,
-					DiscoveredIPs: tt.discoveredIPs,
+					Address: listen,
+					IPs:     tt.ips,
 				},
 				Log:            slog.Default(),
 				netcheckResult: tt.netcheckResult,
@@ -214,13 +238,9 @@ func TestApiAddresses(t *testing.T) {
 
 			got := c.apiAddresses()
 
-			// Non-routable addresses are NEVER advertised — assert
-			// this for every case, in addition to the per-case
-			// excludes.
 			for _, nr := range nonRoutable {
 				assert.NotContains(t, got, nr, "non-routable address %q must never be advertised", nr)
 			}
-
 			for _, want := range tt.wantContains {
 				assert.Contains(t, got, want, "expected %q in result", want)
 			}

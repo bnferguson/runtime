@@ -75,10 +75,10 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	ctx.UILog.Info("starting miren server", "version", versionInfo.Version, "commit", versionInfo.Commit)
 
 	// Discover local and public IPs early so they're available for TLS cert SANs.
-	// We track discovered IPs separately from user-configured IPs so the
-	// coordinator can treat them differently (netcheck can replace discovered
-	// public IPs but user-configured IPs always pass through).
-	var discoveredIps []net.IP
+	// IPs are tagged with whether they are user-configured (explicit) or
+	// auto-discovered from interfaces. The coordinator uses this to decide
+	// which IPs to prune (discovered) vs always include (explicit).
+	ipSet := coordinate.NewIPSet()
 	discovery, err := ipdiscovery.DiscoverWithTimeout(10*time.Second, ctx.Log, ipdiscovery.Options{
 		NetcheckURL: coordinate.DefaultCloudURL,
 	})
@@ -88,7 +88,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		for _, addr := range discovery.Addresses {
 			ip := net.ParseIP(addr.IP)
 			if ip != nil && !ip.IsLinkLocalUnicast() {
-				discoveredIps = append(discoveredIps, ip)
+				ipSet.AddDiscovered(ip)
 			}
 		}
 		ctx.Log.Info("discovered IPs", "addresses", len(discovery.Addresses))
@@ -296,7 +296,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 			ctx.Log.Info("setting up etcd mTLS for distributed runners")
 
 			var err error
-			etcdTLSSetup, err = coordinate.SetupEtcdTLS(ctx.Log, cfg.Server.GetDataPath(), cfg.TLS.AdditionalNames, discoveredIps)
+			etcdTLSSetup, err = coordinate.SetupEtcdTLS(ctx.Log, cfg.Server.GetDataPath(), cfg.TLS.AdditionalNames, ipSet.RawIPs())
 			if err != nil {
 				ctx.Log.Error("failed to set up etcd TLS", "error", err)
 				return err
@@ -516,20 +516,13 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	systemHandler := observability.NewSystemLogHandler(ctx.Log.Handler(), batchWriter)
 	ctx.Log = slog.New(systemHandler)
 
-	var additionalIps []net.IP
-	seen := make(map[string]struct{})
 	for _, ip := range cfg.TLS.AdditionalIPs {
 		addr := net.ParseIP(ip)
 		if addr == nil {
 			ctx.Log.Error("failed to parse additional IP", "ip", ip)
 			return fmt.Errorf("failed to parse additional IP %s", ip)
 		}
-		key := addr.String()
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		additionalIps = append(additionalIps, addr)
+		ipSet.AddExplicit(addr)
 	}
 
 	// Create HTTP metrics
@@ -618,8 +611,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		NetworkBackend:         cfg.Server.GetNetworkBackend(),
 		DataPath:               cfg.Server.GetDataPath(),
 		AdditionalNames:        cfg.TLS.AdditionalNames,
-		AdditionalIPs:          additionalIps,
-		DiscoveredIPs:          discoveredIps,
+		IPs:                    ipSet,
 		AcmeEmail:              cfg.TLS.GetAcmeEmail(),
 		AcmeDNSProvider:        cfg.TLS.GetAcmeDNSProvider(),
 		Resolver:               res,
