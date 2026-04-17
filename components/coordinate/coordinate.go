@@ -916,6 +916,11 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		return err
 	}
 
+	// Register the launcher as a pool creator for the activator so ephemeral
+	// versions can create pools on demand (they bypass the normal Launcher
+	// reconciliation triggered by ActiveVersion changes).
+	aa.SetPoolCreator(launcher)
+
 	// Create controller manager and add controllers
 	c.cm = controller.NewControllerManager()
 

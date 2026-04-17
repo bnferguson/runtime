@@ -118,6 +118,17 @@ type AppActivator interface {
 	// sandboxes become non-RUNNING. Consumers should invalidate any cached
 	// leases referencing the invalidated sandbox.
 	Invalidations() <-chan SandboxInvalidation
+
+	// SetPoolCreator registers a callback for on-demand pool creation.
+	// This is used by ephemeral deployments where the DeploymentLauncher
+	// doesn't pre-create pools.
+	SetPoolCreator(pc PoolCreator)
+}
+
+// PoolCreator creates sandbox pools on demand for versions that don't have
+// one pre-created by the DeploymentLauncher (e.g., ephemeral versions).
+type PoolCreator interface {
+	CreatePoolForVersion(ctx context.Context, ver *core_v1alpha.AppVersion, service string) (entity.Id, error)
 }
 
 type sandbox struct {
@@ -170,8 +181,9 @@ type localActivator struct {
 	// invalidationCh signals httpingress when a sandbox becomes non-RUNNING
 	invalidationCh chan SandboxInvalidation
 
-	log *slog.Logger
-	eac *entityserver_v1alpha.EntityAccessClient
+	log         *slog.Logger
+	eac         *entityserver_v1alpha.EntityAccessClient
+	poolCreator PoolCreator
 }
 
 var _ AppActivator = (*localActivator)(nil)
@@ -208,6 +220,10 @@ func NewLocalActivator(ctx context.Context, log *slog.Logger, eac *entityserver_
 	go la.syncLastActivity(ctx)
 
 	return la
+}
+
+func (a *localActivator) SetPoolCreator(pc PoolCreator) {
+	a.poolCreator = pc
 }
 
 func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.AppVersion, service string) (*Lease, error) {
@@ -896,8 +912,38 @@ func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1al
 			return foundPool, nil
 		}
 
-		// Pool not found after retries - DeploymentLauncher should have created it
+		// Pool not found after retries — try on-demand creation if a PoolCreator
+		// is available (used for ephemeral versions that bypass DeploymentLauncher).
 		a.mu.Unlock()
+
+		if a.poolCreator != nil {
+			a.log.Info("pool not found, attempting on-demand creation",
+				"service", service, "version", ver.Version, "version_id", ver.ID)
+
+			poolID, err := a.poolCreator.CreatePoolForVersion(ctx, ver, service)
+			if err != nil {
+				return nil, fmt.Errorf("on-demand pool creation failed for version=%s service=%s: %w",
+					ver.Version, service, err)
+			}
+
+			// Pool was created — retry findPoolInStore to populate our cache
+			foundPool, err := a.findPoolInStore(ctx, ver.ID, service)
+			if err != nil || foundPool == nil {
+				return nil, fmt.Errorf("pool created on-demand (id=%s) but not found in store", poolID)
+			}
+
+			a.mu.Lock()
+			a.pools[key] = &poolState{
+				pool:     foundPool.pool,
+				revision: foundPool.revision,
+			}
+			a.mu.Unlock()
+
+			a.log.Info("on-demand pool created and cached",
+				"pool", poolID, "service", service, "version", ver.Version)
+			return foundPool.pool, nil
+		}
+
 		a.log.Error("pool not found in store after retries",
 			"service", service,
 			"version", ver.Version,
