@@ -1,0 +1,7 @@
+name = "bun-valkey"
+
+[services.web]
+command = "bun run index.ts"
+
+[addons.miren-valkey]
+variant = "small"
