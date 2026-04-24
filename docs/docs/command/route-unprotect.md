@@ -20,13 +20,13 @@ miren route unprotect <host> [flags]
 
 ## Arguments
 
-- `host` — Hostname for the route (e.g., example.com)
+- `host` — Hostname for the route (e.g., example.com); omit and pass --default for the default route
 
 ## Flags
 
 - `--cluster, -C` — Cluster name
 - `--config` — Path to the config file
-- `--default` — Remove protection from the default route
+- `--default` — Remove protection from the default route (instead of a hostname)
 
 ## Global Options
 

@@ -1,10 +1,12 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 
 	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/ui"
 )
@@ -39,31 +41,41 @@ func RouteShow(ctx *Context, opts struct {
 	if protected {
 		provider = &ingress_v1alpha.OidcProvider{}
 		if err := ic.GetEntityStore().GetById(ctx, route.OidcProvider, provider); err != nil {
-			return fmt.Errorf("failed to get identity provider: %w", err)
+			if !errors.Is(err, cond.ErrNotFound{}) {
+				return fmt.Errorf("failed to get identity provider: %w", err)
+			}
+			provider = nil
 		}
 	}
 
 	if opts.IsJSON() {
 		type RouteJSON struct {
-			Host          string              `json:"host"`
-			App           string              `json:"app"`
-			Default       bool                `json:"default"`
-			Protected     bool                `json:"protected"`
-			ProviderName  string              `json:"provider_name,omitempty"`
-			ProviderURL   string              `json:"provider_url,omitempty"`
-			ClaimMappings []map[string]string `json:"claim_mappings,omitempty"`
+			Host            string              `json:"host"`
+			App             string              `json:"app"`
+			Default         bool                `json:"default"`
+			Protected       bool                `json:"protected"`
+			OIDCEnabled     bool                `json:"oidc_enabled"`
+			ProviderName    string              `json:"provider_name,omitempty"`
+			ProviderURL     string              `json:"provider_url,omitempty"`
+			ProviderMissing bool                `json:"provider_missing,omitempty"`
+			ClaimMappings   []map[string]string `json:"claim_mappings,omitempty"`
 		}
 
 		r := RouteJSON{
-			Host:      opts.Host,
-			App:       ui.CleanEntityID(string(route.App)),
-			Default:   route.Default,
-			Protected: protected,
+			Host:        opts.Host,
+			App:         ui.CleanEntityID(string(route.App)),
+			Default:     route.Default,
+			Protected:   protected,
+			OIDCEnabled: protected,
 		}
 
-		if protected && provider != nil {
-			r.ProviderName = provider.Name
-			r.ProviderURL = provider.ProviderUrl
+		if protected {
+			if provider != nil {
+				r.ProviderName = provider.Name
+				r.ProviderURL = provider.ProviderUrl
+			} else {
+				r.ProviderMissing = true
+			}
 			for _, m := range route.ClaimMappings {
 				r.ClaimMappings = append(r.ClaimMappings, map[string]string{
 					"claim":  m.Claim,
@@ -80,8 +92,12 @@ func RouteShow(ctx *Context, opts struct {
 	ctx.Printf("  Default:   %v\n", route.Default)
 	ctx.Printf("  Protected: %v\n", protected)
 
-	if protected && provider != nil {
-		ctx.Printf("  Provider:  %s (%s)\n", provider.Name, provider.ProviderUrl)
+	if protected {
+		if provider != nil {
+			ctx.Printf("  Provider:  %s (%s)\n", provider.Name, provider.ProviderUrl)
+		} else {
+			ctx.Printf("  Provider:  <missing — provider has been deleted>\n")
+		}
 
 		if len(route.ClaimMappings) > 0 {
 			var rows []ui.Row

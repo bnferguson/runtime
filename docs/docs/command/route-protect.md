@@ -20,14 +20,14 @@ miren route protect <host> [flags]
 
 ## Arguments
 
-- `host` — Hostname for the route (e.g., example.com)
+- `host` — Hostname for the route (e.g., example.com); omit and pass --default for the default route
 
 ## Flags
 
 - `--claim-header` — Claim to header mapping in format 'claim:header' (e.g., 'email:X-User-Email')
 - `--cluster, -C` — Cluster name
 - `--config` — Path to the config file
-- `--default` — Protect the default route
+- `--default` — Protect the default route (instead of a hostname)
 - `--provider` — Name of the identity provider
 
 ## Global Options

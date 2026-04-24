@@ -11,8 +11,8 @@ import (
 )
 
 func RouteProtect(ctx *Context, opts struct {
-	Host        string   `position:"0" usage:"Hostname for the route (e.g., example.com)"`
-	Default     bool     `long:"default" description:"Protect the default route"`
+	Host        string   `position:"0" usage:"Hostname for the route (e.g., example.com); omit and pass --default for the default route"`
+	Default     bool     `long:"default" description:"Protect the default route (instead of a hostname)"`
 	Provider    string   `long:"provider" description:"Name of the identity provider" required:"true"`
 	ClaimHeader []string `long:"claim-header" description:"Claim to header mapping in format 'claim:header' (e.g., 'email:X-User-Email')"`
 	ConfigCentric
@@ -63,16 +63,20 @@ func RouteProtect(ctx *Context, opts struct {
 		routeLabel = opts.Host
 	}
 
-	// Parse claim mappings
 	var claimMappings []ingress_v1alpha.ClaimMappings
 	for _, mapping := range opts.ClaimHeader {
 		parts := strings.SplitN(mapping, ":", 2)
 		if len(parts) != 2 {
 			return fmt.Errorf("invalid claim-header mapping format: %s (expected 'claim:header')", mapping)
 		}
+		claim := strings.TrimSpace(parts[0])
+		header := strings.TrimSpace(parts[1])
+		if claim == "" || header == "" {
+			return fmt.Errorf("invalid claim-header mapping format: %q (expected non-empty 'claim:header')", mapping)
+		}
 		claimMappings = append(claimMappings, ingress_v1alpha.ClaimMappings{
-			Claim:  strings.TrimSpace(parts[0]),
-			Header: strings.TrimSpace(parts[1]),
+			Claim:  claim,
+			Header: header,
 		})
 	}
 

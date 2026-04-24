@@ -10,8 +10,8 @@ import (
 )
 
 func RouteUnprotect(ctx *Context, opts struct {
-	Host    string `position:"0" usage:"Hostname for the route (e.g., example.com)"`
-	Default bool   `long:"default" description:"Remove protection from the default route"`
+	Host    string `position:"0" usage:"Hostname for the route (e.g., example.com); omit and pass --default for the default route"`
+	Default bool   `long:"default" description:"Remove protection from the default route (instead of a hostname)"`
 	ConfigCentric
 }) error {
 	if !labs.RouteOIDC() {
