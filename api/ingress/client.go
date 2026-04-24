@@ -103,6 +103,37 @@ func ValidateWildcardHost(host string) error {
 	return nil
 }
 
+// ExtractSubdomainLabel extracts an ephemeral label from a request host
+// by comparing it against the route's configured host pattern. For example,
+// if requestHost is "feat-x.app.example.com" and the route host is
+// "*.app.example.com", it returns "feat-x". Returns an empty string if
+// the route is not a wildcard or if there's no subdomain prefix.
+func ExtractSubdomainLabel(requestHost, routeHost string) string {
+	requestHost = strings.ToLower(requestHost)
+	routeHost = strings.ToLower(routeHost)
+
+	if !strings.HasPrefix(routeHost, "*.") {
+		return ""
+	}
+
+	// routeHost is "*.base.example.com", base is "base.example.com"
+	base := routeHost[2:]
+
+	if !strings.HasSuffix(requestHost, "."+base) {
+		return ""
+	}
+
+	// Extract the prefix: "feat-x.app.example.com" minus ".app.example.com"
+	label := requestHost[:len(requestHost)-len(base)-1]
+
+	// Only return single-label prefixes (no dots)
+	if strings.Contains(label, ".") {
+		return ""
+	}
+
+	return label
+}
+
 // LookupDefault finds the default http_route
 func (c *Client) LookupDefault(ctx context.Context) (*ingress_v1alpha.HttpRoute, error) {
 	var route ingress_v1alpha.HttpRoute

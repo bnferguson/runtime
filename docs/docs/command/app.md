@@ -72,3 +72,4 @@ miren app --config-only
 - [`miren app restart`](/command/app-restart) — Restart an application
 - [`miren app run`](/command/app-run) — Open interactive shell in a new sandbox
 - [`miren app status`](/command/app-status) — Show current status of an application
+- [`miren app versions`](/command/app-versions) — List app versions with status

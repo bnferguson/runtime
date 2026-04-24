@@ -30,6 +30,7 @@ import (
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/deploygating"
+	ephemeralx "miren.dev/runtime/pkg/ephemeral"
 	"miren.dev/runtime/pkg/git"
 	"miren.dev/runtime/pkg/otelproxy"
 	"miren.dev/runtime/pkg/progress/upload"
@@ -51,9 +52,26 @@ func Deploy(ctx *Context, opts struct {
 	Force         bool     `short:"f" long:"force" description:"Skip confirmation prompt"`
 	Env           []string `short:"e" long:"env" description:"Set environment variable (KEY=VALUE, KEY=@file, or KEY to prompt)"`
 	Sensitive     []string `short:"s" long:"sensitive" description:"Set sensitive environment variable (masked in output)"`
+	Ephemeral     string   `long:"ephemeral" description:"Deploy as ephemeral preview with this label (e.g. feat-login)"`
+	TTL           string   `long:"ttl" description:"TTL for ephemeral version (e.g. 48h)" default:"24h"`
 }) error {
 	name := opts.App
 	dir := opts.ResolvedDir()
+
+	// Normalize and validate ephemeral label
+	var ephemeralLabel, ephemeralTTL string
+	if opts.Ephemeral != "" {
+		normalized, err := ephemeralx.NormalizeLabel(opts.Ephemeral)
+		if err != nil {
+			return fmt.Errorf("invalid ephemeral label: %w", err)
+		}
+		ephemeralLabel = normalized
+
+		if _, err := time.ParseDuration(opts.TTL); err != nil {
+			return fmt.Errorf("invalid TTL %q: %w", opts.TTL, err)
+		}
+		ephemeralTTL = opts.TTL
+	}
 
 	if ctx.ClientConfig == nil {
 		return fmt.Errorf("no client configuration available; run `miren login` to authenticate or install a server locally")
@@ -140,7 +158,7 @@ func Deploy(ctx *Context, opts struct {
 			}
 		}
 
-		result, err := depClient.DeployVersion(ctx, name, ctx.ClusterName, opts.Version, false, envVars)
+		result, err := depClient.DeployVersion(ctx, name, ctx.ClusterName, opts.Version, false, envVars, ephemeralLabel, ephemeralTTL)
 		if err != nil {
 			return fmt.Errorf("failed to deploy version: %w", err)
 		}
@@ -178,16 +196,35 @@ func Deploy(ctx *Context, opts struct {
 				deployedVersion = opts.Version
 			}
 			versionDisplay := ui.DisplayShortID(dep.AppVersionShortId(), deployedVersion)
-			ctx.Printf("✓ Deployed version %s to %s\n", versionDisplay, ctx.ClusterName)
 
-			appCl, appErr := ctx.RPCClient(rpcAppStatus)
-			if appErr == nil {
-				appStatusClient := app_v1alpha.NewAppStatusClient(appCl)
-				waitForActivation(ctx, appStatusClient, name, deployedVersion, versionDisplay)
-			}
+			if ephemeralLabel != "" {
+				// Ephemeral deploy via --version: show ephemeral info, skip activation wait
+				ctx.Printf("Ephemeral version %s created.\n", versionDisplay)
+				ctx.Printf("  Label: %s\n", ephemeralLabel)
+				ctx.Printf("  TTL:   %s\n", ephemeralTTL)
+				if result.HasAccessInfo() && result.AccessInfo() != nil {
+					info := result.AccessInfo()
+					if info.HasHostnames() {
+						for _, h := range *info.Hostnames() {
+							ctx.Printf("  URL:   https://%s\n", h)
+						}
+					}
+					if info.HasClusterHostname() && info.ClusterHostname() != "" {
+						ctx.Printf("  URL:   https://%s.%s\n", ephemeralLabel, info.ClusterHostname())
+					}
+				}
+			} else {
+				ctx.Printf("✓ Deployed version %s to %s\n", versionDisplay, ctx.ClusterName)
 
-			if result.HasAccessInfo() && result.AccessInfo() != nil {
-				displayDeployVersionAccessInfo(ctx, name, result.AccessInfo())
+				appCl, appErr := ctx.RPCClient(rpcAppStatus)
+				if appErr == nil {
+					appStatusClient := app_v1alpha.NewAppStatusClient(appCl)
+					waitForActivation(ctx, appStatusClient, name, deployedVersion, versionDisplay)
+				}
+
+				if result.HasAccessInfo() && result.AccessInfo() != nil {
+					displayDeployVersionAccessInfo(ctx, name, result.AccessInfo())
+				}
 			}
 		}
 		return nil
@@ -305,65 +342,69 @@ func Deploy(ctx *Context, opts struct {
 		}
 	}
 
-	// Create deployment as "in_progress" with a temporary app version
-	createDepCtx, createDepSpan := deployTracer.Start(ctx.Context, "deploy.create_deployment")
-	createResult, err := depClient.CreateDeployment(createDepCtx, name, ctx.ClusterName, "pending-build", deploymentGitInfo)
-	if err != nil {
-		createDepSpan.RecordError(err)
-		createDepSpan.SetStatus(codes.Error, err.Error())
-		createDepSpan.End()
-		return fmt.Errorf("failed to create deployment record: %w", err)
-	}
-	createDepSpan.End()
-
-	if createResult.HasError() && createResult.Error() != "" {
-		// Check if we have structured lock info
-		if createResult.HasLockInfo() && createResult.LockInfo() != nil {
-			lockInfo := createResult.LockInfo()
-
-			// Format the deployment lock message
-			ctx.Printf("\n❌ Deployment blocked:\n\n")
-			ctx.Printf("Another deployment is already in progress for app '%s' on cluster '%s'.\n\n",
-				lockInfo.AppName(), lockInfo.ClusterId())
-
-			ctx.Printf("Existing deployment details:\n")
-			ctx.Printf("  • Deployment ID: %s\n", ui.DisplayShortID(lockInfo.BlockingDeploymentShortId(), lockInfo.BlockingDeploymentId()))
-			ctx.Printf("  • Started by: %s\n", lockInfo.StartedBy())
-
-			if lockInfo.HasStartedAt() && lockInfo.StartedAt() != nil {
-				startedAt := time.Unix(lockInfo.StartedAt().Seconds(), 0)
-				ctx.Printf("  • Started at: %s (%s ago)\n",
-					startedAt.Format("2006-01-02 15:04:05 MST"),
-					time.Since(startedAt).Round(time.Second))
-			}
-
-			ctx.Printf("  • Current phase: %s\n", lockInfo.CurrentPhase())
-
-			if lockInfo.HasLockExpiresAt() && lockInfo.LockExpiresAt() != nil {
-				expiresAt := time.Unix(lockInfo.LockExpiresAt().Seconds(), 0)
-				timeRemaining := time.Until(expiresAt).Round(time.Second)
-				ctx.Printf("  • Lock expires in: %s\n\n", timeRemaining)
-			}
-
-			// Build contact message
-			if lockInfo.StartedBy() != "-" {
-				ctx.Printf("Please wait for it to complete or contact %s to coordinate.\n", lockInfo.StartedBy())
-			} else {
-				ctx.Printf("Please wait for it to complete.\n")
-			}
-		} else {
-			// Fall back to plain error message
-			ctx.Printf("\n❌ Deployment blocked:\n\n%s\n", createResult.Error())
+	// Create deployment record for non-ephemeral deploys only.
+	// Ephemeral deploys don't participate in deployment tracking or locking.
+	var deploymentId string
+	if ephemeralLabel == "" {
+		createDepCtx, createDepSpan := deployTracer.Start(ctx.Context, "deploy.create_deployment")
+		createResult, err := depClient.CreateDeployment(createDepCtx, name, ctx.ClusterName, "pending-build", deploymentGitInfo)
+		if err != nil {
+			createDepSpan.RecordError(err)
+			createDepSpan.SetStatus(codes.Error, err.Error())
+			createDepSpan.End()
+			return fmt.Errorf("failed to create deployment record: %w", err)
 		}
-		return fmt.Errorf("deployment blocked by lock")
-	}
+		createDepSpan.End()
 
-	if !createResult.HasDeployment() || createResult.Deployment() == nil {
-		return fmt.Errorf("deployment creation returned no deployment")
-	}
+		if createResult.HasError() && createResult.Error() != "" {
+			// Check if we have structured lock info
+			if createResult.HasLockInfo() && createResult.LockInfo() != nil {
+				lockInfo := createResult.LockInfo()
 
-	deploymentId := createResult.Deployment().Id()
-	ctx.Log.Info("Created deployment record", "deployment_id", deploymentId)
+				// Format the deployment lock message
+				ctx.Printf("\n❌ Deployment blocked:\n\n")
+				ctx.Printf("Another deployment is already in progress for app '%s' on cluster '%s'.\n\n",
+					lockInfo.AppName(), lockInfo.ClusterId())
+
+				ctx.Printf("Existing deployment details:\n")
+				ctx.Printf("  • Deployment ID: %s\n", ui.DisplayShortID(lockInfo.BlockingDeploymentShortId(), lockInfo.BlockingDeploymentId()))
+				ctx.Printf("  • Started by: %s\n", lockInfo.StartedBy())
+
+				if lockInfo.HasStartedAt() && lockInfo.StartedAt() != nil {
+					startedAt := time.Unix(lockInfo.StartedAt().Seconds(), 0)
+					ctx.Printf("  • Started at: %s (%s ago)\n",
+						startedAt.Format("2006-01-02 15:04:05 MST"),
+						time.Since(startedAt).Round(time.Second))
+				}
+
+				ctx.Printf("  • Current phase: %s\n", lockInfo.CurrentPhase())
+
+				if lockInfo.HasLockExpiresAt() && lockInfo.LockExpiresAt() != nil {
+					expiresAt := time.Unix(lockInfo.LockExpiresAt().Seconds(), 0)
+					timeRemaining := time.Until(expiresAt).Round(time.Second)
+					ctx.Printf("  • Lock expires in: %s\n\n", timeRemaining)
+				}
+
+				// Build contact message
+				if lockInfo.StartedBy() != "-" {
+					ctx.Printf("Please wait for it to complete or contact %s to coordinate.\n", lockInfo.StartedBy())
+				} else {
+					ctx.Printf("Please wait for it to complete.\n")
+				}
+			} else {
+				// Fall back to plain error message
+				ctx.Printf("\n❌ Deployment blocked:\n\n%s\n", createResult.Error())
+			}
+			return fmt.Errorf("deployment blocked by lock")
+		}
+
+		if !createResult.HasDeployment() || createResult.Deployment() == nil {
+			return fmt.Errorf("deployment creation returned no deployment")
+		}
+
+		deploymentId = createResult.Deployment().Id()
+		ctx.Log.Info("Created deployment record", "deployment_id", deploymentId)
+	}
 
 	// Create a cancellable context for the build that can be cancelled externally
 	buildCtx, cancelBuild := context.WithCancel(ctx.Context)
@@ -561,9 +602,9 @@ func Deploy(ctx *Context, opts struct {
 	buildCall := func(callCtx context.Context, tarReader io.ReadCloser, cb stream.SendStream[*build_v1alpha.Status]) (buildResults, error) {
 		if useOptimized {
 			tarStream := stream.ServeReader(callCtx, tarReader)
-			return bc.BuildFromPrepared(callCtx, sessionID, tarStream, cb, envVars)
+			return bc.BuildFromPrepared(callCtx, sessionID, tarStream, cb, envVars, ephemeralLabel, ephemeralTTL)
 		}
-		return bc.BuildFromTar(callCtx, name, stream.ServeReader(callCtx, tarReader), cb, envVars)
+		return bc.BuildFromTar(callCtx, name, stream.ServeReader(callCtx, tarReader), cb, envVars, ephemeralLabel, ephemeralTTL)
 	}
 
 	var (
@@ -823,32 +864,54 @@ func Deploy(ctx *Context, opts struct {
 
 	ctx.Log.Debug("Build completed with version", "version", appVersionId)
 
-	// Update phase to pushing (build completed, now pushing)
-	updateDeploymentPhase("pushing")
+	if ephemeralLabel != "" {
+		// Ephemeral deploy: no deployment record to update, just show info
+		versionDisplay := ui.DisplayShortID(results.VersionShortId(), results.Version())
+		ctx.Printf("\n\nEphemeral version %s created.\n", versionDisplay)
+		ctx.Printf("  Label: %s\n", ephemeralLabel)
+		ctx.Printf("  TTL:   %s\n", ephemeralTTL)
 
-	// Update deployment with actual app version ID
-	_, err = depClient.UpdateDeploymentAppVersion(ctx, deploymentId, appVersionId)
-	if err != nil {
-		ctx.Log.Error("Failed to update deployment app version", "error", err)
-		// Continue anyway - the deployment is proceeding
+		// Show ephemeral access URLs (server returns resolved hostnames)
+		if results.HasAccessInfo() && results.AccessInfo() != nil {
+			info := results.AccessInfo()
+			if info.HasHostnames() {
+				for _, h := range *info.Hostnames() {
+					ctx.Printf("  URL:   https://%s\n", h)
+				}
+			}
+			if info.HasClusterHostname() && info.ClusterHostname() != "" {
+				ctx.Printf("  URL:   https://%s.%s\n", ephemeralLabel, info.ClusterHostname())
+			}
+		}
+	} else {
+		// Normal deploy: update deployment tracking
+		// Update phase to pushing (build completed, now pushing)
+		updateDeploymentPhase("pushing")
+
+		// Update deployment with actual app version ID
+		_, err = depClient.UpdateDeploymentAppVersion(ctx, deploymentId, appVersionId)
+		if err != nil {
+			ctx.Log.Error("Failed to update deployment app version", "error", err)
+			// Continue anyway - the deployment is proceeding
+		}
+
+		// Update phase to activating
+		updateDeploymentPhase("activating")
+
+		// Wrap finalization in a span
+		finalizeCtx, finalizeSpan := deployTracer.Start(ctx.Context, "deploy.finalize")
+
+		// Mark deployment as active
+		_, err = depClient.UpdateDeploymentStatus(finalizeCtx, deploymentId, "active", "")
+		if err != nil {
+			// Log error but don't fail - deployment is already done
+			ctx.Log.Error("Failed to update deployment status", "error", err)
+		}
+		finalizeSpan.End()
+
+		versionDisplay := ui.DisplayShortID(results.VersionShortId(), results.Version())
+		ctx.Printf("\n\nUpdated version %s deployed. All traffic moved to new version.\n", versionDisplay)
 	}
-
-	// Update phase to activating
-	updateDeploymentPhase("activating")
-
-	// Wrap finalization in a span
-	finalizeCtx, finalizeSpan := deployTracer.Start(ctx.Context, "deploy.finalize")
-
-	// Mark deployment as active
-	_, err = depClient.UpdateDeploymentStatus(finalizeCtx, deploymentId, "active", "")
-	if err != nil {
-		// Log error but don't fail - deployment is already done
-		ctx.Log.Error("Failed to update deployment status", "error", err)
-	}
-	finalizeSpan.End()
-
-	versionDisplay := ui.DisplayShortID(results.VersionShortId(), results.Version())
-	ctx.Printf("\n\nUpdated version %s deployed. All traffic moved to new version.\n", versionDisplay)
 
 	if len(deployWarnings) > 0 {
 		warnHeaderStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("208")).Bold(true)

@@ -63,6 +63,33 @@ func NewLauncher(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient)
 	}
 }
 
+// CreatePoolForVersion creates a sandbox pool for the given version and service
+// on demand. This implements activator.PoolCreator for ephemeral versions that
+// bypass the normal DeploymentLauncher reconciliation loop.
+func (l *Launcher) CreatePoolForVersion(ctx context.Context, ver *core_v1alpha.AppVersion, service string) (entity.Id, error) {
+	// Resolve the app entity
+	var app core_v1alpha.App
+	appResp, err := l.EAC.Get(ctx, ver.App.String())
+	if err != nil {
+		return "", fmt.Errorf("failed to get app %s: %w", ver.App, err)
+	}
+	app.Decode(appResp.Entity().Entity())
+	app.ID = ver.App
+
+	// Resolve config
+	spec, err := coreutil.ResolveConfig(ctx, l.EAC, ver)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve config for version %s: %w", ver.Version, err)
+	}
+
+	poolID, err := l.ensurePoolForService(ctx, &app, ver, spec, service)
+	if err != nil {
+		return "", fmt.Errorf("failed to ensure pool for version %s service %s: %w", ver.Version, service, err)
+	}
+
+	return poolID, nil
+}
+
 func (l *Launcher) Init(ctx context.Context) error {
 	l.Log.Info("deployment launcher initialized")
 	return nil

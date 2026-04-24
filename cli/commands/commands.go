@@ -241,6 +241,16 @@ miren deploy --analyze
 			Body: "miren app history --status active --limit 5",
 		}),
 	))
+	d.Dispatch("app versions", Infer("app versions", "List app versions with status", AppVersions,
+		WithExample(mflags.Example{
+			Name: "List all versions",
+			Body: "miren app versions",
+		}),
+		WithExample(mflags.Example{
+			Name: "List only ephemeral versions",
+			Body: "miren app versions --ephemeral",
+		}),
+	))
 	d.Dispatch("app restart", Infer("app restart", "Restart an application", AppRestart,
 		WithExample(mflags.Example{
 			Name: "Restart the current app",

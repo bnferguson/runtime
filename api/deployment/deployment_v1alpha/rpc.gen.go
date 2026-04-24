@@ -1527,11 +1527,13 @@ func (v *DeploymentCancelDeploymentResults) UnmarshalJSON(data []byte) error {
 }
 
 type deploymentDeployVersionArgsData struct {
-	AppName      *string                 `cbor:"0,keyasint,omitempty" json:"app_name,omitempty"`
-	ClusterId    *string                 `cbor:"1,keyasint,omitempty" json:"cluster_id,omitempty"`
-	AppVersionId *string                 `cbor:"2,keyasint,omitempty" json:"app_version_id,omitempty"`
-	IsRollback   *bool                   `cbor:"3,keyasint,omitempty" json:"is_rollback,omitempty"`
-	EnvVars      *[]*EnvironmentVariable `cbor:"4,keyasint,omitempty" json:"env_vars,omitempty"`
+	AppName        *string                 `cbor:"0,keyasint,omitempty" json:"app_name,omitempty"`
+	ClusterId      *string                 `cbor:"1,keyasint,omitempty" json:"cluster_id,omitempty"`
+	AppVersionId   *string                 `cbor:"2,keyasint,omitempty" json:"app_version_id,omitempty"`
+	IsRollback     *bool                   `cbor:"3,keyasint,omitempty" json:"is_rollback,omitempty"`
+	EnvVars        *[]*EnvironmentVariable `cbor:"4,keyasint,omitempty" json:"env_vars,omitempty"`
+	EphemeralLabel *string                 `cbor:"5,keyasint,omitempty" json:"ephemeral_label,omitempty"`
+	EphemeralTtl   *string                 `cbor:"6,keyasint,omitempty" json:"ephemeral_ttl,omitempty"`
 }
 
 type DeploymentDeployVersionArgs struct {
@@ -1592,6 +1594,28 @@ func (v *DeploymentDeployVersionArgs) EnvVars() []*EnvironmentVariable {
 		return nil
 	}
 	return *v.data.EnvVars
+}
+
+func (v *DeploymentDeployVersionArgs) HasEphemeralLabel() bool {
+	return v.data.EphemeralLabel != nil
+}
+
+func (v *DeploymentDeployVersionArgs) EphemeralLabel() string {
+	if v.data.EphemeralLabel == nil {
+		return ""
+	}
+	return *v.data.EphemeralLabel
+}
+
+func (v *DeploymentDeployVersionArgs) HasEphemeralTtl() bool {
+	return v.data.EphemeralTtl != nil
+}
+
+func (v *DeploymentDeployVersionArgs) EphemeralTtl() string {
+	if v.data.EphemeralTtl == nil {
+		return ""
+	}
+	return *v.data.EphemeralTtl
 }
 
 func (v *DeploymentDeployVersionArgs) MarshalCBOR() ([]byte, error) {
@@ -2747,13 +2771,15 @@ func (v *DeploymentClientDeployVersionResults) AccessInfo() *AccessInfo {
 	return *v.data.AccessInfo
 }
 
-func (v DeploymentClient) DeployVersion(ctx context.Context, app_name string, cluster_id string, app_version_id string, is_rollback bool, env_vars []*EnvironmentVariable) (*DeploymentClientDeployVersionResults, error) {
+func (v DeploymentClient) DeployVersion(ctx context.Context, app_name string, cluster_id string, app_version_id string, is_rollback bool, env_vars []*EnvironmentVariable, ephemeral_label string, ephemeral_ttl string) (*DeploymentClientDeployVersionResults, error) {
 	args := DeploymentDeployVersionArgs{}
 	args.data.AppName = &app_name
 	args.data.ClusterId = &cluster_id
 	args.data.AppVersionId = &app_version_id
 	args.data.IsRollback = &is_rollback
 	args.data.EnvVars = &env_vars
+	args.data.EphemeralLabel = &ephemeral_label
+	args.data.EphemeralTtl = &ephemeral_ttl
 
 	var ret deploymentDeployVersionResultsData
 

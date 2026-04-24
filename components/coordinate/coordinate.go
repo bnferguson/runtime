@@ -45,6 +45,7 @@ import (
 	artifactctrl "miren.dev/runtime/controllers/artifact"
 	certctrl "miren.dev/runtime/controllers/certificate"
 	deploymentctrl "miren.dev/runtime/controllers/deployment"
+	ephemeralctrl "miren.dev/runtime/controllers/ephemeral"
 	nodehealthctrl "miren.dev/runtime/controllers/nodehealth"
 	"miren.dev/runtime/controllers/sandboxpool"
 	schedulerctrl "miren.dev/runtime/controllers/scheduler"
@@ -340,6 +341,7 @@ type Coordinator struct {
 	certProvider  autotls.CertificateProvider
 	autocertReady func() // nil when DNS-01 path is used
 	artifactGC    *artifactctrl.GCController
+	ephemeralGC   *ephemeralctrl.GCController
 	hs            *httpingress.Server
 
 	authority *caauth.Authority
@@ -378,6 +380,9 @@ func (c *Coordinator) Stop() {
 	}
 	if c.artifactGC != nil {
 		c.artifactGC.Stop()
+	}
+	if c.ephemeralGC != nil {
+		c.ephemeralGC.Stop()
 	}
 	if c.debugServer != nil {
 		if err := c.debugServer.Close(); err != nil {
@@ -911,6 +916,11 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		return err
 	}
 
+	// Register the launcher as a pool creator for the activator so ephemeral
+	// versions can create pools on demand (they bypass the normal Launcher
+	// reconciliation triggered by ActiveVersion changes).
+	aa.SetPoolCreator(launcher)
+
 	// Create controller manager and add controllers
 	c.cm = controller.NewControllerManager()
 
@@ -1074,6 +1084,14 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		Config: artifactctrl.DefaultGCConfig(),
 	}
 	c.artifactGC.Start(ctx)
+
+	// Start the ephemeral version GC controller
+	c.ephemeralGC = &ephemeralctrl.GCController{
+		Log:    c.Log.With("module", "ephemeral-gc"),
+		EAC:    eac,
+		Config: ephemeralctrl.DefaultGCConfig(),
+	}
+	c.ephemeralGC.Start(ctx)
 
 	eps := execproxy.NewServer(c.Log, eac, rs)
 	server.ExposeValue("dev.miren.runtime/exec", exec_v1alpha.AdaptSandboxExec(eps))

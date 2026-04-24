@@ -250,6 +250,20 @@ kinds:
       type: string
       doc: Cryptographically random token for authenticating admin API calls. Generated per-version and exposed to the app via ADMIN_TOKEN env var.
 
+    ephemeral_label:
+      type: string
+      doc: DNS-safe label for ephemeral subdomain routing (e.g., "feat-x"). Empty for non-ephemeral versions.
+      indexed: true
+
+    ephemeral_ttl:
+      type: string
+      doc: TTL duration string (e.g., "48h") for display. Empty for non-ephemeral versions.
+
+    ephemeral_expires_at:
+      type: time
+      doc: Computed expiration timestamp (creation + TTL). Used by the cleanup controller.
+      indexed: true
+
   deployment:
     app_name:
       type: string
