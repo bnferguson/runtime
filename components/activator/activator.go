@@ -18,11 +18,14 @@ package activator
 //      RLock → check capacity → RUnlock
 //      Lock → re-check capacity → acquire if still available → Unlock
 //
-// 2. Sentinel Pattern (requestPoolCapacity)
-//    Prevents duplicate pool updates by concurrent requests:
+// 2. Sentinel Pattern (requestPoolCapacity on-demand pool creation)
+//    Prevents duplicate pool creation when multiple concurrent requests for
+//    a cold ephemeral URL arrive before any pool exists:
 //      - First request inserts sentinel with inProgress=true
-//      - Concurrent requests wait on sentinel's done channel
-//      - First request finds pool and increments capacity, then replaces sentinel
+//      - Concurrent requests find the sentinel and wait on done channel
+//      - First request calls PoolCreator.CreatePoolForVersion, then replaces
+//        the sentinel with the real pool state (or deletes it on failure)
+//      - Waiters loop back to re-check pool state after done fires
 //
 // 3. Channel Notification (ensurePoolAndWaitForSandbox, watchSandboxes)
 //    Immediate notification when new sandboxes become available:
@@ -914,35 +917,75 @@ func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1al
 
 		// Pool not found after retries — try on-demand creation if a PoolCreator
 		// is available (used for ephemeral versions that bypass DeploymentLauncher).
-		a.mu.Unlock()
-
 		if a.poolCreator != nil {
+			// Use the sentinel pattern to coalesce concurrent creators.
+			// Check under the already-held write lock whether another goroutine
+			// has started (or completed) creation; if so, loop back to re-check.
+			if existing, ok := a.pools[key]; ok {
+				a.mu.Unlock()
+				if existing.inProgress {
+					select {
+					case <-existing.done:
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					}
+				}
+				continue // re-check pool state from the top
+			}
+
+			// Install the in-progress sentinel, then release the lock to do
+			// the slow creation. Concurrent callers will find the sentinel
+			// and wait on done rather than creating a duplicate pool.
+			sentinel := &poolState{
+				inProgress: true,
+				done:       make(chan struct{}),
+			}
+			a.pools[key] = sentinel
+			a.mu.Unlock()
+
 			a.log.Info("pool not found, attempting on-demand creation",
 				"service", service, "version", ver.Version, "version_id", ver.ID)
 
-			poolID, err := a.poolCreator.CreatePoolForVersion(ctx, ver, service)
-			if err != nil {
-				return nil, fmt.Errorf("on-demand pool creation failed for version=%s service=%s: %w",
-					ver.Version, service, err)
+			poolID, createErr := a.poolCreator.CreatePoolForVersion(ctx, ver, service)
+			var foundPool *poolWithRevision
+			if createErr == nil {
+				// Pool was created (or reused — poolID may be empty if an existing
+				// pool matched). Query the store to populate our cache.
+				foundPool, createErr = a.findPoolInStore(ctx, ver.ID, service)
+				if createErr == nil && foundPool == nil {
+					if poolID != "" {
+						createErr = fmt.Errorf("pool created on-demand (id=%s) but not found in store", poolID)
+					} else {
+						createErr = fmt.Errorf("no matching pool found in store after on-demand creation")
+					}
+				}
 			}
 
-			// Pool was created — retry findPoolInStore to populate our cache
-			foundPool, err := a.findPoolInStore(ctx, ver.ID, service)
-			if err != nil || foundPool == nil {
-				return nil, fmt.Errorf("pool created on-demand (id=%s) but not found in store", poolID)
-			}
-
+			// Publish the result and notify waiters
 			a.mu.Lock()
-			a.pools[key] = &poolState{
-				pool:     foundPool.pool,
-				revision: foundPool.revision,
+			if createErr != nil {
+				sentinel.err = createErr
+				delete(a.pools, key)
+			} else {
+				a.pools[key] = &poolState{
+					pool:     foundPool.pool,
+					revision: foundPool.revision,
+				}
 			}
 			a.mu.Unlock()
+			close(sentinel.done)
+
+			if createErr != nil {
+				return nil, fmt.Errorf("on-demand pool creation failed for version=%s service=%s: %w",
+					ver.Version, service, createErr)
+			}
 
 			a.log.Info("on-demand pool created and cached",
 				"pool", poolID, "service", service, "version", ver.Version)
 			return foundPool.pool, nil
 		}
+
+		a.mu.Unlock()
 
 		a.log.Error("pool not found in store after retries",
 			"service", service,
