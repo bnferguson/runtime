@@ -95,6 +95,29 @@ var sensitivePatterns = []string{
 	"AUTH",
 }
 
+// credentialURLPrefixes name services whose connection strings (URL/URI)
+// commonly embed credentials (e.g. postgres://user:pass@host/db). Keys
+// matching one of these prefixes followed by _URL/_URI are masked so
+// `miren deploy --analyze` doesn't print full DSNs to terminals or CI logs.
+var credentialURLPrefixes = []string{
+	"DATABASE",
+	"DB",
+	"REDIS",
+	"POSTGRES",
+	"POSTGRESQL",
+	"MYSQL",
+	"MARIADB",
+	"MONGO",
+	"MONGODB",
+	"ELASTICSEARCH",
+	"RABBITMQ",
+	"AMQP",
+	"CLOUDAMQP",
+	"MEMCACHED",
+	"MEMCACHIER",
+	"CLOUDINARY",
+}
+
 // ignoredLocalEnvVars are env vars that should be ignored when scanning
 var ignoredLocalEnvVars = map[string]bool{
 	// System
@@ -267,6 +290,18 @@ func looksLikeSensitive(key string) bool {
 	for _, pattern := range sensitivePatterns {
 		if strings.Contains(upperKey, pattern) {
 			return true
+		}
+	}
+	// DSNs (e.g. SENTRY_DSN) embed credentials regardless of prefix.
+	if strings.HasSuffix(upperKey, "_DSN") {
+		return true
+	}
+	// Connection-string URLs/URIs for known credential-bearing services.
+	if strings.HasSuffix(upperKey, "_URL") || strings.HasSuffix(upperKey, "_URI") {
+		for _, prefix := range credentialURLPrefixes {
+			if strings.HasPrefix(upperKey, prefix+"_") {
+				return true
+			}
 		}
 	}
 	return false

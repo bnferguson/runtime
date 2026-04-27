@@ -54,7 +54,7 @@ func TestLooksLikeSensitive(t *testing.T) {
 		key      string
 		expected bool
 	}{
-		{"DATABASE_URL", false},
+		// Substring patterns
 		{"API_KEY", true},
 		{"SECRET_KEY_BASE", true},
 		{"DATABASE_PASSWORD", true},
@@ -62,8 +62,33 @@ func TestLooksLikeSensitive(t *testing.T) {
 		{"PRIVATE_KEY", true},
 		{"AWS_SECRET_ACCESS_KEY", true},
 		{"STRIPE_API_KEY", true},
-		{"REDIS_URL", false},
+
+		// Connection-string URLs typically embed credentials.
+		{"DATABASE_URL", true},
+		{"DATABASE_URI", true},
+		{"REDIS_URL", true},
+		{"POSTGRES_URL", true},
+		{"POSTGRESQL_URL", true},
+		{"MYSQL_URL", true},
+		{"MARIADB_URL", true},
+		{"MONGO_URL", true},
+		{"MONGODB_URI", true},
+		{"ELASTICSEARCH_URL", true},
+		{"RABBITMQ_URL", true},
+		{"AMQP_URL", true},
+		{"CLOUDAMQP_URL", true},
+		{"CLOUDINARY_URL", true},
+		{"DB_REPLICA_URL", true},
+
+		// DSNs always embed credentials.
+		{"SENTRY_DSN", true},
+		{"BUGSNAG_DSN", true},
+
+		// Plain hosts/ports without creds stay unmasked.
 		{"APP_HOST", false},
+		{"WEBHOOK_URL", false},
+		{"CALLBACK_URL", false},
+		{"PORT", false},
 	}
 
 	for _, tc := range testCases {
@@ -219,7 +244,7 @@ func TestDetectLocalEnvVars_SensitiveFlag(t *testing.T) {
 	for _, ev := range result.Available {
 		switch ev.Key {
 		case "DATABASE_URL":
-			assert.False(t, ev.Sensitive, "DATABASE_URL should not be sensitive")
+			assert.True(t, ev.Sensitive, "DATABASE_URL should be sensitive (embeds creds)")
 		case "SECRET_KEY_BASE":
 			assert.True(t, ev.Sensitive, "SECRET_KEY_BASE should be sensitive")
 		case "API_TOKEN":
