@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"fmt"
 	"os"
 	"sort"
 	"strings"
@@ -307,15 +308,46 @@ func looksLikeSensitive(key string) bool {
 	return false
 }
 
-// MaskValue masks a sensitive value for display
+// MaskValue masks a sensitive value for display, escaping any control or
+// ANSI-escape sequences so they cannot corrupt or spoof terminal/CI output.
 func MaskValue(value string, sensitive bool) string {
-	if !sensitive || value == "" {
-		return value
+	if !sensitive {
+		return escapeForDisplay(value)
 	}
-
-	// Show first 2 chars if long enough, otherwise just show dots
+	if value == "" {
+		return ""
+	}
 	if len(value) > 8 {
-		return value[:2] + "••••••••"
+		// Show a short prefix to help the user identify which value this is
+		// without revealing the full secret. Escape it the same way so a
+		// secret beginning with an ANSI escape can't break the layout.
+		return escapeForDisplay(value[:2]) + "••••••••"
 	}
 	return "••••••••"
+}
+
+// escapeForDisplay replaces ASCII control characters (including ESC used for
+// ANSI sequences, newlines, and carriage returns) with their Go-quoted form
+// so a malicious env value can't break out of a log line.
+func escapeForDisplay(s string) string {
+	if s == "" {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case r == '\n':
+			b.WriteString(`\n`)
+		case r == '\r':
+			b.WriteString(`\r`)
+		case r == '\t':
+			b.WriteString(`\t`)
+		case r < 0x20 || r == 0x7f:
+			fmt.Fprintf(&b, `\x%02x`, r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
