@@ -190,8 +190,16 @@ func DetectLocalEnvVars(detectedKeys []string) LocalEnvDetection {
 		}
 	}
 
-	// Check which detected vars are available locally
+	// Check which detected vars are available locally. The analyzer can
+	// emit the same key from multiple sources (package-based and
+	// source-based, for example), so dedupe before populating output rows.
+	processed := make(map[string]bool)
 	for _, key := range detectedKeys {
+		if processed[key] {
+			continue
+		}
+		processed[key] = true
+
 		isSensitive := looksLikeSensitive(key)
 
 		if value, exists := localEnv[key]; exists {

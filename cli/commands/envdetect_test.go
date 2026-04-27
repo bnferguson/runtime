@@ -130,6 +130,34 @@ func TestMaskValue(t *testing.T) {
 	}
 }
 
+// TestDetectLocalEnvVars_DeduplicatesDetectedKeys verifies that a key
+// emitted multiple times by the analyzer (e.g. via both package-based and
+// source-based detection) only produces a single Available/Missing row.
+func TestDetectLocalEnvVars_DeduplicatesDetectedKeys(t *testing.T) {
+	origEnv := os.Environ()
+	defer func() {
+		os.Clearenv()
+		for _, e := range origEnv {
+			parts := splitEnv(e)
+			if len(parts) == 2 {
+				os.Setenv(parts[0], parts[1])
+			}
+		}
+	}()
+
+	os.Clearenv()
+	os.Setenv("DATABASE_URL", "postgres://localhost/test")
+
+	// DATABASE_URL appears twice; STRIPE_API_KEY appears twice (missing).
+	detected := []string{"DATABASE_URL", "STRIPE_API_KEY", "DATABASE_URL", "STRIPE_API_KEY"}
+	result := DetectLocalEnvVars(detected)
+
+	assert.Len(t, result.Available, 1, "DATABASE_URL should only appear once")
+	assert.Equal(t, "DATABASE_URL", result.Available[0].Key)
+	assert.Len(t, result.Missing, 1, "STRIPE_API_KEY should only appear once")
+	assert.Equal(t, "STRIPE_API_KEY", result.Missing[0].Key)
+}
+
 func TestDetectLocalEnvVars(t *testing.T) {
 	// Save original environment
 	origEnv := os.Environ()
