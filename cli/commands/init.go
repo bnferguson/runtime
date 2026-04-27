@@ -92,7 +92,11 @@ func Init(ctx *Context, opts struct {
 	runtimeDir := filepath.Dir(appTomlPath)
 
 	var appConfig *appconfig.AppConfig
-	existingEnvVars := make(map[string]string)
+	// Presence map: a key declared in app.toml counts as configured even
+	// when its value is empty, since server-side secrets legitimately leave
+	// the value blank. Tracking by value would re-process already-declared
+	// secret keys and re-append their defaults on each --update.
+	existingEnvVars := make(map[string]struct{})
 	isUpdate := false
 
 	if _, err := os.Stat(appTomlPath); err != nil {
@@ -120,7 +124,7 @@ func Init(ctx *Context, opts struct {
 		}
 
 		for _, ev := range appConfig.EnvVars {
-			existingEnvVars[ev.Key] = ev.Value
+			existingEnvVars[ev.Key] = struct{}{}
 		}
 
 		ctx.Printf("Updating %s\n", appTomlPath)
@@ -193,7 +197,7 @@ func Init(ctx *Context, opts struct {
 			ctx.Printf("%s\n", lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("1")).Render("Required Environment Variables"))
 
 			for _, ev := range requiredVars {
-				if existingVal, exists := existingEnvVars[ev.Name]; exists && existingVal != "" {
+				if _, exists := existingEnvVars[ev.Name]; exists {
 					alreadyConfigured = append(alreadyConfigured, ev)
 					continue
 				}
