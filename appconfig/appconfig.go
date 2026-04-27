@@ -160,11 +160,14 @@ func decodeAndValidate(data []byte, filePath string) (*AppConfig, error) {
 
 // ParseWithoutValidation parses app config TOML without running validation.
 // Use this when you need to read a config that may have incomplete values
-// (e.g., for updating with new detected env vars).
+// (e.g., for updating with new detected env vars). Unknown fields are
+// rejected so that `miren init --update`'s read-modify-write flow does not
+// silently drop config keys it doesn't recognize.
 func ParseWithoutValidation(data []byte) (*AppConfig, error) {
 	var ac AppConfig
-	err := toml.Unmarshal(data, &ac)
-	if err != nil {
+	dec := toml.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&ac); err != nil {
 		return nil, err
 	}
 	return &ac, nil

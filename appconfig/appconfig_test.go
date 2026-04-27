@@ -277,6 +277,31 @@ num_instances = 1
 	assert.Equal(t, 1, workerSvc.Concurrency.NumInstances)
 }
 
+func TestParseWithoutValidation(t *testing.T) {
+	t.Run("accepts incomplete env values that Validate would tolerate", func(t *testing.T) {
+		ac, err := ParseWithoutValidation([]byte(`
+name = "my-app"
+
+[[env]]
+key = "DATABASE_URL"
+`))
+		require.NoError(t, err)
+		require.NotNil(t, ac)
+		assert.Equal(t, "my-app", ac.Name)
+		require.Len(t, ac.EnvVars, 1)
+		assert.Equal(t, "DATABASE_URL", ac.EnvVars[0].Key)
+		assert.Empty(t, ac.EnvVars[0].Value)
+	})
+
+	t.Run("rejects unknown fields so init --update doesn't drop them", func(t *testing.T) {
+		_, err := ParseWithoutValidation([]byte(`
+name = "my-app"
+typo_field = "would be silently dropped before"
+`))
+		require.Error(t, err)
+	})
+}
+
 func TestResolveDefaults_WebService(t *testing.T) {
 	ac := &AppConfig{}
 	ac.ResolveDefaults([]string{"web"})
