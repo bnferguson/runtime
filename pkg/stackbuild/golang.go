@@ -240,12 +240,14 @@ func (s *GoStack) detectEnvVars() []EnvVarRequirement {
 	// 1. Scan source code first to know what env vars are actually used
 	sourceVars := scanSourceFilesForEnvVars(s.dir, []string{".go"}, goEnvPatterns, goOptionalEnvPatterns)
 
-	// 2. Framework defaults - GO_ENV is a common convention
+	// 2. Framework defaults - GO_ENV is a Buffalo/framework-specific convention,
+	// not a general Go convention. Surface it as optional so we don't suggest it
+	// as a best practice for arbitrary Go apps.
 	results = append(results, EnvVarRequirement{
 		Name:         "GO_ENV",
 		Source:       "go_core",
-		Confidence:   "recommended",
-		Reason:       "Go environment mode (common convention)",
+		Confidence:   "optional",
+		Reason:       "Go environment mode (Buffalo/framework convention)",
 		DefaultValue: "production",
 	})
 
