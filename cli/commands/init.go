@@ -286,6 +286,14 @@ func Init(ctx *Context, opts struct {
 							lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render("Warning:"), secret.Key, err)
 					} else {
 						serverConfigured = append(serverConfigured, secret)
+						// Record the key (without its value) so that a subsequent
+						// `miren init --update` treats this secret as already
+						// configured rather than regenerating or re-reading it.
+						appConfig.EnvVars = append(appConfig.EnvVars, appconfig.AppEnvVar{
+							Key:       secret.Key,
+							Sensitive: secret.Sensitive,
+						})
+						existingEnvVars[secret.Key] = struct{}{}
 					}
 				}
 			}
