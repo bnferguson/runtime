@@ -315,15 +315,26 @@ func (s *RubyStack) detectEnvVars() []EnvVarRequirement {
 			CanGenerate: true,
 		})
 
-		// RAILS_MASTER_KEY is used to decrypt credentials.yml.enc
-		// Check if credentials file exists before recommending
-		if s.hasFile("config/credentials.yml.enc") || s.hasFile("config/credentials/production.yml.enc") {
+		// RAILS_MASTER_KEY decrypts the Rails encrypted credentials. Each
+		// credentials file has its own key file: config/credentials.yml.enc
+		// pairs with config/master.key, while environment-scoped files like
+		// config/credentials/production.yml.enc pair with the matching
+		// config/credentials/production.key. Prefer the env-scoped one when
+		// it's present.
+		var keyFile string
+		switch {
+		case s.hasFile("config/credentials/production.yml.enc"):
+			keyFile = "config/credentials/production.key"
+		case s.hasFile("config/credentials.yml.enc"):
+			keyFile = "config/master.key"
+		}
+		if keyFile != "" {
 			results = append(results, EnvVarRequirement{
 				Name:         "RAILS_MASTER_KEY",
 				Source:       "rails_core",
 				Confidence:   "required",
 				Reason:       "Required to decrypt Rails encrypted credentials",
-				ReadFromFile: "config/master.key",
+				ReadFromFile: keyFile,
 			})
 		}
 	}
