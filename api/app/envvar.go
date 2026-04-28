@@ -2,13 +2,16 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/idgen"
 )
 
@@ -48,56 +51,8 @@ func SetEnvVars(ctx context.Context, ec *entityserver.Client, appName string,
 		return nil, err
 	}
 
-	for _, v := range vars {
-		if service == "" {
-			found := false
-			for i, ev := range spec.Variables {
-				if ev.Key == v.Key {
-					spec.Variables[i].Value = v.Value
-					spec.Variables[i].Sensitive = v.Sensitive
-					spec.Variables[i].Source = "manual"
-					found = true
-					break
-				}
-			}
-			if !found {
-				spec.Variables = append(spec.Variables, core_v1alpha.ConfigSpecVariables{
-					Key:       v.Key,
-					Value:     v.Value,
-					Sensitive: v.Sensitive,
-					Source:    "manual",
-				})
-			}
-		} else {
-			svcFound := false
-			for i := range spec.Services {
-				if spec.Services[i].Name == service {
-					svcFound = true
-					envFound := false
-					for j, e := range spec.Services[i].Env {
-						if e.Key == v.Key {
-							spec.Services[i].Env[j].Value = v.Value
-							spec.Services[i].Env[j].Sensitive = v.Sensitive
-							spec.Services[i].Env[j].Source = "manual"
-							envFound = true
-							break
-						}
-					}
-					if !envFound {
-						spec.Services[i].Env = append(spec.Services[i].Env, core_v1alpha.ConfigSpecServicesEnv{
-							Key:       v.Key,
-							Value:     v.Value,
-							Sensitive: v.Sensitive,
-							Source:    "manual",
-						})
-					}
-					break
-				}
-			}
-			if !svcFound {
-				return nil, fmt.Errorf("service %q not found", service)
-			}
-		}
+	if err := mergeIntoSpec(spec, vars, service); err != nil {
+		return nil, err
 	}
 
 	return createNewVersion(ctx, ec, appName, appVer, spec, appRec)
@@ -221,6 +176,10 @@ func resolveBaseVersion(ctx context.Context, ec *entityserver.Client, appName st
 //
 // Subsequent calls merge with the existing initial config rather than
 // replacing it, mirroring the SetEnvVars behaviour for active versions.
+//
+// The app update uses optimistic concurrency control via Replace+revision so
+// that two parallel SetInitialEnvVars calls (or a deploy slipping in between
+// the read and the write) cannot silently drop staged vars.
 func SetInitialEnvVars(ctx context.Context, ec *entityserver.Client, appName string,
 	vars []EnvVarInput, service string) (entity.Id, error) {
 
@@ -230,24 +189,74 @@ func SetInitialEnvVars(ctx context.Context, ec *entityserver.Client, appName str
 		}
 	}
 
-	var appRec core_v1alpha.App
-	if err := ec.Get(ctx, appName, &appRec); err != nil {
-		return "", err
-	}
-
-	if appRec.ActiveVersion != "" {
-		return "", fmt.Errorf("app %q already has a deployed version; use SetEnvVars instead", appName)
-	}
-
-	var spec core_v1alpha.ConfigSpec
-	if appRec.InitialConfig != "" {
-		var prev core_v1alpha.ConfigVersion
-		if err := ec.GetById(ctx, appRec.InitialConfig, &prev); err != nil {
-			return "", fmt.Errorf("failed to load existing initial config: %w", err)
+	const maxAttempts = 5
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		appEnt, err := ec.EAC().Get(ctx, "app/"+appName)
+		if err != nil {
+			return "", err
 		}
-		spec = prev.Spec
+
+		var appRec core_v1alpha.App
+		appRec.Decode(appEnt.Entity().Entity())
+		appRec.ID = entity.Id(appEnt.Entity().Id())
+
+		if appRec.ActiveVersion != "" {
+			return "", fmt.Errorf("app %q already has a deployed version; use SetEnvVars instead", appName)
+		}
+
+		var spec core_v1alpha.ConfigSpec
+		if appRec.InitialConfig != "" {
+			var prev core_v1alpha.ConfigVersion
+			if err := ec.GetById(ctx, appRec.InitialConfig, &prev); err != nil {
+				return "", fmt.Errorf("failed to load existing initial config: %w", err)
+			}
+			spec = prev.Spec
+		}
+
+		if err := mergeIntoSpec(&spec, vars, service); err != nil {
+			return "", err
+		}
+
+		configVer := &core_v1alpha.ConfigVersion{
+			App:  appRec.ID,
+			Spec: spec,
+		}
+		cvName := appName + "-initial-" + idgen.Gen("c")
+		cvid, err := ec.Create(ctx, cvName, configVer)
+		if err != nil {
+			return "", fmt.Errorf("error creating initial config version: %w", err)
+		}
+
+		appRec.InitialConfig = cvid
+
+		// Build full attrs (metadata + identity + decoded fields) for Replace.
+		var meta core_v1alpha.Metadata
+		meta.Decode(appEnt.Entity().Entity())
+		fullAttrs := entity.New(
+			meta.Encode,
+			appRec.Encode,
+			entity.DBId, appRec.ID,
+			entity.Ident, types.Keyword("app/"+appName),
+		).Attrs()
+
+		_, err = ec.EAC().Replace(ctx, fullAttrs, appEnt.Entity().Revision())
+		if err == nil {
+			return cvid, nil
+		}
+		if !errors.Is(err, cond.ErrConflict{}) {
+			return "", fmt.Errorf("error updating app initial_config: %w", err)
+		}
+		// Lost the CAS race; retry. The just-created ConfigVersion is
+		// orphaned but immutable, so this is correctness-safe.
 	}
 
+	return "", fmt.Errorf("failed to update app %q initial_config after %d attempts due to concurrent writes", appName, maxAttempts)
+}
+
+// mergeIntoSpec applies the env var inputs onto the spec in place. service
+// scopes the merge to a named service (creating its entry if needed) when
+// non-empty, otherwise the vars are merged onto the global Variables list.
+func mergeIntoSpec(spec *core_v1alpha.ConfigSpec, vars []EnvVarInput, service string) error {
 	for _, v := range vars {
 		if service == "" {
 			found := false
@@ -268,54 +277,50 @@ func SetInitialEnvVars(ctx context.Context, ec *entityserver.Client, appName str
 					Source:    "manual",
 				})
 			}
-		} else {
-			svcFound := false
-			for i := range spec.Services {
-				if spec.Services[i].Name == service {
-					svcFound = true
-					envFound := false
-					for j, e := range spec.Services[i].Env {
-						if e.Key == v.Key {
-							spec.Services[i].Env[j].Value = v.Value
-							spec.Services[i].Env[j].Sensitive = v.Sensitive
-							spec.Services[i].Env[j].Source = "manual"
-							envFound = true
-							break
-						}
+			continue
+		}
+
+		svcFound := false
+		for i := range spec.Services {
+			if spec.Services[i].Name == service {
+				svcFound = true
+				envFound := false
+				for j, e := range spec.Services[i].Env {
+					if e.Key == v.Key {
+						spec.Services[i].Env[j].Value = v.Value
+						spec.Services[i].Env[j].Sensitive = v.Sensitive
+						spec.Services[i].Env[j].Source = "manual"
+						envFound = true
+						break
 					}
-					if !envFound {
-						spec.Services[i].Env = append(spec.Services[i].Env, core_v1alpha.ConfigSpecServicesEnv{
-							Key:       v.Key,
-							Value:     v.Value,
-							Sensitive: v.Sensitive,
-							Source:    "manual",
-						})
-					}
-					break
 				}
-			}
-			if !svcFound {
-				return "", fmt.Errorf("service %q not found", service)
+				if !envFound {
+					spec.Services[i].Env = append(spec.Services[i].Env, core_v1alpha.ConfigSpecServicesEnv{
+						Key:       v.Key,
+						Value:     v.Value,
+						Sensitive: v.Sensitive,
+						Source:    "manual",
+					})
+				}
+				break
 			}
 		}
+		if !svcFound {
+			// Fresh app or first var for this service — append a new entry
+			// rather than rejecting. SetEnvVars staging predates any deploy,
+			// so service entries are only filled in by the build step.
+			spec.Services = append(spec.Services, core_v1alpha.ConfigSpecServices{
+				Name: service,
+				Env: []core_v1alpha.ConfigSpecServicesEnv{{
+					Key:       v.Key,
+					Value:     v.Value,
+					Sensitive: v.Sensitive,
+					Source:    "manual",
+				}},
+			})
+		}
 	}
-
-	configVer := &core_v1alpha.ConfigVersion{
-		App:  appRec.ID,
-		Spec: spec,
-	}
-	cvName := appName + "-initial-" + idgen.Gen("c")
-	cvid, err := ec.Create(ctx, cvName, configVer)
-	if err != nil {
-		return "", fmt.Errorf("error creating initial config version: %w", err)
-	}
-
-	appRec.InitialConfig = cvid
-	if err := ec.Update(ctx, &appRec); err != nil {
-		return "", fmt.Errorf("error updating app initial_config: %w", err)
-	}
-
-	return cvid, nil
+	return nil
 }
 
 // createNewVersion creates a ConfigVersion + AppVersion from the mutated spec and activates it.

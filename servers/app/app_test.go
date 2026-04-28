@@ -719,8 +719,12 @@ func TestSetEnvVars_Batch(t *testing.T) {
 		}
 	})
 
-	t.Run("ServiceNotFound", func(t *testing.T) {
-		appName := "test-batch-nosvc"
+	t.Run("ServiceCreatedOnFirstUse", func(t *testing.T) {
+		// Setting a service-scoped env var on a service that doesn't yet
+		// have a config entry should create the entry rather than error.
+		// Service entries are otherwise only populated by the build step,
+		// so we'd reject every first-time scoped set.
+		appName := "test-batch-newsvc"
 		app := &core_v1alpha.App{}
 		appID, err := inmem.Client.Create(ctx, appName, app)
 		if err != nil {
@@ -751,9 +755,39 @@ func TestSetEnvVars_Batch(t *testing.T) {
 		nv.SetValue("1")
 		nv.SetSensitive(false)
 
-		_, err = client.SetEnvVars(ctx, appName, []*app_v1alpha.NamedValue{nv}, "nonexistent")
-		if err == nil {
-			t.Fatal("expected error for nonexistent service, got nil")
+		_, err = client.SetEnvVars(ctx, appName, []*app_v1alpha.NamedValue{nv}, "worker")
+		if err != nil {
+			t.Fatalf("expected service entry to be created, got error: %v", err)
+		}
+
+		err = ec.Get(ctx, appName, &appRec)
+		if err != nil {
+			t.Fatalf("failed to reload app: %v", err)
+		}
+
+		var newVer core_v1alpha.AppVersion
+		if err := ec.GetById(ctx, appRec.ActiveVersion, &newVer); err != nil {
+			t.Fatalf("failed to get active version: %v", err)
+		}
+		resolved, err := coreutil.ResolveConfig(ctx, ec.EAC(), &newVer)
+		if err != nil {
+			t.Fatalf("failed to resolve config: %v", err)
+		}
+		var foundEnv *core_v1alpha.ConfigSpecServicesEnv
+		for i := range resolved.Services {
+			if resolved.Services[i].Name == "worker" {
+				for j := range resolved.Services[i].Env {
+					if resolved.Services[i].Env[j].Key == "X" {
+						foundEnv = &resolved.Services[i].Env[j]
+					}
+				}
+			}
+		}
+		if foundEnv == nil {
+			t.Fatal("expected worker service entry with X=1, not found")
+		}
+		if foundEnv.Value != "1" {
+			t.Fatalf("expected X=1, got %q", foundEnv.Value)
 		}
 	})
 }
@@ -977,8 +1011,8 @@ func TestSetEnvVar(t *testing.T) {
 		}
 	})
 
-	t.Run("error on non-existent service", func(t *testing.T) {
-		appName := "test-setenv-nosvc"
+	t.Run("creates service entry on first scoped set", func(t *testing.T) {
+		appName := "test-setenv-newsvc"
 		client := setupAppWithConfig(t, ctx, ec, appInfo, appName,
 			[]*app_v1alpha.NamedValue{
 				makeNamedValue("FOO", "bar", false),
@@ -986,9 +1020,9 @@ func TestSetEnvVar(t *testing.T) {
 			nil, nil,
 		)
 
-		_, err := client.SetEnvVar(ctx, appName, "KEY", "val", false, "nonexistent")
-		if err == nil {
-			t.Fatal("expected error for non-existent service")
+		_, err := client.SetEnvVar(ctx, appName, "KEY", "val", false, "worker")
+		if err != nil {
+			t.Fatalf("expected service to be created on first scoped set, got: %v", err)
 		}
 	})
 }
@@ -1247,6 +1281,37 @@ func TestSetInitialEnvVars(t *testing.T) {
 			[]*app_v1alpha.NamedValue{makeNamedValue("LATE", "x", false)}, "")
 		if err == nil {
 			t.Fatal("expected error when setting initial env vars after deploy")
+		}
+	})
+
+	t.Run("creates service entry when staging service-scoped vars on a fresh app", func(t *testing.T) {
+		appName := "test-init-newsvc"
+		app := &core_v1alpha.App{}
+		_, err := inmem.Client.Create(ctx, appName, app)
+		if err != nil {
+			t.Fatalf("failed to create app: %v", err)
+		}
+
+		nv := makeNamedValue("WORKER_TOKEN", "secret", true)
+		_, err = client.SetInitialEnvVars(ctx, appName,
+			[]*app_v1alpha.NamedValue{nv}, "worker")
+		if err != nil {
+			t.Fatalf("expected service entry to be created on fresh app, got: %v", err)
+		}
+
+		var appCheck core_v1alpha.App
+		if err := ec.Get(ctx, appName, &appCheck); err != nil {
+			t.Fatalf("failed to get app: %v", err)
+		}
+		var cv core_v1alpha.ConfigVersion
+		if err := ec.GetById(ctx, appCheck.InitialConfig, &cv); err != nil {
+			t.Fatalf("failed to get initial config: %v", err)
+		}
+		if len(cv.Spec.Services) != 1 || cv.Spec.Services[0].Name != "worker" {
+			t.Fatalf("expected single worker service entry, got %+v", cv.Spec.Services)
+		}
+		if len(cv.Spec.Services[0].Env) != 1 || cv.Spec.Services[0].Env[0].Key != "WORKER_TOKEN" {
+			t.Fatalf("expected WORKER_TOKEN in worker service, got %+v", cv.Spec.Services[0].Env)
 		}
 	})
 }
