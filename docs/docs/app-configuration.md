@@ -43,17 +43,17 @@ Each detected variable gets a confidence: **required**, **recommended**, or **op
 For required variables, `miren init` tries to handle them automatically:
 
 - **Has a sensible default** (e.g. `RAILS_ENV=production`) → written to `app.toml` so it's visible.
-- **Can be generated** (e.g. Rails `SECRET_KEY_BASE`) → a cryptographically random value is generated and **stored server-side** before any deploy happens.
-- **Can be read from a local file** (e.g. `RAILS_MASTER_KEY` from `config/master.key` or `config/credentials/production.key`) → read from disk and stored server-side.
+- **Can be generated** (e.g. Rails `SECRET_KEY_BASE`) → a cryptographically random value is generated and pre-set on the app, the same as if you'd run `miren config set` yourself.
+- **Can be read from a local file** (e.g. `RAILS_MASTER_KEY` from `config/master.key` or `config/credentials/production.key`) → read from disk and pre-set on the app, again the same as `miren config set`.
 - **Anything else** → listed as "must be configured manually" with `miren config set`.
 
-Server-side staged values land on the app's *initial config*: a ConfigVersion attached to the app before any AppVersion exists. The first `miren deploy` seeds its config from there, so generated secrets and read-in keys are present from the very first build. Subsequent `miren init --update` runs merge new detections without re-generating secrets that have already been staged.
+Pre-set values are picked up by your first `miren deploy` automatically, so generated secrets and read-in keys are present from the very first build without an extra step. Re-running `miren init --update` won't rotate or overwrite values you (or a previous init) have already pre-set.
 
 Sensitive variables marked as such (whether by detection or because the key looks like a secret) are masked in CLI output and never written to `app.toml` in plaintext.
 
 ### Iterating
 
-Run `miren init --update` after adding a new dependency or changing your code. It re-runs detection, leaves anything already declared in `app.toml` (including value-less server-side secrets) alone, and only adds newly required entries.
+Run `miren init --update` after adding a new dependency or changing your code. It re-runs detection, leaves anything already declared in `app.toml` (and anything already pre-set on the app) alone, and only adds newly required entries.
 
 ```bash
 # After adding @sentry/node to package.json
