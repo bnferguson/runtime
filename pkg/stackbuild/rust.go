@@ -228,12 +228,21 @@ func (s *RustStack) detectEnvVars() []EnvVarRequirement {
 	// 1. Scan source code first to know what env vars are actually used
 	sourceVars := scanSourceFilesForEnvVars(s.dir, []string{".rs"}, rustEnvPatterns, rustOptionalEnvPatterns)
 
-	// 2. Framework defaults - RUST_LOG is commonly used for logging
+	// 2. Framework defaults - RUST_LOG is commonly used for logging.
+	// Elevate to required if the source code reads it directly without a
+	// fallback, since the seed-then-skip pass below would otherwise pin
+	// it at "recommended" even when the app explicitly depends on it.
+	rustLogConfidence := "recommended"
+	rustLogReason := "Rust logging level (common convention)"
+	if elevateToRequired("RUST_LOG", sourceVars) {
+		rustLogConfidence = "required"
+		rustLogReason = "Referenced in application code"
+	}
 	results = append(results, EnvVarRequirement{
 		Name:         "RUST_LOG",
 		Source:       "rust_core",
-		Confidence:   "recommended",
-		Reason:       "Rust logging level (common convention)",
+		Confidence:   rustLogConfidence,
+		Reason:       rustLogReason,
 		DefaultValue: "info",
 	})
 

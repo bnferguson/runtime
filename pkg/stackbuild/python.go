@@ -544,11 +544,17 @@ func (s *PythonStack) detectEnvVars() []EnvVarRequirement {
 	// "core" var to require by name. Source/config scanning below picks up
 	// the actual names the app reads.
 	if s.hasDjango {
+		djangoDebugConfidence := "recommended"
+		djangoDebugReason := "Django debug mode (should be False in production)"
+		if elevateToRequired("DJANGO_DEBUG", sourceVars) {
+			djangoDebugConfidence = "required"
+			djangoDebugReason = "Referenced in application code"
+		}
 		results = append(results, EnvVarRequirement{
 			Name:         "DJANGO_DEBUG",
 			Source:       "django_core",
-			Confidence:   "recommended",
-			Reason:       "Django debug mode (should be False in production)",
+			Confidence:   djangoDebugConfidence,
+			Reason:       djangoDebugReason,
 			DefaultValue: "False",
 		})
 	}

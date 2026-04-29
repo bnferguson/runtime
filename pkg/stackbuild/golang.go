@@ -45,10 +45,18 @@ var goEnvPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`os\.LookupEnv\(['"]([A-Z][A-Z0-9_]+)['"]\)`),
 }
 
-// goOptionalEnvPatterns detect patterns where env var has a fallback
+// goOptionalEnvPatterns detect patterns where env var has a fallback.
+//
+// LookupEnv on its own is *not* optional — apps frequently use it to
+// distinguish "unset" from "empty" for a hard requirement, so blanket-
+// matching every LookupEnv call would silently downgrade those to
+// optional. The patterns below only match when a default value or
+// fallback expression is visible on the same line.
 var goOptionalEnvPatterns = []*regexp.Regexp{
-	// os.LookupEnv returns (value, ok) so any use is potentially optional
-	regexp.MustCompile(`os\.LookupEnv\(['"]([A-Z][A-Z0-9_]+)['"]\)`),
+	// cmp.Or(os.Getenv("VAR"), default) - single-line default expression
+	regexp.MustCompile(`cmp\.Or\(\s*os\.Getenv\(['"]([A-Z][A-Z0-9_]+)['"]\)\s*,`),
+	// cmp.Or(os.LookupEnv("VAR"), default) — though typically wrapped
+	regexp.MustCompile(`cmp\.Or\(\s*os\.LookupEnv\(['"]([A-Z][A-Z0-9_]+)['"]\)\s*,`),
 }
 
 // GoStack implements Stack for Go
@@ -242,12 +250,19 @@ func (s *GoStack) detectEnvVars() []EnvVarRequirement {
 
 	// 2. Framework defaults - GO_ENV is a Buffalo/framework-specific convention,
 	// not a general Go convention. Surface it as optional so we don't suggest it
-	// as a best practice for arbitrary Go apps.
+	// as a best practice for arbitrary Go apps. Elevate to required if the
+	// source code reads it directly without a fallback.
+	goEnvConfidence := "optional"
+	goEnvReason := "Go environment mode (Buffalo/framework convention)"
+	if elevateToRequired("GO_ENV", sourceVars) {
+		goEnvConfidence = "required"
+		goEnvReason = "Referenced in application code"
+	}
 	results = append(results, EnvVarRequirement{
 		Name:         "GO_ENV",
 		Source:       "go_core",
-		Confidence:   "optional",
-		Reason:       "Go environment mode (Buffalo/framework convention)",
+		Confidence:   goEnvConfidence,
+		Reason:       goEnvReason,
 		DefaultValue: "production",
 	})
 
