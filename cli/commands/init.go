@@ -68,9 +68,8 @@ func generateSecretKey() (string, error) {
 }
 
 func Init(ctx *Context, opts struct {
-	Name   string `short:"n" long:"name" description:"Application name (defaults to directory name)"`
-	Dir    string `short:"d" long:"dir" description:"Application directory (defaults to current directory)"`
-	Update bool   `short:"u" long:"update" description:"Update existing app.toml with newly detected env vars"`
+	Name string `short:"n" long:"name" description:"Application name (defaults to directory name)"`
+	Dir  string `short:"d" long:"dir" description:"Application directory (defaults to current directory)"`
 	ConfigCentric
 }) error {
 	workDir := opts.Dir
@@ -91,56 +90,25 @@ func Init(ctx *Context, opts struct {
 	appTomlPath := filepath.Join(workDir, appconfig.AppConfigPath)
 	runtimeDir := filepath.Dir(appTomlPath)
 
-	var appConfig *appconfig.AppConfig
-	// Presence map: a key declared in app.toml counts as configured even
-	// when its value is empty, since server-side secrets legitimately leave
-	// the value blank. Tracking by value would re-process already-declared
-	// secret keys and re-append their defaults on each --update.
-	existingEnvVars := make(map[string]struct{})
-	isUpdate := false
-
 	if _, err := os.Stat(appTomlPath); err != nil {
 		if !os.IsNotExist(err) {
 			return fmt.Errorf("failed to check for existing app.toml: %w", err)
 		}
-		if opts.Update {
-			return fmt.Errorf("app.toml does not exist - use 'miren init' without --update first")
-		}
 	} else {
-		if !opts.Update {
-			return fmt.Errorf("app.toml already exists in %s - use --update to add detected env vars", runtimeDir)
-		}
-		isUpdate = true
+		return fmt.Errorf("app.toml already exists in %s - app already initialized", runtimeDir)
 	}
 
-	if isUpdate {
-		content, err := os.ReadFile(appTomlPath)
-		if err != nil {
-			return fmt.Errorf("failed to read app.toml: %w", err)
-		}
-		appConfig, err = appconfig.ParseWithoutValidation(content)
-		if err != nil {
-			return fmt.Errorf("failed to parse app.toml: %w", err)
-		}
+	appName := opts.Name
+	if appName == "" {
+		appName = inferAppName(workDir)
+	}
 
-		for _, ev := range appConfig.EnvVars {
-			existingEnvVars[ev.Key] = struct{}{}
-		}
+	if err := os.MkdirAll(runtimeDir, 0755); err != nil {
+		return fmt.Errorf("failed to create .miren directory: %w", err)
+	}
 
-		ctx.Printf("Updating %s\n", appTomlPath)
-	} else {
-		appName := opts.Name
-		if appName == "" {
-			appName = inferAppName(workDir)
-		}
-
-		if err := os.MkdirAll(runtimeDir, 0755); err != nil {
-			return fmt.Errorf("failed to create .miren directory: %w", err)
-		}
-
-		appConfig = &appconfig.AppConfig{
-			Name: appName,
-		}
+	appConfig := &appconfig.AppConfig{
+		Name: appName,
 	}
 
 	ctx.Printf("Analyzing codebase...\n")
@@ -176,7 +144,6 @@ func Init(ctx *Context, opts struct {
 	var secretsToStore []secretToStore
 	var defaultsForAppToml []defaultEnvVar
 	var needsManualConfig []stackbuild.EnvVarRequirement
-	var alreadyConfigured []stackbuild.EnvVarRequirement
 
 	if detectedStack != nil {
 		envVars := detectedStack.RequiredEnvVars()
@@ -197,11 +164,6 @@ func Init(ctx *Context, opts struct {
 			ctx.Printf("%s\n", lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("1")).Render("Required Environment Variables"))
 
 			for _, ev := range requiredVars {
-				if _, exists := existingEnvVars[ev.Name]; exists {
-					alreadyConfigured = append(alreadyConfigured, ev)
-					continue
-				}
-
 				if ev.DefaultValue != "" {
 					defaultsForAppToml = append(defaultsForAppToml, defaultEnvVar{
 						Key:    ev.Name,
@@ -298,29 +260,14 @@ func Init(ctx *Context, opts struct {
 						lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render("Warning:"), err)
 					ctx.Printf("Secrets not stored. Run 'miren config set' to configure manually.\n")
 				} else {
-					for _, secret := range secretsToStore {
-						serverConfigured = append(serverConfigured, secret)
-						// Record the key (without its value) so that a subsequent
-						// `miren init --update` treats this secret as already
-						// configured rather than regenerating or re-reading it.
-						appConfig.EnvVars = append(appConfig.EnvVars, appconfig.AppEnvVar{
-							Key:       secret.Key,
-							Sensitive: secret.Sensitive,
-						})
-						existingEnvVars[secret.Key] = struct{}{}
-					}
+					serverConfigured = append(serverConfigured, secretsToStore...)
 				}
 			}
 		}
 	}
 
-	if len(alreadyConfigured) > 0 || len(serverConfigured) > 0 || len(defaultsForAppToml) > 0 {
+	if len(serverConfigured) > 0 || len(defaultsForAppToml) > 0 {
 		ctx.Printf("\nAutomatically configured:\n")
-		for _, ev := range alreadyConfigured {
-			ctx.Printf("  %s %s\n",
-				lipgloss.NewStyle().Bold(true).Render(ev.Name),
-				lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("2")).Render("✓ already configured"))
-		}
 		for _, defVar := range defaultsForAppToml {
 			ctx.Printf("  %s=%s %s\n",
 				lipgloss.NewStyle().Bold(true).Render(defVar.Key),
@@ -353,10 +300,6 @@ func Init(ctx *Context, opts struct {
 		return fmt.Errorf("failed to write app.toml: %w", err)
 	}
 
-	if isUpdate {
-		ctx.Printf("\nUpdated %s\n", appTomlPath)
-	} else {
-		ctx.Printf("\nInitialized Miren app '%s' in %s\n", appConfig.Name, appTomlPath)
-	}
+	ctx.Printf("\nInitialized Miren app '%s' in %s\n", appConfig.Name, appTomlPath)
 	return nil
 }

@@ -20,7 +20,6 @@ miren init [flags]
 - `--config` — Path to the config file
 - `--dir, -d` — Application directory (defaults to current directory)
 - `--name, -n` — Application name (defaults to directory name)
-- `--update, -u` — Update existing app.toml with newly detected env vars
 
 ## Global Options
 

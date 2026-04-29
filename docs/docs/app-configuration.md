@@ -47,21 +47,9 @@ For required variables, `miren init` tries to handle them automatically:
 - **Can be read from a local file** (e.g. `RAILS_MASTER_KEY` from `config/master.key` or `config/credentials/production.key`) → read from disk and pre-set on the app, again the same as `miren config set`.
 - **Anything else** → listed as "must be configured manually" with `miren config set`.
 
-Pre-set values are picked up by your first `miren deploy` automatically, so generated secrets and read-in keys are present from the very first build without an extra step. Re-running `miren init --update` won't rotate or overwrite values you (or a previous init) have already pre-set.
+Pre-set values are picked up by your first `miren deploy` automatically, so generated secrets and read-in keys are present from the very first build without an extra step.
 
 Sensitive variables marked as such (whether by detection or because the key looks like a secret) are masked in CLI output and never written to `app.toml` in plaintext.
-
-### Iterating
-
-Run `miren init --update` after adding a new dependency or changing your code. It re-runs detection, leaves anything already declared in `app.toml` (and anything already pre-set on the app) alone, and only adds newly required entries.
-
-```bash
-# After adding @sentry/node to package.json
-miren init --update
-# → Detects SENTRY_DSN, lists it as needing manual configuration
-miren config set SENTRY_DSN=https://...@sentry.io/...
-miren deploy
-```
 
 ## When You Need app.toml
 
