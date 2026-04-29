@@ -42,6 +42,14 @@ type DiskController struct {
 	// NodeId is the ID of this node, used for creating volume entities
 	NodeId string
 
+	// isCoordinator is true if this controller runs on the coordinator node.
+	// Today all disks are owned by the coordinator, so only the coordinator
+	// may create, update, or delete disk_volume entities. When cross-node
+	// disk migration lands, shouldManageDisk will gain smarter logic (likely
+	// keyed off a target-node field on the disk entity); every caller
+	// already routes through it.
+	isCoordinator bool
+
 	// Base path for disk mounts (e.g., /var/lib/miren/disks)
 	mountBasePath string
 
@@ -54,15 +62,33 @@ type DiskController struct {
 
 // NewDiskController creates a disk controller that uses disk_volume entities.
 // The diskMode parameter comes from server config (MIREN_DISK_MODE); pass ""
-// for auto-detection.
-func NewDiskController(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, nodeId string, diskMode string) *DiskController {
+// for auto-detection. isCoordinator must be true on the primary node and
+// false on distributed runners.
+func NewDiskController(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, nodeId string, diskMode string, isCoordinator bool) *DiskController {
 	return &DiskController{
 		Log:            log.With("module", "disk"),
 		EAC:            eac,
 		NodeId:         nodeId,
+		isCoordinator:  isCoordinator,
 		mountBasePath:  "/var/lib/miren/disks",
 		configuredMode: diskMode,
 	}
+}
+
+// shouldManageDisk reports whether this controller is responsible for
+// reconciling the given disk's disk_volume lifecycle. Currently this is
+// coordinator-only; when cross-node migration lands, this will look at
+// the disk's target node.
+func (d *DiskController) shouldManageDisk(disk *storage_v1alpha.Disk) bool {
+	_ = disk
+	return d.isCoordinator
+}
+
+// myNodeId returns the entity ID used for disk_volumes owned by this
+// controller's node, normalized so the "node/" prefix is always present
+// exactly once regardless of how NodeId was passed in.
+func (d *DiskController) myNodeId() entity.Id {
+	return entity.Id("node/" + strings.TrimPrefix(d.NodeId, "node/"))
 }
 
 // ForceUniversalMode forces the controller to use disk_volume entities with
@@ -105,6 +131,10 @@ func (d *DiskController) Delete(ctx context.Context, id entity.Id, obj *storage_
 
 // reconcileDisk reconciles the disk state
 func (d *DiskController) reconcileDisk(ctx context.Context, disk *storage_v1alpha.Disk, meta *entity.Meta) error {
+	if !d.shouldManageDisk(disk) {
+		return nil
+	}
+
 	var err error
 
 	switch disk.Status {
@@ -155,18 +185,22 @@ func (d *DiskController) handleProvisioning(ctx context.Context, disk *storage_v
 		return fmt.Errorf("error looking up existing disk_volume for disk %s: %w", disk.ID, err)
 	}
 
-	if existingVolume != nil {
-		// If the volume belongs to a different node, don't touch it
-		myNodeId := entity.Id("node/" + strings.TrimPrefix(d.NodeId, "node/"))
-		if existingVolume.NodeId != "" && existingVolume.NodeId != myNodeId {
-			d.Log.Debug("disk_volume belongs to another node, skipping",
-				"disk", disk.ID,
-				"disk_volume", existingVolume.ID,
-				"volume_node", existingVolume.NodeId,
-				"my_node", myNodeId)
-			return nil
-		}
+	myNodeId := d.myNodeId()
 
+	if existingVolume != nil && existingVolume.NodeId != "" && existingVolume.NodeId != myNodeId {
+		// Orphan from a runner that created a volume it shouldn't have. Log
+		// and fall through to create our own native volume; the orphan is
+		// harmless here and will be cleaned up via DELETING (or left to the
+		// future migration-aware controller).
+		d.Log.Warn("ignoring foreign disk_volume for coordinator-owned disk",
+			"disk", disk.ID,
+			"disk_volume", existingVolume.ID,
+			"volume_node", existingVolume.NodeId,
+			"my_node", myNodeId)
+		existingVolume = nil
+	}
+
+	if existingVolume != nil {
 		d.Log.Debug("found existing disk_volume for disk",
 			"disk", disk.ID,
 			"disk_volume", existingVolume.ID,
@@ -210,7 +244,7 @@ func (d *DiskController) handleProvisioning(ctx context.Context, disk *storage_v
 		VolumeMode:   diskModeToVolumeMode(d.diskMode),
 		DesiredState: storage_v1alpha.DV_PRESENT,
 		ActualState:  storage_v1alpha.DV_PENDING,
-		NodeId:       entity.Id("node/" + strings.TrimPrefix(d.NodeId, "node/")),
+		NodeId:       myNodeId,
 	}
 
 	// When migrating from LSVD, set MountId to the LSVD volume UUID so the
@@ -365,7 +399,11 @@ func (d *DiskController) findLSVDVolumeId(ctx context.Context, diskId entity.Id)
 	return lsvdVol.VolumeId
 }
 
-// getDiskVolumeForDisk finds the disk_volume entity for a disk
+// getDiskVolumeForDisk finds the disk_volume entity for a disk. When more
+// than one exists (e.g. an orphan left behind by a past violation of the
+// primary-only invariant, or — in the future — a volume belonging to a
+// migration peer), prefer the one owned by this controller's node so the
+// controller reconciles its own volume and ignores foreign ones.
 func (d *DiskController) getDiskVolumeForDisk(ctx context.Context, diskId entity.Id) (*storage_v1alpha.DiskVolume, error) {
 	if d.EAC == nil {
 		return nil, nil
@@ -383,10 +421,24 @@ func (d *DiskController) getDiskVolumeForDisk(ctx context.Context, diskId entity
 		return nil, nil
 	}
 
-	var volume storage_v1alpha.DiskVolume
-	volume.Decode(values[0].Entity())
+	myNodeId := d.myNodeId()
 
-	return &volume, nil
+	var chosen *storage_v1alpha.DiskVolume
+	for _, v := range values {
+		var volume storage_v1alpha.DiskVolume
+		volume.Decode(v.Entity())
+
+		if volume.NodeId == myNodeId {
+			return &volume, nil
+		}
+
+		if chosen == nil {
+			vol := volume
+			chosen = &vol
+		}
+	}
+
+	return chosen, nil
 }
 
 func diskModeToVolumeMode(mode storage_v1alpha.DiskMode) storage_v1alpha.DiskVolumeVolumeMode {

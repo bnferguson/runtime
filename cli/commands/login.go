@@ -375,7 +375,10 @@ func pollForToken(ctx context.Context, cloudURL, deviceCode string, interval, ma
 	for {
 		select {
 		case <-timeoutCtx.Done():
-			return "", fmt.Errorf("authentication timed out after %v", maxDuration)
+			if errors.Is(timeoutCtx.Err(), context.DeadlineExceeded) {
+				return "", fmt.Errorf("authentication timed out after %v: %w", maxDuration, timeoutCtx.Err())
+			}
+			return "", timeoutCtx.Err()
 		case <-ticker.C:
 			req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 			if err != nil {

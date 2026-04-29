@@ -789,7 +789,7 @@ func (r *Runner) SetupControllers(
 	))
 
 	// Use entity mode controllers
-	diskController := disk.NewDiskController(log, eas, r.Id, r.DiskMode)
+	diskController := disk.NewDiskController(log, eas, r.Id, r.DiskMode, r.deps.IsCoordinator)
 	diskLeaseController := disk.NewDiskLeaseController(log, eas, r.Id, r.DiskMode)
 
 	// Add disk controller to closers list so it gets cleaned up on shutdown
