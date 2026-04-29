@@ -26,12 +26,17 @@ type FileManifest struct {
 }
 
 // parseGitignoreFile reads a .gitignore file and returns its parsed patterns
-// scoped to the given domain (path components from the walk root). Returns
-// nil if the file doesn't exist or is empty.
-func parseGitignoreFile(path string, domain []string) []gitignore.Pattern {
+// scoped to the given domain (path components from the walk root). A missing
+// file is not an error and returns (nil, nil); other read failures (e.g.
+// permission denied) propagate up so we don't silently treat them as "no
+// patterns" and ship a tar that should have been filtered.
+func parseGitignoreFile(path string, domain []string) ([]gitignore.Pattern, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading %s: %w", path, err)
 	}
 	var patterns []gitignore.Pattern
 	for line := range strings.SplitSeq(string(data), "\n") {
@@ -41,7 +46,7 @@ func parseGitignoreFile(path string, domain []string) []gitignore.Pattern {
 		}
 		patterns = append(patterns, gitignore.ParsePattern(line, domain))
 	}
-	return patterns
+	return patterns, nil
 }
 
 // parseStringPatterns parses a list of raw gitignore-style pattern strings
@@ -119,13 +124,16 @@ func TarToMap(r io.Reader) (map[string][]byte, error) {
 // ComputeManifest walks a directory using the same gitignore/include logic as MakeTar
 // and returns a manifest of all regular files with their SHA-256 hashes.
 func ComputeManifest(dir string, includePatterns []string) ([]FileManifest, error) {
-	ignorePatterns := parseGitignoreFile(filepath.Join(dir, ".gitignore"), nil)
+	ignorePatterns, err := parseGitignoreFile(filepath.Join(dir, ".gitignore"), nil)
+	if err != nil {
+		return nil, err
+	}
 	ignorePatterns = append(ignorePatterns, gitignore.ParsePattern(".git", nil))
 	includes := parseStringPatterns(includePatterns)
 
 	var manifest []FileManifest
 
-	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+	err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -155,7 +163,11 @@ func ComputeManifest(dir string, includePatterns []string) ([]FileManifest, erro
 
 		if info.IsDir() {
 			nestedGitignore := filepath.Join(path, ".gitignore")
-			if more := parseGitignoreFile(nestedGitignore, segs); more != nil {
+			more, err := parseGitignoreFile(nestedGitignore, segs)
+			if err != nil {
+				return err
+			}
+			if more != nil {
 				ignorePatterns = append(ignorePatterns, more...)
 			}
 			return nil
@@ -230,7 +242,11 @@ func makeTarWithFilter(dir string, includePatterns []string, accept func(string)
 	gzw := gzip.NewWriter(w)
 	tw := tar.NewWriter(gzw)
 
-	ignorePatterns := parseGitignoreFile(filepath.Join(dir, ".gitignore"), nil)
+	ignorePatterns, err := parseGitignoreFile(filepath.Join(dir, ".gitignore"), nil)
+	if err != nil {
+		w.Close()
+		return nil, err
+	}
 	ignorePatterns = append(ignorePatterns, gitignore.ParsePattern(".git", nil))
 	includes := parseStringPatterns(includePatterns)
 
@@ -271,7 +287,11 @@ func makeTarWithFilter(dir string, includePatterns []string, accept func(string)
 
 			if info.IsDir() {
 				nestedGitignore := filepath.Join(path, ".gitignore")
-				if more := parseGitignoreFile(nestedGitignore, segs); more != nil {
+				more, err := parseGitignoreFile(nestedGitignore, segs)
+				if err != nil {
+					return err
+				}
+				if more != nil {
 					ignorePatterns = append(ignorePatterns, more...)
 				}
 				return nil
