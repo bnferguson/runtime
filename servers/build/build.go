@@ -716,7 +716,8 @@ func (b *Builder) nextVersion(ctx context.Context, name string) (
 
 	var currentCfg core_v1alpha.ConfigSpec
 
-	if appRec.ActiveVersion != "" {
+	switch {
+	case appRec.ActiveVersion != "":
 		var verRec core_v1alpha.AppVersion
 
 		err := b.ec.GetById(ctx, appRec.ActiveVersion, &verRec)
@@ -730,6 +731,15 @@ func (b *Builder) nextVersion(ctx context.Context, name string) (
 			return nil, nil, core_v1alpha.ConfigSpec{}, "", fmt.Errorf("failed to resolve config: %w", err)
 		}
 		currentCfg = *resolvedCfg
+
+	case appRec.InitialConfig != "":
+		// First deploy after `miren init` staged config server-side. Seed from
+		// the initial ConfigVersion so generated secrets are picked up.
+		var cv core_v1alpha.ConfigVersion
+		if err := b.ec.GetById(ctx, appRec.InitialConfig, &cv); err != nil {
+			return nil, nil, core_v1alpha.ConfigSpec{}, "", fmt.Errorf("failed to load initial config: %w", err)
+		}
+		currentCfg = cv.Spec
 	}
 
 	ver := name + "-" + idgen.Gen("v")
@@ -1814,27 +1824,36 @@ func (b *Builder) AnalyzeApp(ctx context.Context, state *build_v1alpha.BuilderAn
 	var stackName string
 	var buildResult BuildResult
 	var detectedStack stackbuild.Stack
+	var hasDockerfile bool
 
 	// Check for Dockerfile.miren first
 	if f, err := tr.Open("Dockerfile.miren"); err == nil {
 		f.Close()
+		hasDockerfile = true
 		stackName = "dockerfile"
 		result.SetBuildDockerfile("Dockerfile.miren")
 	} else if ac != nil && ac.Build != nil && ac.Build.Dockerfile != "" {
+		hasDockerfile = true
 		stackName = "dockerfile"
-	} else {
-		// Try to detect stack
-		var detectOpts stackbuild.BuildOptions
-		detectOpts.Log = b.Log
-		if ac != nil {
-			detectOpts.Name = ac.Name
-		}
-		stack, err := stackbuild.DetectStack(path, detectOpts)
-		if err != nil {
-			b.Log.Debug("no stack detected", "error", err)
+	}
+
+	// Always try to detect stack for analysis (env vars, events, etc.)
+	// even when dockerfile is present
+	var detectOpts stackbuild.BuildOptions
+	detectOpts.Log = b.Log
+	if ac != nil {
+		detectOpts.Name = ac.Name
+	}
+	stack, err := stackbuild.DetectStack(path, detectOpts)
+	if err != nil {
+		b.Log.Debug("no stack detected", "error", err)
+		if !hasDockerfile {
 			stackName = "unknown"
-		} else {
-			detectedStack = stack
+		}
+	} else {
+		detectedStack = stack
+		// Only use detected stack name/config if no dockerfile
+		if !hasDockerfile {
 			stackName = stack.Name()
 			buildResult.Entrypoint = stack.Entrypoint()
 			buildResult.Command = stack.WebCommand()
@@ -1856,6 +1875,30 @@ func (b *Builder) AnalyzeApp(ctx context.Context, state *build_v1alpha.BuilderAn
 			event.SetName(e.Name)
 			event.SetMessage(e.Message)
 			events = append(events, event)
+		}
+
+		// Add detected env vars from stack to the result
+		// This supplements any env vars already found in app.toml
+		stackEnvVars := detectedStack.RequiredEnvVars()
+		if len(stackEnvVars) > 0 {
+			// Get existing env keys if any
+			var existingKeys []string
+			if result.EnvVars() != nil {
+				existingKeys = *result.EnvVars()
+			}
+			envKeySet := make(map[string]bool)
+			for _, k := range existingKeys {
+				envKeySet[k] = true
+			}
+
+			// Add stack-detected env var keys that aren't already present
+			for _, ev := range stackEnvVars {
+				if !envKeySet[ev.Name] {
+					envKeySet[ev.Name] = true
+					existingKeys = append(existingKeys, ev.Name)
+				}
+			}
+			result.SetEnvVars(&existingKeys)
 		}
 	}
 

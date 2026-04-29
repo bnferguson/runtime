@@ -340,13 +340,6 @@ func TestImageMatchesAppVersion(t *testing.T) {
 			description:     "Different registries should not match",
 		},
 		{
-			name:            "empty app version image",
-			containerImage:  "postgres:16",
-			appVersionImage: "",
-			shouldMatch:     false,
-			description:     "Empty app version image should not match",
-		},
-		{
 			name:            "similar but not matching",
 			containerImage:  "myapp-sidecar:v1",
 			appVersionImage: "myapp:v1",

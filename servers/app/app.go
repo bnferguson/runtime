@@ -83,17 +83,23 @@ func (r *AppInfo) New(ctx context.Context, state *app_v1alpha.CrudNew) error {
 
 	err := r.EC.Get(ctx, name, &appRec)
 	if err == nil {
-		state.Results().SetId(name)
+		// App already exists, return its ID
+		state.Results().SetId(string(appRec.ID))
 		return nil
 	}
+	if !errors.Is(err, cond.ErrNotFound{}) {
+		return fmt.Errorf("failed to look up app %q: %w", name, err)
+	}
 
-	_, err = r.EC.Create(ctx, name, &appRec)
+	// Set default project to match the build server behavior
+	appRec.Project = "project/default"
+
+	id, err := r.EC.Create(ctx, name, &appRec)
 	if err != nil {
 		return err
 	}
 
-	// TODO this is a bad id.
-	state.Results().SetId(name)
+	state.Results().SetId(string(id))
 
 	return nil
 }
@@ -621,6 +627,28 @@ func (r *AppInfo) SetEnvVars(ctx context.Context, state *app_v1alpha.CrudSetEnvV
 	if sid := r.versionShortId(ctx, versionId); sid != "" {
 		state.Results().SetVersionShortId(sid)
 	}
+	return nil
+}
+
+func (r *AppInfo) SetInitialEnvVars(ctx context.Context, state *app_v1alpha.CrudSetInitialEnvVars) error {
+	args := state.Args()
+	rpcVars := args.Vars()
+
+	if len(rpcVars) == 0 {
+		return fmt.Errorf("no environment variables provided")
+	}
+
+	vars := make([]appclient.EnvVarInput, len(rpcVars))
+	for i, v := range rpcVars {
+		vars[i] = appclient.EnvVarInput{Key: v.Key(), Value: v.Value(), Sensitive: v.Sensitive()}
+	}
+
+	cvid, err := appclient.SetInitialEnvVars(ctx, r.EC, args.App(), vars, args.Service())
+	if err != nil {
+		return err
+	}
+
+	state.Results().SetConfigVersionId(string(cvid))
 	return nil
 }
 
