@@ -26,6 +26,7 @@ miren auth provider remove <name> [flags]
 
 - `--cluster, -C` — Cluster name
 - `--config` — Path to the config file
+- `--force` — Remove the provider even if it is attached to routes
 
 ## Global Options
 

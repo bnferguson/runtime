@@ -12,12 +12,17 @@ import (
 )
 
 func RouteShow(ctx *Context, opts struct {
-	Host string `position:"0" usage:"Hostname of the route to show" required:"true"`
+	Host    string `position:"0" usage:"Hostname of the route to show; omit and pass --default for the default route"`
+	Default bool   `long:"default" description:"Show the default route (instead of a hostname)"`
 	FormatOptions
 	ConfigCentric
 }) error {
-	if opts.Host == "" {
-		return fmt.Errorf("host is required")
+	if opts.Host == "" && !opts.Default {
+		return fmt.Errorf("either a hostname or --default must be specified")
+	}
+
+	if opts.Host != "" && opts.Default {
+		return fmt.Errorf("--default cannot be used with a hostname")
 	}
 
 	client, err := ctx.RPCClient("entities")
@@ -27,13 +32,27 @@ func RouteShow(ctx *Context, opts struct {
 
 	ic := ingress.NewClient(ctx.Log, client)
 
-	route, err := ic.Lookup(ctx, opts.Host)
-	if err != nil {
-		return err
-	}
+	var route *ingress_v1alpha.HttpRoute
+	var routeLabel string
 
-	if route == nil {
-		return fmt.Errorf("route not found: %s", opts.Host)
+	if opts.Default {
+		route, err = ic.LookupDefault(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to lookup default route: %w", err)
+		}
+		if route == nil {
+			return fmt.Errorf("no default route configured")
+		}
+		routeLabel = "default"
+	} else {
+		route, err = ic.Lookup(ctx, opts.Host)
+		if err != nil {
+			return err
+		}
+		if route == nil {
+			return fmt.Errorf("route not found: %s", opts.Host)
+		}
+		routeLabel = opts.Host
 	}
 
 	protected := !entity.Empty(route.OidcProvider)
@@ -62,7 +81,7 @@ func RouteShow(ctx *Context, opts struct {
 		}
 
 		r := RouteJSON{
-			Host:        opts.Host,
+			Host:        routeLabel,
 			App:         ui.CleanEntityID(string(route.App)),
 			Default:     route.Default,
 			Protected:   protected,
@@ -87,7 +106,7 @@ func RouteShow(ctx *Context, opts struct {
 		return PrintJSON(r)
 	}
 
-	ctx.Printf("Route: %s\n", opts.Host)
+	ctx.Printf("Route: %s\n", routeLabel)
 	ctx.Printf("  App:       %s\n", ui.CleanEntityID(string(route.App)))
 	ctx.Printf("  Default:   %v\n", route.Default)
 	ctx.Printf("  Protected: %v\n", protected)

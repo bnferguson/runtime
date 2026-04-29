@@ -28,6 +28,8 @@ miren route protect <host> [flags]
 - `--cluster, -C` — Cluster name
 - `--config` — Path to the config file
 - `--default` — Protect the default route (instead of a hostname)
+- `--format` — Output format (text, json) (default: `text`)
+- `--json` — Shorthand for --format json
 - `--provider` — Name of the identity provider
 
 ## Global Options

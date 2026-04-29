@@ -30,6 +30,7 @@ miren auth provider add <name> [flags]
 - `--config` — Path to the config file
 - `--provider-url` — OIDC provider URL (e.g., https://accounts.google.com)
 - `--scope` — OAuth2 scopes (can be specified multiple times)
+- `--update` — Overwrite an existing provider with the same name (rotates client secret)
 
 ## Global Options
 

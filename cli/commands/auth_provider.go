@@ -16,6 +16,7 @@ func AuthProviderAdd(ctx *Context, opts struct {
 	ClientID     string   `long:"client-id" description:"OAuth2 client ID" required:"true"`
 	ClientSecret string   `long:"client-secret" description:"OAuth2 client secret" required:"true"`
 	Scopes       []string `long:"scope" description:"OAuth2 scopes (can be specified multiple times)"`
+	Update       bool     `long:"update" description:"Overwrite an existing provider with the same name (rotates client secret)"`
 	ConfigCentric
 }) error {
 	if !labs.RouteOIDC() {
@@ -54,6 +55,14 @@ func AuthProviderAdd(ctx *Context, opts struct {
 	}
 
 	ic := ingress.NewClient(ctx.Log, client)
+
+	existing, err := ic.GetOIDCProvider(ctx, opts.Name)
+	if err != nil {
+		return fmt.Errorf("failed to check for existing identity provider: %w", err)
+	}
+	if existing != nil && !opts.Update {
+		return fmt.Errorf("identity provider %q already exists. Pass --update to overwrite (rotates client secret)", opts.Name)
+	}
 
 	provider := &ingress_v1alpha.OidcProvider{
 		Name:         opts.Name,
@@ -101,19 +110,19 @@ func AuthProviderList(ctx *Context, opts struct {
 
 	if opts.IsJSON() {
 		type ProviderJSON struct {
-			Name        string `json:"name"`
-			ProviderURL string `json:"provider_url"`
-			ClientID    string `json:"client_id"`
-			Scopes      string `json:"scopes"`
+			Name        string   `json:"name"`
+			ProviderURL string   `json:"provider_url"`
+			ClientID    string   `json:"client_id"`
+			Scopes      []string `json:"scopes"`
 		}
 
-		var items []ProviderJSON
+		items := make([]ProviderJSON, 0, len(providers))
 		for _, p := range providers {
 			items = append(items, ProviderJSON{
 				Name:        p.Name,
 				ProviderURL: p.ProviderUrl,
 				ClientID:    p.ClientId,
-				Scopes:      p.Scopes,
+				Scopes:      strings.Fields(p.Scopes),
 			})
 		}
 		return PrintJSON(items)
@@ -172,17 +181,17 @@ func AuthProviderShow(ctx *Context, opts struct {
 
 	if opts.IsJSON() {
 		type ProviderJSON struct {
-			Name        string `json:"name"`
-			ProviderURL string `json:"provider_url"`
-			ClientID    string `json:"client_id"`
-			Scopes      string `json:"scopes"`
+			Name        string   `json:"name"`
+			ProviderURL string   `json:"provider_url"`
+			ClientID    string   `json:"client_id"`
+			Scopes      []string `json:"scopes"`
 		}
 
 		return PrintJSON(ProviderJSON{
 			Name:        provider.Name,
 			ProviderURL: provider.ProviderUrl,
 			ClientID:    provider.ClientId,
-			Scopes:      provider.Scopes,
+			Scopes:      strings.Fields(provider.Scopes),
 		})
 	}
 
@@ -198,7 +207,8 @@ func AuthProviderShow(ctx *Context, opts struct {
 }
 
 func AuthProviderRemove(ctx *Context, opts struct {
-	Name string `position:"0" usage:"Name of the identity provider to remove" required:"true"`
+	Name  string `position:"0" usage:"Name of the identity provider to remove" required:"true"`
+	Force bool   `long:"force" description:"Remove the provider even if it is attached to routes"`
 	ConfigCentric
 }) error {
 	if !labs.RouteOIDC() {
@@ -215,6 +225,32 @@ func AuthProviderRemove(ctx *Context, opts struct {
 	}
 
 	ic := ingress.NewClient(ctx.Log, client)
+
+	if !opts.Force {
+		provider, err := ic.GetOIDCProvider(ctx, opts.Name)
+		if err != nil {
+			return fmt.Errorf("failed to get identity provider: %w", err)
+		}
+		if provider == nil {
+			return fmt.Errorf("identity provider not found: %s", opts.Name)
+		}
+
+		routes, err := ic.List(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to list routes: %w", err)
+		}
+
+		var inUse []string
+		for _, rm := range routes {
+			if rm.Route.OidcProvider == provider.ID {
+				inUse = append(inUse, rm.Route.Host)
+			}
+		}
+
+		if len(inUse) > 0 {
+			return fmt.Errorf("identity provider %q is attached to %d route(s): %s. Detach with `miren route unprotect`, or pass --force to remove anyway", opts.Name, len(inUse), strings.Join(inUse, ", "))
+		}
+	}
 
 	err = ic.DeleteOIDCProvider(ctx, opts.Name)
 	if err != nil {

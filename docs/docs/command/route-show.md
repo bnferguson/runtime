@@ -16,12 +16,13 @@ miren route show <host> [flags]
 
 ## Arguments
 
-- `host` — Hostname of the route to show
+- `host` — Hostname of the route to show; omit and pass --default for the default route
 
 ## Flags
 
 - `--cluster, -C` — Cluster name
 - `--config` — Path to the config file
+- `--default` — Show the default route (instead of a hostname)
 - `--format` — Output format (text, json) (default: `text`)
 - `--json` — Shorthand for --format json
 

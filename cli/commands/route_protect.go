@@ -15,6 +15,7 @@ func RouteProtect(ctx *Context, opts struct {
 	Default     bool     `long:"default" description:"Protect the default route (instead of a hostname)"`
 	Provider    string   `long:"provider" description:"Name of the identity provider" required:"true"`
 	ClaimHeader []string `long:"claim-header" description:"Claim to header mapping in format 'claim:header' (e.g., 'email:X-User-Email')"`
+	FormatOptions
 	ConfigCentric
 }) error {
 	if !labs.RouteOIDC() {
@@ -83,6 +84,30 @@ func RouteProtect(ctx *Context, opts struct {
 	_, err = ic.AttachOIDCProviderToRoute(ctx, route, opts.Provider, claimMappings)
 	if err != nil {
 		return fmt.Errorf("failed to protect route: %w", err)
+	}
+
+	if opts.IsJSON() {
+		type RouteProtectJSON struct {
+			Route         string              `json:"route"`
+			Protected     bool                `json:"protected"`
+			Provider      string              `json:"provider"`
+			ClaimMappings []map[string]string `json:"claim_mappings,omitempty"`
+		}
+
+		var mappings []map[string]string
+		for _, m := range claimMappings {
+			mappings = append(mappings, map[string]string{
+				"claim":  m.Claim,
+				"header": m.Header,
+			})
+		}
+
+		return PrintJSON(RouteProtectJSON{
+			Route:         routeLabel,
+			Protected:     true,
+			Provider:      opts.Provider,
+			ClaimMappings: mappings,
+		})
 	}
 
 	items := []ui.NamedValue{
