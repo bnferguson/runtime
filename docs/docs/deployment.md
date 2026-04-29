@@ -33,7 +33,7 @@ miren deploy -d path/to/app
 ```
 </CliCommand>
 
-Miren reads the app name from `.miren/app.toml`. If you haven't set up your project yet, Miren offers to run `miren init` for you, which creates an `app.toml` with the app name derived from your directory name. If this is the first deploy of the app, Miren creates it automatically on the server.
+Miren reads the app name from `.miren/app.toml`. If you haven't set up your project yet, Miren offers to run `miren init` for you. `miren init` creates `app.toml` with the app name derived from your directory, then scans the project for required environment variables and stages whatever it can — generated secrets, read-from-file values, and sensible defaults — on the app's initial config so they're available on the first deploy. See [What `miren init` Does for You](/app-configuration#what-miren-init-does-for-you) for the full picture. If this is the first deploy of the app, Miren creates it automatically on the server.
 
 ### Confirmation Prompt
 

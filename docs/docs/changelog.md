@@ -5,6 +5,9 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *main*
 
+**Features**
+- **Smarter `miren init`** - `miren init` now scans your project for the environment variables your app actually needs and stages them server-side before the first deploy. Generated secrets (Rails `SECRET_KEY_BASE`), file-backed keys (`RAILS_MASTER_KEY`), framework defaults, and source-detected reads across Python/Node/Bun/Go/Ruby/Rust are recognized; the ones we can resolve land on a new initial config that the first build picks up automatically. Re-running with `--update` merges new detections without re-rotating already-staged secrets. See [What `miren init` Does for You](/app-configuration#what-miren-init-does-for-you). ([#567](https://github.com/mirendev/runtime/pull/567))
+
 ---
 
 ## v0.7.1
