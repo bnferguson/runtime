@@ -328,6 +328,43 @@ func TestMakeTarGitignoreNegation(t *testing.T) {
 	require.ElementsMatch(t, expected, entries)
 }
 
+// TestMakeTarBridgetownTmpPids mirrors the on-disk shape of a vanilla
+// `bridgetown new` checkout: only tmp/pids/.keep exists (no tmp/.keep), with
+// the gitignore using `/tmp/*` plus a `!/tmp/pids/` negation to keep the
+// pidfile directory tracked. Without the kept .keep file surviving the
+// walker, lazy directory emission drops tmp/ from the tar entirely and
+// Puma fails to write tmp/pids/server.pid at runtime.
+func TestMakeTarBridgetownTmpPids(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "tarx-test-bridgetown-")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	files := map[string]string{
+		"Gemfile":         "source 'https://rubygems.org'\n",
+		"config/puma.rb":  "pidfile 'tmp/pids/server.pid'\n",
+		"tmp/pids/.keep":  "",
+		"tmp/cache/x.txt": "should be ignored",
+	}
+	for filename, content := range files {
+		fullPath := filepath.Join(tmpDir, filename)
+		require.NoError(t, os.MkdirAll(filepath.Dir(fullPath), 0755))
+		require.NoError(t, os.WriteFile(fullPath, []byte(content), 0644))
+	}
+
+	gitignore := "/tmp/*\n!/tmp/.keep\n/tmp/pids/*\n!/tmp/pids/\n!/tmp/pids/.keep\n"
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".gitignore"), []byte(gitignore), 0644))
+
+	reader, err := MakeTar(tmpDir, nil, nil)
+	require.NoError(t, err)
+
+	entries := extractTarEntries(t, reader)
+	require.Contains(t, entries, "tmp/pids/.keep",
+		"tmp/pids/.keep must be in the tar so Puma can write tmp/pids/server.pid at runtime")
+	require.Contains(t, entries, "tmp",
+		"tmp/ directory header must be in the tar so /app/tmp/ exists in the runtime image")
+	require.NotContains(t, entries, "tmp/cache/x.txt")
+}
+
 func TestComputeManifest(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "tarx-manifest-")
 	require.NoError(t, err)

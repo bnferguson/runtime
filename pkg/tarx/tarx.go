@@ -13,7 +13,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/shibumi/go-pathspec"
+	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
 	"github.com/tonistiigi/fsutil"
 )
 
@@ -25,66 +25,56 @@ type FileManifest struct {
 	Mode int32
 }
 
-// parseGitignore reads a .gitignore file and returns its patterns.
-// Returns nil if the file doesn't exist or can't be read.
-func parseGitignore(path string) []string {
+// parseGitignoreFile reads a .gitignore file and returns its parsed patterns
+// scoped to the given domain (path components from the walk root). Returns
+// nil if the file doesn't exist or is empty.
+func parseGitignoreFile(path string, domain []string) []gitignore.Pattern {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil
 	}
-	var patterns []string
-	for _, line := range strings.Split(string(data), "\n") {
+	var patterns []gitignore.Pattern
+	for line := range strings.SplitSeq(string(data), "\n") {
 		line = strings.TrimSpace(line)
-		if line != "" && !strings.HasPrefix(line, "#") {
-			patterns = append(patterns, line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
 		}
+		patterns = append(patterns, gitignore.ParsePattern(line, domain))
 	}
 	return patterns
 }
 
-// isGitignored checks whether a relative path is matched by any applicable
-// gitignore in the map. The map is keyed by directory relative path ("." for
-// root). Only gitignores whose directory is a parent of rp are consulted.
-func isGitignored(rp string, isDir bool, gitignoreMap map[string][]string) (bool, error) {
-	for dir, patterns := range gitignoreMap {
-		if len(patterns) == 0 {
-			continue
-		}
-		// Check that rp is within this gitignore's subtree
-		if dir != "." {
-			if !strings.HasPrefix(rp, dir+"/") {
-				continue
-			}
-		}
-		// Compute the path relative to the gitignore's directory
-		relPath := rp
-		if dir != "." {
-			relPath = strings.TrimPrefix(rp, dir+"/")
-		}
-		paths := []string{relPath}
-		if isDir {
-			paths = append(paths, relPath+"/")
-		}
-		for _, checkPath := range paths {
-			ignore, err := pathspec.GitIgnore(patterns, checkPath)
-			if err != nil {
-				return false, fmt.Errorf("invalid gitignore pattern: %w", err)
-			}
-			if ignore {
-				return true, nil
-			}
-		}
+// parseStringPatterns parses a list of raw gitignore-style pattern strings
+// (e.g. user-supplied --include patterns) into gitignore.Patterns rooted at
+// the walk root.
+func parseStringPatterns(rawPatterns []string) []gitignore.Pattern {
+	if len(rawPatterns) == 0 {
+		return nil
 	}
-	return false, nil
+	patterns := make([]gitignore.Pattern, 0, len(rawPatterns))
+	for _, p := range rawPatterns {
+		patterns = append(patterns, gitignore.ParsePattern(p, nil))
+	}
+	return patterns
 }
 
-// ValidatePattern checks if a pattern is valid for use with pathspec.GitIgnore
-func ValidatePattern(pattern string) error {
-	// Test the pattern with a dummy path to ensure it's valid
-	_, err := pathspec.GitIgnore([]string{pattern}, "test")
-	if err != nil {
-		return fmt.Errorf("invalid pattern syntax: %w", err)
+// pathSegments converts an OS-relative path into the []string component form
+// that gitignore.Matcher expects.
+func pathSegments(rp string) []string {
+	rp = filepath.ToSlash(rp)
+	if rp == "" || rp == "." {
+		return nil
 	}
+	return strings.Split(rp, "/")
+}
+
+// ValidatePattern checks that a user-supplied gitignore-style pattern parses
+// successfully.
+func ValidatePattern(pattern string) error {
+	if strings.TrimSpace(pattern) == "" {
+		return fmt.Errorf("invalid pattern syntax: empty pattern")
+	}
+	gitignore.ParsePattern(pattern, nil)
 	return nil
 }
 
@@ -129,10 +119,9 @@ func TarToMap(r io.Reader) (map[string][]byte, error) {
 // ComputeManifest walks a directory using the same gitignore/include logic as MakeTar
 // and returns a manifest of all regular files with their SHA-256 hashes.
 func ComputeManifest(dir string, includePatterns []string) ([]FileManifest, error) {
-	gitignoreMap := make(map[string][]string)
-	rootPatterns := parseGitignore(filepath.Join(dir, ".gitignore"))
-	rootPatterns = append(rootPatterns, ".git")
-	gitignoreMap["."] = rootPatterns
+	ignorePatterns := parseGitignoreFile(filepath.Join(dir, ".gitignore"), nil)
+	ignorePatterns = append(ignorePatterns, gitignore.ParsePattern(".git", nil))
+	includes := parseStringPatterns(includePatterns)
 
 	var manifest []FileManifest
 
@@ -151,30 +140,12 @@ func ComputeManifest(dir string, includePatterns []string) ([]FileManifest, erro
 			return nil
 		}
 
-		isIncluded := false
-		if len(includePatterns) > 0 {
-			paths := []string{rp}
-			if info.IsDir() {
-				paths = append(paths, rp+"/")
-			}
-			for _, checkPath := range paths {
-				match, matchErr := pathspec.GitIgnore(includePatterns, checkPath)
-				if matchErr != nil {
-					return fmt.Errorf("invalid include pattern: %w", matchErr)
-				}
-				if match {
-					isIncluded = true
-					break
-				}
-			}
-		}
+		segs := pathSegments(rp)
+
+		isIncluded := len(includes) > 0 && gitignore.NewMatcher(includes).Match(segs, info.IsDir())
 
 		if !isIncluded {
-			ignored, ignoreErr := isGitignored(rp, info.IsDir(), gitignoreMap)
-			if ignoreErr != nil {
-				return ignoreErr
-			}
-			if ignored {
+			if gitignore.NewMatcher(ignorePatterns).Match(segs, info.IsDir()) {
 				if info.IsDir() {
 					return filepath.SkipDir
 				}
@@ -184,8 +155,8 @@ func ComputeManifest(dir string, includePatterns []string) ([]FileManifest, erro
 
 		if info.IsDir() {
 			nestedGitignore := filepath.Join(path, ".gitignore")
-			if patterns := parseGitignore(nestedGitignore); patterns != nil {
-				gitignoreMap[rp] = patterns
+			if more := parseGitignoreFile(nestedGitignore, segs); more != nil {
+				ignorePatterns = append(ignorePatterns, more...)
 			}
 			return nil
 		}
@@ -259,10 +230,9 @@ func makeTarWithFilter(dir string, includePatterns []string, accept func(string)
 	gzw := gzip.NewWriter(w)
 	tw := tar.NewWriter(gzw)
 
-	gitignoreMap := make(map[string][]string)
-	rootPatterns := parseGitignore(filepath.Join(dir, ".gitignore"))
-	rootPatterns = append(rootPatterns, ".git")
-	gitignoreMap["."] = rootPatterns
+	ignorePatterns := parseGitignoreFile(filepath.Join(dir, ".gitignore"), nil)
+	ignorePatterns = append(ignorePatterns, gitignore.ParsePattern(".git", nil))
+	includes := parseStringPatterns(includePatterns)
 
 	go func() {
 		defer w.Close()
@@ -286,30 +256,12 @@ func makeTarWithFilter(dir string, includePatterns []string, accept func(string)
 				return nil
 			}
 
-			isIncluded := false
-			if len(includePatterns) > 0 {
-				paths := []string{rp}
-				if info.IsDir() {
-					paths = append(paths, rp+"/")
-				}
-				for _, checkPath := range paths {
-					match, matchErr := pathspec.GitIgnore(includePatterns, checkPath)
-					if matchErr != nil {
-						return fmt.Errorf("invalid include pattern: %w", matchErr)
-					}
-					if match {
-						isIncluded = true
-						break
-					}
-				}
-			}
+			segs := pathSegments(rp)
+
+			isIncluded := len(includes) > 0 && gitignore.NewMatcher(includes).Match(segs, info.IsDir())
 
 			if !isIncluded {
-				ignored, ignoreErr := isGitignored(rp, info.IsDir(), gitignoreMap)
-				if ignoreErr != nil {
-					return ignoreErr
-				}
-				if ignored {
+				if gitignore.NewMatcher(ignorePatterns).Match(segs, info.IsDir()) {
 					if info.IsDir() {
 						return filepath.SkipDir
 					}
@@ -319,8 +271,8 @@ func makeTarWithFilter(dir string, includePatterns []string, accept func(string)
 
 			if info.IsDir() {
 				nestedGitignore := filepath.Join(path, ".gitignore")
-				if patterns := parseGitignore(nestedGitignore); patterns != nil {
-					gitignoreMap[rp] = patterns
+				if more := parseGitignoreFile(nestedGitignore, segs); more != nil {
+					ignorePatterns = append(ignorePatterns, more...)
 				}
 				return nil
 			}
