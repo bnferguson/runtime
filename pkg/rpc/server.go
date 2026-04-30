@@ -324,7 +324,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if identity != nil {
 		ctx = ContextWithIdentity(ctx, identity)
 		r = r.WithContext(ctx)
-		s.state.log.Debug("request authenticated", "subject", identity.Subject, "method", identity.Method, "path", r.URL.Path)
 	}
 
 	// For RPC paths, let the method-level check in handleCalls decide based on public flag

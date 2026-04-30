@@ -7,7 +7,7 @@ import (
 const (
 	AddonName      = "miren-valkey"
 	BaseImage      = "oci.miren.cloud/valkey"
-	DefaultVersion = "8"
+	DefaultVersion = "9"
 )
 
 const (

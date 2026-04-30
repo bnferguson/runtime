@@ -211,6 +211,29 @@ func TestClientLookupWithWildcard(t *testing.T) {
 	})
 }
 
+func TestExtractSubdomainLabel(t *testing.T) {
+	tests := []struct {
+		requestHost string
+		routeHost   string
+		want        string
+	}{
+		{"feat-x.app.example.com", "*.app.example.com", "feat-x"},
+		{"my-branch.app.example.com", "*.app.example.com", "my-branch"},
+		{"app.example.com", "*.app.example.com", ""},              // no prefix
+		{"app.example.com", "app.example.com", ""},                // not a wildcard
+		{"deep.sub.app.example.com", "*.app.example.com", ""},     // multi-level subdomain
+		{"feat-x.other.com", "*.app.example.com", ""},             // different domain
+		{"FEAT-X.APP.EXAMPLE.COM", "*.app.example.com", "feat-x"}, // case insensitive
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.requestHost+"_"+tt.routeHost, func(t *testing.T) {
+			got := ExtractSubdomainLabel(tt.requestHost, tt.routeHost)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestValidateWildcardHost(t *testing.T) {
 	tests := []struct {
 		host    string

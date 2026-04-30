@@ -66,6 +66,16 @@ func (e *EntityServer) Get(ctx context.Context, req *entityserver_v1alpha.Entity
 			if resolvedId, idxErr := etcdStore.GetOneIndex(ctx, entity.String(entity.DBShortId, args.Id())); idxErr == nil {
 				ent, err = e.Store.GetEntity(ctx, resolvedId)
 			}
+			// If that didn't work and the ID has a kind prefix (e.g. "sandbox/3sA"),
+			// strip the prefix and try the bare suffix as a short ID.
+			if err != nil {
+				if idx := strings.LastIndex(args.Id(), "/"); idx >= 0 {
+					bare := args.Id()[idx+1:]
+					if resolvedId, idxErr := etcdStore.GetOneIndex(ctx, entity.String(entity.DBShortId, bare)); idxErr == nil {
+						ent, err = e.Store.GetEntity(ctx, resolvedId)
+					}
+				}
+			}
 		}
 		if err != nil {
 			return cond.NotFound("entity", args.Id())

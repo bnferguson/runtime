@@ -96,7 +96,7 @@ func TestDiskControllerUpgradeLSVDToUniversal(t *testing.T) {
 		es, cleanup := testutils.NewInMemEntityServer(t)
 		defer cleanup()
 
-		dc := NewDiskController(log, es.EAC, "test-node-1", "")
+		dc := NewDiskController(log, es.EAC, "test-node-1", "", true)
 		dc.ForceUniversalMode()
 
 		// Create a disk entity that looks like it was provisioned under the old LSVD system:
@@ -145,7 +145,7 @@ func TestDiskControllerUpgradeLSVDToUniversal(t *testing.T) {
 		es, cleanup := testutils.NewInMemEntityServer(t)
 		defer cleanup()
 
-		dc := NewDiskController(log, es.EAC, "test-node-1", "")
+		dc := NewDiskController(log, es.EAC, "test-node-1", "", true)
 		dc.ForceUniversalMode()
 
 		// Disk has a VolumeId (from old system) but no corresponding disk_volume entity
@@ -185,7 +185,7 @@ func TestDiskControllerUpgradeLSVDToUniversal(t *testing.T) {
 		es, cleanup := testutils.NewInMemEntityServer(t)
 		defer cleanup()
 
-		dc := NewDiskController(log, es.EAC, "test-node-1", "")
+		dc := NewDiskController(log, es.EAC, "test-node-1", "", true)
 		dc.ForceUniversalMode()
 
 		disk := &storage_v1alpha.Disk{

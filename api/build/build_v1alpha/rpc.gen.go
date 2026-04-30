@@ -1017,10 +1017,12 @@ func (v StreamClient) Recv(ctx context.Context, count int32) (*StreamClientRecvR
 }
 
 type builderBuildFromTarArgsData struct {
-	Application *string                 `cbor:"0,keyasint,omitempty" json:"application,omitempty"`
-	Tardata     *rpc.Capability         `cbor:"1,keyasint,omitempty" json:"tardata,omitempty"`
-	Status      *rpc.Capability         `cbor:"2,keyasint,omitempty" json:"status,omitempty"`
-	EnvVars     *[]*EnvironmentVariable `cbor:"3,keyasint,omitempty" json:"envVars,omitempty"`
+	Application    *string                 `cbor:"0,keyasint,omitempty" json:"application,omitempty"`
+	Tardata        *rpc.Capability         `cbor:"1,keyasint,omitempty" json:"tardata,omitempty"`
+	Status         *rpc.Capability         `cbor:"2,keyasint,omitempty" json:"status,omitempty"`
+	EnvVars        *[]*EnvironmentVariable `cbor:"3,keyasint,omitempty" json:"envVars,omitempty"`
+	EphemeralLabel *string                 `cbor:"4,keyasint,omitempty" json:"ephemeral_label,omitempty"`
+	EphemeralTtl   *string                 `cbor:"5,keyasint,omitempty" json:"ephemeral_ttl,omitempty"`
 }
 
 type BuilderBuildFromTarArgs struct {
@@ -1070,6 +1072,28 @@ func (v *BuilderBuildFromTarArgs) EnvVars() []*EnvironmentVariable {
 		return nil
 	}
 	return *v.data.EnvVars
+}
+
+func (v *BuilderBuildFromTarArgs) HasEphemeralLabel() bool {
+	return v.data.EphemeralLabel != nil
+}
+
+func (v *BuilderBuildFromTarArgs) EphemeralLabel() string {
+	if v.data.EphemeralLabel == nil {
+		return ""
+	}
+	return *v.data.EphemeralLabel
+}
+
+func (v *BuilderBuildFromTarArgs) HasEphemeralTtl() bool {
+	return v.data.EphemeralTtl != nil
+}
+
+func (v *BuilderBuildFromTarArgs) EphemeralTtl() string {
+	if v.data.EphemeralTtl == nil {
+		return ""
+	}
+	return *v.data.EphemeralTtl
 }
 
 func (v *BuilderBuildFromTarArgs) MarshalCBOR() ([]byte, error) {
@@ -1270,10 +1294,12 @@ func (v *BuilderPrepareUploadResults) UnmarshalJSON(data []byte) error {
 }
 
 type builderBuildFromPreparedArgsData struct {
-	SessionId *string                 `cbor:"0,keyasint,omitempty" json:"session_id,omitempty"`
-	Tardata   *rpc.Capability         `cbor:"1,keyasint,omitempty" json:"tardata,omitempty"`
-	Status    *rpc.Capability         `cbor:"2,keyasint,omitempty" json:"status,omitempty"`
-	EnvVars   *[]*EnvironmentVariable `cbor:"3,keyasint,omitempty" json:"envVars,omitempty"`
+	SessionId      *string                 `cbor:"0,keyasint,omitempty" json:"session_id,omitempty"`
+	Tardata        *rpc.Capability         `cbor:"1,keyasint,omitempty" json:"tardata,omitempty"`
+	Status         *rpc.Capability         `cbor:"2,keyasint,omitempty" json:"status,omitempty"`
+	EnvVars        *[]*EnvironmentVariable `cbor:"3,keyasint,omitempty" json:"envVars,omitempty"`
+	EphemeralLabel *string                 `cbor:"4,keyasint,omitempty" json:"ephemeral_label,omitempty"`
+	EphemeralTtl   *string                 `cbor:"5,keyasint,omitempty" json:"ephemeral_ttl,omitempty"`
 }
 
 type BuilderBuildFromPreparedArgs struct {
@@ -1323,6 +1349,28 @@ func (v *BuilderBuildFromPreparedArgs) EnvVars() []*EnvironmentVariable {
 		return nil
 	}
 	return *v.data.EnvVars
+}
+
+func (v *BuilderBuildFromPreparedArgs) HasEphemeralLabel() bool {
+	return v.data.EphemeralLabel != nil
+}
+
+func (v *BuilderBuildFromPreparedArgs) EphemeralLabel() string {
+	if v.data.EphemeralLabel == nil {
+		return ""
+	}
+	return *v.data.EphemeralLabel
+}
+
+func (v *BuilderBuildFromPreparedArgs) HasEphemeralTtl() bool {
+	return v.data.EphemeralTtl != nil
+}
+
+func (v *BuilderBuildFromPreparedArgs) EphemeralTtl() string {
+	if v.data.EphemeralTtl == nil {
+		return ""
+	}
+	return *v.data.EphemeralTtl
 }
 
 func (v *BuilderBuildFromPreparedArgs) MarshalCBOR() ([]byte, error) {
@@ -1608,7 +1656,7 @@ func (v *BuilderClientBuildFromTarResults) VersionShortId() string {
 	return *v.data.VersionShortId
 }
 
-func (v BuilderClient) BuildFromTar(ctx context.Context, application string, tardata stream.RecvStream[[]byte], status stream.SendStream[*Status], envVars []*EnvironmentVariable) (*BuilderClientBuildFromTarResults, error) {
+func (v BuilderClient) BuildFromTar(ctx context.Context, application string, tardata stream.RecvStream[[]byte], status stream.SendStream[*Status], envVars []*EnvironmentVariable, ephemeral_label string, ephemeral_ttl string) (*BuilderClientBuildFromTarResults, error) {
 	args := BuilderBuildFromTarArgs{}
 	caps := map[rpc.OID]*rpc.InlineCapability{}
 	args.data.Application = &application
@@ -1623,6 +1671,8 @@ func (v BuilderClient) BuildFromTar(ctx context.Context, application string, tar
 		caps[oid] = ic
 	}
 	args.data.EnvVars = &envVars
+	args.data.EphemeralLabel = &ephemeral_label
+	args.data.EphemeralTtl = &ephemeral_ttl
 
 	var ret builderBuildFromTarResultsData
 
@@ -1738,7 +1788,7 @@ func (v *BuilderClientBuildFromPreparedResults) VersionShortId() string {
 	return *v.data.VersionShortId
 }
 
-func (v BuilderClient) BuildFromPrepared(ctx context.Context, session_id string, tardata stream.RecvStream[[]byte], status stream.SendStream[*Status], envVars []*EnvironmentVariable) (*BuilderClientBuildFromPreparedResults, error) {
+func (v BuilderClient) BuildFromPrepared(ctx context.Context, session_id string, tardata stream.RecvStream[[]byte], status stream.SendStream[*Status], envVars []*EnvironmentVariable, ephemeral_label string, ephemeral_ttl string) (*BuilderClientBuildFromPreparedResults, error) {
 	args := BuilderBuildFromPreparedArgs{}
 	caps := map[rpc.OID]*rpc.InlineCapability{}
 	args.data.SessionId = &session_id
@@ -1753,6 +1803,8 @@ func (v BuilderClient) BuildFromPrepared(ctx context.Context, session_id string,
 		caps[oid] = ic
 	}
 	args.data.EnvVars = &envVars
+	args.data.EphemeralLabel = &ephemeral_label
+	args.data.EphemeralTtl = &ephemeral_ttl
 
 	var ret builderBuildFromPreparedResultsData
 

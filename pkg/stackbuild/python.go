@@ -3,12 +3,68 @@ package stackbuild
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/moby/buildkit/client/llb"
 	"github.com/pelletier/go-toml/v2"
 	"miren.dev/runtime/pkg/imagerefs"
 )
+
+// pythonPackageEnvVars maps Python package names to the environment variables they typically require
+var pythonPackageEnvVars = map[string][]packageEnvVarDef{
+	// Database drivers
+	"psycopg2":               {{name: "DATABASE_URL", confidence: "recommended"}},
+	"psycopg2-binary":        {{name: "DATABASE_URL", confidence: "recommended"}},
+	"psycopg":                {{name: "DATABASE_URL", confidence: "recommended"}},
+	"asyncpg":                {{name: "DATABASE_URL", confidence: "recommended"}},
+	"mysql-connector-python": {{name: "DATABASE_URL", confidence: "recommended"}},
+	"mysqlclient":            {{name: "DATABASE_URL", confidence: "recommended"}},
+	"pymongo":                {{name: "MONGODB_URI", confidence: "recommended"}},
+	"motor":                  {{name: "MONGODB_URI", confidence: "recommended"}},
+	"redis":                  {{name: "REDIS_URL", confidence: "recommended"}},
+	"celery":                 {{name: "CELERY_BROKER_URL", confidence: "recommended"}},
+	"elasticsearch":          {{name: "ELASTICSEARCH_URL", confidence: "recommended"}},
+	"elasticsearch-dsl":      {{name: "ELASTICSEARCH_URL", confidence: "recommended"}},
+
+	// Cloud services
+	"boto3":    {{name: "AWS_ACCESS_KEY_ID", confidence: "recommended"}, {name: "AWS_SECRET_ACCESS_KEY", confidence: "recommended"}},
+	"botocore": {{name: "AWS_ACCESS_KEY_ID", confidence: "recommended"}, {name: "AWS_SECRET_ACCESS_KEY", confidence: "recommended"}},
+
+	// Third-party services
+	"sentry-sdk": {{name: "SENTRY_DSN", confidence: "recommended"}},
+	"stripe":     {{name: "STRIPE_API_KEY", confidence: "recommended"}},
+	"sendgrid":   {{name: "SENDGRID_API_KEY", confidence: "recommended"}},
+	"newrelic":   {{name: "NEW_RELIC_LICENSE_KEY", confidence: "recommended"}},
+	"twilio":     {{name: "TWILIO_ACCOUNT_SID", confidence: "recommended"}, {name: "TWILIO_AUTH_TOKEN", confidence: "recommended"}},
+	"mailgun":    {{name: "MAILGUN_API_KEY", confidence: "recommended"}},
+	"pusher":     {{name: "PUSHER_APP_ID", confidence: "recommended"}, {name: "PUSHER_KEY", confidence: "recommended"}, {name: "PUSHER_SECRET", confidence: "recommended"}},
+	"cloudinary": {{name: "CLOUDINARY_URL", confidence: "recommended"}},
+}
+
+// packageEnvVarDef holds env var definition for a package
+type packageEnvVarDef struct {
+	name       string
+	confidence string
+}
+
+// pythonEnvPatterns are regex patterns to find env var usage in Python source code
+var pythonEnvPatterns = []*regexp.Regexp{
+	// os.getenv('VAR') or os.getenv("VAR")
+	regexp.MustCompile(`os\.getenv\(['"]([A-Z][A-Z0-9_]+)['"]\)`),
+	// os.environ['VAR'] or os.environ["VAR"]
+	regexp.MustCompile(`os\.environ\[['"]([A-Z][A-Z0-9_]+)['"]\]`),
+	// os.environ.get('VAR') or os.environ.get("VAR")
+	regexp.MustCompile(`os\.environ\.get\(['"]([A-Z][A-Z0-9_]+)['"]\)`),
+}
+
+// pythonOptionalEnvPatterns detect patterns where env var has a default value
+var pythonOptionalEnvPatterns = []*regexp.Regexp{
+	// os.getenv('VAR', 'default') - getenv with second argument
+	regexp.MustCompile(`os\.getenv\(['"]([A-Z][A-Z0-9_]+)['"],`),
+	// os.environ.get('VAR', 'default') - get with second argument
+	regexp.MustCompile(`os\.environ\.get\(['"]([A-Z][A-Z0-9_]+)['"],`),
+}
 
 // pythonPackageManager represents the detected package manager
 type pythonPackageManager string
@@ -38,6 +94,9 @@ type PythonStack struct {
 
 	// Cached uv.lock packages for accurate detection
 	uvPackages map[string]bool
+
+	// Detected environment variable requirements
+	requiredEnvVars []EnvVarRequirement
 }
 
 func (s *PythonStack) Name() string {
@@ -124,6 +183,12 @@ func (s *PythonStack) Init(opts BuildOptions) {
 	s.fastapiEntrypoint = s.findFastAPIEntrypoint()
 	if s.fastapiEntrypoint != "" {
 		s.Event("config", "fastapi", "FastAPI entrypoint: "+s.fastapiEntrypoint)
+	}
+
+	// Detect required environment variables
+	s.requiredEnvVars = s.detectEnvVars()
+	for _, ev := range s.requiredEnvVars {
+		s.Event("env_var", ev.Name, ev.Reason)
 	}
 }
 
@@ -456,4 +521,121 @@ func (s *PythonStack) WebCommand() string {
 	}
 
 	return ""
+}
+
+// RequiredEnvVars returns the detected environment variable requirements
+func (s *PythonStack) RequiredEnvVars() []EnvVarRequirement {
+	return s.requiredEnvVars
+}
+
+// detectEnvVars analyzes the app to find required environment variables
+func (s *PythonStack) detectEnvVars() []EnvVarRequirement {
+	var results []EnvVarRequirement
+
+	// 1. Scan source code first to know what env vars are actually used
+	sourceVars := scanSourceFilesForEnvVars(s.dir, []string{".py"}, pythonEnvPatterns, pythonOptionalEnvPatterns)
+
+	// 2. Framework core vars
+	//
+	// Django does not read DJANGO_SECRET_KEY automatically — settings.py has
+	// to wire SECRET_KEY = os.environ["..."], and the chosen name is
+	// app-specific. Flask only reads FLASK_-prefixed vars when the app calls
+	// app.config.from_prefixed_env(). So neither framework gives us a stable
+	// "core" var to require by name. Source/config scanning below picks up
+	// the actual names the app reads.
+	if s.hasDjango {
+		djangoDebugConfidence := "recommended"
+		djangoDebugReason := "Django debug mode (should be False in production)"
+		if elevateToRequired("DJANGO_DEBUG", sourceVars) {
+			djangoDebugConfidence = "required"
+			djangoDebugReason = "Referenced in application code"
+		}
+		results = append(results, EnvVarRequirement{
+			Name:         "DJANGO_DEBUG",
+			Source:       "django_core",
+			Confidence:   djangoDebugConfidence,
+			Reason:       djangoDebugReason,
+			DefaultValue: "False",
+		})
+	}
+
+	// 3. Package-based inference with elevation logic
+	packageVars := s.detectPackageEnvVars()
+	for _, pv := range packageVars {
+		confidence := pv.Confidence
+		// Elevate to required if source code references this var
+		if confidence == "recommended" && elevateToRequired(pv.Name, sourceVars) {
+			confidence = "required"
+		}
+		if !hasEnvVar(results, pv.Name) {
+			results = append(results, EnvVarRequirement{
+				Name:       pv.Name,
+				Source:     pv.Source,
+				Confidence: confidence,
+				Reason:     pv.Reason,
+			})
+		}
+	}
+
+	// 4. Add remaining source-detected vars not covered by packages.
+	// Direct, non-default code references are hard requirements; default
+	// to "required" rather than the weaker "recommended" used for
+	// package-inferred guesses.
+	for _, v := range sourceVars {
+		if !hasEnvVar(results, v.name) {
+			confidence := "required"
+			reason := "Referenced in application code"
+			if v.optional {
+				confidence = "optional"
+				reason = "Referenced in application code (has default)"
+			}
+			results = append(results, EnvVarRequirement{
+				Name:       v.name,
+				Source:     "code",
+				Confidence: confidence,
+				Reason:     reason,
+			})
+		}
+	}
+
+	// 5. Config file parsing (.env.sample, .env.example)
+	for _, filename := range []string{".env.sample", ".env.example"} {
+		sampleVars := parseEnvSampleFile(s.dir, filename)
+		for _, v := range sampleVars {
+			if !hasEnvVar(results, v) {
+				results = append(results, EnvVarRequirement{
+					Name:       v,
+					Source:     "config",
+					Confidence: "required",
+					Reason:     "Declared in " + filename,
+				})
+			}
+		}
+	}
+
+	return results
+}
+
+// detectPackageEnvVars analyzes package files to infer required env vars from dependencies
+func (s *PythonStack) detectPackageEnvVars() []EnvVarRequirement {
+	var results []EnvVarRequirement
+	seen := make(map[string]bool)
+
+	for pkg, vars := range pythonPackageEnvVars {
+		if s.detectPackage(pkg) {
+			for _, v := range vars {
+				if !seen[v.name] {
+					seen[v.name] = true
+					results = append(results, EnvVarRequirement{
+						Name:       v.name,
+						Source:     "package",
+						Confidence: v.confidence,
+						Reason:     pkg + " package detected",
+					})
+				}
+			}
+		}
+	}
+
+	return results
 }

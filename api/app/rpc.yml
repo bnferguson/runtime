@@ -452,6 +452,25 @@ interfaces:
             type: string
           - name: versionShortId
             type: string
+      - name: setInitialEnvVars
+        doc: |
+          Set env vars on the app's initial ConfigVersion. Used during
+          `miren init` to stage config (including server-side secrets) before
+          the first build. Creates a ConfigVersion entity and points the app's
+          initial_config field at it; does not create an AppVersion or
+          activate one. The first deploy seeds its config from this entity.
+        parameters:
+          - name: app
+            type: string
+          - name: vars
+            type: list
+            element: NamedValue
+          - name: service
+            type: string
+            doc: "Optional service name for per-service env vars. Empty means global."
+        results:
+          - name: configVersionId
+            type: string
       - name: deleteEnvVar
         parameters:
           - name: app

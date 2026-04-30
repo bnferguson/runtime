@@ -62,11 +62,6 @@ func (m *Manager) Init(ctx context.Context) error {
 // specified in the pool entity.
 // This method is called by the controller framework for both Add and Update events.
 func (m *Manager) Reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPool, meta *entity.Meta) error {
-	m.log.Debug("reconciling pool",
-		"pool", pool.ID,
-		"service", pool.Service,
-		"desired", pool.DesiredInstances)
-
 	// Get all sandboxes for this pool
 	sandboxes, err := m.listSandboxes(ctx, pool)
 	if err != nil {

@@ -5,6 +5,56 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *main*
 
+**Features**
+- **Smarter `miren init`** - `miren init` now scans your project for the environment variables your app actually needs and pre-sets them on the app before the first deploy, the same as if you'd run `miren config set` yourself. Generated secrets (Rails `SECRET_KEY_BASE`), file-backed keys (`RAILS_MASTER_KEY`), framework defaults, and source-detected reads across Python/Node/Bun/Go/Ruby/Rust are recognized; the ones we can resolve are picked up automatically by the first build. See [What `miren init` Does for You](/app-configuration#what-miren-init-does-for-you). ([#567](https://github.com/mirendev/runtime/pull/567))
+
+---
+
+## v0.7.1
+*2026-04-22*
+
+**Improvements**
+- **Cut steady-state log noise** - Roughly 76% reduction in server log volume during normal operation. Removed per-request auth success logs, redundant controller reconcile lines, heartbeat spam, and other content-free chatter that drowned out useful signal. ([#767](https://github.com/mirendev/runtime/pull/767))
+
+**Bug Fixes**
+- **Fixed Valkey addon causing app connection errors** - The valkey sandbox was starting without `--requirepass` while apps received a URL containing the password, so every client got `ERR AUTH called without any password configured`. Password is now baked directly into the server command at provision time. ([#771](https://github.com/mirendev/runtime/pull/771))
+- **Fixed short IDs not resolving for several commands** - `sandbox exec`, `logs sandbox`, and `deploy cancel` weren't resolving short IDs like you'd expect from seeing them in other output. Worst case was `deploy cancel` silently no-op'ing while reporting success, leaving the deploy lock stuck until its 30-minute timeout. ([#769](https://github.com/mirendev/runtime/pull/769))
+- **Fixed Rust source-only deploys shipping stale binaries** - Changing only source files in a Rust app could silently ship the previously built binary. The workspace crate now force-rebuilds on every deploy while the dependency cache stays intact. ([#768](https://github.com/mirendev/runtime/pull/768))
+- **Fixed activator fail-fast killing healthy replacement deploys** - When a crash-looping version was replaced with a fix, the activator counted dead sandboxes from the broken version and fail-fasted the fix before it got to boot a sandbox of its own. Fail-fast accounting is now scoped to the requesting version. ([#766](https://github.com/mirendev/runtime/pull/766))
+- **Fixed silent app.toml parse errors during build** - A parse error in `app.toml` used to be logged and discarded, and the build continued as if no config existed — services, env vars, and addons silently gone. Parse errors now fail the build and surface the full diagnostic (file, line, suggestions) to the client. ([#765](https://github.com/mirendev/runtime/pull/765))
+
+---
+
+## v0.7.0
+*2026-04-14*
+
+**Breaking Changes**
+- **Local shared storage is now opt-in** - Apps that need persistent local storage now declare it explicitly as a disk with `provider = "local"` in app.toml instead of getting an automatic bind mount at `/miren/data/local`. This makes storage dependencies visible to the scheduler, which needs to know about them as we build out multi-node cluster support. If your app has existing data in local storage, Miren detects it automatically, keeps mounting it, and shows a warning during deploy with a link to add the config. No data loss, just a nudge to make the dependency explicit at your own pace. See [Migrating from automatic local storage](https://miren.md/disks#migrating-from-automatic-local-storage) for details. ([#700](https://github.com/mirendev/runtime/pull/700), [#719](https://github.com/mirendev/runtime/pull/719))
+
+**Features**
+- **Managed addons** - Miren now provisions and manages backing services alongside your apps. Add a database or cache with `miren addon create`, and Miren handles the container lifecycle, networking, and credential injection. Launch includes PostgreSQL, MySQL, Valkey, Memcache, and RabbitMQ, with version selection and custom OCI image support. ([#688](https://github.com/mirendev/runtime/pull/688), [#706](https://github.com/mirendev/runtime/pull/706), [#720](https://github.com/mirendev/runtime/pull/720), [#726](https://github.com/mirendev/runtime/pull/726), [#727](https://github.com/mirendev/runtime/pull/727), [#743](https://github.com/mirendev/runtime/pull/743), [#755](https://github.com/mirendev/runtime/pull/755), [#758](https://github.com/mirendev/runtime/pull/758), [#760](https://github.com/mirendev/runtime/pull/760))
+- **Short entity IDs** - Entities now get short 3-8 character identifiers that work anywhere a full ID does. CLI tables are easier to read and IDs are easy to type from memory. ([#696](https://github.com/mirendev/runtime/pull/696), [#721](https://github.com/mirendev/runtime/pull/721), [#741](https://github.com/mirendev/runtime/pull/741))
+- **CLI aliases** - Define custom command shortcuts in `.miren/app.toml` under `[aliases]`. Supports multi-word names and appends extra arguments. ([#693](https://github.com/mirendev/runtime/pull/693))
+- **Disk undelete** - Deleted disks are now soft-deleted with a 7-day retention window. `disk undelete` restores them, and `disk list-deleted` shows what's recoverable. ([#694](https://github.com/mirendev/runtime/pull/694))
+- **`miren app restart`** - New command to restart an app immediately. Deploys also now reset crash cooldown, so a new deploy isn't blocked by stale backoff from a previous crash. ([#702](https://github.com/mirendev/runtime/pull/702))
+
+**Improvements**
+- **Better config error messages** - Typos and validation errors in `.miren/app.toml` now show file location, underline the problem, and suggest corrections with color output. ([#709](https://github.com/mirendev/runtime/pull/709))
+- **Faster `app list`** - App list aggregation moved server-side, significantly reducing round trips for clusters with many apps. ([#701](https://github.com/mirendev/runtime/pull/701))
+- **Disk-aware pool draining** - Services with disks now drain old pools before starting new ones, preventing data conflicts during deploys. ([#725](https://github.com/mirendev/runtime/pull/725))
+- **Hardened embedded etcd** - Defenses against bbolt freelist bloat that could cause etcd to slow down over time. ([#733](https://github.com/mirendev/runtime/pull/733))
+- **App name in sandbox list** - `sandbox list` now shows which app each sandbox belongs to. ([#757](https://github.com/mirendev/runtime/pull/757))
+- **Dual-stack IP discovery** - Cluster address reporting now discovers both IPv4 and IPv6 public addresses, and TLS certificates include public IP SANs automatically. ([#708](https://github.com/mirendev/runtime/pull/708), [#712](https://github.com/mirendev/runtime/pull/712))
+
+**Bug Fixes**
+- **Fixed deploy from subdirectory using wrong source directory** ([#716](https://github.com/mirendev/runtime/pull/716))
+- **Friendlier TLS certificate behavior when DNS isn't ready yet** - ACME challenges now back off gracefully instead of burning through rate limits when a domain's DNS isn't fully propagated. ([#710](https://github.com/mirendev/runtime/pull/710), [#730](https://github.com/mirendev/runtime/pull/730))
+- **Fixed overlay IP allocator assigning duplicate IPs after restart** ([#707](https://github.com/mirendev/runtime/pull/707))
+- **Fixed sandbox hostname resolution for addon sub-containers** ([#728](https://github.com/mirendev/runtime/pull/728))
+- **Fixed stale pool reuse when volume/mount config changes** ([#718](https://github.com/mirendev/runtime/pull/718))
+- **Self-healing loop-backed volumes after unclean shutdown** - After a SIGKILL, miren now detects and cleans up stale loop devices instead of mounting a second one and corrupting the filesystem. ([#756](https://github.com/mirendev/runtime/pull/756))
+- **Fixed release bundle detection for CLI-only installs** ([#759](https://github.com/mirendev/runtime/pull/759))
+
 ---
 
 ## v0.6.1

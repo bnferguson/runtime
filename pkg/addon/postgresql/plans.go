@@ -7,7 +7,7 @@ import (
 const (
 	AddonName      = "miren-postgresql"
 	BaseImage      = "oci.miren.cloud/postgres"
-	DefaultVersion = "17"
+	DefaultVersion = "18"
 )
 
 // Variant configuration keys

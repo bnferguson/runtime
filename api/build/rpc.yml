@@ -215,6 +215,12 @@ interfaces:
           - name: envVars
             type: '[]*EnvironmentVariable'
             doc: Environment variables to set on the app (optional, applied with source=manual)
+          - name: ephemeral_label
+            type: string
+            doc: Ephemeral label for preview deployments (optional, skip activation when set)
+          - name: ephemeral_ttl
+            type: string
+            doc: TTL for ephemeral version (e.g., "48h"), defaults to "24h" when ephemeral_label is set
         results:
           - name: version
             type: string
@@ -256,6 +262,12 @@ interfaces:
           - name: envVars
             type: '[]*EnvironmentVariable'
             doc: Environment variables to set on the app (optional, applied with source=manual)
+          - name: ephemeral_label
+            type: string
+            doc: Ephemeral label for preview deployments (optional, skip activation when set)
+          - name: ephemeral_ttl
+            type: string
+            doc: TTL for ephemeral version (e.g., "48h"), defaults to "24h" when ephemeral_label is set
         results:
           - name: version
             type: string

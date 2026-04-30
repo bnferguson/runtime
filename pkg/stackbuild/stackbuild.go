@@ -66,6 +66,9 @@ type Stack interface {
 
 	// Events returns detection events collected during Detect() and Init()
 	Events() []DetectionEvent
+
+	// RequiredEnvVars returns environment variables detected as required/recommended
+	RequiredEnvVars() []EnvVarRequirement
 }
 
 // DetectStack identifies the programming stack in the given directory
@@ -100,6 +103,11 @@ type MetaStack struct {
 
 func (s *MetaStack) Init(opts BuildOptions) {
 	// Base implementation does nothing; stacks can override for specific initialization
+}
+
+// RequiredEnvVars returns nil by default; stacks can override to provide detected env vars
+func (s *MetaStack) RequiredEnvVars() []EnvVarRequirement {
+	return nil
 }
 
 func (s *MetaStack) Entrypoint() string {

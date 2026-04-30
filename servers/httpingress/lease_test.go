@@ -51,6 +51,8 @@ func (m *mockActivator) Invalidations() <-chan activator.SandboxInvalidation {
 	return make(chan activator.SandboxInvalidation)
 }
 
+func (m *mockActivator) SetPoolCreator(pc activator.PoolCreator) {}
+
 func newTestServer(aa *mockActivator) *Server {
 	return &Server{
 		Log:  slog.Default(),

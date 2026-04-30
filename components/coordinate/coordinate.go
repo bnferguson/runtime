@@ -45,6 +45,8 @@ import (
 	artifactctrl "miren.dev/runtime/controllers/artifact"
 	certctrl "miren.dev/runtime/controllers/certificate"
 	deploymentctrl "miren.dev/runtime/controllers/deployment"
+	ephemeralctrl "miren.dev/runtime/controllers/ephemeral"
+	nodehealthctrl "miren.dev/runtime/controllers/nodehealth"
 	"miren.dev/runtime/controllers/sandboxpool"
 	schedulerctrl "miren.dev/runtime/controllers/scheduler"
 	"miren.dev/runtime/metrics"
@@ -339,6 +341,7 @@ type Coordinator struct {
 	certProvider  autotls.CertificateProvider
 	autocertReady func() // nil when DNS-01 path is used
 	artifactGC    *artifactctrl.GCController
+	ephemeralGC   *ephemeralctrl.GCController
 	hs            *httpingress.Server
 
 	authority *caauth.Authority
@@ -377,6 +380,9 @@ func (c *Coordinator) Stop() {
 	}
 	if c.artifactGC != nil {
 		c.artifactGC.Stop()
+	}
+	if c.ephemeralGC != nil {
+		c.ephemeralGC.Stop()
 	}
 	if c.debugServer != nil {
 		if err := c.debugServer.Close(); err != nil {
@@ -910,6 +916,11 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		return err
 	}
 
+	// Register the launcher as a pool creator for the activator so ephemeral
+	// versions can create pools on demand (they bypass the normal Launcher
+	// reconciliation triggered by ActiveVersion changes).
+	aa.SetPoolCreator(launcher)
+
 	// Create controller manager and add controllers
 	c.cm = controller.NewControllerManager()
 
@@ -968,6 +979,25 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		1,           // Single worker
 	)
 	c.cm.AddController(schedulerController)
+
+	// Add node health controller (marks sandboxes DEAD when their runner
+	// has been non-READY for longer than the grace period)
+	nodeHealth := nodehealthctrl.NewController(c.Log, eac)
+	if err := nodeHealth.Init(ctx); err != nil {
+		c.Log.Error("failed to initialize node health controller", "error", err)
+		return err
+	}
+
+	nodeHealthRC := controller.NewReconcileController(
+		"nodehealth",
+		c.Log,
+		entity.Ref(entity.EntityKind, compute_v1alpha.KindNode),
+		eac,
+		controller.AdaptReconcileController[compute_v1alpha.Node](nodeHealth),
+		30*time.Second, // Resync to check grace period expiry
+		1,
+	)
+	c.cm.AddController(nodeHealthRC)
 
 	// Add certificate controller — DNS-01 when a DNS provider is configured,
 	// otherwise HTTP-01 via autocert for eager cert provisioning on route set.
@@ -1054,6 +1084,14 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		Config: artifactctrl.DefaultGCConfig(),
 	}
 	c.artifactGC.Start(ctx)
+
+	// Start the ephemeral version GC controller
+	c.ephemeralGC = &ephemeralctrl.GCController{
+		Log:    c.Log.With("module", "ephemeral-gc"),
+		EAC:    eac,
+		Config: ephemeralctrl.DefaultGCConfig(),
+	}
+	c.ephemeralGC.Start(ctx)
 
 	eps := execproxy.NewServer(c.Log, eac, rs)
 	server.ExposeValue("dev.miren.runtime/exec", exec_v1alpha.AdaptSandboxExec(eps))

@@ -13,6 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/app/app_v1alpha"
+	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/observability"
@@ -252,8 +253,12 @@ func TestStreamLogChunks_BySandbox(t *testing.T) {
 	}
 
 	mockServer := createMockVictoriaLogs(t, entries, 0)
-	server, _, cleanup := setupTestServer(t, mockServer)
+	server, ec, cleanup := setupTestServer(t, mockServer)
 	defer cleanup()
+
+	// Create the sandbox entity so resolution succeeds
+	_, err := ec.Create(ctx, "test-sandbox-123", &compute_v1alpha.Sandbox{})
+	r.NoError(err)
 
 	client := &app_v1alpha.LogsClient{
 		Client: rpc.LocalClient(app_v1alpha.AdaptLogs(server)),
@@ -272,7 +277,7 @@ func TestStreamLogChunks_BySandbox(t *testing.T) {
 	target := &app_v1alpha.LogTarget{}
 	target.SetSandbox("sandbox/test-sandbox-123")
 
-	_, err := client.StreamLogChunks(ctx, target, nil, false, "", callback)
+	_, err = client.StreamLogChunks(ctx, target, nil, false, "", callback)
 	r.NoError(err)
 
 	mu.Lock()

@@ -68,25 +68,8 @@ func RunnerInstall(ctx *Context, opts struct {
 		ctx.Info("Skipping system requirements check (--skip-system-check specified)")
 	}
 
-	// Download release bundle if not present
-	mirenPath := "/var/lib/miren/release/miren"
-	if _, err := os.Stat(mirenPath); err != nil {
-		if !os.IsNotExist(err) {
-			return fmt.Errorf("failed to inspect %s: %w", mirenPath, err)
-		}
-		ctx.Info("Miren release not found at %s, downloading...", mirenPath)
-
-		if err := PerformDownloadRelease(ctx, DownloadReleaseOptions{
-			Branch: opts.Branch,
-			Global: true,
-			Force:  false,
-			Output: "/var/lib/miren/release",
-		}); err != nil {
-			return fmt.Errorf("failed to download release: %w", err)
-		}
-
-		ctx.Completed("Release downloaded successfully")
-		fixSELinuxContext(ctx, mirenPath)
+	if err := ensureReleaseBundlePresent(ctx, opts.Branch); err != nil {
+		return err
 	}
 
 	// Join flow: use existing config, flags, interactive prompts, or error
@@ -109,7 +92,7 @@ func RunnerInstall(ctx *Context, opts struct {
 
 	if !serviceExists || opts.Force {
 		var execStartParts []string
-		execStartParts = append(execStartParts, mirenPath, "runner", "start")
+		execStartParts = append(execStartParts, releaseBinPath, "runner", "start")
 
 		if opts.ConfigPath != "/var/lib/miren/runner/config.yaml" {
 			execStartParts = append(execStartParts, fmt.Sprintf("--config=%s", opts.ConfigPath))

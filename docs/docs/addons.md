@@ -19,9 +19,9 @@ If you just need a PostgreSQL database for your app, use an addon. If you need c
 
 | Addon | Description | Supported Versions | Default |
 |-------|-------------|--------------------|---------|
-| `miren-postgresql` | Managed PostgreSQL database | 14, 15, 16, 17, 18 | 17 |
-| `miren-mysql` | Managed MySQL database | 8, 9 | 8 |
-| `miren-valkey` | Managed Valkey key-value store | 7, 8 | 8 |
+| `miren-postgresql` | Managed PostgreSQL database | 14, 15, 16, 17, 18 | 18 |
+| `miren-mysql` | Managed MySQL database | 8, 9 | 9 |
+| `miren-valkey` | Managed Valkey key-value store (Redis-compatible) | 7, 8, 9 | 9 |
 | `miren-rabbitmq` | Managed RabbitMQ message broker | 3, 4 | 4 |
 | `miren-memcache` | Managed Memcached in-memory cache | 1.4, 1.5, 1.6 | 1.6 |
 
@@ -99,9 +99,9 @@ When the version value contains `:`, Miren uses it as the complete image referen
 
 ## Environment Variables
 
-When an addon is provisioned, Miren injects connection credentials as environment variables into your app. These are available to all services in the app.
+When an addon is provisioned, Miren injects connection credentials as environment variables into your app. These are available to all services in the app. Variables marked sensitive are redacted in `miren env list` output.
 
-For PostgreSQL, the following variables are injected:
+### PostgreSQL (`miren-postgresql`)
 
 | Variable | Description | Example |
 |----------|-------------|---------|
@@ -112,7 +112,52 @@ For PostgreSQL, the following variables are injected:
 | `PGPASSWORD` | Database password (sensitive) | — |
 | `PGDATABASE` | Database name | `myapp` |
 
-Most frameworks and ORMs connect automatically using `DATABASE_URL`. You can verify the variables are set:
+Most frameworks and ORMs connect automatically using `DATABASE_URL`.
+
+### MySQL (`miren-mysql`)
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `DATABASE_URL` | Full connection URL (sensitive) | `mysql://user:pass@host:3306/dbname` |
+| `MYSQL_HOST` | Database hostname | `10.10.0.196` |
+| `MYSQL_PORT` | Database port | `3306` |
+| `MYSQL_USER` | Database username | `myapp` |
+| `MYSQL_PASSWORD` | Database password (sensitive) | — |
+| `MYSQL_DATABASE` | Database name | `myapp` |
+
+### Valkey (`miren-valkey`)
+
+Valkey is wire-compatible with Redis, so Miren injects both `VALKEY_*` and `REDIS_*` variables pointing at the same server. Use whichever your client library expects.
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `VALKEY_URL` / `REDIS_URL` | Full connection URL (sensitive) | `redis://:pass@host:6379` |
+| `VALKEY_HOST` / `REDIS_HOST` | Server hostname | `10.10.0.196` |
+| `VALKEY_PORT` / `REDIS_PORT` | Server port | `6379` |
+| `VALKEY_PASSWORD` / `REDIS_PASSWORD` | Password (sensitive) | — |
+
+### RabbitMQ (`miren-rabbitmq`)
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `RABBITMQ_URL` | Full AMQP connection URL (sensitive) | `amqp://user:pass@host:5672/%2F` |
+| `RABBITMQ_HOST` | Broker hostname | `10.10.0.196` |
+| `RABBITMQ_PORT` | Broker port | `5672` |
+| `RABBITMQ_USER` | Broker username | `myapp` |
+| `RABBITMQ_PASSWORD` | Broker password (sensitive) | — |
+| `RABBITMQ_VHOST` | Virtual host | `/` |
+
+### Memcached (`miren-memcache`)
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `MEMCACHE_URL` | Connection URL | `memcache://host:11211` |
+| `MEMCACHE_HOST` | Server hostname | `10.10.0.196` |
+| `MEMCACHE_PORT` | Server port | `11211` |
+
+### Inspecting injected variables
+
+You can verify the variables are set on your app:
 
 <CliCommand context="client">
 ```miren
@@ -130,16 +175,22 @@ miren addon variants miren-postgresql
 ```
 </CliCommand>
 
-### PostgreSQL Variants
+### PostgreSQL & MySQL Variants
+
+PostgreSQL and MySQL each offer two variants:
 
 | Variant | Description | Use case |
 |---------|-------------|----------|
-| `small` | Dedicated PostgreSQL server (1 GB storage) | Production apps needing isolation |
-| `shared` | Multi-app shared PostgreSQL server | Development, staging, or small apps |
+| `small` | Dedicated server (1 GB storage) | Production apps needing isolation |
+| `shared` | Multi-app shared server | Development, staging, or small apps |
 
-**Dedicated** (`small`): Each app gets its own PostgreSQL instance with dedicated storage. Best for production workloads where you need isolation and predictable performance. Start here if your app might grow.
+**Dedicated** (`small`): Each app gets its own database instance with dedicated storage. Best for production workloads where you need isolation and predictable performance. Start here if your app might grow.
 
-**Shared** (`shared`): Multiple apps share a single PostgreSQL server, each with their own database and credentials. The shared server does not isolate workloads — a heavy query in one app can affect others on the same server. This variant is designed for small internal tools, staging environments, and apps you know will stay lightweight.
+**Shared** (`shared`): Multiple apps share a single database server, each with their own logical database and credentials. The shared server does not isolate workloads — a heavy query in one app can affect others on the same server. This variant is designed for small internal tools, staging environments, and apps you know will stay lightweight.
+
+### Valkey, RabbitMQ, and Memcached Variants
+
+These addons currently offer only the dedicated `small` variant — each app gets its own server instance.
 
 If no variant is specified, the default (`small`) is used.
 

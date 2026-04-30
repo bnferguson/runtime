@@ -36,6 +36,7 @@ import (
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
+	ephemeralx "miren.dev/runtime/pkg/ephemeral"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/procfile"
 	"miren.dev/runtime/pkg/rpc"
@@ -715,7 +716,8 @@ func (b *Builder) nextVersion(ctx context.Context, name string) (
 
 	var currentCfg core_v1alpha.ConfigSpec
 
-	if appRec.ActiveVersion != "" {
+	switch {
+	case appRec.ActiveVersion != "":
 		var verRec core_v1alpha.AppVersion
 
 		err := b.ec.GetById(ctx, appRec.ActiveVersion, &verRec)
@@ -729,6 +731,15 @@ func (b *Builder) nextVersion(ctx context.Context, name string) (
 			return nil, nil, core_v1alpha.ConfigSpec{}, "", fmt.Errorf("failed to resolve config: %w", err)
 		}
 		currentCfg = *resolvedCfg
+
+	case appRec.InitialConfig != "":
+		// First deploy after `miren init` staged config server-side. Seed from
+		// the initial ConfigVersion so generated secrets are picked up.
+		var cv core_v1alpha.ConfigVersion
+		if err := b.ec.GetById(ctx, appRec.InitialConfig, &cv); err != nil {
+			return nil, nil, core_v1alpha.ConfigSpec{}, "", fmt.Errorf("failed to load initial config: %w", err)
+		}
+		currentCfg = cv.Spec
 	}
 
 	ver := name + "-" + idgen.Gen("v")
@@ -924,7 +935,16 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		_, _ = status.Send(ctx, so)
 	}
 
-	result, err := b.buildFromDir(ctx, name, path, status, args.EnvVars())
+	var eph *ephemeralOpts
+	if args.HasEphemeralLabel() && args.EphemeralLabel() != "" {
+		ttl := "24h"
+		if args.HasEphemeralTtl() && args.EphemeralTtl() != "" {
+			ttl = args.EphemeralTtl()
+		}
+		eph = &ephemeralOpts{label: args.EphemeralLabel(), ttl: ttl}
+	}
+
+	result, err := b.buildFromDir(ctx, name, path, status, args.EnvVars(), eph)
 	if err != nil {
 		return err
 	}
@@ -1061,7 +1081,16 @@ func (b *Builder) BuildFromPrepared(ctx context.Context, state *build_v1alpha.Bu
 		_, _ = status.Send(ctx, so)
 	}
 
-	result, err := b.buildFromDir(ctx, name, sess.dir, status, args.EnvVars())
+	var eph *ephemeralOpts
+	if args.HasEphemeralLabel() && args.EphemeralLabel() != "" {
+		ttl := "24h"
+		if args.HasEphemeralTtl() && args.EphemeralTtl() != "" {
+			ttl = args.EphemeralTtl()
+		}
+		eph = &ephemeralOpts{label: args.EphemeralLabel(), ttl: ttl}
+	}
+
+	result, err := b.buildFromDir(ctx, name, sess.dir, status, args.EnvVars(), eph)
 	if err != nil {
 		return err
 	}
@@ -1081,9 +1110,15 @@ type buildResult struct {
 	accessInfo     *build_v1alpha.AccessInfo
 }
 
+type ephemeralOpts struct {
+	label string
+	ttl   string
+}
+
 func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 	status *stream.SendStreamClient[*build_v1alpha.Status],
-	envVars []*build_v1alpha.EnvironmentVariable) (*buildResult, error) {
+	envVars []*build_v1alpha.EnvironmentVariable,
+	ephemeral *ephemeralOpts) (*buildResult, error) {
 
 	so := new(build_v1alpha.Status)
 
@@ -1100,7 +1135,11 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 
 	ac, err := b.loadAppConfig(tr)
 	if err != nil {
-		b.Log.Warn("error loading app config, ignoring", "error", err)
+		setupSpan.RecordError(err)
+		setupSpan.SetStatus(codes.Error, err.Error())
+		setupSpan.End()
+		b.sendErrorStatus(ctx, status, "Invalid app.toml: %v", err)
+		return nil, fmt.Errorf("error loading app config: %w", err)
 	}
 	if ac != nil {
 		b.Log.Info("loaded app config", "name", ac.Name, "envVarCount", len(ac.EnvVars), "serviceCount", len(ac.Services))
@@ -1419,6 +1458,34 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 		b.Log.Debug("no new env vars from app config, preserving existing variables")
 	}
 
+	// Set ephemeral fields before creating the version entity
+	isEphemeral := ephemeral != nil && ephemeral.label != ""
+	if isEphemeral {
+		if err := ephemeralx.ValidateLabel(ephemeral.label); err != nil {
+			return nil, fmt.Errorf("invalid ephemeral label: %w", err)
+		}
+		ttlDuration, parseErr := time.ParseDuration(ephemeral.ttl)
+		if parseErr != nil {
+			return nil, fmt.Errorf("invalid ephemeral TTL %q: %w", ephemeral.ttl, parseErr)
+		}
+		if ttlDuration <= 0 {
+			return nil, fmt.Errorf("invalid ephemeral TTL %q: must be greater than 0", ephemeral.ttl)
+		}
+		mrv.EphemeralLabel = ephemeral.label
+		mrv.EphemeralTtl = ephemeral.ttl
+		mrv.EphemeralExpiresAt = time.Now().Add(ttlDuration)
+
+		// Replace-on-same-label: delete existing ephemeral version with the same label
+		if err := ephemeralx.ReplaceExisting(ctx, b.ec.EAC(), appRec.ID, ephemeral.label, b.Log); err != nil {
+			return nil, fmt.Errorf("failed to replace existing ephemeral version %q: %w", ephemeral.label, err)
+		}
+
+		// Enforce per-app ephemeral version limit
+		if err := ephemeralx.EnforceLimit(ctx, b.ec.EAC(), appRec.ID, ephemeralx.DefaultMaxEphemeral, b.Log); err != nil {
+			return nil, fmt.Errorf("failed to enforce ephemeral limit: %w", err)
+		}
+	}
+
 	// -- build.create_version span
 	createVerCtx, createVerSpan := buildTracer.Start(ctx, "build.create_version",
 		trace.WithAttributes(attribute.String("miren.app.version", mrv.Version)))
@@ -1448,36 +1515,46 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 	}
 	createVerSpan.End()
 
-	// -- build.activate span
-	activateCtx, activateSpan := buildTracer.Start(ctx, "build.activate")
+	if isEphemeral {
+		b.Log.Info("created ephemeral app version",
+			"app", name, "version", mrv.Version, "label", ephemeral.label,
+			"ttl", ephemeral.ttl, "expires_at", mrv.EphemeralExpiresAt)
+	} else {
+		// -- build.activate span (only for non-ephemeral versions)
+		activateCtx, activateSpan := buildTracer.Start(ctx, "build.activate")
 
-	// Provision addons before activating the version so that AddonAssociation
-	// entities exist when the launcher runs. The addon controller will create
-	// a new AppVersion with addon vars once provisioning completes.
-	if ac != nil && b.addonsClient != nil {
-		if err := b.provisionAddons(ctx, name, ac); err != nil {
-			return nil, fmt.Errorf("addon provisioning failed: %w", err)
+		// Provision addons before activating the version so that AddonAssociation
+		// entities exist when the launcher runs. The addon controller will create
+		// a new AppVersion with addon vars once provisioning completes.
+		if ac != nil && b.addonsClient != nil {
+			if err := b.provisionAddons(ctx, name, ac); err != nil {
+				return nil, fmt.Errorf("addon provisioning failed: %w", err)
+			}
 		}
-	}
 
-	b.Log.Info("updating app entity with new version", "app", name, "version", mrv.Version)
-	err = b.appClient.SetActiveVersion(activateCtx, name, string(id))
-	if err != nil {
-		activateSpan.RecordError(err)
-		activateSpan.SetStatus(codes.Error, err.Error())
+		b.Log.Info("updating app entity with new version", "app", name, "version", mrv.Version)
+		err = b.appClient.SetActiveVersion(activateCtx, name, string(id))
+		if err != nil {
+			activateSpan.RecordError(err)
+			activateSpan.SetStatus(codes.Error, err.Error())
+			activateSpan.End()
+			return nil, fmt.Errorf("error updating app entity: %w", err)
+		}
 		activateSpan.End()
-		return nil, fmt.Errorf("error updating app entity: %w", err)
+
+		b.Log.Info("app version updated", "app", name, "version", mrv.Version)
+
+		b.checkLocalStorageMigration(ctx, appRec.ID, configSpec, status)
 	}
-	activateSpan.End()
-
-	b.Log.Info("app version updated", "app", name, "version", mrv.Version)
-
-	b.checkLocalStorageMigration(ctx, appRec.ID, configSpec, status)
 
 	// Log the deployment to the app's logs
 	b.logDeployment(ctx, name, mrv.Version, artifactName)
 
-	accessInfo := b.getAccessInfo(ctx, name)
+	var ephLabel string
+	if ephemeral != nil {
+		ephLabel = ephemeral.label
+	}
+	accessInfo := b.getAccessInfo(ctx, name, ephLabel)
 
 	// Look up the short ID for the newly created version entity
 	var versionShortId string
@@ -1497,8 +1574,10 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 	}, nil
 }
 
-// getAccessInfo queries routes to determine how the app can be accessed
-func (b *Builder) getAccessInfo(ctx context.Context, appName string) *build_v1alpha.AccessInfo {
+// getAccessInfo queries routes to determine how the app can be accessed.
+// When ephemeralLabel is non-empty, wildcard routes are resolved to concrete
+// hostnames using the label (e.g., *.app.example.com → feat-x.app.example.com).
+func (b *Builder) getAccessInfo(ctx context.Context, appName string, ephemeralLabel string) *build_v1alpha.AccessInfo {
 	info := &build_v1alpha.AccessInfo{}
 
 	// Get the app entity to find its ID
@@ -1526,9 +1605,20 @@ func (b *Builder) getAccessInfo(ctx context.Context, appName string) *build_v1al
 		if r.Route.Default {
 			hasDefaultRoute = true
 		}
-		if r.Route.Host != "" {
-			hostnames = append(hostnames, r.Route.Host)
+		if r.Route.Host == "" {
+			continue
 		}
+		host := r.Route.Host
+		if ephemeralLabel != "" {
+			if strings.HasPrefix(host, "*.") {
+				// Resolve wildcard: *.app.example.com → feat-x.app.example.com
+				host = ephemeralLabel + "." + host[2:]
+			} else {
+				// Prepend label to normal route: app.example.com → feat-x.app.example.com
+				host = ephemeralLabel + "." + host
+			}
+		}
+		hostnames = append(hostnames, host)
 	}
 
 	info.SetHostnames(&hostnames)
@@ -1702,7 +1792,7 @@ func (b *Builder) AnalyzeApp(ctx context.Context, state *build_v1alpha.BuilderAn
 	// Load app config
 	ac, err := b.loadAppConfig(tr)
 	if err != nil {
-		b.Log.Warn("error loading app config, ignoring", "error", err)
+		return fmt.Errorf("error loading app config: %w", err)
 	}
 	if ac != nil {
 		var event build_v1alpha.DetectionEvent
@@ -1734,27 +1824,36 @@ func (b *Builder) AnalyzeApp(ctx context.Context, state *build_v1alpha.BuilderAn
 	var stackName string
 	var buildResult BuildResult
 	var detectedStack stackbuild.Stack
+	var hasDockerfile bool
 
 	// Check for Dockerfile.miren first
 	if f, err := tr.Open("Dockerfile.miren"); err == nil {
 		f.Close()
+		hasDockerfile = true
 		stackName = "dockerfile"
 		result.SetBuildDockerfile("Dockerfile.miren")
 	} else if ac != nil && ac.Build != nil && ac.Build.Dockerfile != "" {
+		hasDockerfile = true
 		stackName = "dockerfile"
-	} else {
-		// Try to detect stack
-		var detectOpts stackbuild.BuildOptions
-		detectOpts.Log = b.Log
-		if ac != nil {
-			detectOpts.Name = ac.Name
-		}
-		stack, err := stackbuild.DetectStack(path, detectOpts)
-		if err != nil {
-			b.Log.Debug("no stack detected", "error", err)
+	}
+
+	// Always try to detect stack for analysis (env vars, events, etc.)
+	// even when dockerfile is present
+	var detectOpts stackbuild.BuildOptions
+	detectOpts.Log = b.Log
+	if ac != nil {
+		detectOpts.Name = ac.Name
+	}
+	stack, err := stackbuild.DetectStack(path, detectOpts)
+	if err != nil {
+		b.Log.Debug("no stack detected", "error", err)
+		if !hasDockerfile {
 			stackName = "unknown"
-		} else {
-			detectedStack = stack
+		}
+	} else {
+		detectedStack = stack
+		// Only use detected stack name/config if no dockerfile
+		if !hasDockerfile {
 			stackName = stack.Name()
 			buildResult.Entrypoint = stack.Entrypoint()
 			buildResult.Command = stack.WebCommand()
@@ -1776,6 +1875,30 @@ func (b *Builder) AnalyzeApp(ctx context.Context, state *build_v1alpha.BuilderAn
 			event.SetName(e.Name)
 			event.SetMessage(e.Message)
 			events = append(events, event)
+		}
+
+		// Add detected env vars from stack to the result
+		// This supplements any env vars already found in app.toml
+		stackEnvVars := detectedStack.RequiredEnvVars()
+		if len(stackEnvVars) > 0 {
+			// Get existing env keys if any
+			var existingKeys []string
+			if result.EnvVars() != nil {
+				existingKeys = *result.EnvVars()
+			}
+			envKeySet := make(map[string]bool)
+			for _, k := range existingKeys {
+				envKeySet[k] = true
+			}
+
+			// Add stack-detected env var keys that aren't already present
+			for _, ev := range stackEnvVars {
+				if !envKeySet[ev.Name] {
+					envKeySet[ev.Name] = true
+					existingKeys = append(existingKeys, ev.Name)
+				}
+			}
+			result.SetEnvVars(&existingKeys)
 		}
 	}
 

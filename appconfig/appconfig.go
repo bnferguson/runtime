@@ -17,10 +17,10 @@ var aliasWordRegexp = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 
 type AppEnvVar struct {
 	Key         string `json:"key" toml:"key"`
-	Value       string `json:"value" toml:"value"`
-	Required    bool   `json:"required,omitempty" toml:"required"`
-	Sensitive   bool   `json:"sensitive,omitempty" toml:"sensitive"`
-	Description string `json:"description,omitempty" toml:"description"`
+	Value       string `json:"value,omitempty" toml:"value,omitempty"`
+	Required    bool   `json:"required,omitempty" toml:"required,omitempty"`
+	Sensitive   bool   `json:"sensitive,omitempty" toml:"sensitive,omitempty"`
+	Description string `json:"description,omitempty" toml:"description,omitempty"`
 }
 
 type BuildConfig struct {
@@ -82,14 +82,14 @@ type AddonConfig struct {
 
 type AppConfig struct {
 	Name        string                    `toml:"name"`
-	PostImport  string                    `toml:"post_import"`
-	EnvVars     []AppEnvVar               `toml:"env"`
-	Concurrency *int                      `toml:"concurrency"`
-	Services    map[string]*ServiceConfig `toml:"services"`
-	Build       *BuildConfig              `toml:"build"`
-	Include     []string                  `toml:"include"`
-	Addons      map[string]*AddonConfig   `toml:"addons"`
-	Aliases     map[string]string         `toml:"aliases"`
+	PostImport  string                    `toml:"post_import,omitempty"`
+	EnvVars     []AppEnvVar               `toml:"env,omitempty"`
+	Concurrency *int                      `toml:"concurrency,omitempty"`
+	Services    map[string]*ServiceConfig `toml:"services,omitempty"`
+	Build       *BuildConfig              `toml:"build,omitempty"`
+	Include     []string                  `toml:"include,omitempty"`
+	Addons      map[string]*AddonConfig   `toml:"addons,omitempty"`
+	Aliases     map[string]string         `toml:"aliases,omitempty"`
 }
 
 const AppConfigPath = ".miren/app.toml"
@@ -162,6 +162,7 @@ func decodeAndValidate(data []byte, filePath string) (*AppConfig, error) {
 // Returns *ValidationError with a key path for AST-based line resolution.
 func (ac *AppConfig) Validate() error {
 	// Validate global environment variables
+	// Note: empty values are allowed - secrets may be stored server-side
 	for i, ev := range ac.EnvVars {
 		if ev.Key == "" {
 			return &ValidationError{KeyPath: "env", Message: fmt.Sprintf("env[%d]: key is required", i)}
@@ -247,6 +248,7 @@ func (ac *AppConfig) Validate() error {
 		}
 
 		// Validate service environment variables
+		// Note: empty values are allowed - secrets may be stored server-side
 		for i, ev := range svcConfig.EnvVars {
 			if ev.Key == "" {
 				return &ValidationError{

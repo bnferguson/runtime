@@ -625,6 +625,9 @@ func TestActivatorFailsFastWhenAllSandboxesDead(t *testing.T) {
 		sandbox: &compute_v1alpha.Sandbox{
 			ID:     entity.Id("sb-1"),
 			Status: compute_v1alpha.DEAD,
+			Spec: compute_v1alpha.SandboxSpec{
+				Version: testVer.ID,
+			},
 		},
 		ent:         ent,
 		lastRenewal: time.Now(),
@@ -1928,6 +1931,9 @@ func TestActivatorDoesNotFailFastOnStaleDeadSandboxWhenScalingUp(t *testing.T) {
 		sandbox: &compute_v1alpha.Sandbox{
 			ID:     entity.Id("stale-dead-sandbox"),
 			Status: compute_v1alpha.DEAD, // From previous scale-down
+			Spec: compute_v1alpha.SandboxSpec{
+				Version: testVer.ID,
+			},
 		},
 		ent:         ent,
 		lastRenewal: time.Now().Add(-10 * time.Minute), // Old
@@ -1973,6 +1979,9 @@ func TestActivatorDoesNotFailFastOnStaleDeadSandboxWhenScalingUp(t *testing.T) {
 			sandbox: &compute_v1alpha.Sandbox{
 				ID:     entity.Id("new-running-sandbox"),
 				Status: compute_v1alpha.RUNNING,
+				Spec: compute_v1alpha.SandboxSpec{
+					Version: testVer.ID,
+				},
 			},
 			ent:         newEnt,
 			lastRenewal: time.Now(),
@@ -2095,6 +2104,9 @@ func TestActivatorFailsFastOnNewSandboxDeath(t *testing.T) {
 		sandbox: &compute_v1alpha.Sandbox{
 			ID:     entity.Id("stale-dead-sandbox"),
 			Status: compute_v1alpha.DEAD,
+			Spec: compute_v1alpha.SandboxSpec{
+				Version: testVer.ID,
+			},
 		},
 		ent:         ent,
 		lastRenewal: time.Now().Add(-10 * time.Minute),
@@ -2138,6 +2150,9 @@ func TestActivatorFailsFastOnNewSandboxDeath(t *testing.T) {
 			sandbox: &compute_v1alpha.Sandbox{
 				ID:     entity.Id("new-crashed-sandbox"),
 				Status: compute_v1alpha.DEAD, // Crashed during boot!
+				Spec: compute_v1alpha.SandboxSpec{
+					Version: testVer.ID,
+				},
 			},
 			ent:         newEnt,
 			lastRenewal: time.Now(),
@@ -2179,6 +2194,183 @@ func TestActivatorFailsFastOnNewSandboxDeath(t *testing.T) {
 
 	// Should fail fast (< 200ms), not wait for full timeout
 	assert.Less(t, elapsed, 200*time.Millisecond, "Should fail fast on new sandbox death")
+}
+
+// TestActivatorDoesNotFailFastWhenPoolIsReusedByNewVersion verifies the fix
+// for MIR-1023: when a new app version reuses an existing pool (because the
+// sandbox spec matches), dead sandboxes from the previous version sharing the
+// pool must not cause the activator to fail-fast for the new version before
+// it gets a chance to boot its own sandbox.
+//
+// Repro of the outage scenario:
+//  1. v1 deployed, crashed 9 times, leaving 9 DEAD sandboxes in the pool
+//  2. v2 deployed (a fix); deployment controller reused v1's pool
+//  3. Activator sees v1's 9 DEAD sandboxes, fail-fasts v2 without trying
+//  4. v2 never gets to boot a sandbox; manual rollback required
+//
+// The fix scopes the fail-fast sandbox accounting to the requesting version.
+func TestActivatorDoesNotFailFastWhenPoolIsReusedByNewVersion(t *testing.T) {
+	ctx := context.Background()
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	makeVer := func(name string) *core_v1alpha.AppVersion {
+		v := &core_v1alpha.AppVersion{
+			App:      app.ID,
+			Version:  name,
+			ImageUrl: "test:latest",
+			Config: core_v1alpha.Config{
+				Port: 3000,
+				Services: []core_v1alpha.Services{
+					{
+						Name: "web",
+						ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+							Mode:                "auto",
+							RequestsPerInstance: 10,
+							ScaleDownDelay:      "15m",
+						},
+					},
+				},
+			},
+		}
+		vID, err := server.Client.Create(ctx, "test-ver-"+name, v)
+		require.NoError(t, err)
+		v.ID = vID
+		return v
+	}
+
+	v1 := makeVer("v1")
+	v2 := makeVer("v2")
+
+	// Pool was created for v1 and then reused by v2 when v2 deployed with a
+	// matching sandbox spec. DesiredInstances=1 is carried over from v1.
+	pool := &compute_v1alpha.SandboxPool{
+		Service: "web",
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Version: v1.ID,
+			Container: []compute_v1alpha.SandboxSpecContainer{
+				{
+					Name:  "app",
+					Image: "test:latest",
+					Port: []compute_v1alpha.SandboxSpecContainerPort{
+						{Port: 3000, Name: "http", Type: "http"},
+					},
+				},
+			},
+		},
+		ReferencedByVersions: []entity.Id{v1.ID, v2.ID},
+		DesiredInstances:     1,
+	}
+	poolID, err := server.Client.Create(ctx, "shared-pool", pool)
+	require.NoError(t, err)
+	pool.ID = poolID
+
+	log := testutils.TestLogger(t)
+	strategy := concurrency.NewStrategy(&v2.Config.Services[0].ServiceConcurrency)
+
+	// 9 DEAD sandboxes in the shared pool, all tagged as v1's.
+	var deadSandboxes []*sandbox
+	for i := 0; i < 9; i++ {
+		id := entity.Id("dead-v1-" + string(rune('0'+i)))
+		ent := entity.Blank()
+		ent.SetID(id)
+		deadSandboxes = append(deadSandboxes, &sandbox{
+			sandbox: &compute_v1alpha.Sandbox{
+				ID:     id,
+				Status: compute_v1alpha.DEAD,
+				Spec: compute_v1alpha.SandboxSpec{
+					Version: v1.ID,
+				},
+			},
+			ent:         ent,
+			lastRenewal: time.Now().Add(-5 * time.Minute),
+			url:         "",
+			tracker:     strategy.InitializeTracker(),
+		})
+	}
+
+	activator := &localActivator{
+		log:             log,
+		eac:             server.EAC,
+		versions:        make(map[verKey]*versionPoolRef),
+		poolSandboxes:   make(map[entity.Id]*poolSandboxes),
+		pools:           make(map[verKey]*poolState),
+		newSandboxChans: make(map[verKey][]chan struct{}),
+	}
+
+	// Activator knows about v1 and its pool. v2 is not yet in versions map —
+	// requestPoolCapacity will wire it up when AcquireLease is called below.
+	activator.poolSandboxes[poolID] = &poolSandboxes{
+		pool:      pool,
+		sandboxes: deadSandboxes,
+		service:   "web",
+		strategy:  strategy,
+	}
+	v1Key := verKey{v1.ID.String(), "web"}
+	activator.versions[v1Key] = &versionPoolRef{
+		ver:      v1,
+		poolID:   poolID,
+		service:  "web",
+		strategy: strategy,
+	}
+
+	// After a short delay, simulate the pool manager booting a fresh sandbox
+	// for v2. In the wild, this appears via the watchSandboxes path; here we
+	// poke it directly to keep the test focused on the fail-fast decision.
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+
+		newEnt := entity.Blank()
+		newEnt.SetID("new-v2-sandbox")
+
+		newSandbox := &sandbox{
+			sandbox: &compute_v1alpha.Sandbox{
+				ID:     entity.Id("new-v2-sandbox"),
+				Status: compute_v1alpha.RUNNING,
+				Spec: compute_v1alpha.SandboxSpec{
+					Version: v2.ID,
+				},
+			},
+			ent:         newEnt,
+			lastRenewal: time.Now(),
+			url:         "http://10.0.0.42:3000",
+			tracker:     strategy.InitializeTracker(),
+		}
+
+		activator.mu.Lock()
+		ps := activator.poolSandboxes[poolID]
+		ps.sandboxes = append(ps.sandboxes, newSandbox)
+
+		v2Key := verKey{v2.ID.String(), "web"}
+		if chans, ok := activator.newSandboxChans[v2Key]; ok {
+			for _, ch := range chans {
+				select {
+				case ch <- struct{}{}:
+				default:
+				}
+			}
+		}
+		activator.mu.Unlock()
+	}()
+
+	timeoutCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	lease, err := activator.AcquireLease(timeoutCtx, v2, "web")
+	elapsed := time.Since(start)
+
+	require.NoError(t, err, "v2 should not fail-fast on v1's stale dead sandboxes sharing the pool")
+	require.NotNil(t, lease)
+	assert.Equal(t, entity.Id("new-v2-sandbox"), lease.sandbox.ID)
+	assert.Equal(t, v2.ID, lease.sandbox.Spec.Version)
+	assert.Greater(t, elapsed, 50*time.Millisecond, "Should have waited for v2's sandbox")
 }
 
 // TestRemovePoolFromTrackingCleansAllCaches verifies that removePoolFromTracking

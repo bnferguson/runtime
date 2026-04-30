@@ -96,7 +96,7 @@ func TestSandboxDiskIntegration(t *testing.T) {
 		t.Cleanup(cleanup)
 
 		// Create controllers with real EAC and universal mode
-		diskController := NewDiskController(log, es.EAC, "test-node", "")
+		diskController := NewDiskController(log, es.EAC, "test-node", "", true)
 		diskController.ForceUniversalMode()
 		leaseController := NewDiskLeaseController(log, es.EAC, "test-node", "")
 		leaseController.ForceUniversalMode()
@@ -267,7 +267,7 @@ func TestSandboxDiskIntegration(t *testing.T) {
 		es, cleanup := testutils.NewInMemEntityServer(t)
 		t.Cleanup(cleanup)
 
-		diskController := NewDiskController(log, es.EAC, "test-node", "")
+		diskController := NewDiskController(log, es.EAC, "test-node", "", true)
 		diskController.ForceUniversalMode()
 		leaseController := NewDiskLeaseController(log, es.EAC, "test-node", "")
 		leaseController.ForceUniversalMode()

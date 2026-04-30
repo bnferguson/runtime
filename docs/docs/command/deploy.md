@@ -18,10 +18,12 @@ miren deploy [flags]
 
 - `--analyze` — Analyze the app without building (show detected stack, services, etc.)
 - `--env, -e` — Set environment variable (KEY=VALUE, KEY=@file, or KEY to prompt)
+- `--ephemeral` — Deploy as ephemeral preview with this label (e.g. feat-login)
 - `--explain, -x` — Explain the build process
 - `--explain-format` — Explain format (default: `auto`) (choices: `auto`, `plain`, `tty`, `rawjson`)
 - `--force, -f` — Skip confirmation prompt
 - `--sensitive, -s` — Set sensitive environment variable (masked in output)
+- `--ttl` — TTL for ephemeral version (e.g. 48h) (default: `24h`)
 - `--version, -V` — Deploy an existing version (skip build)
 
 ## Config Options

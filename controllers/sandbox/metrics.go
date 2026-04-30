@@ -23,7 +23,6 @@ type Cgroups struct {
 
 	attrs       map[string]string
 	lastReading time.Time
-	lastLogTime time.Time
 	prev        map[string]*stats.Metrics
 }
 
@@ -214,11 +213,6 @@ func (m *Metrics) writeStatsToStorage(ctx context.Context) error {
 			m.Log.Error("failed to record memory usage", "err", err)
 		}
 
-		// Only log every 10 seconds
-		if cg.lastLogTime.IsZero() || wallEnd.Sub(cg.lastLogTime) >= 10*time.Second {
-			m.Log.Debug("recorded container stats", "app", name, "sandbox", cg.attrs["sandbox"], "usage", usage, "mem", mem)
-			cg.lastLogTime = wallEnd
-		}
 		cg.lastReading = wallEnd
 	}
 

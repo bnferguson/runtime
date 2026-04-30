@@ -571,8 +571,6 @@ func PauseContainerID(id entity.Id) string {
 }
 
 func (c *SandboxController) CheckSandbox(ctx context.Context, co *compute.Sandbox, meta *entity.Meta) (int, error) {
-	c.Log.Debug("checking for existing sandbox", "id", co.ID)
-
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
 	_, err := c.CC.LoadContainer(ctx, pauseContainerId(co.ID))
@@ -836,7 +834,6 @@ func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, met
 						return nil
 					}
 				}
-				c.Log.Debug("sandbox already exists, skipping create")
 				return nil
 			case unhealthy:
 				c.Log.Info("sandbox container exists but is unhealthy", "id", co.ID)

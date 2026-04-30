@@ -29,10 +29,12 @@ import (
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/httpingress/httpingress_v1alpha"
 	"miren.dev/runtime/api/ingress"
+	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/components/activator"
 	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/entity"
+	ephemeralx "miren.dev/runtime/pkg/ephemeral"
 	"miren.dev/runtime/pkg/httputil"
 	"miren.dev/runtime/pkg/oidc"
 	"miren.dev/runtime/pkg/rpc"
@@ -239,7 +241,6 @@ func (h *Server) expireLeases(ctx context.Context) {
 			// Renew all retained leases — both active (Uses > 0) and idle
 			// but within TTL. This validates with the activator that the
 			// sandbox is still alive, so we never serve a stale route.
-			h.Log.Debug("renewing lease", "app", app, "url", l.Lease.URL, "uses", l.Uses)
 			lease, err := h.aa.RenewLease(ctx, l.Lease)
 			if err != nil {
 				h.Log.Error("error renewing lease", "error", err, "app", app, "url", l.Lease.URL)
@@ -496,19 +497,37 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 
 	var targetAppId entity.Id
 	var routeType string
+	var ephemeralLabel string
 
 	if route != nil {
-		// Use the http route if found
+		// Exact or wildcard route matched
 		targetAppId = route.App
 		routeType = "route"
-		h.Log.Debug("using http route", "host", onlyHost, "app", targetAppId)
+
+		// Check for ephemeral subdomain label (only relevant for wildcard routes)
+		ephemeralLabel = ingress.ExtractSubdomainLabel(onlyHost, route.Host)
 
 		// Check if OIDC authentication is required
 		if !entity.Empty(route.OidcProvider) {
 			// Wrap the request handler with OIDC middleware
 			oidcWrapped := h.oidcMiddleware(route, func(w http.ResponseWriter, r *http.Request) {
 				// Continue with normal request handling after auth
-				h.serveAuthenticatedRequest(w, r, targetAppId, routeType, appName)
+				h.serveAuthenticatedRequest(w, r, targetAppId, routeType, ephemeralLabel, appName)
+			})
+			oidcWrapped(w, req)
+			return
+		}
+	} else if label, baseRoute, err := h.lookupEphemeralRoute(ctx, onlyHost); err == nil && baseRoute != nil {
+		// No exact or wildcard match, but stripping the first subdomain label
+		// matched an existing route — this is an ephemeral subdomain request.
+		route = baseRoute
+		targetAppId = baseRoute.App
+		routeType = "route"
+		ephemeralLabel = label
+
+		if !entity.Empty(baseRoute.OidcProvider) {
+			oidcWrapped := h.oidcMiddleware(route, func(w http.ResponseWriter, r *http.Request) {
+				h.serveAuthenticatedRequest(w, r, targetAppId, routeType, ephemeralLabel, appName)
 			})
 			oidcWrapped(w, req)
 			return
@@ -541,7 +560,7 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 			route = defaultRoute
 			// Wrap with OIDC middleware
 			oidcWrapped := h.oidcMiddleware(route, func(w http.ResponseWriter, r *http.Request) {
-				h.serveAuthenticatedRequest(w, r, targetAppId, routeType, appName)
+				h.serveAuthenticatedRequest(w, r, targetAppId, routeType, ephemeralLabel, appName)
 			})
 			oidcWrapped(w, req)
 			return
@@ -549,11 +568,38 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 	}
 
 	// Continue with normal request handling
-	h.serveAuthenticatedRequest(w, req, targetAppId, routeType, appName)
+	h.serveAuthenticatedRequest(w, req, targetAppId, routeType, ephemeralLabel, appName)
+}
+
+// lookupEphemeralRoute checks whether the request host is an ephemeral
+// subdomain of an existing route. It strips the first DNS label and looks up
+// the remainder. For example, "feat-x.app.example.com" strips to
+// "app.example.com". If that matches a route, it returns the label ("feat-x")
+// and the matched route. This allows ephemeral subdomains to work with normal
+// (non-wildcard) routes — the user only needs a wildcard DNS record, not a
+// wildcard route entity.
+func (h *Server) lookupEphemeralRoute(ctx context.Context, host string) (string, *ingress_v1alpha.HttpRoute, error) {
+	idx := strings.Index(host, ".")
+	if idx <= 0 || idx == len(host)-1 {
+		return "", nil, nil
+	}
+
+	label := host[:idx]
+	base := host[idx+1:]
+
+	route, err := h.ingressClient.LookupWithWildcard(ctx, base)
+	if err != nil {
+		return "", nil, err
+	}
+	if route == nil {
+		return "", nil, nil
+	}
+
+	return label, route, nil
 }
 
 // serveAuthenticatedRequest handles the request after authentication (if any)
-func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Request, targetAppId entity.Id, routeType string, appName *string) {
+func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Request, targetAppId entity.Id, routeType string, ephemeralLabel string, appName *string) {
 	ctx := req.Context()
 
 	// Get app details first to have the name for metrics
@@ -581,12 +627,19 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 		))
 	defer leaseSpan.End()
 
+	// Scope the lease cache key by ephemeral label so different versions
+	// (active vs ephemeral, or different ephemeral labels) never share leases.
+	leaseKey := targetAppId.String()
+	if ephemeralLabel != "" {
+		leaseKey = targetAppId.String() + ":eph:" + ephemeralLabel
+	}
+
 	// Retry loop: if a cached lease fails with a connection error (stale sandbox),
 	// invalidate all cached leases and retry once to acquire a fresh lease.
 	const maxRetries = 1
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		// Try to use a cached lease
-		curLease, err := h.useLease(ctx, targetAppId.String())
+		curLease, err := h.useLease(ctx, leaseKey)
 		if err != nil {
 			h.Log.Error("error taking lease", "error", err, "app", targetAppId)
 			http.Error(w, fmt.Sprintf("error taking lease: %s", targetAppId), http.StatusInternalServerError)
@@ -605,7 +658,7 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 			if err != nil && isProxyConnectionError(err) {
 				// Cached lease pointed at a dead sandbox — invalidate all app
 				// leases (they likely all point to the same dead sandbox) and retry
-				h.invalidateAppLeases(context.Background(), targetAppId.String())
+				h.invalidateAppLeases(context.Background(), leaseKey)
 				h.Log.Warn("stale lease, retrying with fresh lease",
 					"stale_url", curLease.Lease.URL,
 					"attempt", attempt,
@@ -613,7 +666,7 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 				continue
 			}
 			if err != nil {
-				h.invalidateLease(context.Background(), targetAppId.String(), curLease)
+				h.invalidateLease(context.Background(), leaseKey, curLease)
 			} else {
 				h.releaseLease(ctx, curLease)
 			}
@@ -623,25 +676,47 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 		// No cached lease — acquire a fresh one
 		leaseSpan.SetAttributes(attribute.Bool("miren.lease.cached", false))
 
-		if app.ActiveVersion == "" {
-			h.Log.Debug("no active version for app", "app", targetAppId)
-			http.Error(w, fmt.Sprintf("no active version for app: %s", targetAppId), http.StatusNotFound)
-			return
-		}
-
-		vr, err := h.eac.Get(ctx, app.ActiveVersion.String())
-		if err != nil {
-			h.Log.Error("error looking up application version", "error", err, "version", app.ActiveVersion)
-			http.Error(w, fmt.Sprintf("error looking up application version: %s", app.ActiveVersion), http.StatusInternalServerError)
-			return
-		}
-
 		var av core_v1alpha.AppVersion
-		av.Decode(vr.Entity().Entity())
 
-		leaseSpan.SetAttributes(
-			attribute.String("miren.app.version", app.ActiveVersion.String()),
-		)
+		if ephemeralLabel != "" {
+			// Resolve ephemeral version by label
+			ephVer, ephErr := ephemeralx.LookupByLabel(ctx, h.eac, targetAppId, ephemeralLabel)
+			if ephErr != nil {
+				h.Log.Error("error looking up ephemeral version", "error", ephErr, "label", ephemeralLabel)
+				http.Error(w, fmt.Sprintf("error looking up ephemeral version: %s", ephemeralLabel), http.StatusInternalServerError)
+				return
+			}
+			if ephVer == nil {
+				h.Log.Debug("no ephemeral version found", "label", ephemeralLabel, "app", targetAppId)
+				http.Error(w, fmt.Sprintf("ephemeral version %q not found or has expired", ephemeralLabel), http.StatusNotFound)
+				return
+			}
+			av = *ephVer
+			leaseSpan.SetAttributes(
+				attribute.String("miren.app.version", string(av.ID)),
+				attribute.String("miren.ephemeral.label", ephemeralLabel),
+			)
+		} else {
+			// Resolve active version
+			if app.ActiveVersion == "" {
+				h.Log.Debug("no active version for app", "app", targetAppId)
+				http.Error(w, fmt.Sprintf("no active version for app: %s", targetAppId), http.StatusNotFound)
+				return
+			}
+
+			vr, err := h.eac.Get(ctx, app.ActiveVersion.String())
+			if err != nil {
+				h.Log.Error("error looking up application version", "error", err, "version", app.ActiveVersion)
+				http.Error(w, fmt.Sprintf("error looking up application version: %s", app.ActiveVersion), http.StatusInternalServerError)
+				return
+			}
+
+			av.Decode(vr.Entity().Entity())
+
+			leaseSpan.SetAttributes(
+				attribute.String("miren.app.version", app.ActiveVersion.String()),
+			)
+		}
 
 		// Give lease acquisition a generous timeout to complete sandbox boot
 		// even if the client request times out. This prevents dangling resources.
@@ -668,7 +743,7 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 
 		leaseSpan.SetAttributes(attribute.String("miren.lease.url", actLease.URL))
 
-		localLease := h.retainLease(ctx, targetAppId.String(), actLease)
+		localLease := h.retainLease(ctx, leaseKey, actLease)
 
 		req = req.WithContext(ctx)
 		// Fresh lease — always write error response (no retry on fresh lease failure)
@@ -676,7 +751,7 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 		if err != nil {
 			// Connection error on a fresh lease - the sandbox may have died
 			// between lease acquisition and proxy. Invalidate immediately.
-			h.invalidateLease(context.Background(), targetAppId.String(), localLease)
+			h.invalidateLease(context.Background(), leaseKey, localLease)
 		} else {
 			h.releaseLease(ctx, localLease)
 		}

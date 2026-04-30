@@ -23,6 +23,34 @@ miren deploy
 
 </CliCommand>
 
+## What `miren init` Does for You
+
+`miren init` does more than scaffold a config file. It scans your project for the environment variables your app actually needs to boot, splits them into things it can handle for you and things it can't, and stages whatever it can find.
+
+### Detection
+
+For each supported stack (Python, Node.js, Bun, Go, Ruby, Rust), `miren init`:
+
+- Reads your manifest (`Gemfile`, `package.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`) to map known libraries to the env vars they typically expect — `pg` → `DATABASE_URL`, `@sentry/node` → `SENTRY_DSN`, and so on.
+- Greps your source code for direct env reads (`ENV['X']`, `process.env.X`, `os.Getenv("X")`, `std::env::var("X")`, `Bun.env.X`) and notes whether each one has a fallback.
+- Parses any `.env.sample` / `.env.example` files in the repo as a declaration of what's expected.
+- Recognizes framework-specific names like `RAILS_ENV`, `NODE_ENV`, `RUST_LOG`, and `RAILS_MASTER_KEY`.
+
+Each detected variable gets a confidence: **required**, **recommended**, or **optional**. A direct source reference without a fallback is required. Library-based guesses are recommended unless the source confirms them, in which case they're elevated. Variables with a default-valued fallback in code (`process.env.X ?? "..."`, `cmp.Or(os.Getenv("X"), "...")`) are optional.
+
+### Staging
+
+For required variables, `miren init` tries to handle them automatically:
+
+- **Has a sensible default** (e.g. `RAILS_ENV=production`) → written to `app.toml` so it's visible.
+- **Can be generated** (e.g. Rails `SECRET_KEY_BASE`) → a cryptographically random value is generated and pre-set on the app, the same as if you'd run `miren config set` yourself.
+- **Can be read from a local file** (e.g. `RAILS_MASTER_KEY` from `config/master.key` or `config/credentials/production.key`) → read from disk and pre-set on the app, again the same as `miren config set`.
+- **Anything else** → listed as "must be configured manually" with `miren config set`.
+
+Pre-set values are picked up by your first `miren deploy` automatically, so generated secrets and read-in keys are present from the very first build without an extra step.
+
+Sensitive variables marked as such (whether by detection or because the key looks like a secret) are masked in CLI output and never written to `app.toml` in plaintext.
+
 ## When You Need app.toml
 
 Create `.miren/app.toml` when you need to:

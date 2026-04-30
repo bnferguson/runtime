@@ -344,8 +344,6 @@ func (c *ReconcileController) runWorker(ctx context.Context) {
 			}
 			c.inFlightMu.Unlock()
 
-			c.Log.Info("Processing event", "entity", event.Id, "worker", WorkerId(ctx), "rev", event.Rev)
-
 			// Process the event
 			updates, err := c.processItem(ctx, event)
 			if err != nil {

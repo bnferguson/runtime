@@ -109,7 +109,6 @@ func (s *SagaSandboxController) Create(ctx context.Context, co *compute.Sandbox,
 						"id", co.ID, "age", age)
 					return nil
 				}
-				s.log.Debug("sandbox already exists, skipping create")
 				return nil
 			case unhealthy:
 				s.log.Info("sandbox container exists but is unhealthy", "id", co.ID)

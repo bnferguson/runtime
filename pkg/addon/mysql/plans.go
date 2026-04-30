@@ -7,7 +7,7 @@ import (
 const (
 	AddonName      = "miren-mysql"
 	BaseImage      = "oci.miren.cloud/mysql"
-	DefaultVersion = "8"
+	DefaultVersion = "9"
 )
 
 const (
