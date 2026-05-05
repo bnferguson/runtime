@@ -101,7 +101,10 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 		runnerDone <- runner.Start(ctx)
 	}()
 
-	defer runner.Close()
+	defer func() {
+		cancel()
+		runner.Close()
+	}()
 
 	cfg, err := coord.LocalConfig()
 	r.NoError(err)
