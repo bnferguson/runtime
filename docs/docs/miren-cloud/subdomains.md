@@ -1,3 +1,8 @@
+---
+title: Subdomains
+description: Claim a custom subdomain like mycluster.run.garden for your Miren cluster with automatic DNS and wildcard routing.
+keywords: [subdomains, dns, run.garden, miren.app, custom domain, wildcard]
+---
 
 # Subdomains
 

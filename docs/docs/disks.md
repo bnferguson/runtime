@@ -1,3 +1,9 @@
+---
+title: Persistent Storage
+description: Configure persistent storage for your app using local storage or Miren Disks managed volumes.
+keywords: [disks, storage, persistent, volumes, local storage, backup]
+---
+
 import CliCommand from '@site/src/components/CliCommand';
 
 # Persistent Storage

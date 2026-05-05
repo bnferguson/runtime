@@ -1,3 +1,8 @@
+---
+title: Terminology
+description: Definitions of common terms used in Miren — apps, clusters, sandboxes, services, and more.
+keywords: [terminology, glossary, definitions, concepts]
+---
 
 # Terminology
 

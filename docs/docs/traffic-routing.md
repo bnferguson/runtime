@@ -1,3 +1,9 @@
+---
+title: Traffic Routing
+description: Route HTTP traffic to apps via hostnames, and configure non-HTTP ports for TCP/UDP services.
+keywords: [routing, routes, hostname, dns, ports, tcp, udp, load balancing, wildcard]
+---
+
 import CliCommand from '@site/src/components/CliCommand';
 
 # Traffic Routing

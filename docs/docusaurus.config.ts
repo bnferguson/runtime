@@ -124,17 +124,16 @@ const config: Config = {
       respectPrefersColorScheme: true,
     },
     navbar: {
+      title: '',
       logo: {
-        alt: 'Miren Logo',
+        alt: 'Miren Docs',
         src: 'img/logo-light.svg',
         srcDark: 'img/logo.svg',
       },
       items: [
-        {
-          type: 'docSidebar',
-          sidebarId: 'tutorialSidebar',
-          position: 'left',
-          label: 'Docs',
+{
+          type: 'search',
+          position: 'right',
         },
         {
           href: 'https://github.com/mirendev/runtime',
@@ -174,6 +173,13 @@ const config: Config = {
         },
       ],
       copyright: `© ${new Date().getFullYear()} From your friends at <a href="https://miren.dev" target="_blank" rel="noopener noreferrer">Miren</a>`,
+    },
+    algolia: {
+      appId: 'UMQ0GOVXIG',
+      apiKey: '9ac12cfcf7f3cdb2ccd3fe48548cc1ed',
+      indexName: 'Miren Docs',
+      contextualSearch: true,
+      searchPagePath: 'search',
     },
     prism: {
       theme: prismThemes.github,

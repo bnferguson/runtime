@@ -351,6 +351,7 @@ generate_commands_index() {
     echo "---"
     echo "title: \"Commands\""
     echo "description: \"Complete reference for all miren CLI commands\""
+    echo "keywords: [cli, commands, reference, miren]"
     echo "---"
     echo ""
     echo "# Commands"

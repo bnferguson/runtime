@@ -1,3 +1,8 @@
+---
+title: Observability
+description: OpenTelemetry distributed tracing for the request lifecycle, including routing, sandbox management, and container operations.
+keywords: [observability, tracing, opentelemetry, spans, latency, cold start]
+---
 
 # Observability
 

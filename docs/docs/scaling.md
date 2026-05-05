@@ -1,3 +1,9 @@
+---
+title: Application Scaling
+description: How Miren autoscales your app based on traffic, and how to configure scaling behavior.
+keywords: [scaling, autoscaling, concurrency, instances, traffic, scale to zero]
+---
+
 import CliCommand from '@site/src/components/CliCommand';
 
 # Application Scaling

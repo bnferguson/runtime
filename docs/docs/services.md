@@ -1,3 +1,9 @@
+---
+title: Services
+description: Run multiple processes in a single app — web servers, workers, databases — each with independent scaling.
+keywords: [services, processes, worker, web, background jobs, multi-process]
+---
+
 import CliCommand from '@site/src/components/CliCommand';
 
 # Services
@@ -303,7 +309,7 @@ For detailed scaling configuration, see [Application Scaling](/scaling).
 
 ## Persistent Storage
 
-For stateful services like databases, use [Local Shared Storage](/disks#local-shared-storage)—persistent storage automatically available at `/miren/data/local`. Configure your database to store data there:
+For stateful services like databases, use [Local Storage](/disks#local-storage)—persistent storage automatically available at `/miren/data/local`. Configure your database to store data there:
 
 ```toml
 [services.postgres]

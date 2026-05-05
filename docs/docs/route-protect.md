@@ -1,3 +1,9 @@
+---
+title: Protecting Routes
+description: Add single sign-on to your app's HTTP routes using OIDC, with identity passed as headers.
+keywords: [route protection, oidc, sso, authentication, single sign-on, identity provider]
+---
+
 import CliCommand from '@site/src/components/CliCommand';
 
 # Protecting Routes

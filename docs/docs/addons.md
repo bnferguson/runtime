@@ -1,3 +1,9 @@
+---
+title: Addons
+description: Managed services like databases that Miren provisions and operates for your app, with automatic credential injection.
+keywords: [addons, managed services, database, postgres, credentials, environment variables]
+---
+
 import CliCommand from '@site/src/components/CliCommand';
 
 # Addons

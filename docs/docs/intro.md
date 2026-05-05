@@ -1,5 +1,8 @@
 ---
 slug: /
+title: Miren
+description: Miren is a container platform for small teams — deploy apps to a Linux server with builds, scaling, routing, TLS, and backups built in.
+keywords: [miren, container platform, deploy, self-hosted, paas]
 ---
 
 # Miren

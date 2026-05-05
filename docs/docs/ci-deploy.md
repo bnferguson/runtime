@@ -1,3 +1,9 @@
+---
+title: CI/CD Deployment
+description: Deploy to Miren from CI/CD pipelines using short-lived OIDC tokens instead of stored secrets.
+keywords: [ci, cd, github actions, oidc, deployment, automation, pipeline]
+---
+
 import CliCommand from '@site/src/components/CliCommand';
 
 # CI/CD Deployment

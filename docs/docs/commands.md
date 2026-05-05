@@ -1,6 +1,7 @@
 ---
 title: "Commands"
 description: "Complete reference for all miren CLI commands"
+keywords: [cli, commands, reference, miren]
 ---
 
 # Commands

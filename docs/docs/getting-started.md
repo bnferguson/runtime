@@ -1,3 +1,9 @@
+---
+title: Getting Started
+description: Install Miren, set up a server, and deploy your first app in minutes.
+keywords: [getting started, install, setup, quickstart, first deploy]
+---
+
 import CliCommand from '@site/src/components/CliCommand';
 
 # Getting Started

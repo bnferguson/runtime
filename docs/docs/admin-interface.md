@@ -1,3 +1,9 @@
+---
+title: Admin Interface
+description: Expose custom administrative functions in your app that can be called from the CLI via JSON-RPC.
+keywords: [admin, json-rpc, maintenance, management, cli]
+---
+
 import CliCommand from '@site/src/components/CliCommand';
 
 # Admin Interface
