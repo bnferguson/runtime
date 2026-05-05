@@ -291,7 +291,7 @@ type logEntryJSON struct {
 
 func printLogEntryJSON(ctx *Context, l *app_v1alpha.LogEntry) {
 	entry := logEntryJSON{
-		Timestamp: standard.FromTimestamp(l.Timestamp()).Format(time.RFC3339Nano),
+		Timestamp: standard.FromTimestamp(l.Timestamp()).UTC().Format(time.RFC3339Nano),
 		Stream:    l.Stream(),
 		Message:   l.Line(),
 	}
