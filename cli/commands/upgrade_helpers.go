@@ -45,16 +45,16 @@ func CheckVersionStatus(ctx context.Context, targetVersion string, mgrOpts *rele
 // PrintVersionComparison prints a formatted comparison of current vs latest versions
 func PrintVersionComparison(current, latest release.VersionInfo) {
 	fmt.Printf("Current version: %s\n", current.Version)
-	if current.Commit != "" && len(current.Commit) > 7 {
-		fmt.Printf("Current commit:  %s\n", current.Commit[:7])
+	if sc := current.ShortCommit(); sc != "" {
+		fmt.Printf("Current commit:  %s\n", sc)
 	}
 	if !current.BuildDate.IsZero() {
 		fmt.Printf("Current build:   %s\n", current.BuildDate.Format("2006-01-02 15:04:05 UTC"))
 	}
 
 	fmt.Printf("\nLatest version:  %s\n", latest.Version)
-	if latest.Commit != "" && len(latest.Commit) > 7 {
-		fmt.Printf("Latest commit:   %s\n", latest.Commit[:7])
+	if sc := latest.ShortCommit(); sc != "" {
+		fmt.Printf("Latest commit:   %s\n", sc)
 	}
 	if !latest.BuildDate.IsZero() {
 		fmt.Printf("Latest build:    %s\n", latest.BuildDate.Format("2006-01-02 15:04:05 UTC"))
@@ -92,6 +92,59 @@ func CheckIfUpgradeNeeded(ctx context.Context, targetVersion string, force bool,
 	return true, nil
 }
 
+// PrintRunningVersionDrift prints an additional line about the running daemon
+// when its version differs from the on-disk binary. Used by --check paths to
+// surface drift without trying to upgrade. Returns true when drift was
+// reported, so callers can adjust their conclusion text.
+func PrintRunningVersionDrift(serviceName string, onDisk release.VersionInfo) bool {
+	runningVer, err := release.GetRunningServiceVersion(serviceName)
+	if err != nil {
+		return false
+	}
+	if runningVer.Equivalent(onDisk) {
+		return false
+	}
+	fmt.Printf("\nRunning daemon:  %s\n", runningVer.Display())
+	return true
+}
+
+// HandleVersionDrift checks whether the running daemon for the given systemd
+// service differs from the binary on disk. If they differ, the service is
+// restarted via mgr (no download, no install) and the function returns true.
+//
+// This exists because `CheckIfUpgradeNeeded` only compares on-disk binary vs
+// target version. If a previous `miren upgrade` already replaced the on-disk
+// binary, the running daemon is stale even though "current == target". Drift
+// detection catches that case and triggers just the restart.
+//
+// If the running version can't be determined (service inaccessible, /proc not
+// readable, etc.), we log a note and return (false, nil) rather than forcing a
+// surprise restart.
+func HandleVersionDrift(ctx context.Context, mgr *release.Manager, serviceName string) (bool, error) {
+	runningVer, err := release.GetRunningServiceVersion(serviceName)
+	if err != nil {
+		fmt.Printf("Note: could not determine running %s version (%v); skipping drift check\n", serviceName, err)
+		return false, nil
+	}
+
+	onDiskVer, err := mgr.GetCurrentVersion(ctx)
+	if err != nil {
+		return false, nil
+	}
+
+	if runningVer.Equivalent(onDiskVer) {
+		return false, nil
+	}
+
+	fmt.Printf("Running %s is at %s; on-disk binary is %s. Restarting to pick up the new binary.\n",
+		serviceName, runningVer.Display(), onDiskVer.Display())
+
+	if err := mgr.RestartAndVerify(ctx); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
 // PrintUpgradeSuccess prints a formatted success message after upgrade
 // If mgrOpts is nil, uses default manager options (for server path)
 func PrintUpgradeSuccess(ctx context.Context, oldVersion release.VersionInfo, commandType string, mgrOpts *release.ManagerOptions) {
@@ -104,22 +157,7 @@ func PrintUpgradeSuccess(ctx context.Context, oldVersion release.VersionInfo, co
 
 	if oldVersion.Version != "" {
 		fmt.Printf("\n%s upgrade successful:\n", commandType)
-		fmt.Printf("  Old: %s", oldVersion.Version)
-		if c := oldVersion.Commit; c != "" && c != "unknown" {
-			end := 8
-			if len(c) < end {
-				end = len(c)
-			}
-			fmt.Printf(" (%s)", c[:end])
-		}
-		fmt.Printf("\n  New: %s", newVersion.Version)
-		if c := newVersion.Commit; c != "" && c != "unknown" {
-			end := 8
-			if len(c) < end {
-				end = len(c)
-			}
-			fmt.Printf(" (%s)", c[:end])
-		}
-		fmt.Printf("\n")
+		fmt.Printf("  Old: %s\n", oldVersion.Display())
+		fmt.Printf("  New: %s\n", newVersion.Display())
 	}
 }

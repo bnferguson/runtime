@@ -156,6 +156,28 @@ func (m *Manager) UpgradeServer(ctx context.Context, artifact Artifact) error {
 	return nil
 }
 
+// RestartAndVerify restarts the systemd service and verifies its health
+// without performing any download or installation. Used by the drift-recovery
+// path when the running daemon is stale relative to the on-disk binary (e.g.,
+// after `miren upgrade` rewrote the release-dir binary but no service restart
+// has happened yet).
+func (m *Manager) RestartAndVerify(ctx context.Context) error {
+	fmt.Printf("Restarting %s service...\n", m.opts.ServiceName)
+	if err := m.restartService(ctx); err != nil {
+		return fmt.Errorf("service restart failed: %w", err)
+	}
+
+	if !m.opts.SkipHealthCheck {
+		fmt.Printf("Verifying service health...\n")
+		if err := m.verifier.VerifyHealth(ctx, m.opts.HealthTimeout); err != nil {
+			return fmt.Errorf("health check failed: %w", err)
+		}
+		fmt.Printf("Service is healthy\n")
+	}
+
+	return nil
+}
+
 // Rollback rolls back to the previous version
 func (m *Manager) Rollback(ctx context.Context) error {
 	// Check if backup exists

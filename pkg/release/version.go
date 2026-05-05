@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -79,6 +80,82 @@ func parseVersionText(output string) VersionInfo {
 	}
 
 	return info
+}
+
+// ShortCommit returns the 7-char display prefix of v's commit, or "" if the
+// commit is missing or "unknown". 7 chars matches git's default short-sha
+// length and what users see elsewhere.
+func (v VersionInfo) ShortCommit() string {
+	c := v.Commit
+	if c == "" || c == "unknown" {
+		return ""
+	}
+	if len(c) <= 7 {
+		return c
+	}
+	return c[:7]
+}
+
+// Display formats v as "version (commit)" for human-facing output. If the
+// commit is missing, just the version string is returned.
+func (v VersionInfo) Display() string {
+	if sc := v.ShortCommit(); sc != "" {
+		return v.Version + " (" + sc + ")"
+	}
+	return v.Version
+}
+
+// Equivalent returns true if v represents the same build as other.
+// Commits are the strongest signal: if both sides have a known commit, that
+// alone decides. Otherwise we fall back to comparing version string and build
+// date. Used by drift detection to ask "is the running daemon actually a
+// different build than what's on disk?".
+func (v VersionInfo) Equivalent(other VersionInfo) bool {
+	if v.Commit != "" && v.Commit != "unknown" &&
+		other.Commit != "" && other.Commit != "unknown" {
+		return v.Commit == other.Commit
+	}
+	if v.Version != other.Version {
+		return false
+	}
+	if !v.BuildDate.IsZero() && !other.BuildDate.IsZero() {
+		return v.BuildDate.Equal(other.BuildDate)
+	}
+	return true
+}
+
+// GetRunningServiceVersion returns the version info for the binary currently
+// executing for the given systemd service. It looks up the service's MainPID
+// via systemctl and execs /proc/<pid>/exe.
+//
+// On Linux this returns the *actually-running* version regardless of what the
+// on-disk binary at the install path says. The kernel keeps the original inode
+// alive as long as the process holds an exec mapping to it, so /proc/<pid>/exe
+// continues to point at the binary the daemon was started from even after an
+// atomic rename of the install path.
+func GetRunningServiceVersion(serviceName string) (VersionInfo, error) {
+	pid, err := getServiceMainPID(serviceName)
+	if err != nil {
+		return VersionInfo{}, err
+	}
+	if pid == 0 {
+		return VersionInfo{}, fmt.Errorf("service %s is not running", serviceName)
+	}
+	return GetCurrentVersion(fmt.Sprintf("/proc/%d/exe", pid))
+}
+
+func getServiceMainPID(serviceName string) (int, error) {
+	cmd := exec.Command("systemctl", "show", "-p", "MainPID", "--value", serviceName)
+	output, err := cmd.Output()
+	if err != nil {
+		return 0, fmt.Errorf("systemctl show failed for %s: %w", serviceName, err)
+	}
+	pidStr := strings.TrimSpace(string(output))
+	pid, err := strconv.Atoi(pidStr)
+	if err != nil {
+		return 0, fmt.Errorf("parse MainPID %q for %s: %w", pidStr, serviceName, err)
+	}
+	return pid, nil
 }
 
 // IsNewer returns true if this version is newer than the other

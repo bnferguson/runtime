@@ -61,11 +61,14 @@ func ServerUpgrade(ctx *Context, opts struct {
 		}
 
 		PrintVersionComparison(current, latest)
+		drift := PrintRunningVersionDrift(mgrOpts.ServiceName, current)
 
-		// Use proper version comparison with build dates
-		if latest.IsNewer(current) {
+		switch {
+		case latest.IsNewer(current):
 			fmt.Println("\nAn update is available! Run 'sudo miren server upgrade' to install it.")
-		} else {
+		case drift:
+			fmt.Println("\nOn-disk binary is current, but the running daemon is stale. Run 'sudo miren server upgrade' to restart the service.")
+		default:
 			fmt.Println("\nYour server is already on the latest version.")
 		}
 		return nil
@@ -78,7 +81,11 @@ func ServerUpgrade(ctx *Context, opts struct {
 		ctx.Log.Warn("could not check version status", "error", err)
 		// Continue with upgrade if we can't check
 	} else if !needsUpgrade {
-		return nil // Already up to date
+		mgr := release.NewManager(mgrOpts)
+		if _, err := HandleVersionDrift(ctx, mgr, mgrOpts.ServiceName); err != nil {
+			return err
+		}
+		return nil
 	}
 
 	mgr := release.NewManager(mgrOpts)
