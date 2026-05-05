@@ -69,7 +69,19 @@ const config: Config = {
   // Prevent GitHub Pages from adding trailing slashes via redirects
   trailingSlash: false,
 
-  plugins: [filterAncestorWatchesPlugin],
+  plugins: [
+    filterAncestorWatchesPlugin,
+    [
+      'docusaurus-plugin-llms',
+      {
+        generateLLMsTxt: true,
+        generateLLMsFullTxt: true,
+        excludeImports: true,
+        removeDuplicateHeadings: true,
+        logLevel: 'quiet',
+      },
+    ],
+  ],
 
   scripts: [
     {
