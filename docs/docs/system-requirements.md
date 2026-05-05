@@ -1,3 +1,9 @@
+---
+title: System Requirements
+description: Minimum and recommended hardware for running a Miren server — OS, architecture, memory, and storage.
+keywords: [system requirements, hardware, linux, memory, disk space, arm64, x86]
+---
+
 import CliCommand from '@site/src/components/CliCommand';
 
 # System Requirements

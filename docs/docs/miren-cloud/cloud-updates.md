@@ -1,3 +1,9 @@
+---
+title: Cloud Updates
+description: What's new in Miren Cloud — feature releases, fixes, and improvements.
+keywords: [updates, changelog, miren cloud, releases]
+---
+
 # Updates
 
 What's new in Miren Cloud.

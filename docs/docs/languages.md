@@ -1,3 +1,8 @@
+---
+title: Supported Languages
+description: Languages and frameworks Miren detects automatically, including build and runtime configuration.
+keywords: [languages, ruby, node, python, go, rust, bun, framework, build]
+---
 
 # Supported Languages
 

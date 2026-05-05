@@ -1,3 +1,9 @@
+---
+title: TLS Certificates
+description: Automatic TLS certificate provisioning via Let's Encrypt, including DNS challenges and custom certificates.
+keywords: [tls, ssl, certificates, https, lets encrypt, acme, dns challenge]
+---
+
 import CliCommand from '@site/src/components/CliCommand';
 
 # TLS Certificates

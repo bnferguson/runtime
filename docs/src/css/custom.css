@@ -704,6 +704,34 @@ a:hover {
 }
 
 /* ========================================
+ * Algolia DocSearch Overrides
+ * ======================================== */
+
+.DocSearch-Button {
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+.DocSearch-Button:hover {
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+.DocSearch-Form {
+  outline: none !important;
+  outline-offset: 0 !important;
+}
+
+.DocSearch-Input:focus-visible {
+  outline: none;
+  outline-offset: 0;
+}
+
+.DocSearch-Modal a:hover {
+  text-decoration: none;
+}
+
+/* ========================================
  * Accessibility & Motion
  * ======================================== */
 

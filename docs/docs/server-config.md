@@ -1,5 +1,8 @@
 ---
+title: Server Configuration Reference
 sidebar_label: server.toml
+description: Complete reference for Miren server configuration — config file, environment variables, and CLI flags.
+keywords: [server.toml, server configuration, environment variables, flags, settings]
 ---
 
 import CliCommand from '@site/src/components/CliCommand';

@@ -1,5 +1,8 @@
 ---
+title: app.toml Reference
 sidebar_label: app.toml
+description: Complete reference for .miren/app.toml — services, scaling, disks, environment variables, and build configuration.
+keywords: [app.toml, configuration, reference, services, scaling, environment variables, build]
 ---
 
 # app.toml Reference

@@ -1,3 +1,9 @@
+---
+title: Changelog
+description: All notable changes to Miren Runtime, organized by release version.
+keywords: [changelog, releases, updates, version history]
+---
+
 # Changelog
 
 All notable changes to Miren Runtime will be documented in this file.

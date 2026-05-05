@@ -1,3 +1,9 @@
+---
+title: Logs
+description: View and query application, build, sandbox, and system logs with the miren logs command.
+keywords: [logs, logging, victoria logs, debugging, output, build logs]
+---
+
 import CliCommand from '@site/src/components/CliCommand';
 
 # Logs

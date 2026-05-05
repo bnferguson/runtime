@@ -1,3 +1,9 @@
+---
+title: App Configuration
+description: How Miren detects and configures your app automatically, and when to customize with app.toml.
+keywords: [configuration, app.toml, convention over configuration, environment variables, miren init]
+---
+
 import CliCommand from '@site/src/components/CliCommand';
 
 # App Configuration

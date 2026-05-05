@@ -1,3 +1,8 @@
+---
+title: Miren Cloud
+description: Central control plane for managing Miren clusters — team access, backups, multi-environment workflows, and custom subdomains.
+keywords: [miren cloud, control plane, teams, rbac, backup, multi-environment, organization]
+---
 
 # Miren Cloud
 

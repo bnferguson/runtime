@@ -1,3 +1,9 @@
+---
+title: Troubleshooting
+description: Step-by-step guide to diagnosing issues with Miren applications, builds, networking, and server health.
+keywords: [troubleshooting, debugging, errors, miren doctor, health check]
+---
+
 import CliCommand from '@site/src/components/CliCommand';
 
 # Troubleshooting

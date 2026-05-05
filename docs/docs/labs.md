@@ -1,3 +1,9 @@
+---
+title: Miren Labs
+description: Experimental features available for early access and feedback before stable release.
+keywords: [labs, experimental, features, opt-in, preview]
+---
+
 import CliCommand from '@site/src/components/CliCommand';
 
 # Miren Labs

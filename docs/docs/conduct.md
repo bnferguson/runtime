@@ -1,6 +1,8 @@
 ---
 slug: /conduct
 title: Code of Conduct
+description: The Miren community code of conduct — guidelines for respectful and inclusive participation.
+keywords: [code of conduct, community, guidelines]
 ---
 
 # Miren Community Code of Conduct

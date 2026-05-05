@@ -1,3 +1,9 @@
+---
+title: Deployment
+description: How miren deploy works — uploading code, building images, and activating new versions.
+keywords: [deploy, build, rollback, versions, container image]
+---
+
 import CliCommand from '@site/src/components/CliCommand';
 
 # Deployment

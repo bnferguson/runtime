@@ -1,3 +1,9 @@
+---
+title: Firewall Configuration
+description: How Miren configures iptables rules for container networking and how to troubleshoot networking issues.
+keywords: [firewall, iptables, networking, containers, troubleshooting]
+---
+
 import CliCommand from '@site/src/components/CliCommand';
 
 # Firewall Configuration
