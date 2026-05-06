@@ -490,9 +490,7 @@ func (e *Executor) Recover(ctx context.Context) error {
 			if exec.Error != "" {
 				e.log.Info("found failed action during recovery, starting undo",
 					"saga", exec.DefinitionName, "error", exec.Error)
-				if err := e.runUndo(ctx, def, exec); err != nil {
-					recoverErrors = append(recoverErrors, err)
-				}
+				recoverErrors = append(recoverErrors, e.runUndo(ctx, def, exec))
 			} else {
 				// Resume execution (pending means crashed before first action started)
 				if err := e.runExecution(ctx, def, exec); err != nil {
@@ -501,9 +499,7 @@ func (e *Executor) Recover(ctx context.Context) error {
 			}
 		case StatusUndoing:
 			// Resume undo
-			if err := e.runUndo(ctx, def, exec); err != nil {
-				recoverErrors = append(recoverErrors, err)
-			}
+			recoverErrors = append(recoverErrors, e.runUndo(ctx, def, exec))
 		}
 	}
 

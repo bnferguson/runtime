@@ -785,6 +785,7 @@ func TestSetEnvVars_Batch(t *testing.T) {
 		}
 		if foundEnv == nil {
 			t.Fatal("expected worker service entry with X=1, not found")
+			return
 		}
 		if foundEnv.Value != "1" {
 			t.Fatalf("expected X=1, got %q", foundEnv.Value)
