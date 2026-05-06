@@ -25,7 +25,7 @@ type fieldMapping struct {
 // Format: `saga:"keyname"` or `saga:"keyname,optional"`
 // Use `saga:"-"` to skip a field.
 func extractMappings(t reflect.Type) ([]fieldMapping, error) {
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	if t.Kind() != reflect.Struct {

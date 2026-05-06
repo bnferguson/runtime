@@ -270,7 +270,7 @@ func (c *Context) DisplayTableTemplate(template string, items []any) {
 			field := reflect.Indirect(val).FieldByName(accessor)
 			if field.IsValid() {
 				// Check if the field is nil
-				if field.Kind() == reflect.Ptr && field.IsNil() {
+				if field.Kind() == reflect.Pointer && field.IsNil() {
 					row[j] = "<nil>"
 					continue
 				}
@@ -284,7 +284,7 @@ func (c *Context) DisplayTableTemplate(template string, items []any) {
 				result := method.Call(nil)
 				if len(result) > 0 {
 					// Check if the result is nil
-					if result[0].Kind() == reflect.Ptr && result[0].IsNil() {
+					if result[0].Kind() == reflect.Pointer && result[0].IsNil() {
 						row[j] = "<nil>"
 						continue
 					}
