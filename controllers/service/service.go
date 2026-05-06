@@ -158,8 +158,11 @@ func (s *ServiceController) endpointChain(ip netip.Addr, port uint16, proto stri
 	return fmt.Sprintf("endpoint_%s", base58.Encode(x[:]))
 }
 
-func (s *ServiceController) nodeportChain(ip netip.Addr, port uint16, proto string) string {
-	x := blake2b.Sum256([]byte(fmt.Sprintf("%s:%s:%d", ip.String(), proto, port)))
+// nodeportChain names the per-NodePort chain. NodePort dispatch is a property
+// of the cluster-facing port, so the key is (proto, nport) — independent of
+// any service IP, which a service may not yet have when this chain installs.
+func (s *ServiceController) nodeportChain(nport int, proto string) string {
+	x := blake2b.Sum256([]byte(fmt.Sprintf("%s:%d", proto, nport)))
 	return fmt.Sprintf("nodeport_%s", base58.Encode(x[:]))
 }
 
@@ -217,30 +220,52 @@ func (s *ServiceController) updateServiceEndpoints(cmd *nftCommands, sip netip.A
 	return nil
 }
 
-func (s *ServiceController) setupNodePort(cmd *nftCommands, nport int, sip netip.Addr, sport int, proto string) error {
-	chain := s.nodeportChain(sip, uint16(sport), proto)
-
-	if cmd.knownChains.Contains(chain) {
+// setupNodePort installs a per-NodePort chain that DNATs traffic landing on
+// this node's NodePort to one of the service's endpoint sandbox IPs, picked at
+// random. It mirrors the shape of the service-IP chain (counter, masq for
+// non-routable sources, random-vmap dispatch to endpoint chains) but stands
+// alone so that NodePort works on every node regardless of whether the service
+// has an allocated cluster IP yet.
+func (s *ServiceController) setupNodePort(cmd *nftCommands, nport int, proto string, endpoints []string) error {
+	if len(endpoints) == 0 {
 		return nil
 	}
 
-	cmd.knownChains.Add(chain)
+	chain := s.nodeportChain(nport, proto)
 
-	cmd.append("add chain inet %s %s", s.table, chain)
+	slices.Sort(endpoints)
 
-	cmd.append("add element inet %s service_nodeports { %s . %d : goto %s }", s.table, proto, nport, chain)
+	s.mu.Lock()
+	if cur, ok := s.chainEndpoints[chain]; ok && slices.Equal(cur, endpoints) {
+		s.mu.Unlock()
+		return nil
+	}
+	s.chainEndpoints[chain] = endpoints
+	s.mu.Unlock()
+
+	if cmd.knownChains.Contains(chain) {
+		cmd.append("flush chain inet %s %s", s.table, chain)
+	} else {
+		cmd.knownChains.Add(chain)
+		cmd.append("add chain inet %s %s", s.table, chain)
+		cmd.append("add element inet %s service_nodeports { %s . %d : goto %s }", s.table, proto, nport, chain)
+	}
 
 	cmd.append("add rule inet %s %s counter name \"nodeports\"", s.table, chain)
 	for _, rp := range s.routablePrefixes {
 		if rp.Addr().Is4() {
-			cmd.append("add rule inet %s %s ip saddr == %s goto %s", s.table, chain, rp.String(), s.serviceChain(sip, uint16(sport), proto))
+			cmd.append("add rule inet %s %s ip saddr != %s counter jump mark-for-masq", s.table, chain, rp.String())
 		} else {
-			cmd.append("add rule inet %s %s ip6 saddr == %s goto %s", s.table, chain, rp.String(), s.serviceChain(sip, uint16(sport), proto))
+			cmd.append("add rule inet %s %s ip6 saddr != %s counter jump mark-for-masq", s.table, chain, rp.String())
 		}
 	}
 
-	cmd.append("add rule inet %s %s fib saddr type local counter jump mark-for-masq", s.table, chain)
-	cmd.append("add rule inet %s %s fib saddr type local counter goto %s", s.table, chain, s.serviceChain(sip, uint16(sport), proto))
+	vmap := make([]string, len(endpoints))
+	for i, ep := range endpoints {
+		vmap[i] = fmt.Sprintf("%d : goto %s", i, ep)
+	}
+	cmd.append("add rule inet %s %s numgen random mod %d vmap { %s }", s.table, chain, len(endpoints), strings.Join(vmap, ", "))
+
 	return nil
 }
 
@@ -455,10 +480,6 @@ func (s *ServiceController) apply(ctx context.Context, cmd *nftCommands) error {
 func (s *ServiceController) Create(ctx context.Context, srv *network_v1alpha.Service, meta *entity.Meta) error {
 	s.Log.Info("Creating service", "service", srv)
 
-	if len(srv.Ip) == 0 {
-		return nil
-	}
-
 	lr, err := s.EAC.List(ctx, entity.Ref(network_v1alpha.EndpointsServiceId, srv.ID))
 	if err != nil {
 		return fmt.Errorf("failed to list endpoints: %w", err)
@@ -466,61 +487,79 @@ func (s *ServiceController) Create(ctx context.Context, srv *network_v1alpha.Ser
 
 	cmd := s.cmd.Clone()
 
-	var firstIp netip.Addr
+	// Build endpoint chains once, keyed by the public-facing port. Both the
+	// service-IP path and the NodePort path consume the same set so that a
+	// service with a NodePort but no allocated cluster IP still gets DNAT
+	// installed on every node.
+	type portKey struct {
+		Port  int64
+		Proto string
+	}
+	epChainsByPort := make(map[portKey][]string, len(srv.Port))
+	for _, tp := range srv.Port {
+		target := tp.TargetPort
+		if target == 0 {
+			target = tp.Port
+		}
+		proto := nftProto(tp.Protocol)
+		key := portKey{Port: tp.Port, Proto: proto}
 
+		for _, ent := range lr.Values() {
+			var eps network_v1alpha.Endpoints
+			eps.Decode(ent.Entity())
+
+			for _, ep := range eps.Endpoint {
+				destIP, err := netip.ParseAddr(ep.Ip)
+				if err != nil {
+					return fmt.Errorf("failed to parse endpoint IP address: %v", err)
+				}
+
+				chain, err := s.setupEndpointChain(cmd, destIP, uint16(target), proto)
+				if err != nil {
+					return fmt.Errorf("failed to setup endpoint chain: %w", err)
+				}
+
+				epChainsByPort[key] = append(epChainsByPort[key], chain)
+			}
+		}
+	}
+
+	// Service-IP path: for cluster-internal traffic to <serviceIP>:<port>.
+	// Skipped when the service has no allocated IP.
 	for _, sip := range srv.Ip {
 		ip, err := netip.ParseAddr(sip)
 		if err != nil {
 			return fmt.Errorf("failed to parse service IP address: %w", err)
 		}
 
-		if !firstIp.IsValid() {
-			firstIp = ip
-		}
-
 		for _, tp := range srv.Port {
-			target := tp.TargetPort
-			if target == 0 {
-				target = tp.Port
-			}
 			proto := nftProto(tp.Protocol)
-
-			var epChains []string
-			for _, ent := range lr.Values() {
-				var eps network_v1alpha.Endpoints
-				eps.Decode(ent.Entity())
-
-				for _, ep := range eps.Endpoint {
-					destIP, err := netip.ParseAddr(ep.Ip)
-					if err != nil {
-						return fmt.Errorf("failed to parse endpoint IP address: %v", err)
-					}
-
-					chain, err := s.setupEndpointChain(cmd, destIP, uint16(target), proto)
-					if err != nil {
-						return fmt.Errorf("failed to setup endpoint chain: %w", err)
-					}
-
-					epChains = append(epChains, chain)
-				}
-			}
+			key := portKey{Port: tp.Port, Proto: proto}
 
 			if err := s.createServiceChain(cmd, ip, int(tp.Port), proto); err != nil {
 				return fmt.Errorf("failed to create service chain: %w", err)
 			}
 
-			if err := s.updateServiceEndpoints(cmd, ip, int(tp.Port), proto, epChains); err != nil {
+			if err := s.updateServiceEndpoints(cmd, ip, int(tp.Port), proto, epChainsByPort[key]); err != nil {
 				return fmt.Errorf("failed to update service endpoints: %w", err)
 			}
 		}
 	}
 
+	// NodePort path: every node that runs the controller installs this rule,
+	// independent of where the service's sandboxes live, so external traffic
+	// to <any-node>:<nport> reaches the service. Same model as Kubernetes
+	// kube-proxy: any node answers, cluster routing carries the DNAT'd packet
+	// to the right sandbox.
 	for _, tp := range srv.Port {
-		if tp.NodePort != 0 {
-			proto := nftProto(tp.Protocol)
-			if err := s.setupNodePort(cmd, int(tp.NodePort), firstIp, int(tp.Port), proto); err != nil {
-				return fmt.Errorf("failed to setup node port: %w", err)
-			}
+		if tp.NodePort == 0 {
+			continue
+		}
+		proto := nftProto(tp.Protocol)
+		key := portKey{Port: tp.Port, Proto: proto}
+
+		if err := s.setupNodePort(cmd, int(tp.NodePort), proto, epChainsByPort[key]); err != nil {
+			return fmt.Errorf("failed to setup node port: %w", err)
 		}
 	}
 
