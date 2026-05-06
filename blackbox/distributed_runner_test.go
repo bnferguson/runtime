@@ -5,6 +5,7 @@ package blackbox
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -116,4 +117,34 @@ func TestDistributedRunnerLogs(t *testing.T) {
 			return false, "no app startup log yet"
 		},
 	)
+}
+
+// TestDistributedRunnerNodePort guards the MIR-1032 fix: NodePort DNAT rules
+// must install on every node that runs the service controller (coordinator
+// and all runners), not only on the node hosting the sandbox. The tcp-echo
+// testdata app declares node_port = 7000, so after deploy every peer's nft
+// service_nodeports map must contain an entry for tcp/7000.
+func TestDistributedRunnerNodePort(t *testing.T) {
+	c := harness.NewCluster(t)
+	skipIfNotDistributed(t, c)
+	m := harness.NewMiren(t, c)
+
+	harness.DeployApp(t, m, harness.AppOptions{
+		Testdata: "tcp-echo",
+	})
+
+	for _, peer := range []string{"coordinator", "runner1"} {
+		harness.Poll(t, fmt.Sprintf("nodeport rule on %s", peer), 60*time.Second, 2*time.Second,
+			func() (bool, string) {
+				r := m.PeerExec(peer, "nft", "list", "map", "inet", "miren", "service_nodeports")
+				if !r.Success() {
+					return false, fmt.Sprintf("nft list map failed (exit %d): %s", r.ExitCode, strings.TrimSpace(r.Stderr))
+				}
+				if !strings.Contains(r.Stdout, "tcp . 7000") {
+					return false, fmt.Sprintf("service_nodeports has no entry for tcp/7000 on %s yet", peer)
+				}
+				return true, ""
+			},
+		)
+	}
 }

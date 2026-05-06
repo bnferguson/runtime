@@ -56,10 +56,14 @@ func RunnerUpgrade(ctx *Context, opts struct {
 		}
 
 		PrintVersionComparison(current, latest)
+		drift := PrintRunningVersionDrift(mgrOpts.ServiceName, current)
 
-		if latest.IsNewer(current) {
+		switch {
+		case latest.IsNewer(current):
 			fmt.Println("\nAn update is available! Run 'sudo miren runner upgrade' to install it.")
-		} else {
+		case drift:
+			fmt.Println("\nOn-disk binary is current, but the running daemon is stale. Run 'sudo miren runner upgrade' to restart the service.")
+		default:
 			fmt.Println("\nYour runner is already on the latest version.")
 		}
 		return nil
@@ -69,6 +73,10 @@ func RunnerUpgrade(ctx *Context, opts struct {
 	if err != nil {
 		ctx.Log.Warn("could not check version status", "error", err)
 	} else if !needsUpgrade {
+		mgr := release.NewManager(mgrOpts)
+		if _, err := HandleVersionDrift(ctx, mgr, mgrOpts.ServiceName); err != nil {
+			return err
+		}
 		return nil
 	}
 

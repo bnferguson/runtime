@@ -1251,12 +1251,20 @@ func (c *SandboxController) AllocateNetwork(
 	return ep, nil
 }
 
-func (c *SandboxController) setupHosts(sb *compute.Sandbox, name string) error {
+func (c *SandboxController) setupHosts(sb *compute.Sandbox, name string, ep *network.EndpointConfig) error {
+	if ep == nil || len(ep.Addresses) == 0 {
+		return fmt.Errorf("no addresses allocated for sandbox %s", sb.ID)
+	}
+
 	var lines []string
 
 	lines = append(lines, "# The following lines are managed by runtime.computer")
-	lines = append(lines, fmt.Sprintf("127.0.0.1\tlocalhost localhost.localdomain %s", name))
-	lines = append(lines, fmt.Sprintf("::1\tlocalhost localhost.localdomain %s", name))
+	lines = append(lines, "127.0.0.1\tlocalhost localhost.localdomain")
+	lines = append(lines, "::1\tlocalhost localhost.localdomain")
+
+	for _, prefix := range ep.Addresses {
+		lines = append(lines, fmt.Sprintf("%s\t%s", prefix.Addr(), name))
+	}
 
 	for _, addr := range sb.Spec.StaticHost {
 		lines = append(lines, fmt.Sprintf("%s\t%s", addr.Ip, addr.Host))
@@ -1376,7 +1384,7 @@ func (c *SandboxController) BuildSpec(
 		return nil, err
 	}
 
-	err = c.setupHosts(sb, sandboxHostname(sb.ID))
+	err = c.setupHosts(sb, sandboxHostname(sb.ID), ep)
 	if err != nil {
 		return nil, err
 	}

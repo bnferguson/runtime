@@ -893,6 +893,169 @@ func TestServiceController(t *testing.T) {
 		r.NoError(err)
 	})
 
+	t.Run("installs nodeport chain without service IP", func(t *testing.T) {
+		// MIR-1032: a service with a NodePort must install the NodePort DNAT
+		// chain on every node, including nodes that don't host the sandbox and
+		// even when the service has no allocated cluster IP yet. Before the
+		// fix, Create() returned early when srv.Ip was empty so the NodePort
+		// rule was never installed on the coordinator.
+		r := require.New(t)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		testDeps, cleanup := testutils.NewTestDeps()
+		defer cleanup()
+
+		eac := testDeps.EAC
+
+		sc, err := newServiceController(testDeps)
+		r.NoError(err)
+
+		err = sc.Init(ctx)
+		r.NoError(err)
+
+		svcID := entity.Id(svcName())
+		svc := &network_v1alpha.Service{
+			ID: svcID,
+			Match: types.Labels{
+				types.Label{Key: "app", Value: "rust-chat"},
+			},
+			Port: []network_v1alpha.Port{
+				{
+					Name:     "console",
+					Port:     6669,
+					NodePort: 30669,
+				},
+			},
+		}
+
+		var rpcE entityserver_v1alpha.Entity
+		rpcE.SetAttrs(entity.New(
+			entity.Keyword(entity.Ident, svcID.String()),
+			svc.Encode).Attrs())
+		_, err = eac.Put(ctx, &rpcE)
+		r.NoError(err)
+
+		epID := entity.Id("endpoints-" + svcID.String())
+		eps := &network_v1alpha.Endpoints{
+			ID:      epID,
+			Service: svcID,
+			Endpoint: []network_v1alpha.Endpoint{
+				{Ip: "10.8.103.56", Port: 6669},
+			},
+		}
+
+		var epRPC entityserver_v1alpha.Entity
+		epRPC.SetAttrs(entity.New(
+			entity.Keyword(entity.Ident, epID.String()),
+			eps.Encode).Attrs())
+		_, err = eac.Put(ctx, &epRPC)
+		r.NoError(err)
+
+		svcEntity := entity.New(svc.Encode)
+		meta := &entity.Meta{Entity: svcEntity, Revision: 1}
+
+		err = sc.Create(ctx, svc, meta)
+		r.NoError(err)
+
+		npChain := sc.nodeportChain(30669, "tcp")
+		epIP := netip.MustParseAddr("10.8.103.56")
+		expectedEpChain := sc.endpointChain(epIP, 6669, "tcp")
+
+		sc.mu.Lock()
+		got, ok := sc.chainEndpoints[npChain]
+		sc.mu.Unlock()
+
+		r.True(ok, "NodePort chain should be tracked even without a service IP")
+		r.Equal([]string{expectedEpChain}, got, "NodePort chain should DNAT to the endpoint chain")
+	})
+
+	t.Run("rebuilds nodeport vmap when endpoints change", func(t *testing.T) {
+		r := require.New(t)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		testDeps, cleanup := testutils.NewTestDeps()
+		defer cleanup()
+
+		eac := testDeps.EAC
+
+		sc, err := newServiceController(testDeps)
+		r.NoError(err)
+
+		err = sc.Init(ctx)
+		r.NoError(err)
+
+		svcID := entity.Id(svcName())
+		svc := &network_v1alpha.Service{
+			ID: svcID,
+			Match: types.Labels{
+				types.Label{Key: "app", Value: "rust-chat"},
+			},
+			Port: []network_v1alpha.Port{
+				{
+					Name:     "console",
+					Port:     6669,
+					NodePort: 30669,
+				},
+			},
+		}
+
+		var rpcE entityserver_v1alpha.Entity
+		rpcE.SetAttrs(entity.New(
+			entity.Keyword(entity.Ident, svcID.String()),
+			svc.Encode).Attrs())
+		_, err = eac.Put(ctx, &rpcE)
+		r.NoError(err)
+
+		epID := entity.Id("endpoints-" + svcID.String())
+		eps := &network_v1alpha.Endpoints{
+			ID:      epID,
+			Service: svcID,
+			Endpoint: []network_v1alpha.Endpoint{
+				{Ip: "10.8.103.56", Port: 6669},
+			},
+		}
+
+		var epRPC entityserver_v1alpha.Entity
+		epRPC.SetAttrs(entity.New(
+			entity.Keyword(entity.Ident, epID.String()),
+			eps.Encode).Attrs())
+		putRes, err := eac.Put(ctx, &epRPC)
+		r.NoError(err)
+		epRevision := putRes.Revision()
+
+		svcEntity := entity.New(svc.Encode)
+		meta := &entity.Meta{Entity: svcEntity, Revision: 1}
+
+		err = sc.Create(ctx, svc, meta)
+		r.NoError(err)
+
+		npChain := sc.nodeportChain(30669, "tcp")
+
+		sc.mu.Lock()
+		first := append([]string{}, sc.chainEndpoints[npChain]...)
+		sc.mu.Unlock()
+		r.Len(first, 1, "expected one endpoint chain after first reconcile")
+
+		eps.Endpoint = append(eps.Endpoint, network_v1alpha.Endpoint{Ip: "10.8.104.42", Port: 6669})
+		updated := entity.New(
+			entity.Keyword(entity.Ident, epID.String()),
+			eps.Encode)
+		_, err = eac.Replace(ctx, updated.Attrs(), epRevision)
+		r.NoError(err)
+
+		err = sc.Create(ctx, svc, meta)
+		r.NoError(err)
+
+		sc.mu.Lock()
+		second := append([]string{}, sc.chainEndpoints[npChain]...)
+		sc.mu.Unlock()
+
+		r.Len(second, 2, "expected NodePort chain to track both endpoint chains after rebuild")
+		r.NotEqual(first, second, "NodePort chain endpoint set should change when endpoints change")
+	})
+
 	t.Run("creates per-port endpoint chains for multi-port services", func(t *testing.T) {
 		r := require.New(t)
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

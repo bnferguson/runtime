@@ -44,6 +44,7 @@ import (
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/saga"
 	"miren.dev/runtime/servers/exec"
+	"miren.dev/runtime/version"
 )
 
 type RunnerConfig struct {
@@ -553,6 +554,7 @@ func (r *Runner) setupEntity(ctx context.Context, ec *entityserver.Client) error
 		Name:        r.Name,
 		Constraints: types.LabelSet("compute", "generic", "role", role),
 		ApiAddress:  r.ListenAddress,
+		Version:     version.GetInfo().Version,
 	}
 
 	r.Log.Info("Registering node entity", "role", role, "address", r.ListenAddress)
