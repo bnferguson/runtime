@@ -1252,6 +1252,10 @@ func (c *SandboxController) AllocateNetwork(
 }
 
 func (c *SandboxController) setupHosts(sb *compute.Sandbox, name string, ep *network.EndpointConfig) error {
+	if ep == nil || len(ep.Addresses) == 0 {
+		return fmt.Errorf("no addresses allocated for sandbox %s", sb.ID)
+	}
+
 	var lines []string
 
 	lines = append(lines, "# The following lines are managed by runtime.computer")
