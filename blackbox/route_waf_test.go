@@ -43,12 +43,12 @@ func TestRouteWafEnableDisable(t *testing.T) {
 	r.RequireSuccess(t)
 
 	// Disable WAF
-	r = m.MustRun("route", "unwaf", host)
+	r = m.MustRun("route", "waf", host, "--disable")
 	r.RequireSuccess(t)
 	r.RequireContains(t, "WAF disabled")
 
 	// Disable again — should be a no-op
-	r = m.MustRun("route", "unwaf", host)
+	r = m.MustRun("route", "waf", host, "--disable")
 	r.RequireSuccess(t)
 	r.RequireContains(t, "not enabled")
 }
@@ -102,7 +102,7 @@ func TestRouteWafBlocksMaliciousRequest(t *testing.T) {
 	}
 
 	// Disable WAF — previously blocked request should now pass
-	m.MustRun("route", "unwaf", host).RequireSuccess(t)
+	m.MustRun("route", "waf", host, "--disable").RequireSuccess(t)
 
 	harness.Poll(t, "WAF disabled allows previously blocked request", 30*time.Second, 2*time.Second, func() (bool, string) {
 		code, _, err := harness.HTTPGet(m, host, "/?id=1%20OR%201=1--")
@@ -157,7 +157,7 @@ func TestRouteWafDefaultRoute(t *testing.T) {
 	r.RequireSuccess(t)
 
 	// Disable WAF on default route
-	r = m.MustRun("route", "unwaf", "--default")
+	r = m.MustRun("route", "waf", "--default", "--disable")
 	r.RequireSuccess(t)
 }
 
@@ -172,7 +172,7 @@ func TestRouteWafInvalidLevel(t *testing.T) {
 	host := name + ".wafinvalid.test.local"
 	m.MustRun("route", "set", host, name).RequireSuccess(t)
 
-	// Level 0 should fail (use unwaf instead)
+	// Level 0 should fail (use --disable instead)
 	r := m.MustRun("route", "waf", host, "--level", "0")
 	if r.Success() {
 		t.Fatal("expected route waf --level 0 to fail")

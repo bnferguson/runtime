@@ -10,8 +10,9 @@ import (
 
 func RouteWaf(ctx *Context, opts struct {
 	Host    string `position:"0" usage:"Hostname for the route (e.g., example.com); omit and pass --default for the default route"`
-	Default bool   `long:"default" description:"Enable WAF on the default route (instead of a hostname)"`
+	Default bool   `long:"default" description:"Apply to the default route (instead of a hostname)"`
 	Level   int    `long:"level" description:"OWASP CRS paranoia level (1-4)" default:"1"`
+	Disable bool   `long:"disable" description:"Disable WAF on the route"`
 	FormatOptions
 	ConfigCentric
 }) error {
@@ -23,7 +24,7 @@ func RouteWaf(ctx *Context, opts struct {
 		return fmt.Errorf("--default cannot be used with a hostname")
 	}
 
-	if opts.Level < 1 || opts.Level > 4 {
+	if !opts.Disable && (opts.Level < 1 || opts.Level > 4) {
 		return fmt.Errorf("WAF level must be between 1 and 4, got %d", opts.Level)
 	}
 
@@ -55,6 +56,21 @@ func RouteWaf(ctx *Context, opts struct {
 			return fmt.Errorf("route not found for host: %s", opts.Host)
 		}
 		routeLabel = opts.Host
+	}
+
+	if opts.Disable {
+		if route.WafLevel == 0 {
+			ctx.Printf("WAF is not enabled on route: %s\n", routeLabel)
+			return nil
+		}
+
+		_, err = ic.SetRouteWAFLevelOnRoute(ctx, route, 0)
+		if err != nil {
+			return fmt.Errorf("failed to disable WAF on route: %w", err)
+		}
+
+		ctx.Printf("WAF disabled on route: %s\n", routeLabel)
+		return nil
 	}
 
 	_, err = ic.SetRouteWAFLevelOnRoute(ctx, route, opts.Level)

@@ -503,7 +503,7 @@ miren deploy --analyze
 		}),
 	))
 
-	d.Dispatch("route waf", Infer("route waf", "Enable WAF protection on an HTTP route", RouteWaf,
+	d.Dispatch("route waf", Infer("route waf", "Manage WAF protection on an HTTP route", RouteWaf,
 		WithExample(mflags.Example{
 			Name: "Enable WAF on a route with default paranoia level",
 			Body: "miren route waf example.com",
@@ -516,11 +516,9 @@ miren deploy --analyze
 			Name: "Enable WAF on the default route",
 			Body: "miren route waf --default",
 		}),
-	))
-	d.Dispatch("route unwaf", Infer("route unwaf", "Disable WAF protection on an HTTP route", RouteUnwaf,
 		WithExample(mflags.Example{
 			Name: "Disable WAF on a route",
-			Body: "miren route unwaf example.com",
+			Body: "miren route waf example.com --disable",
 		}),
 	))
 
