@@ -145,7 +145,7 @@ func TestGetOrCreatePasswordHandlerFailClosed(t *testing.T) {
 	}
 
 	// Warm the cache
-	h1, err := srv.getOrCreatePasswordHandler(context.Background(), route, "https://app.example.com")
+	_, err := srv.getOrCreatePasswordHandler(context.Background(), route, "https://app.example.com")
 	if err != nil {
 		t.Fatalf("initial call: %v", err)
 	}
@@ -153,23 +153,18 @@ func TestGetOrCreatePasswordHandlerFailClosed(t *testing.T) {
 	// Remove provider to simulate unavailability
 	store.RemoveEntity(entity.Id(providerIdent))
 
-	// Should return cached handler
-	h2, err := srv.getOrCreatePasswordHandler(context.Background(), route, "https://app.example.com")
-	if err != nil {
-		t.Fatalf("expected cached handler, got error: %v", err)
-	}
-	if h1 != h2 {
-		t.Error("expected same cached handler on entity store failure")
+	// Should fail closed and clear cached handler
+	_, err = srv.getOrCreatePasswordHandler(context.Background(), route, "https://app.example.com")
+	if err == nil {
+		t.Error("expected error when entity store fails, not cached fallback")
 	}
 
-	// No cache + no entity store should error
-	routeNew := &ingress_v1alpha.HttpRoute{
-		Host:             "new.example.com",
-		PasswordProvider: entity.Id(providerIdent),
-	}
-	_, err = srv.getOrCreatePasswordHandler(context.Background(), routeNew, "https://new.example.com")
-	if err == nil {
-		t.Error("expected error when entity store fails and no cached handler exists")
+	// Cache entry should have been removed
+	srv.passwordMu.RLock()
+	_, cached := srv.passwordHandlers["app.example.com|https://app.example.com"]
+	srv.passwordMu.RUnlock()
+	if cached {
+		t.Error("expected cached handler to be removed after lookup failure")
 	}
 }
 
@@ -251,6 +246,58 @@ func TestPasswordSessionRoundtrip(t *testing.T) {
 	})
 }
 
+func TestSanitizeReturnPath(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"", "/"},
+		{"/", "/"},
+		{"/dashboard", "/dashboard"},
+		{"/a/b/c", "/a/b/c"},
+		{"https://evil.com", "/"},
+		{"//evil.com", "/"},
+		{"http://evil.com/steal", "/"},
+		{"/foo/../bar", "/bar"},
+		{"/../../../etc/passwd", "/etc/passwd"},
+		{"/valid/path", "/valid/path"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := sanitizeReturnPath(tt.input)
+			if got != tt.want {
+				t.Errorf("sanitizeReturnPath(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoginFormHTMLEscaping(t *testing.T) {
+	signingKey := make([]byte, 32)
+	sm := oidc.NewSessionManager(false, "", signingKey)
+
+	handler := &passwordHandler{
+		route: &ingress_v1alpha.HttpRoute{Host: "app.example.com"},
+		provider: &ingress_v1alpha.PasswordProvider{
+			PasswordHash: "$2a$10$test",
+		},
+		sm:     sm,
+		logger: slog.Default(),
+	}
+
+	w := httptest.NewRecorder()
+	handler.serveLoginForm(w, `"><script>alert(1)</script>`, "")
+
+	body := w.Body.String()
+	if strings.Contains(body, "<script>") {
+		t.Error("XSS payload was not escaped in login form HTML")
+	}
+	if !strings.Contains(body, "&lt;script&gt;") {
+		t.Error("expected HTML-escaped script tag in form output")
+	}
+}
+
 func TestPasswordLoginFlow(t *testing.T) {
 	signingKey := make([]byte, 32)
 	sm := oidc.NewSessionManager(false, "", signingKey)
@@ -322,6 +369,23 @@ func TestPasswordLoginFlow(t *testing.T) {
 		}
 		if !foundCookie {
 			t.Error("expected session cookie to be set after successful login")
+		}
+	})
+
+	t.Run("open redirect is blocked", func(t *testing.T) {
+		form := url.Values{"password": {"correctpassword"}, "return": {"https://evil.com/steal"}}
+		req := httptest.NewRequest("POST", passwordLoginPath, strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		w := httptest.NewRecorder()
+		handler.handleLogin(w, req)
+
+		if w.Code != http.StatusFound {
+			t.Errorf("expected 302, got %d", w.Code)
+		}
+
+		loc := w.Header().Get("Location")
+		if loc != "/" {
+			t.Errorf("expected redirect to / (sanitized), got %s", loc)
 		}
 	})
 

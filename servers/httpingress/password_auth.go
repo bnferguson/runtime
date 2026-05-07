@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"log/slog"
 	"net/http"
+	"path"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -79,6 +82,20 @@ func (h *passwordHandler) clearSession(w http.ResponseWriter) {
 	h.sm.ClearNamedCookie(w, pwSessionCookieName)
 }
 
+func sanitizeReturnPath(raw string) string {
+	if raw == "" {
+		return "/"
+	}
+	if strings.Contains(raw, "://") || strings.HasPrefix(raw, "//") {
+		return "/"
+	}
+	cleaned := path.Clean("/" + raw)
+	if !strings.HasPrefix(cleaned, "/") {
+		return "/"
+	}
+	return cleaned
+}
+
 func (h *passwordHandler) serveLoginForm(w http.ResponseWriter, returnPath string, errorMsg string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -88,12 +105,12 @@ func (h *passwordHandler) serveLoginForm(w http.ResponseWriter, returnPath strin
 		errorHTML = `<p style="color:#c0392b;margin-bottom:16px">` + errorMsg + `</p>`
 	}
 
-	fmt.Fprintf(w, loginFormHTML, errorHTML, returnPath)
+	fmt.Fprintf(w, loginFormHTML, errorHTML, html.EscapeString(returnPath))
 }
 
 func (h *passwordHandler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		h.serveLoginForm(w, r.URL.Query().Get("return"), "")
+		h.serveLoginForm(w, sanitizeReturnPath(r.URL.Query().Get("return")), "")
 		return
 	}
 
@@ -104,7 +121,7 @@ func (h *passwordHandler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	password := r.FormValue("password")
-	returnPath := r.FormValue("return")
+	returnPath := sanitizeReturnPath(r.FormValue("return"))
 
 	err := bcrypt.CompareHashAndPassword([]byte(h.provider.PasswordHash), []byte(password))
 	if err != nil {
@@ -117,10 +134,6 @@ func (h *passwordHandler) handleLogin(w http.ResponseWriter, r *http.Request) {
 		h.logger.Error("failed to set session", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
-	}
-
-	if returnPath == "" {
-		returnPath = "/"
 	}
 
 	h.logger.Info("password authentication successful", "host", h.route.Host)
@@ -145,13 +158,9 @@ func (s *Server) getOrCreatePasswordHandler(ctx context.Context, route *ingress_
 
 	resp, err := s.eac.Get(ctx, string(route.PasswordProvider))
 	if err != nil {
-		s.passwordMu.RLock()
-		h, ok := s.passwordHandlers[key]
-		s.passwordMu.RUnlock()
-		if ok {
-			s.Log.Warn("entity store unavailable, using cached password handler", "error", err, "host", route.Host)
-			return h, nil
-		}
+		s.passwordMu.Lock()
+		delete(s.passwordHandlers, key)
+		s.passwordMu.Unlock()
 		return nil, fmt.Errorf("failed to get password provider: %w", err)
 	}
 
@@ -197,7 +206,7 @@ func (s *Server) passwordMiddleware(route *ingress_v1alpha.HttpRoute, next http.
 		handler, err := s.getOrCreatePasswordHandler(r.Context(), route, baseURL)
 		if err != nil {
 			s.Log.Error("failed to get password handler", "error", err, "host", r.Host)
-			next(w, r)
+			http.Error(w, "Authentication service unavailable", http.StatusServiceUnavailable)
 			return
 		}
 
@@ -216,7 +225,7 @@ func (s *Server) passwordMiddleware(route *ingress_v1alpha.HttpRoute, next http.
 			return
 		}
 
-		handler.serveLoginForm(w, r.URL.RequestURI(), "")
+		handler.serveLoginForm(w, sanitizeReturnPath(r.URL.RequestURI()), "")
 	}
 }
 

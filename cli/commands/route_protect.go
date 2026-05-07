@@ -155,6 +155,9 @@ func RouteProtect(ctx *Context, opts struct {
 	}
 
 	if len(opts.ClaimHeader) > 0 {
+		if opts.IsJSON() {
+			return fmt.Errorf("--claim-header is not supported for password providers")
+		}
 		ctx.Printf("Warning: --claim-header is ignored for password providers\n")
 	}
 

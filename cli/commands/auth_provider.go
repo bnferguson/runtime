@@ -60,6 +60,14 @@ func AuthProviderAdd(ctx *Context, opts struct {
 		return fmt.Errorf("identity provider %q already exists. Pass --update to overwrite (rotates client secret)", opts.Name)
 	}
 
+	pwExisting, err := ic.GetPasswordProvider(ctx, opts.Name)
+	if err != nil {
+		return fmt.Errorf("failed to check for existing password provider: %w", err)
+	}
+	if pwExisting != nil {
+		return fmt.Errorf("a password provider named %q already exists. Provider names must be unique across types", opts.Name)
+	}
+
 	provider := &ingress_v1alpha.OidcProvider{
 		Name:         opts.Name,
 		ProviderUrl:  opts.ProviderURL,

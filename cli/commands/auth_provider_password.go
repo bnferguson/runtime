@@ -39,6 +39,14 @@ func AuthProviderAddPassword(ctx *Context, opts struct {
 		return fmt.Errorf("password provider %q already exists. Pass --update to overwrite (rotates password)", opts.Name)
 	}
 
+	oidcExisting, err := ic.GetOIDCProvider(ctx, opts.Name)
+	if err != nil {
+		return fmt.Errorf("failed to check for existing OIDC provider: %w", err)
+	}
+	if oidcExisting != nil {
+		return fmt.Errorf("an OIDC provider named %q already exists. Provider names must be unique across types", opts.Name)
+	}
+
 	hash, err := bcrypt.GenerateFromPassword([]byte(opts.Password), bcrypt.DefaultCost)
 	if err != nil {
 		return fmt.Errorf("failed to hash password: %w", err)
