@@ -74,7 +74,8 @@ type ServiceConfig struct {
 	Disks       []DiskConfig              `toml:"disks"`
 	// PortWaitTimeout overrides the default 15s wait for the service to bind
 	// its port during startup. Accepts a Go duration string (e.g. "60s", "2m").
-	// Empty or invalid values fall back to the default.
+	// Empty falls back to the default; invalid duration strings are rejected
+	// at parse time by Validate.
 	PortWaitTimeout string `toml:"port_wait_timeout,omitempty"`
 }
 
