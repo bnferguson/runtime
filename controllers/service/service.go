@@ -1,26 +1,49 @@
 package service
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/netip"
 	"os"
-	"os/exec"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/mr-tron/base58"
 	"golang.org/x/crypto/blake2b"
+	"sigs.k8s.io/knftables"
 
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/network/network_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
-	"miren.dev/runtime/pkg/set"
+)
+
+// tableName is the single nft table this controller owns.
+const tableName = "miren"
+
+// Static chain names. These belong to the controller's "infrastructure" — the
+// dispatcher, the masq machinery, the base chains attached to NAT hooks. They
+// are installed once by Init and never garbage-collected.
+const (
+	chainServices       = "services"
+	chainNATPrerouting  = "nat-prerouting"
+	chainNATOutput      = "nat-output"
+	chainNATPostrouting = "nat-postrouting"
+	chainMarkForMasq    = "mark-for-masq"
+	chainMasq           = "masq"
+)
+
+// Static map names. Keys are concatenated tuples that the dispatcher chain
+// uses to route packets to the right per-service or per-nodeport chain.
+const (
+	mapServiceIP4s     = "service_ip4s"
+	mapServiceIP6s     = "service_ip6s"
+	mapServiceNodePort = "service_nodeports"
 )
 
 // ServiceControllerDeps holds required dependencies for ServiceController.
@@ -42,10 +65,12 @@ type ServiceController struct {
 
 	routablePrefixes []netip.Prefix
 
-	table string
-	cmd   *nftCommands
+	nft knftables.Interface
 
-	mu             sync.Mutex
+	mu sync.Mutex
+	// chainEndpoints caches the last-installed endpoint chain list for each
+	// service-IP and nodeport chain so we can skip the flush+rebuild when the
+	// composition hasn't changed. Protected by mu.
 	chainEndpoints map[string][]string
 }
 
@@ -61,82 +86,43 @@ func NewServiceController(cfg ServiceControllerDeps) (*ServiceController, error)
 		return nil, fmt.Errorf("service: IPv4Routable must be a valid prefix")
 	}
 
+	nft, err := knftables.New(knftables.InetFamily, tableName)
+	if err != nil {
+		return nil, fmt.Errorf("service: nft init: %w", err)
+	}
+
 	return &ServiceController{
 		Log:             cfg.Log,
 		EAC:             cfg.EAC,
 		IPv4Routable:    cfg.IPv4Routable,
 		ServicePrefixes: cfg.ServicePrefixes,
 		DisableLocalNet: cfg.DisableLocalNet,
+		nft:             nft,
 	}, nil
 }
 
 func (s *ServiceController) UpdateEndpoints(ctx context.Context, event controller.Event) ([]entity.Attr, error) {
-	if event.Type != controller.EventDeleted {
-		var eps network_v1alpha.Endpoints
-		eps.Decode(event.Entity)
+	var eps network_v1alpha.Endpoints
+	eps.Decode(event.Entity)
 
-		gr, err := s.EAC.Get(ctx, eps.Service.String())
-		if err != nil {
-			return nil, fmt.Errorf("failed to get service: %w", err)
-		}
-
-		var srv network_v1alpha.Service
-		srv.Decode(gr.Entity().Entity())
-
-		meta := &entity.Meta{
-			Entity: gr.Entity().Entity(),
-		}
-
-		s.Log.Info("Endpoint updated, triggering service update", "service", srv.ID)
-
-		return nil, s.Create(ctx, &srv, meta)
-	}
-
-	// TODO when WatchIndex gives us the entities value pre-delete, we can use the
-	// same above logic. Until then, we just loop over all the services and update
-	// them all.
-
-	// List all services
-	serviceList, err := s.EAC.List(ctx, entity.Ref(entity.EntityKind, network_v1alpha.KindService))
+	gr, err := s.EAC.Get(ctx, eps.Service.String())
 	if err != nil {
-		return nil, fmt.Errorf("failed to list services: %w", err)
-	}
-
-	// Loop through all services and trigger an update
-	for _, srvEntity := range serviceList.Values() {
-		var srv network_v1alpha.Service
-		srv.Decode(srvEntity.Entity())
-
-		meta := &entity.Meta{
-			Entity: srvEntity.Entity(),
+		if errors.Is(err, cond.ErrNotFound{}) {
+			// The parent Service is gone too (cascading delete or the
+			// launcher tearing the app down). Any stranded chains get
+			// pruned by the next GC tick.
+			return nil, nil
 		}
-
-		s.Log.Info("Endpoint deleted, triggering service update", "service", srv.ID)
-
-		if err := s.Create(ctx, &srv, meta); err != nil {
-			s.Log.Error("Failed to update service after endpoint deletion", "service", srv.ID, "error", err)
-			// Continue updating other services even if one fails
-		}
+		return nil, fmt.Errorf("failed to get service: %w", err)
 	}
 
-	return nil, nil
-}
+	var srv network_v1alpha.Service
+	srv.Decode(gr.Entity().Entity())
 
-type nftCommands struct {
-	commands    []string
-	knownChains set.Set[string]
-	knownMaps   set.Set[string]
-}
+	s.Log.Info("Endpoint event, triggering service update",
+		"service", srv.ID, "type", event.Type)
 
-func (n *nftCommands) Clone() *nftCommands {
-	return &nftCommands{
-		knownChains: n.knownChains,
-		knownMaps:   n.knownMaps,
-	}
-}
-
-func (n *nftCommands) append(cmd string, args ...any) {
-	n.commands = append(n.commands, fmt.Sprintf(cmd, args...))
+	return nil, s.Create(ctx, &srv, &entity.Meta{Entity: gr.Entity().Entity()})
 }
 
 // nftProto converts a network_v1alpha.PortProtocol to the nftables protocol string.
@@ -166,267 +152,13 @@ func (s *ServiceController) nodeportChain(nport int, proto string) string {
 	return fmt.Sprintf("nodeport_%s", base58.Encode(x[:]))
 }
 
-func (s *ServiceController) createServiceChain(cmd *nftCommands, ip netip.Addr, port int, proto string) error {
-	srv := s.serviceChain(ip, uint16(port), proto)
-	if cmd.knownChains.Contains(srv) {
-		return nil
+// mapForServiceIP returns the verdict map name for the dispatcher's service-IP
+// path. Picks v4 vs v6 from the address family.
+func mapForServiceIP(ip netip.Addr) string {
+	if ip.Is6() {
+		return mapServiceIP6s
 	}
-
-	cmd.knownChains.Add(srv)
-
-	cmd.append("add chain inet %s %s", s.table, srv)
-	if ip.Is4() {
-		cmd.append("add element inet %s service_ip4s { %s . %s . %d : goto %s }", s.table, ip.String(), proto, port, srv)
-	} else {
-		cmd.append("add element inet %s service_ip6s { %s . %s . %d : goto %s }", s.table, ip.String(), proto, port, srv)
-	}
-	return nil
-}
-
-func (s *ServiceController) updateServiceEndpoints(cmd *nftCommands, sip netip.Addr, sport int, proto string, endpoints []string) error {
-	if len(endpoints) == 0 {
-		return nil
-	}
-
-	srv := s.serviceChain(sip, uint16(sport), proto)
-
-	slices.Sort(endpoints)
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if cur, ok := s.chainEndpoints[srv]; ok && slices.Equal(cur, endpoints) {
-		return nil
-	}
-
-	s.chainEndpoints[srv] = endpoints
-
-	cmd.append("flush chain inet %s %s", s.table, srv)
-	var vmap []string
-
-	for i, ep := range endpoints {
-		vmap = append(vmap, fmt.Sprintf("%d : goto %s", i, ep))
-	}
-
-	cmd.append("add rule inet %s %s counter name \"services\"", s.table, srv)
-	for _, rp := range s.routablePrefixes {
-		if rp.Addr().Is4() {
-			cmd.append("add rule inet %s %s ip saddr != %s counter jump mark-for-masq", s.table, srv, rp.String())
-		} else {
-			cmd.append("add rule inet %s %s ip6 saddr != %s counter jump mark-for-masq", s.table, srv, rp.String())
-		}
-	}
-	cmd.append("add rule inet %s %s numgen random mod %d vmap { %s }", s.table, srv, len(endpoints), strings.Join(vmap, ", "))
-	return nil
-}
-
-// setupNodePort installs a per-NodePort chain that DNATs traffic landing on
-// this node's NodePort to one of the service's endpoint sandbox IPs, picked at
-// random. It mirrors the shape of the service-IP chain (counter, masq for
-// non-routable sources, random-vmap dispatch to endpoint chains) but stands
-// alone so that NodePort works on every node regardless of whether the service
-// has an allocated cluster IP yet.
-func (s *ServiceController) setupNodePort(cmd *nftCommands, nport int, proto string, endpoints []string) error {
-	if len(endpoints) == 0 {
-		return nil
-	}
-
-	chain := s.nodeportChain(nport, proto)
-
-	slices.Sort(endpoints)
-
-	s.mu.Lock()
-	if cur, ok := s.chainEndpoints[chain]; ok && slices.Equal(cur, endpoints) {
-		s.mu.Unlock()
-		return nil
-	}
-	s.chainEndpoints[chain] = endpoints
-	s.mu.Unlock()
-
-	if cmd.knownChains.Contains(chain) {
-		cmd.append("flush chain inet %s %s", s.table, chain)
-	} else {
-		cmd.knownChains.Add(chain)
-		cmd.append("add chain inet %s %s", s.table, chain)
-		cmd.append("add element inet %s service_nodeports { %s . %d : goto %s }", s.table, proto, nport, chain)
-	}
-
-	cmd.append("add rule inet %s %s counter name \"nodeports\"", s.table, chain)
-	for _, rp := range s.routablePrefixes {
-		if rp.Addr().Is4() {
-			cmd.append("add rule inet %s %s ip saddr != %s counter jump mark-for-masq", s.table, chain, rp.String())
-		} else {
-			cmd.append("add rule inet %s %s ip6 saddr != %s counter jump mark-for-masq", s.table, chain, rp.String())
-		}
-	}
-
-	vmap := make([]string, len(endpoints))
-	for i, ep := range endpoints {
-		vmap[i] = fmt.Sprintf("%d : goto %s", i, ep)
-	}
-	cmd.append("add rule inet %s %s numgen random mod %d vmap { %s }", s.table, chain, len(endpoints), strings.Join(vmap, ", "))
-
-	return nil
-}
-
-func (s *ServiceController) setupEndpointChain(cmd *nftCommands, ip netip.Addr, port uint16, proto string) (string, error) {
-	endpoint := s.endpointChain(ip, port, proto)
-	if cmd.knownChains.Contains(endpoint) {
-		return endpoint, nil
-	}
-
-	cmd.knownChains.Add(endpoint)
-
-	cmd.append("add chain inet %s %s", s.table, endpoint)
-	if ip.Is4() {
-		cmd.append("add rule inet %s %s ip saddr %s jump mark-for-masq", s.table, endpoint, ip.String())
-		cmd.append("add rule inet %s %s meta l4proto %s counter dnat ip to %s:%d", s.table, endpoint, proto, ip.String(), port)
-	} else {
-		cmd.append("add rule inet %s %s ip6 saddr %s jump mark-for-masq", s.table, endpoint, ip.String())
-		cmd.append("add rule inet %s %s meta l4proto %s counter dnat ip6 to %s:%d", s.table, endpoint, proto, ip.String(), port)
-	}
-	return endpoint, nil
-}
-
-func (s *ServiceController) systemTables() ([]string, error) {
-	cmd := exec.Command("nft", "-j", "list", "tables")
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("failed to list tables: %w (%s)", err, string(out))
-	}
-
-	var tr struct {
-		Root []struct {
-			Table struct {
-				Name   string `json:"name"`
-				Handle int    `json:"handle"`
-			} `json:"table"`
-		} `json:"nftables"`
-	}
-
-	if err := json.Unmarshal(out, &tr); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal nft output: %w", err)
-	}
-
-	var tables []string
-
-	for _, table := range tr.Root {
-		if table.Table.Name != "" {
-			tables = append(tables, table.Table.Name)
-		}
-	}
-
-	return tables, nil
-}
-
-func (s *ServiceController) initNFT(table string, nc *nftCommands) error {
-	s.table = table
-
-	tables, err := s.systemTables()
-	if err != nil {
-		return fmt.Errorf("failed to list tables: %w", err)
-	}
-
-	chains := set.New[string]()
-	maps := set.New[string]()
-
-	if slices.Contains(tables, table) {
-		// TODO: assuming inet family here; read from `list tables` output instead?
-		cmd := exec.Command("nft", "-j", "list", "table", "inet", table)
-
-		out, err := cmd.Output()
-		if err != nil {
-			return fmt.Errorf("failed to list table %s: %w", table, err)
-		}
-
-		var result struct {
-			Root []struct {
-				Chain struct {
-					Name   string `json:"name"`
-					Table  string `json:"table"`
-					Handle int    `json:"handle"`
-				} `json:"chain"`
-
-				Map struct {
-					Name   string `json:"name"`
-					Table  string `json:"table"`
-					Handle int    `json:"handle"`
-					Map    string `json:"map"`
-				} `json:"map"`
-			}
-		}
-
-		if err := json.Unmarshal(out, &result); err != nil {
-			return fmt.Errorf("failed to unmarshal nft output: %w", err)
-		}
-
-		for _, chain := range result.Root {
-			if chain.Chain.Table == table {
-				chains.Add(chain.Chain.Name)
-			}
-			if chain.Map.Table == table {
-				maps.Add(chain.Map.Name)
-			}
-		}
-	} else {
-		nc.append("add table inet %s", table)
-	}
-
-	nc.knownChains = chains
-	nc.knownMaps = maps
-
-	if !maps.Contains("service_ip4s") {
-		nc.append("add map inet %s service_ip4s { type ipv4_addr . inet_proto . inet_service : verdict; }", s.table)
-		maps.Add("service_ip4s")
-	}
-
-	if !maps.Contains("service_ip6s") {
-		nc.append("add map inet %s service_ip6s { type ipv6_addr . inet_proto . inet_service : verdict; }", s.table)
-		maps.Add("service_ip6s")
-	}
-
-	if !maps.Contains("service_nodeports") {
-		nc.append("add map inet %s service_nodeports { type inet_proto . inet_service : verdict; }", s.table)
-		maps.Add("service_nodeports")
-	}
-
-	if !chains.Contains("services") {
-		nc.append("add chain inet %s services", s.table)
-		nc.append("add counter inet %s services", s.table)
-		nc.append("add counter inet %s nodeports", s.table)
-		nc.append("add rule inet %s services ip daddr . meta l4proto . th dport vmap @service_ip4s", s.table)
-		nc.append("add rule inet %s services ip6 daddr . meta l4proto . th dport vmap @service_ip6s", s.table)
-		nc.append("add rule inet %s services meta l4proto . th dport vmap @service_nodeports", s.table)
-	}
-
-	if !chains.Contains("nat-prerouting") {
-		nc.append("add chain inet %s nat-prerouting { type nat hook prerouting priority -100; }", s.table)
-		nc.append("add rule inet %s nat-prerouting jump services", s.table)
-	}
-
-	if !chains.Contains("nat-output") {
-		nc.append("add chain inet %s nat-output { type nat hook output priority -100; }", s.table)
-		nc.append("add rule inet %s nat-output jump services", s.table)
-	}
-
-	if !chains.Contains("mark-for-masq") {
-		nc.append("add chain inet %s mark-for-masq", s.table)
-		nc.append("add rule inet %s mark-for-masq mark set mark or 0x2000", s.table)
-	}
-
-	if !chains.Contains("masq") {
-		nc.append("add chain inet %s masq", s.table)
-		nc.append("add rule inet %s masq mark and 0x2000 == 0 return", s.table)
-		nc.append("add rule inet %s masq mark set mark xor 0x2000", s.table)
-		nc.append("add rule inet %s masq masquerade fully-random", s.table)
-	}
-
-	if !chains.Contains("nat-postrouting") {
-		nc.append("add chain inet %s nat-postrouting { type nat hook postrouting priority 100; }", s.table)
-		nc.append("add rule inet %s nat-postrouting jump masq", s.table)
-	}
-
-	return nil
+	return mapServiceIP4s
 }
 
 func (s *ServiceController) Init(ctx context.Context) error {
@@ -436,45 +168,182 @@ func (s *ServiceController) Init(ctx context.Context) error {
 	s.Log.Info("Initializing service controller")
 
 	if !s.DisableLocalNet {
-		os.WriteFile("/proc/sys/net/ipv4/conf/all/route_localnet", []byte("1"), 0644)
+		// Allow DNAT to deliver to localhost-bound endpoints. Best-effort; if
+		// /proc isn't writable we just keep going.
+		_ = os.WriteFile("/proc/sys/net/ipv4/conf/all/route_localnet", []byte("1"), 0644)
 	}
 
-	cmd := &nftCommands{
-		commands: []string{},
+	tx := s.nft.NewTransaction()
+
+	// Idempotent table create.
+	tx.Add(&knftables.Table{})
+
+	// Verdict maps the dispatcher uses to route packets.
+	tx.Add(&knftables.Map{
+		Name: mapServiceIP4s,
+		Type: "ipv4_addr . inet_proto . inet_service : verdict",
+	})
+	tx.Add(&knftables.Map{
+		Name: mapServiceIP6s,
+		Type: "ipv6_addr . inet_proto . inet_service : verdict",
+	})
+	tx.Add(&knftables.Map{
+		Name: mapServiceNodePort,
+		Type: "inet_proto . inet_service : verdict",
+	})
+
+	// Named counters that the per-service and per-nodeport chains reference
+	// for traffic visibility. Created here so chain bodies can `counter name`
+	// them without races.
+	tx.Add(&knftables.Counter{Name: "services"})
+	tx.Add(&knftables.Counter{Name: "nodeports"})
+
+	// Static chains. We Add to ensure existence and Flush to wipe stale rules
+	// from prior controller versions, then re-add the canonical rule set.
+	// The duplicate `jump services` rules the bug report flagged came from old
+	// code that re-added without flushing; this loop fixes that for free.
+	tx.Add(&knftables.Chain{Name: chainServices})
+	tx.Flush(&knftables.Chain{Name: chainServices})
+	tx.Add(&knftables.Rule{Chain: chainServices, Rule: "ip daddr . meta l4proto . th dport vmap @" + mapServiceIP4s})
+	tx.Add(&knftables.Rule{Chain: chainServices, Rule: "ip6 daddr . meta l4proto . th dport vmap @" + mapServiceIP6s})
+	tx.Add(&knftables.Rule{Chain: chainServices, Rule: "meta l4proto . th dport vmap @" + mapServiceNodePort})
+
+	tx.Add(&knftables.Chain{Name: chainMarkForMasq})
+	tx.Flush(&knftables.Chain{Name: chainMarkForMasq})
+	tx.Add(&knftables.Rule{Chain: chainMarkForMasq, Rule: "mark set mark or 0x2000"})
+
+	tx.Add(&knftables.Chain{Name: chainMasq})
+	tx.Flush(&knftables.Chain{Name: chainMasq})
+	tx.Add(&knftables.Rule{Chain: chainMasq, Rule: "mark and 0x2000 == 0 return"})
+	tx.Add(&knftables.Rule{Chain: chainMasq, Rule: "mark set mark xor 0x2000"})
+	tx.Add(&knftables.Rule{Chain: chainMasq, Rule: "masquerade fully-random"})
+
+	// Base chains attached to NAT hooks.
+	tx.Add(&knftables.Chain{
+		Name:     chainNATPrerouting,
+		Type:     knftables.PtrTo(knftables.NATType),
+		Hook:     knftables.PtrTo(knftables.PreroutingHook),
+		Priority: knftables.PtrTo(knftables.BaseChainPriority("-100")),
+	})
+	tx.Flush(&knftables.Chain{Name: chainNATPrerouting})
+	tx.Add(&knftables.Rule{Chain: chainNATPrerouting, Rule: "jump " + chainServices})
+
+	tx.Add(&knftables.Chain{
+		Name:     chainNATOutput,
+		Type:     knftables.PtrTo(knftables.NATType),
+		Hook:     knftables.PtrTo(knftables.OutputHook),
+		Priority: knftables.PtrTo(knftables.BaseChainPriority("-100")),
+	})
+	tx.Flush(&knftables.Chain{Name: chainNATOutput})
+	tx.Add(&knftables.Rule{Chain: chainNATOutput, Rule: "jump " + chainServices})
+
+	tx.Add(&knftables.Chain{
+		Name:     chainNATPostrouting,
+		Type:     knftables.PtrTo(knftables.NATType),
+		Hook:     knftables.PtrTo(knftables.PostroutingHook),
+		Priority: knftables.PtrTo(knftables.BaseChainPriority("100")),
+	})
+	tx.Flush(&knftables.Chain{Name: chainNATPostrouting})
+	tx.Add(&knftables.Rule{Chain: chainNATPostrouting, Rule: "jump " + chainMasq})
+
+	if err := s.nft.Run(ctx, tx); err != nil {
+		return fmt.Errorf("initialize nftables: %w", err)
 	}
-
-	if err := s.initNFT("miren", cmd); err != nil {
-		return fmt.Errorf("failed to initialize nftables: %w", err)
-	}
-
-	s.cmd = cmd
-
-	return s.apply(ctx, cmd)
+	return nil
 }
 
-func (s *ServiceController) apply(ctx context.Context, cmd *nftCommands) error {
-	if len(cmd.commands) == 0 {
-		return nil
+// addEndpointChain registers a per-backend chain that DNATs to one sandbox.
+// Endpoint chains have static contents (mark-for-masq for hairpin, then DNAT)
+// and are content-addressed by (backend ip, target port, proto), so two
+// services pointing at the same backend share the same chain.
+//
+// Returns the chain name. Always emits an idempotent Add+Flush+rules so
+// concurrent Create() calls don't end up with stale rule contents from a prior
+// controller version.
+func (s *ServiceController) addEndpointChain(tx *knftables.Transaction, ip netip.Addr, port uint16, proto string) string {
+	chain := s.endpointChain(ip, port, proto)
+	tx.Add(&knftables.Chain{Name: chain})
+	tx.Flush(&knftables.Chain{Name: chain})
+	if ip.Is4() {
+		tx.Add(&knftables.Rule{Chain: chain, Rule: knftables.Concat("ip saddr", ip, "jump", chainMarkForMasq)})
+		tx.Add(&knftables.Rule{Chain: chain, Rule: knftables.Concat("meta l4proto", proto, "counter dnat ip to", ip, ":", port)})
+	} else {
+		tx.Add(&knftables.Rule{Chain: chain, Rule: knftables.Concat("ip6 saddr", ip, "jump", chainMarkForMasq)})
+		tx.Add(&knftables.Rule{Chain: chain, Rule: knftables.Concat("meta l4proto", proto, "counter dnat ip6 to", ip, ":", port)})
+	}
+	return chain
+}
+
+// addServiceChain registers a per-(serviceIP, port, proto) chain plus the map
+// element that points the dispatcher at it. Body is filled in by setEndpoints.
+func (s *ServiceController) addServiceChain(tx *knftables.Transaction, ip netip.Addr, port int, proto string) {
+	chain := s.serviceChain(ip, uint16(port), proto)
+	tx.Add(&knftables.Chain{Name: chain})
+	tx.Add(&knftables.Element{
+		Map:   mapForServiceIP(ip),
+		Key:   []string{ip.String(), proto, strconv.Itoa(port)},
+		Value: []string{"goto " + chain},
+	})
+}
+
+// setEndpoints fills in the body of a service-IP or nodeport chain: counter,
+// per-prefix mark-for-masq jumps, and a numgen-random vmap that load-balances
+// across the endpoint chains. Skips the flush+rebuild when the endpoint set
+// hasn't changed from the cache, which avoids resetting the named counter and
+// reduces unnecessary kernel transactions on the periodic resync.
+func (s *ServiceController) setEndpoints(tx *knftables.Transaction, chain, counterName string, endpoints []string) {
+	if len(endpoints) == 0 {
+		return
 	}
 
-	var buf bytes.Buffer
+	slices.Sort(endpoints)
 
-	for _, cmdStr := range cmd.commands {
-		buf.WriteString(cmdStr)
-		buf.WriteString("\n")
+	s.mu.Lock()
+	cur, ok := s.chainEndpoints[chain]
+	if ok && slices.Equal(cur, endpoints) {
+		s.mu.Unlock()
+		return
+	}
+	s.chainEndpoints[chain] = endpoints
+	s.mu.Unlock()
+
+	tx.Flush(&knftables.Chain{Name: chain})
+	tx.Add(&knftables.Rule{Chain: chain, Rule: knftables.Concat("counter name", `"`+counterName+`"`)})
+	for _, rp := range s.routablePrefixes {
+		if rp.Addr().Is4() {
+			tx.Add(&knftables.Rule{Chain: chain, Rule: knftables.Concat("ip saddr !=", rp, "counter jump", chainMarkForMasq)})
+		} else {
+			tx.Add(&knftables.Rule{Chain: chain, Rule: knftables.Concat("ip6 saddr !=", rp, "counter jump", chainMarkForMasq)})
+		}
 	}
 
-	s.Log.Info("Applying nftables commands", "commands", len(cmd.commands))
-
-	ecmd := exec.CommandContext(ctx, "nft", "-f", "-")
-	ecmd.Stdin = &buf
-
-	out, err := ecmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed to execute nft command: %w (%s)", err, string(out))
+	vmap := make([]string, len(endpoints))
+	for i, ep := range endpoints {
+		vmap[i] = fmt.Sprintf("%d : goto %s", i, ep)
 	}
+	tx.Add(&knftables.Rule{
+		Chain: chain,
+		Rule:  fmt.Sprintf("numgen random mod %d vmap { %s }", len(endpoints), strings.Join(vmap, ", ")),
+	})
+}
 
-	return nil
+// addNodePort registers a per-NodePort chain that DNATs traffic landing on
+// this node's NodePort to one of the service's endpoint sandbox IPs, picked
+// at random. Mirrors addServiceChain + setEndpoints but stands alone so that
+// NodePort works on every node regardless of whether the service has an
+// allocated cluster IP yet.
+func (s *ServiceController) addNodePort(tx *knftables.Transaction, nport int, proto string, endpoints []string) {
+	if len(endpoints) == 0 {
+		return
+	}
+	chain := s.nodeportChain(nport, proto)
+	tx.Add(&knftables.Chain{Name: chain})
+	tx.Add(&knftables.Element{
+		Map:   mapServiceNodePort,
+		Key:   []string{proto, strconv.Itoa(nport)},
+		Value: []string{"goto " + chain},
+	})
+	s.setEndpoints(tx, chain, "nodeports", endpoints)
 }
 
 func (s *ServiceController) Create(ctx context.Context, srv *network_v1alpha.Service, meta *entity.Meta) error {
@@ -485,7 +354,7 @@ func (s *ServiceController) Create(ctx context.Context, srv *network_v1alpha.Ser
 		return fmt.Errorf("failed to list endpoints: %w", err)
 	}
 
-	cmd := s.cmd.Clone()
+	tx := s.nft.NewTransaction()
 
 	// Build endpoint chains once, keyed by the public-facing port. Both the
 	// service-IP path and the NodePort path consume the same set so that a
@@ -513,12 +382,7 @@ func (s *ServiceController) Create(ctx context.Context, srv *network_v1alpha.Ser
 				if err != nil {
 					return fmt.Errorf("failed to parse endpoint IP address: %v", err)
 				}
-
-				chain, err := s.setupEndpointChain(cmd, destIP, uint16(target), proto)
-				if err != nil {
-					return fmt.Errorf("failed to setup endpoint chain: %w", err)
-				}
-
+				chain := s.addEndpointChain(tx, destIP, uint16(target), proto)
 				epChainsByPort[key] = append(epChainsByPort[key], chain)
 			}
 		}
@@ -531,45 +395,47 @@ func (s *ServiceController) Create(ctx context.Context, srv *network_v1alpha.Ser
 		if err != nil {
 			return fmt.Errorf("failed to parse service IP address: %w", err)
 		}
-
 		for _, tp := range srv.Port {
 			proto := nftProto(tp.Protocol)
 			key := portKey{Port: tp.Port, Proto: proto}
 
-			if err := s.createServiceChain(cmd, ip, int(tp.Port), proto); err != nil {
-				return fmt.Errorf("failed to create service chain: %w", err)
-			}
-
-			if err := s.updateServiceEndpoints(cmd, ip, int(tp.Port), proto, epChainsByPort[key]); err != nil {
-				return fmt.Errorf("failed to update service endpoints: %w", err)
-			}
+			s.addServiceChain(tx, ip, int(tp.Port), proto)
+			s.setEndpoints(tx, s.serviceChain(ip, uint16(tp.Port), proto), "services", epChainsByPort[key])
 		}
 	}
 
-	// NodePort path: every node that runs the controller installs this rule,
+	// NodePort path: every node that runs the controller installs this chain,
 	// independent of where the service's sandboxes live, so external traffic
-	// to <any-node>:<nport> reaches the service. Same model as Kubernetes
-	// kube-proxy: any node answers, cluster routing carries the DNAT'd packet
-	// to the right sandbox.
+	// to <any-node>:<nport> reaches the service.
 	for _, tp := range srv.Port {
 		if tp.NodePort == 0 {
 			continue
 		}
 		proto := nftProto(tp.Protocol)
 		key := portKey{Port: tp.Port, Proto: proto}
-
-		if err := s.setupNodePort(cmd, int(tp.NodePort), proto, epChainsByPort[key]); err != nil {
-			return fmt.Errorf("failed to setup node port: %w", err)
-		}
+		s.addNodePort(tx, int(tp.NodePort), proto, epChainsByPort[key])
 	}
 
-	if err := s.apply(ctx, cmd); err != nil {
-		return fmt.Errorf("failed to apply nftables changes: %w", err)
+	if tx.NumOperations() == 0 {
+		return nil
 	}
-
+	if err := s.nft.Run(ctx, tx); err != nil {
+		return fmt.Errorf("apply nftables changes: %w", err)
+	}
 	return nil
 }
 
 func (s *ServiceController) Delete(ctx context.Context, id entity.Id, obj *network_v1alpha.Service) error {
+	// No-op. Cleanup happens in the periodic GC pass which diffs the entity
+	// store against the kernel and prunes anything no longer claimed.
+	//
+	// Per-service deletion is awkward to do correctly here anyway. Endpoint
+	// chains are content-addressed by (backendIP, targetPort, proto), so two
+	// services pointing at the same backend share a chain; tearing it down
+	// because one of them went away would break the other. The GC pass
+	// computes the union of expected chains across all live services in one
+	// shot and only prunes what's actually orphan, which dodges that whole
+	// class of mistake. As a bonus it also sweeps chains leaked by older
+	// controller versions that no current entity claims.
 	return nil
 }

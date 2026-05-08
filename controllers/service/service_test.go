@@ -717,7 +717,7 @@ func TestServiceController(t *testing.T) {
 		r.NoError(err)
 	})
 
-	t.Run("handles endpoint deletions by updating all services", func(t *testing.T) {
+	t.Run("handles endpoint deletions by reconciling the affected service", func(t *testing.T) {
 		r := require.New(t)
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -825,31 +825,29 @@ func TestServiceController(t *testing.T) {
 		_, err = eac.Get(ctx, epID.String())
 		r.Error(err, "Expected endpoint to be deleted")
 
-		// Simulate endpoint deletion event (EventDeleted type)
-		epsEntity := entity.New(eps.Encode)
-
+		// Simulate endpoint deletion event. The framework now carries the
+		// pre-delete entity through (see pkg/entity/store.go and the etcd
+		// WithPrevKV watch option), so the controller routes the event to
+		// just the affected service via eps.Service rather than fanning
+		// out to every Service entity.
+		epsEntity := entity.New(
+			entity.DBId, epID,
+			eps.Encode,
+		)
 		event := controller.Event{
 			Type:   controller.EventDeleted,
 			Entity: epsEntity,
 		}
 
-		// Call UpdateEndpoints with delete event
 		_, err = sc.UpdateEndpoints(ctx, event)
 		r.NoError(err)
 
-		// Verify that both services were updated by checking their revision in the entity store
-		// When UpdateEndpoints processes a delete event, it should call Create on all services
-		// which would update their configuration in the entity store
-
-		// Check first service was processed
-		result1, err := eac.Get(ctx, svcID1.String())
+		// Both services should still be in the entity store; svc2 wasn't
+		// touched, svc1 was reconciled with the now-empty endpoint set.
+		_, err = eac.Get(ctx, svcID1.String())
 		r.NoError(err)
-		r.NotNil(result1)
-
-		// Check second service was processed
-		result2, err := eac.Get(ctx, svcID2.String())
+		_, err = eac.Get(ctx, svcID2.String())
 		r.NoError(err)
-		r.NotNil(result2)
 	})
 
 	t.Run("handles service with nodeport", func(t *testing.T) {
