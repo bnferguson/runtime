@@ -127,6 +127,7 @@ require (
 	miren.dev/jsonrpc3/go/jsonrpc3 v0.0.0-20260106052505-c98e2702b093
 	miren.dev/lbd v0.0.0-20260224020427-8914d8db2233
 	miren.dev/mflags v0.0.0-20260313175018-d9ee90a8bb13
+	sigs.k8s.io/knftables v0.0.21
 )
 
 require (
@@ -407,7 +408,6 @@ require (
 	k8s.io/apimachinery v0.31.2 // indirect
 	k8s.io/utils v0.0.0-20240902221715-702e33fdd3c3 // indirect
 	sigs.k8s.io/json v0.0.0-20221116044647-bc3834ca7abd // indirect
-	sigs.k8s.io/knftables v0.0.18 // indirect
 	sigs.k8s.io/yaml v1.4.0 // indirect
 	tags.cncf.io/container-device-interface v0.8.0 // indirect
 	tags.cncf.io/container-device-interface/specs-go v0.8.0 // indirect
