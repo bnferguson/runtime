@@ -5,6 +5,7 @@ import (
 
 	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
+	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/ui"
 )
 
@@ -59,12 +60,12 @@ func RouteWaf(ctx *Context, opts struct {
 	}
 
 	if opts.Disable {
-		if route.WafLevel == 0 {
+		if entity.Empty(route.WafProfile) {
 			ctx.Printf("WAF is not enabled on route: %s\n", routeLabel)
 			return nil
 		}
 
-		_, err = ic.SetRouteWAFLevelOnRoute(ctx, route, 0)
+		_, err = ic.DetachWAFProfileFromRoute(ctx, route)
 		if err != nil {
 			return fmt.Errorf("failed to disable WAF on route: %w", err)
 		}

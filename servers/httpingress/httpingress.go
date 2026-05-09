@@ -97,7 +97,9 @@ type Server struct {
 	oidcMu             sync.RWMutex
 	oidcHandlers       map[string]*oidcHandler
 
-	wafEngine *waf.Engine
+	wafEngine       *waf.Engine
+	wafProfileMu    sync.RWMutex
+	wafProfileCache map[entity.Id]*wafProfileEntry
 }
 
 type appUsage struct {
@@ -159,6 +161,7 @@ func NewServer(
 		oidcSessionManager: oidc.NewSessionManager(false, "", signingKey),
 		oidcHandlers:       make(map[string]*oidcHandler),
 		wafEngine:          waf.NewEngine(log.With("component", "waf")),
+		wafProfileCache:    make(map[entity.Id]*wafProfileEntry),
 	}
 
 	if httpMetrics == nil {

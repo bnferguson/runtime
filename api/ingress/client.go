@@ -416,12 +416,43 @@ func (c *Client) DetachOIDCProviderFromRoute(ctx context.Context, route *ingress
 	return route, nil
 }
 
+func (c *Client) CreateWAFProfile(ctx context.Context, level int) (*ingress_v1alpha.WafProfile, error) {
+	if level < 1 || level > 4 {
+		return nil, fmt.Errorf("paranoia level must be between 1 and 4, got %d", level)
+	}
+
+	profile := &ingress_v1alpha.WafProfile{
+		ParanoiaLevel: int64(level),
+	}
+
+	name := fmt.Sprintf("waf-l%d", level)
+	eid, err := c.ec.CreateOrUpdate(ctx, name, profile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create WAF profile: %w", err)
+	}
+
+	profile.ID = eid
+	return profile, nil
+}
+
+func (c *Client) GetWAFProfileByID(ctx context.Context, id entity.Id) (*ingress_v1alpha.WafProfile, error) {
+	var profile ingress_v1alpha.WafProfile
+	err := c.ec.GetById(ctx, id, &profile)
+	if err != nil {
+		if errors.Is(err, cond.ErrNotFound{}) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to lookup WAF profile: %w", err)
+	}
+
+	return &profile, nil
+}
+
 func (c *Client) SetRouteWAFLevel(ctx context.Context, host string, level int) (*ingress_v1alpha.HttpRoute, error) {
 	route, err := c.Lookup(ctx, host)
 	if err != nil {
 		return nil, err
 	}
-
 	if route == nil {
 		return nil, fmt.Errorf("route not found: %s", host)
 	}
@@ -430,20 +461,45 @@ func (c *Client) SetRouteWAFLevel(ctx context.Context, host string, level int) (
 }
 
 func (c *Client) SetRouteWAFLevelOnRoute(ctx context.Context, route *ingress_v1alpha.HttpRoute, level int) (*ingress_v1alpha.HttpRoute, error) {
-	if level < 0 || level > 4 {
-		return nil, fmt.Errorf("WAF level must be between 0 and 4, got %d", level)
+	if level < 1 || level > 4 {
+		return nil, fmt.Errorf("WAF level must be between 1 and 4, got %d", level)
 	}
 
-	route.WafLevel = int64(level)
+	profile, err := c.CreateWAFProfile(ctx, level)
+	if err != nil {
+		return nil, err
+	}
 
-	// Use Patch to explicitly set the attribute, since Encode() omits zero values
-	// and Update would leave the old waf_level in place when disabling (level=0).
+	route.WafProfile = profile.ID
+
+	err = c.ec.Update(ctx, route)
+	if err != nil {
+		return nil, fmt.Errorf("failed to set WAF profile on route: %w", err)
+	}
+
+	return route, nil
+}
+
+func (c *Client) DetachWAFProfile(ctx context.Context, host string) (*ingress_v1alpha.HttpRoute, error) {
+	route, err := c.Lookup(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	if route == nil {
+		return nil, fmt.Errorf("route not found: %s", host)
+	}
+
+	return c.DetachWAFProfileFromRoute(ctx, route)
+}
+
+func (c *Client) DetachWAFProfileFromRoute(ctx context.Context, route *ingress_v1alpha.HttpRoute) (*ingress_v1alpha.HttpRoute, error) {
 	err := c.ec.Patch(ctx, route.ID, 0,
-		entity.Int64(ingress_v1alpha.HttpRouteWafLevelId, int64(level)),
+		entity.Ref(ingress_v1alpha.HttpRouteWafProfileId, ""),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to set WAF level on route: %w", err)
+		return nil, fmt.Errorf("failed to detach WAF profile from route: %w", err)
 	}
 
+	route.WafProfile = ""
 	return route, nil
 }

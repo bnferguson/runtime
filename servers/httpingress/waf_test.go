@@ -5,24 +5,37 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
+	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/waf"
 )
 
 func newTestWAFServer() *Server {
 	return &Server{
-		Log:       slog.Default(),
-		wafEngine: waf.NewEngine(slog.Default()),
+		Log:             slog.Default(),
+		wafEngine:       waf.NewEngine(slog.Default()),
+		wafProfileCache: make(map[entity.Id]*wafProfileEntry),
 	}
 }
 
-func TestWafMiddlewareDisabledWhenLevelZero(t *testing.T) {
+func newTestRoute(profileID entity.Id, level int, s *Server) *ingress_v1alpha.HttpRoute {
+	if level > 0 {
+		s.wafProfileCache[profileID] = &wafProfileEntry{
+			paranoiaLevel: level,
+			fetchedAt:     time.Now(),
+		}
+	}
+	return &ingress_v1alpha.HttpRoute{WafProfile: profileID}
+}
+
+func TestWafMiddlewareDisabledWhenNoProfile(t *testing.T) {
 	s := newTestWAFServer()
 
-	route := &ingress_v1alpha.HttpRoute{WafLevel: 0}
+	route := &ingress_v1alpha.HttpRoute{}
 	called := false
 	next := func(w http.ResponseWriter, r *http.Request) {
 		called = true
@@ -42,7 +55,7 @@ func TestWafMiddlewareDisabledWhenLevelZero(t *testing.T) {
 func TestWafMiddlewareBlocksSQLInjection(t *testing.T) {
 	s := newTestWAFServer()
 
-	route := &ingress_v1alpha.HttpRoute{WafLevel: 1}
+	route := newTestRoute("waf-l1", 1, s)
 	called := false
 	next := func(w http.ResponseWriter, r *http.Request) {
 		called = true
@@ -62,7 +75,7 @@ func TestWafMiddlewareBlocksSQLInjection(t *testing.T) {
 func TestWafMiddlewareBlocksXSS(t *testing.T) {
 	s := newTestWAFServer()
 
-	route := &ingress_v1alpha.HttpRoute{WafLevel: 1}
+	route := newTestRoute("waf-l1", 1, s)
 	next := func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}
@@ -79,7 +92,7 @@ func TestWafMiddlewareBlocksXSS(t *testing.T) {
 func TestWafMiddlewareAllowsCleanRequest(t *testing.T) {
 	s := newTestWAFServer()
 
-	route := &ingress_v1alpha.HttpRoute{WafLevel: 1}
+	route := newTestRoute("waf-l1", 1, s)
 	next := func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok"))
 	}
@@ -97,22 +110,21 @@ func TestWafMiddlewareAllowsCleanRequest(t *testing.T) {
 func TestWafMiddlewareRespectsParanoiaLevel(t *testing.T) {
 	s := newTestWAFServer()
 
-	for _, level := range []int64{1, 2, 3, 4} {
+	for _, level := range []int{1, 2, 3, 4} {
 		t.Run("level"+string(rune('0'+level)), func(t *testing.T) {
-			route := &ingress_v1alpha.HttpRoute{WafLevel: level}
+			profileID := entity.Id("waf-l" + string(rune('0'+level)))
+			route := newTestRoute(profileID, level, s)
 			next := func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
 			}
 
 			handler := s.wafMiddleware(route, next)
 
-			// Clean request should pass at any level
 			req := httptest.NewRequest("GET", "http://example.com/", nil)
 			rec := httptest.NewRecorder()
 			handler.ServeHTTP(rec, req)
 			assert.Equal(t, http.StatusOK, rec.Code)
 
-			// SQL injection should be blocked at any level
 			req = httptest.NewRequest("GET", "http://example.com/?id=1%20OR%201=1--", nil)
 			rec = httptest.NewRecorder()
 			handler.ServeHTTP(rec, req)
@@ -121,10 +133,16 @@ func TestWafMiddlewareRespectsParanoiaLevel(t *testing.T) {
 	}
 }
 
-func TestWafMiddlewareInvalidLevel(t *testing.T) {
+func TestWafMiddlewareZeroLevelProfile(t *testing.T) {
 	s := newTestWAFServer()
 
-	route := &ingress_v1alpha.HttpRoute{WafLevel: 99}
+	profileID := entity.Id("waf-zero")
+	s.wafProfileCache[profileID] = &wafProfileEntry{
+		paranoiaLevel: 0,
+		fetchedAt:     time.Now(),
+	}
+
+	route := &ingress_v1alpha.HttpRoute{WafProfile: profileID}
 	called := false
 	next := func(w http.ResponseWriter, r *http.Request) {
 		called = true
@@ -137,27 +155,7 @@ func TestWafMiddlewareInvalidLevel(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
-	// On invalid level, falls through to next handler
-	assert.True(t, called)
-}
-
-func TestWafMiddlewareNegativeLevel(t *testing.T) {
-	s := newTestWAFServer()
-
-	route := &ingress_v1alpha.HttpRoute{WafLevel: -1}
-	called := false
-	next := func(w http.ResponseWriter, r *http.Request) {
-		called = true
-		w.WriteHeader(http.StatusOK)
-	}
-
-	handler := s.wafMiddleware(route, next)
-
-	req := httptest.NewRequest("GET", "http://example.com/", nil)
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-	assert.True(t, called, "negative WAF level should be treated as disabled")
+	assert.True(t, called, "zero-level profile should fail open")
 }
 
 func TestWafEngineInitialized(t *testing.T) {

@@ -11,7 +11,7 @@ const (
 	HttpRouteDefaultId       = entity.Id("dev.miren.ingress/http_route.default")
 	HttpRouteHostId          = entity.Id("dev.miren.ingress/http_route.host")
 	HttpRouteOidcProviderId  = entity.Id("dev.miren.ingress/http_route.oidc_provider")
-	HttpRouteWafLevelId      = entity.Id("dev.miren.ingress/http_route.waf_level")
+	HttpRouteWafProfileId    = entity.Id("dev.miren.ingress/http_route.waf_profile")
 )
 
 type HttpRoute struct {
@@ -21,7 +21,7 @@ type HttpRoute struct {
 	Default       bool            `cbor:"default,omitempty" json:"default,omitempty"`
 	Host          string          `cbor:"host,omitempty" json:"host,omitempty"`
 	OidcProvider  entity.Id       `cbor:"oidc_provider,omitempty" json:"oidc_provider,omitempty"`
-	WafLevel      int64           `cbor:"waf_level,omitempty" json:"waf_level,omitempty"`
+	WafProfile    entity.Id       `cbor:"waf_profile,omitempty" json:"waf_profile,omitempty"`
 }
 
 func (o *HttpRoute) Decode(e entity.AttrGetter) {
@@ -45,8 +45,8 @@ func (o *HttpRoute) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(HttpRouteOidcProviderId); ok && a.Value.Kind() == entity.KindId {
 		o.OidcProvider = a.Value.Id()
 	}
-	if a, ok := e.Get(HttpRouteWafLevelId); ok && a.Value.Kind() == entity.KindInt64 {
-		o.WafLevel = a.Value.Int64()
+	if a, ok := e.Get(HttpRouteWafProfileId); ok && a.Value.Kind() == entity.KindId {
+		o.WafProfile = a.Value.Id()
 	}
 }
 
@@ -80,8 +80,8 @@ func (o *HttpRoute) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.OidcProvider) {
 		attrs = append(attrs, entity.Ref(HttpRouteOidcProviderId, o.OidcProvider))
 	}
-	if !entity.Empty(o.WafLevel) {
-		attrs = append(attrs, entity.Int64(HttpRouteWafLevelId, o.WafLevel))
+	if !entity.Empty(o.WafProfile) {
+		attrs = append(attrs, entity.Ref(HttpRouteWafProfileId, o.WafProfile))
 	}
 	attrs = append(attrs, entity.Ref(entity.EntityKind, KindHttpRoute))
 	return
@@ -103,7 +103,7 @@ func (o *HttpRoute) Empty() bool {
 	if !entity.Empty(o.OidcProvider) {
 		return false
 	}
-	if !entity.Empty(o.WafLevel) {
+	if !entity.Empty(o.WafProfile) {
 		return false
 	}
 	return true
@@ -116,7 +116,7 @@ func (o *HttpRoute) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Bool("default", "dev.miren.ingress/http_route.default", schema.Doc("Whether this is the default route for routing"), schema.Indexed)
 	sb.String("host", "dev.miren.ingress/http_route.host", schema.Doc("The hostname to match on for the application"), schema.Indexed)
 	sb.Ref("oidc_provider", "dev.miren.ingress/http_route.oidc_provider", schema.Doc("Reference to an OIDC provider for authentication"), schema.Indexed)
-	sb.Int64("waf_level", "dev.miren.ingress/http_route.waf_level", schema.Doc("WAF protection level (0=disabled, 1-4=OWASP CRS paranoia level)"))
+	sb.Ref("waf_profile", "dev.miren.ingress/http_route.waf_profile", schema.Doc("Reference to a WAF profile for request filtering"))
 }
 
 const (
@@ -262,9 +262,58 @@ func (o *OidcProvider) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("scopes", "dev.miren.ingress/oidc_provider.scopes", schema.Doc("Space-separated list of OAuth2 scopes (e.g. \"openid email profile\")"))
 }
 
+const (
+	WafProfileParanoiaLevelId = entity.Id("dev.miren.ingress/waf_profile.paranoia_level")
+)
+
+type WafProfile struct {
+	ID            entity.Id `json:"id"`
+	ParanoiaLevel int64     `cbor:"paranoia_level,omitempty" json:"paranoia_level,omitempty"`
+}
+
+func (o *WafProfile) Decode(e entity.AttrGetter) {
+	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
+	if a, ok := e.Get(WafProfileParanoiaLevelId); ok && a.Value.Kind() == entity.KindInt64 {
+		o.ParanoiaLevel = a.Value.Int64()
+	}
+}
+
+func (o *WafProfile) Is(e entity.AttrGetter) bool {
+	return entity.Is(e, KindWafProfile)
+}
+
+func (o *WafProfile) ShortKind() string {
+	return "waf_profile"
+}
+
+func (o *WafProfile) Kind() entity.Id {
+	return KindWafProfile
+}
+
+func (o *WafProfile) EntityId() entity.Id {
+	return o.ID
+}
+
+func (o *WafProfile) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.ParanoiaLevel) {
+		attrs = append(attrs, entity.Int64(WafProfileParanoiaLevelId, o.ParanoiaLevel))
+	}
+	attrs = append(attrs, entity.Ref(entity.EntityKind, KindWafProfile))
+	return
+}
+
+func (o *WafProfile) Empty() bool {
+	return entity.Empty(o.ParanoiaLevel)
+}
+
+func (o *WafProfile) InitSchema(sb *schema.SchemaBuilder) {
+	sb.Int64("paranoia_level", "dev.miren.ingress/waf_profile.paranoia_level", schema.Doc("OWASP CRS paranoia level (1-4)"))
+}
+
 var (
 	KindHttpRoute    = entity.Id("dev.miren.ingress/kind.http_route")
 	KindOidcProvider = entity.Id("dev.miren.ingress/kind.oidc_provider")
+	KindWafProfile   = entity.Id("dev.miren.ingress/kind.waf_profile")
 	Schema           = entity.Id("dev.miren.ingress/schema.v1alpha")
 )
 
@@ -272,6 +321,7 @@ func init() {
 	schema.Register("dev.miren.ingress", "v1alpha", func(sb *schema.SchemaBuilder) {
 		(&HttpRoute{}).InitSchema(sb)
 		(&OidcProvider{}).InitSchema(sb)
+		(&WafProfile{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.ingress", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\x8c\x94뮔0\x10\xc7_\xc4DM\x8c\xc6\x1b\xc6'j\xba\xed\x00\xe3\xf6f\xdb\xc5ݯ&\xfa ^\xce\x1b\x9e\xf3\xf9\xa4S\b\x14X\xe0\v\x99\xb63\xbf\xb9\xf0o\xffI\xc35|\x97\xd0U\x1a=\x98\nM\xe3!\x048\xa3\x91\xe1\xcf\xf5\xf5\xe2\xe4K:\xa9\xda\x18\x1d\xf3\xf6\x12\xe1\x81\b\xd7\x17K\xc7\xd1'Ӟji5G\xb3\xccV\xd7\bJ\x86\xdf\x7fO(\xaf\xaf\xb6H\x15w\x8e\x12\x8adě\x83\x13\xca\xff)\xec\xe3f\x98P\x1c5\xd3\xdc94M\x90\x9a\x9b\xdb#q\xcc\xec$!QX\xed\xac\x01\x13G\xabos\x99\xa5\xba\x9b\xe5`\xd7?\xa9\xeb\xb7\xcb\xf2KZ\x86S\x15\x90\xcdTj\x1d\xa2G\xd3\x10\xe2\xdd.\xa2\x05.\xc1\x13\xa3\xee\xed\t\xa4\xe9\xc0\a\xb4\xa6\xe9\xber\xe5Z\xae\x9cG\xcd\xfd\x8d\xa5>4\xa1\x06\x12\xe5{\xb39q\t5\xbf\xa8Hɚa\x91\xb2ɓ\xb5\x8a\x00+\xe2\x9a\x00Z\x1br\xb4$k\xde\xed\x87\xcd`\x8bR0\xe7m\x87Cú\xdc\xea\xa5so\xf6\x13\xd4\x0f^3\x05\x1d(\xc2\xe0\xb8L\b\x81&n\xce\xed\xdbHZ\x1b\x18]\xa6\xa2\xb2^h/\x97\xbe\x85\xdbAq\xfd\xa2\x06\xdf\xef\xc0*\xa1\x10Ld(s\x8f\xe3r>\xf5\xcf\aI\x01\x84\x87\xfc\xfbt\xb95'\xae\f\xa5$\x92\x04\xc6\xcf<\xfe\xd3^\xfc`\xb0\x8bϿP\x15;sފ\x18J^\x10\xd6Aȗ\xa8\xb7\x0f_\xa2\x824w=\x87\xd6\xfa\xc8\xf2\xcb;\xd5\xcd\xfe#\\\x82\x8f\t\xed\x19\x00\x00\xff\xff\x01\x00\x00\xff\xff\x87\xbd)}\xfb\x05\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.ingress", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\x8c\x95\xdb\xf2\xd3 \x10\xc6_D\xc7\xc38\x9e\x8d\xe3\x13ehX\x92\xb5\x9c\x04\x1a\xdbK\x9d\xd1\x17\xf9\xabo\xa8\xd7\x0eK:\t$\xa5\xb9\xe9la\xf7\xb7|\xf0A~q\xcd\x14|\xe106\n\x1d\xe8\x06u\xef\xc0{8\xa2\xe6\xfe\xe1\xfcl5\xf31\xce4C\b\xb6u\xe6\x14\xe0\x0f\x11Ώ։sN\xa2\xfd\x13\xdc(\x86z\xddM\b\x04\xc9\xfdχ\x03\xf2\xf3\xd3\x1a\xa9a\xd6R\xc3.\x06\xe1b\xe1\x80\xfcw,{W-\xeb$C\xd5*f-\xea\xdes\xc5\xf4\xe5/qt1\x13\x91\xd8\x19e\x8d\x06\x1d\xe6h\x92\xb9\xee\xd2\xdc\xec\xb2S\xf5wR\xfdr\xbd\xfc\x9c\x96\xe0\xb4\nHa\\\xaa\xf0\xc1\xa1\xee\t\xf1\xea.b\x00\xc6\xc1\x11CL\xf1\x02ҏ\xe0<\x1aݏ\x9f\x98\xb4\x03\x93֡b\xee\xd2F\x1d\x8aPW\x12\xf5{Q\xddq\x0e\x82\x9dd\xa0f\xfd\xf5O\xec\xc6\x0f\xc6H\x02l\x98k\x01\x18\x8cO՜\xa2R\xed\xdbj\xb1A\u07b5֙\x11\xaf\x82U>4Y\x87P\xaf\xab\xa8\xafL\xc42\x81\x12\bt\\\x0eL\x98\xea\xd6}\x9ea\xe7\xe77\xeeӂ99\xed\xf1:s\x91\xb4\xd3[\xdfH\xdf\xfb*\xaa\xb1\xcc1m\x90\xb5\x12F\x90\xe9V\x14cQf\x87:Tu.7f\xcb\x1c$4;\x85I\xea\x93un\x96\xb6S\xec\x0f\x12\xfb\xe6\x0e\xac\xe9$\x82\x0e-rj\x8e\xf3\xdf\xd2a\x1fv\x92<t\x0e\x92UU>T\x1276%'\x92\xdd矲~\xe3 \xf3\xfakО\\:H\x99\x8d\x94\xbc\x8dG'\xe7\xf9\xceX\xf0\xe9\xc1\x98\xe2\xdd\x0fFF*S\x8f~0.\xb4\xe9+\xb3\xbc \xf7?8\x99\xcdvܧ|!\xfb\x8c\xf9\x1f\x00\x00\xff\xff\x01\x00\x00\xff\xff\xe5\x12\x94\f\x17\a\x00\x00"))
 }

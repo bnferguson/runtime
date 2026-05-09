@@ -15,9 +15,9 @@ kinds:
       type: bool
       indexed: true
       doc: Whether this is the default route for routing
-    waf_level:
-      type: int
-      doc: WAF protection level (0=disabled, 1-4=OWASP CRS paranoia level)
+    waf_profile:
+      type: ref
+      doc: Reference to a WAF profile for request filtering
     oidc_provider:
       type: ref
       doc: Reference to an OIDC provider for authentication
@@ -51,3 +51,7 @@ kinds:
     scopes:
       type: string
       doc: Space-separated list of OAuth2 scopes (e.g. "openid email profile")
+  waf_profile:
+    paranoia_level:
+      type: int
+      doc: OWASP CRS paranoia level (1-4)

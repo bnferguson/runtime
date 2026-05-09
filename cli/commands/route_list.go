@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"miren.dev/runtime/api/ingress"
+	"miren.dev/runtime/api/ingress/ingress_v1alpha"
+	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/ui"
 )
 
@@ -22,6 +24,17 @@ func RouteList(ctx *Context, opts struct {
 	routes, err := ic.List(ctx)
 	if err != nil {
 		return err
+	}
+
+	resolveWAFLevel := func(route *ingress_v1alpha.HttpRoute) int {
+		if entity.Empty(route.WafProfile) {
+			return 0
+		}
+		profile, err := ic.GetWAFProfileByID(ctx, route.WafProfile)
+		if err != nil || profile == nil {
+			return 0
+		}
+		return int(profile.ParanoiaLevel)
 	}
 
 	if opts.IsJSON() {
@@ -44,7 +57,7 @@ func RouteList(ctx *Context, opts struct {
 				Host:      host,
 				App:       string(r.Route.App),
 				Default:   r.Route.Default,
-				WafLevel:  int(r.Route.WafLevel),
+				WafLevel:  resolveWAFLevel(r.Route),
 				CreatedAt: r.CreatedAt,
 				UpdatedAt: r.UpdatedAt,
 			})
@@ -59,7 +72,6 @@ func RouteList(ctx *Context, opts struct {
 	for _, r := range routes {
 		route := r.Route
 
-		// Display host or "(default)" for default routes
 		host := route.Host
 		if host == "" && route.Default {
 			host = "(default)"
@@ -68,18 +80,16 @@ func RouteList(ctx *Context, opts struct {
 			host = "-"
 		}
 
-		// Show cleaned app ID
 		appDisplay := ui.CleanEntityID(string(route.App))
 
-		// Show default status
 		defaultDisplay := "-"
 		if route.Default {
 			defaultDisplay = "✓"
 		}
 
 		wafDisplay := "-"
-		if route.WafLevel > 0 {
-			wafDisplay = fmt.Sprintf("%d", route.WafLevel)
+		if wafLevel := resolveWAFLevel(route); wafLevel > 0 {
+			wafDisplay = fmt.Sprintf("%d", wafLevel)
 		}
 
 		rows = append(rows, ui.Row{
