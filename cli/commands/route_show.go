@@ -74,25 +74,21 @@ func RouteShow(ctx *Context, opts struct {
 	protectionType := "none"
 
 	if protected {
-		oidcProvider = &ingress_v1alpha.OidcProvider{}
-		if err := ic.GetEntityStore().GetById(ctx, route.AuthProvider, oidcProvider); err != nil {
+		providerEnt, err := ic.GetEntityStore().GetByIdWithEntity(ctx, route.AuthProvider, &ingress_v1alpha.OidcProvider{})
+		if err != nil {
 			if !errors.Is(err, cond.ErrNotFound{}) {
 				return fmt.Errorf("failed to get auth provider: %w", err)
 			}
-			oidcProvider = nil
-		}
-
-		if oidcProvider != nil {
-			protectionType = "oidc"
 		} else {
-			pwProvider = &ingress_v1alpha.PasswordProvider{}
-			if err := ic.GetEntityStore().GetById(ctx, route.AuthProvider, pwProvider); err != nil {
-				if !errors.Is(err, cond.ErrNotFound{}) {
-					return fmt.Errorf("failed to get auth provider: %w", err)
-				}
-				pwProvider = nil
-			}
-			if pwProvider != nil {
+			raw := providerEnt.Entity()
+			switch {
+			case entity.Is(raw, ingress_v1alpha.KindOidcProvider):
+				oidcProvider = &ingress_v1alpha.OidcProvider{}
+				oidcProvider.Decode(raw)
+				protectionType = "oidc"
+			case entity.Is(raw, ingress_v1alpha.KindPasswordProvider):
+				pwProvider = &ingress_v1alpha.PasswordProvider{}
+				pwProvider.Decode(raw)
 				protectionType = "password"
 			}
 		}
