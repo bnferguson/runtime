@@ -350,7 +350,7 @@ func TestGetOrCreateOIDCHandlerFailClosed(t *testing.T) {
 	}
 
 	// Warm the cache
-	h1, err := srv.getOrCreateOIDCHandler(context.Background(), route, "https://socials.example.com")
+	_, err := srv.getOrCreateOIDCHandler(context.Background(), route, "https://socials.example.com")
 	if err != nil {
 		t.Fatalf("initial getOrCreateOIDCHandler: %v", err)
 	}
@@ -358,22 +358,17 @@ func TestGetOrCreateOIDCHandlerFailClosed(t *testing.T) {
 	// Remove the provider entity to simulate entity store being unavailable
 	store.RemoveEntity(entity.Id(providerIdent))
 
-	// Should return cached handler instead of failing open
-	h2, err := srv.getOrCreateOIDCHandler(context.Background(), route, "https://socials.example.com")
-	if err != nil {
-		t.Fatalf("expected cached handler on entity store failure, got error: %v", err)
-	}
-	if h1 != h2 {
-		t.Error("expected same cached handler instance on entity store failure")
+	// Should fail closed and clear cached handler
+	_, err = srv.getOrCreateOIDCHandler(context.Background(), route, "https://socials.example.com")
+	if err == nil {
+		t.Error("expected error when entity store fails, not cached fallback")
 	}
 
-	// With no cache entry and no entity store, should error (not fail open)
-	routeNew := &ingress_v1alpha.HttpRoute{
-		Host:         "newsite.example.com",
-		AuthProvider: entity.Id(providerIdent),
-	}
-	_, err = srv.getOrCreateOIDCHandler(context.Background(), routeNew, "https://newsite.example.com")
-	if err == nil {
-		t.Error("expected error when entity store fails and no cached handler exists")
+	// Cache entry should have been removed
+	srv.oidcMu.RLock()
+	_, cached := srv.oidcHandlers["socials.example.com|https://socials.example.com"]
+	srv.oidcMu.RUnlock()
+	if cached {
+		t.Error("expected cached handler to be removed after lookup failure")
 	}
 }

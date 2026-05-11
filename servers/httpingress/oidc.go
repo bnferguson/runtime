@@ -327,9 +327,8 @@ func oidcProviderMatches(cached *oidcHandler, current *ingress_v1alpha.OidcProvi
 // creating one on first access. The handler (and its oidc.Client) is reused
 // across requests so that discovery and JWKS caches are effective.
 // If the provider config has changed since the handler was cached, the stale
-// handler is replaced with a new one. If the entity store is unreachable but
-// a cached handler exists, the cached handler is returned to avoid failing
-// open (serving requests without authentication).
+// handler is replaced with a new one. If the entity store is unreachable,
+// the cached handler is evicted and an error is returned (fail-closed).
 func (s *Server) getOrCreateOIDCHandler(ctx context.Context, route *ingress_v1alpha.HttpRoute, baseURL string) (*oidcHandler, error) {
 	// Key by route host + baseURL so that handlers with different redirect
 	// URIs (different scheme or host for default routes) are cached separately.
@@ -338,18 +337,11 @@ func (s *Server) getOrCreateOIDCHandler(ctx context.Context, route *ingress_v1al
 		key = "__default__|" + baseURL
 	}
 
-	// Try to resolve the current provider config from the entity store.
 	resp, err := s.eac.Get(ctx, string(route.AuthProvider))
 	if err != nil {
-		// Entity store unavailable — return cached handler if we have one
-		// to avoid failing open (serving without auth).
-		s.oidcMu.RLock()
-		h, ok := s.oidcHandlers[key]
-		s.oidcMu.RUnlock()
-		if ok {
-			s.Log.Warn("entity store unavailable, using cached OIDC handler", "error", err, "host", route.Host)
-			return h, nil
-		}
+		s.oidcMu.Lock()
+		delete(s.oidcHandlers, key)
+		s.oidcMu.Unlock()
 		return nil, fmt.Errorf("failed to get OIDC provider: %w", err)
 	}
 
