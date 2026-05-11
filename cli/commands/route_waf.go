@@ -59,8 +59,16 @@ func RouteWaf(ctx *Context, opts struct {
 		routeLabel = opts.Host
 	}
 
+	type RouteWafJSON struct {
+		Route    string `json:"route"`
+		WafLevel int    `json:"waf_level"`
+	}
+
 	if opts.Disable {
 		if entity.Empty(route.WafProfile) {
+			if opts.IsJSON() {
+				return PrintJSON(RouteWafJSON{Route: routeLabel, WafLevel: 0})
+			}
 			ctx.Printf("WAF is not enabled on route: %s\n", routeLabel)
 			return nil
 		}
@@ -70,6 +78,9 @@ func RouteWaf(ctx *Context, opts struct {
 			return fmt.Errorf("failed to disable WAF on route: %w", err)
 		}
 
+		if opts.IsJSON() {
+			return PrintJSON(RouteWafJSON{Route: routeLabel, WafLevel: 0})
+		}
 		ctx.Printf("WAF disabled on route: %s\n", routeLabel)
 		return nil
 	}
@@ -80,15 +91,7 @@ func RouteWaf(ctx *Context, opts struct {
 	}
 
 	if opts.IsJSON() {
-		type RouteWafJSON struct {
-			Route    string `json:"route"`
-			WafLevel int    `json:"waf_level"`
-		}
-
-		return PrintJSON(RouteWafJSON{
-			Route:    routeLabel,
-			WafLevel: opts.Level,
-		})
+		return PrintJSON(RouteWafJSON{Route: routeLabel, WafLevel: opts.Level})
 	}
 
 	items := []ui.NamedValue{

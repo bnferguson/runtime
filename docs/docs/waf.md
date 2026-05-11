@@ -12,6 +12,10 @@ Miren includes a built-in WAF that filters malicious HTTP requests before they r
 
 WAF is configured per route. Enable it and all requests to that route are inspected — malicious requests get a `403 Forbidden` response, clean requests pass through normally. No changes to your app are needed.
 
+:::note What this doesn't cover
+The WAF inspects request content for attack payloads (SQL injection, XSS, command injection, path traversal). It does **not** rate-limit, fingerprint bots, or block reconnaissance scans (e.g., probes for `/wp-admin/` or `/xmlrpc.php` on non-WordPress sites). For that kind of filtering, use an upstream proxy like Cloudflare in front of your route.
+:::
+
 ## Enabling WAF
 
 <CliCommand context="client">
