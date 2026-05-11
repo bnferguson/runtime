@@ -37,6 +37,11 @@ configs:
         toml: server
         nested: true
 
+      ingress:
+        type: IngressConfig
+        toml: ingress
+        nested: true
+
       tls:
         type: TLSConfig
         toml: tls
@@ -183,8 +188,31 @@ configs:
         validation:
           enum: ["", auto, universal, accelerator]
 
+  IngressConfig:
+    description: HTTP/HTTPS ingress configuration. See RFD-84 for the mode-based design.
+    fields:
+      mode:
+        type: string
+        default: tls-autoprovision
+        cli:
+          long: ingress-mode
+          description: "Ingress mode: tls-autoprovision (default, :443 + :80 with ACME or self-signed), behind-proxy-http (plain HTTP for use behind a TLS-terminating proxy), behind-proxy-https (TLS terminated by Miren with externally-provided certs, no ACME provisioning)"
+        env: MIREN_INGRESS_MODE
+        toml: mode
+        validation:
+          enum: [tls-autoprovision, behind-proxy-http, behind-proxy-https]
+
+      address:
+        type: string
+        default: ""
+        cli:
+          long: ingress-address
+          description: "Optional bind override. Replaces the mode's default bind entirely (interface and port). Ignored for tls-autoprovision. Reserved unix:/path prefix is not yet supported."
+        env: MIREN_INGRESS_ADDRESS
+        toml: address
+
   TLSConfig:
-    description: TLS/certificate settings
+    description: TLS certificate settings. Consulted only when ingress.mode is tls-autoprovision or behind-proxy-https.
     fields:
       additional_names:
         type: "[]string"
@@ -205,15 +233,6 @@ configs:
         toml: additional_ips
         validation:
           format: ip_list
-
-      standard_tls:
-        type: bool
-        default: true
-        cli:
-          long: serve-tls
-          description: Expose the http ingress on standard TLS ports
-        env: MIREN_TLS_STANDARD_TLS
-        toml: standard_tls
 
       acme_dns_provider:
         type: string

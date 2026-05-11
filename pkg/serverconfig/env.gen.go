@@ -194,6 +194,22 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 
 	}
 
+	// Apply MIREN_INGRESS_ADDRESS
+	if val := os.Getenv("MIREN_INGRESS_ADDRESS"); val != "" {
+
+		cfg.Ingress.Address = &val
+		log.Debug("applied env var", "key", "MIREN_INGRESS_ADDRESS")
+
+	}
+
+	// Apply MIREN_INGRESS_MODE
+	if val := os.Getenv("MIREN_INGRESS_MODE"); val != "" {
+
+		cfg.Ingress.Mode = &val
+		log.Debug("applied env var", "key", "MIREN_INGRESS_MODE")
+
+	}
+
 	// Apply MIREN_SERVER_ADDRESS
 	if val := os.Getenv("MIREN_SERVER_ADDRESS"); val != "" {
 
@@ -364,18 +380,6 @@ func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
 			log.Debug("applied env var", "key", "MIREN_TLS_SELF_SIGNED")
 		} else {
 			log.Warn("invalid MIREN_TLS_SELF_SIGNED value", "value", val, "error", err)
-		}
-
-	}
-
-	// Apply MIREN_TLS_STANDARD_TLS
-	if val := os.Getenv("MIREN_TLS_STANDARD_TLS"); val != "" {
-
-		if b, err := strconv.ParseBool(val); err == nil {
-			cfg.TLS.StandardTLS = &b
-			log.Debug("applied env var", "key", "MIREN_TLS_STANDARD_TLS")
-		} else {
-			log.Warn("invalid MIREN_TLS_STANDARD_TLS value", "value", val, "error", err)
 		}
 
 	}

@@ -85,6 +85,7 @@ type Config struct {
 	Buildkit        BuildkitConfig        `toml:"buildkit"`
 	Containerd      ContainerdConfig      `toml:"containerd"`
 	Etcd            EtcdConfig            `toml:"etcd"`
+	Ingress         IngressConfig         `toml:"ingress"`
 	Labs            []string              `toml:"labs" env:"MIREN_LABS"`
 	Mode            *string               `toml:"mode" env:"MIREN_MODE"`
 	Server          ServerConfig          `toml:"server"`
@@ -225,6 +226,38 @@ func (c *EtcdConfig) GetStartEmbedded() bool {
 // SetStartEmbedded sets the value of StartEmbedded
 func (c *EtcdConfig) SetStartEmbedded(v bool) {
 	c.StartEmbedded = &v
+}
+
+// IngressConfig HTTP/HTTPS ingress configuration. See RFD-84 for the mode-based design.
+type IngressConfig struct {
+	Address *string `toml:"address" env:"MIREN_INGRESS_ADDRESS"`
+	Mode    *string `toml:"mode" env:"MIREN_INGRESS_MODE"`
+}
+
+// GetAddress returns the value of Address or its zero value if nil
+func (c *IngressConfig) GetAddress() string {
+	if c.Address != nil {
+		return *c.Address
+	}
+	return ""
+}
+
+// SetAddress sets the value of Address
+func (c *IngressConfig) SetAddress(v string) {
+	c.Address = &v
+}
+
+// GetMode returns the value of Mode or its zero value if nil
+func (c *IngressConfig) GetMode() string {
+	if c.Mode != nil {
+		return *c.Mode
+	}
+	return ""
+}
+
+// SetMode sets the value of Mode
+func (c *IngressConfig) SetMode(v string) {
+	c.Mode = &v
 }
 
 // ServerConfig Core server settings
@@ -385,14 +418,13 @@ func (c *ServerConfig) SetStopSandboxesOnShutdown(v bool) {
 	c.StopSandboxesOnShutdown = &v
 }
 
-// TLSConfig TLS/certificate settings
+// TLSConfig TLS certificate settings. Consulted only when ingress.mode is tls-autoprovision or behind-proxy-https.
 type TLSConfig struct {
 	AcmeDNSProvider *string  `toml:"acme_dns_provider" env:"MIREN_TLS_ACME_DNS_PROVIDER"`
 	AcmeEmail       *string  `toml:"acme_email" env:"MIREN_TLS_ACME_EMAIL"`
 	AdditionalIPs   []string `toml:"additional_ips" env:"MIREN_TLS_ADDITIONAL_IPS"`
 	AdditionalNames []string `toml:"additional_names" env:"MIREN_TLS_ADDITIONAL_NAMES"`
 	SelfSigned      *bool    `toml:"self_signed" env:"MIREN_TLS_SELF_SIGNED"`
-	StandardTLS     *bool    `toml:"standard_tls" env:"MIREN_TLS_STANDARD_TLS"`
 }
 
 // GetAcmeDNSProvider returns the value of AcmeDNSProvider or its zero value if nil
@@ -432,19 +464,6 @@ func (c *TLSConfig) GetSelfSigned() bool {
 // SetSelfSigned sets the value of SelfSigned
 func (c *TLSConfig) SetSelfSigned(v bool) {
 	c.SelfSigned = &v
-}
-
-// GetStandardTLS returns the value of StandardTLS or its zero value if nil
-func (c *TLSConfig) GetStandardTLS() bool {
-	if c.StandardTLS != nil {
-		return *c.StandardTLS
-	}
-	return false
-}
-
-// SetStandardTLS sets the value of StandardTLS
-func (c *TLSConfig) SetStandardTLS(v bool) {
-	c.StandardTLS = &v
 }
 
 // VictoriaLogsConfig VictoriaLogs configuration
