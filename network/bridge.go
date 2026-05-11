@@ -9,6 +9,9 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"regexp"
+	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -452,15 +455,213 @@ func CheckBridgeStatus(name string) error {
 	return nil
 }
 
+// ReconcileBridgeAddresses owns the per-bridge NAT chain shape and removes
+// bridge addresses + POSTROUTING jumps that belong to subnets no longer in
+// `desired`. It runs at sandbox controller init so the chain is in the
+// right shape before any sandbox is created. Drift happens when a runner's
+// flannel lease rotates (typically after the runner is offline long enough
+// for its etcd lease to expire) and a fresh subnet is allocated; without
+// this reconcile the host bridge accumulates stale addresses across lease
+// eras, and the per-bridge MIREN-* chain accumulates rules that interfere
+// with traffic on the new subnet (MIR-1108).
+func ReconcileBridgeAddresses(log *slog.Logger, br netlink.Link, desired []netip.Prefix) error {
+	bridgeName := br.Attrs().Name
+	chain := formatChain(bridgeName)
+	comment := fmt.Sprintf("id: %q", bridgeName)
+
+	desiredSet := make(map[string]bool, len(desired))
+	for _, p := range desired {
+		desiredSet[p.String()] = true
+	}
+
+	addrs, err := netlink.AddrList(br, netlink.FAMILY_V4)
+	if err != nil {
+		return fmt.Errorf("listing addresses on %s: %w", bridgeName, err)
+	}
+
+	var stale []netip.Prefix
+	for _, addr := range addrs {
+		prefix, ok := netipx.FromStdIPNet(addr.IPNet)
+		if !ok {
+			continue
+		}
+		if !desiredSet[prefix.String()] {
+			stale = append(stale, prefix)
+		}
+	}
+
+	ipt, err := iptables.NewWithProtocol(iptables.ProtocolIPv4)
+	if err != nil {
+		return fmt.Errorf("locating iptables: %w", err)
+	}
+
+	if len(stale) > 0 {
+		log.Warn("removing stale bridge state",
+			"bridge", bridgeName, "stale", stale, "desired", desired)
+
+		for _, s := range stale {
+			ipn := netipx.PrefixIPNet(s)
+			if err := deleteAddr(br, ipn); err != nil {
+				return fmt.Errorf("removing stale bridge address %s: %w", s, err)
+			}
+			log.Info("removed stale bridge address", "bridge", bridgeName, "address", s)
+
+			if err := removeStalePostroutingJumps(log, ipt, chain, comment, s); err != nil {
+				log.Warn("failed to clean POSTROUTING jumps",
+					"bridge", bridgeName, "subnet", s, "error", err)
+			}
+		}
+	}
+
+	if err := reconcileMasqChain(ipt, chain, comment, desired); err != nil {
+		return fmt.Errorf("reconciling chain on %s: %w", bridgeName, err)
+	}
+
+	return nil
+}
+
+// postroutingSourceIP extracts the source IP from a `-A POSTROUTING -s X ...` rule line.
+var postroutingSourceIP = regexp.MustCompile(`-s\s+(\d+\.\d+\.\d+\.\d+)`)
+
+func removeStalePostroutingJumps(log *slog.Logger, ipt *iptables.IPTables, chain, comment string, stale netip.Prefix) error {
+	rules, err := ipt.List("nat", "POSTROUTING")
+	if err != nil {
+		return fmt.Errorf("listing POSTROUTING: %w", err)
+	}
+
+	target := "-j " + chain
+	for _, rule := range rules {
+		if !strings.Contains(rule, target) {
+			continue
+		}
+		m := postroutingSourceIP.FindStringSubmatch(rule)
+		if m == nil {
+			continue
+		}
+		src, err := netip.ParseAddr(m[1])
+		if err != nil || !stale.Contains(src) {
+			continue
+		}
+		if err := ipt.DeleteIfExists("nat", "POSTROUTING",
+			"-s", src.String(),
+			"-m", "comment", "--comment", comment,
+			"-j", chain,
+		); err != nil {
+			log.Warn("failed to delete stale POSTROUTING jump",
+				"src", src, "chain", chain, "error", err)
+		}
+	}
+	return nil
+}
+
+// MasqueradeEndpoint adds a POSTROUTING jump for each address in `ec` to
+// the per-bridge MIREN-* chain, so packets with that source pod IP get
+// masqueraded on egress to non-pod-subnet destinations. The bridge-scope
+// chain content (per-subnet ACCEPTs followed by the MASQUERADE catch-all)
+// is owned by ReconcileBridgeAddresses, which runs at controller init
+// before any sandbox is created.
 func MasqueradeEndpoint(ec *EndpointConfig) error {
+	if len(ec.Addresses) == 0 {
+		return nil
+	}
+
 	chain := formatChain(ec.Bridge.Name)
 	comment := fmt.Sprintf("id: %q", ec.Bridge.Name)
 
+	ipt, err := iptables.NewWithProtocol(iptables.ProtocolIPv4)
+	if err != nil {
+		return fmt.Errorf("locating iptables: %w", err)
+	}
+
 	for _, ac := range ec.Addresses {
-		if err := ip.SetupIPMasq(netipx.PrefixIPNet(ac), chain, comment); err != nil {
-			return err
+		ipn := netipx.PrefixIPNet(ac)
+		if err := ipt.AppendUnique("nat", "POSTROUTING",
+			"-s", ipn.IP.String(),
+			"-m", "comment", "--comment", comment,
+			"-j", chain,
+		); err != nil {
+			return fmt.Errorf("adding POSTROUTING jump for %s: %w", ipn.IP, err)
 		}
 	}
 
 	return nil
+}
+
+// reconcileMasqChain converges the per-bridge NAT chain to the desired shape:
+// one ACCEPT per pod subnet followed by a single MASQUERADE catch-all. Order
+// matters because MASQUERADE is terminal, so any ACCEPT after it would be
+// unreachable. The previous implementation appended ACCEPT then MASQUERADE
+// per call, which left later subnets' ACCEPTs stranded after the
+// already-present MASQUERADE (MIR-1108).
+//
+// To stay idempotent under concurrent calls and on already-correct chains,
+// the chain is only flushed and rebuilt when its current content does not
+// already match the desired shape.
+func reconcileMasqChain(ipt *iptables.IPTables, chain, comment string, addresses []netip.Prefix) error {
+	chains, err := ipt.ListChains("nat")
+	if err != nil {
+		return fmt.Errorf("listing nat chains: %w", err)
+	}
+	if !slices.Contains(chains, chain) {
+		if err := ipt.NewChain("nat", chain); err != nil {
+			return fmt.Errorf("creating chain %s: %w", chain, err)
+		}
+	}
+
+	desired := desiredMasqRules(comment, addresses)
+
+	matches, err := chainMatchesDesired(ipt, chain, desired)
+	if err != nil {
+		return fmt.Errorf("inspecting chain %s: %w", chain, err)
+	}
+	if matches {
+		return nil
+	}
+
+	if err := ipt.ClearChain("nat", chain); err != nil {
+		return fmt.Errorf("clearing chain %s: %w", chain, err)
+	}
+	for _, rule := range desired {
+		if err := ipt.Append("nat", chain, rule...); err != nil {
+			return fmt.Errorf("appending rule to %s: %w", chain, err)
+		}
+	}
+	return nil
+}
+
+// desiredMasqRules builds the chain content in the order it should appear:
+// per-subnet ACCEPTs first, then the catch-all MASQUERADE last.
+func desiredMasqRules(comment string, addresses []netip.Prefix) [][]string {
+	rules := make([][]string, 0, len(addresses)+1)
+	for _, ac := range addresses {
+		ipn := netipx.PrefixIPNet(ac).String()
+		rules = append(rules, []string{"-d", ipn, "-m", "comment", "--comment", comment, "-j", "ACCEPT"})
+	}
+	rules = append(rules, []string{"!", "-d", "224.0.0.0/4", "-m", "comment", "--comment", comment, "-j", "MASQUERADE"})
+	return rules
+}
+
+// chainMatchesDesired returns true when the chain's existing rules already
+// represent the desired shape: every desired rule exists, no extra rules
+// exist, and the last rule is MASQUERADE (so all ACCEPTs precede it).
+func chainMatchesDesired(ipt *iptables.IPTables, chain string, desired [][]string) (bool, error) {
+	for _, rule := range desired {
+		ok, err := ipt.Exists("nat", chain, rule...)
+		if err != nil {
+			return false, err
+		}
+		if !ok {
+			return false, nil
+		}
+	}
+
+	rules, err := ipt.List("nat", chain)
+	if err != nil {
+		return false, err
+	}
+	// rules[0] is the "-N <chain>" header; remaining entries are "-A ..." rules.
+	if len(rules)-1 != len(desired) {
+		return false, nil
+	}
+	return strings.Contains(rules[len(rules)-1], "-j MASQUERADE"), nil
 }
