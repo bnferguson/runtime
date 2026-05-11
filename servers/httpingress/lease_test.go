@@ -369,6 +369,7 @@ func TestInvalidateAndReacquire(t *testing.T) {
 	}
 	if got2 == nil {
 		t.Fatal("expected to get fresh lease")
+		return
 	}
 	if got2.Lease.URL != "http://10.0.0.2:3000" {
 		t.Errorf("expected fresh lease URL, got %s", got2.Lease.URL)
@@ -453,6 +454,7 @@ func TestSandboxDeathOnlyInvalidatesMatchingLeases(t *testing.T) {
 	}
 	if got == nil {
 		t.Fatal("expected sandbox2 lease to survive")
+		return
 	}
 	if got.Lease.URL != "http://10.0.0.2:3000" {
 		t.Errorf("expected sandbox2 URL, got %s", got.Lease.URL)
@@ -516,6 +518,7 @@ func TestSandboxDeathAcrossMultipleApps(t *testing.T) {
 	}
 	if got == nil {
 		t.Fatal("expected app/gamma lease to survive")
+		return
 	}
 	if got.Lease.URL != "http://10.0.0.2:3000" {
 		t.Errorf("expected gamma URL, got %s", got.Lease.URL)

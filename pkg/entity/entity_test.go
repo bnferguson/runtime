@@ -44,22 +44,22 @@ func assertEntityEqual(t *testing.T, expected, actual *Entity, msgAndArgs ...int
 	msg.WriteString("Entities differ:\n\n")
 
 	if expectedCopy.Id() != actualCopy.Id() {
-		msg.WriteString(fmt.Sprintf("ID mismatch:\n  Expected: %s\n  Actual:   %s\n\n", expectedCopy.Id(), actualCopy.Id()))
+		fmt.Fprintf(&msg, "ID mismatch:\n  Expected: %s\n  Actual:   %s\n\n", expectedCopy.Id(), actualCopy.Id())
 	}
 
-	msg.WriteString(fmt.Sprintf("Expected Attrs (%d):\n", len(expectedCopy.Attrs())))
+	fmt.Fprintf(&msg, "Expected Attrs (%d):\n", len(expectedCopy.Attrs()))
 	for i, attr := range expectedCopy.Attrs() {
-		msg.WriteString(fmt.Sprintf("  [%d] %s = %v\n", i, attr.ID, attr.Value.Any()))
+		fmt.Fprintf(&msg, "  [%d] %s = %v\n", i, attr.ID, attr.Value.Any())
 	}
 
-	msg.WriteString(fmt.Sprintf("\nActual Attrs (%d):\n", len(actualCopy.Attrs())))
+	fmt.Fprintf(&msg, "\nActual Attrs (%d):\n", len(actualCopy.Attrs()))
 	for i, attr := range actualCopy.Attrs() {
-		msg.WriteString(fmt.Sprintf("  [%d] %s = %v\n", i, attr.ID, attr.Value.Any()))
+		fmt.Fprintf(&msg, "  [%d] %s = %v\n", i, attr.ID, attr.Value.Any())
 	}
 
 	if len(msgAndArgs) > 0 {
 		msg.WriteString("\n")
-		msg.WriteString(fmt.Sprint(msgAndArgs...))
+		fmt.Fprint(&msg, msgAndArgs...)
 	}
 
 	return assert.Fail(t, msg.String())

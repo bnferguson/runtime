@@ -1,9 +1,12 @@
 package commands
 
 import (
+	"fmt"
 	"time"
 
 	"miren.dev/runtime/api/ingress"
+	"miren.dev/runtime/api/ingress/ingress_v1alpha"
+	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/ui"
 )
 
@@ -23,11 +26,23 @@ func RouteList(ctx *Context, opts struct {
 		return err
 	}
 
+	resolveWAFLevel := func(route *ingress_v1alpha.HttpRoute) int {
+		if entity.Empty(route.WafProfile) {
+			return 0
+		}
+		profile, err := ic.GetWAFProfileByID(ctx, route.WafProfile)
+		if err != nil || profile == nil {
+			return 0
+		}
+		return int(profile.ParanoiaLevel)
+	}
+
 	if opts.IsJSON() {
 		type RouteInfo struct {
 			Host      string `json:"host"`
 			App       string `json:"app"`
 			Default   bool   `json:"default"`
+			WafLevel  int    `json:"waf_level"`
 			CreatedAt int64  `json:"created_at"`
 			UpdatedAt int64  `json:"updated_at"`
 		}
@@ -42,6 +57,7 @@ func RouteList(ctx *Context, opts struct {
 				Host:      host,
 				App:       string(r.Route.App),
 				Default:   r.Route.Default,
+				WafLevel:  resolveWAFLevel(r.Route),
 				CreatedAt: r.CreatedAt,
 				UpdatedAt: r.UpdatedAt,
 			})
@@ -51,12 +67,11 @@ func RouteList(ctx *Context, opts struct {
 	}
 
 	var rows []ui.Row
-	headers := []string{"HOST", "APP", "DEFAULT", "CREATED", "UPDATED"}
+	headers := []string{"HOST", "APP", "DEFAULT", "WAF", "CREATED", "UPDATED"}
 
 	for _, r := range routes {
 		route := r.Route
 
-		// Display host or "(default)" for default routes
 		host := route.Host
 		if host == "" && route.Default {
 			host = "(default)"
@@ -65,19 +80,23 @@ func RouteList(ctx *Context, opts struct {
 			host = "-"
 		}
 
-		// Show cleaned app ID
 		appDisplay := ui.CleanEntityID(string(route.App))
 
-		// Show default status
 		defaultDisplay := "-"
 		if route.Default {
 			defaultDisplay = "✓"
+		}
+
+		wafDisplay := "-"
+		if wafLevel := resolveWAFLevel(route); wafLevel > 0 {
+			wafDisplay = fmt.Sprintf("%d", wafLevel)
 		}
 
 		rows = append(rows, ui.Row{
 			host,
 			appDisplay,
 			defaultDisplay,
+			wafDisplay,
 			humanFriendlyTimestamp(time.UnixMilli(r.CreatedAt)),
 			humanFriendlyTimestamp(time.UnixMilli(r.UpdatedAt)),
 		})

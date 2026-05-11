@@ -11,6 +11,7 @@ const (
 	HttpRouteDefaultId       = entity.Id("dev.miren.ingress/http_route.default")
 	HttpRouteHostId          = entity.Id("dev.miren.ingress/http_route.host")
 	HttpRouteOidcProviderId  = entity.Id("dev.miren.ingress/http_route.oidc_provider")
+	HttpRouteWafProfileId    = entity.Id("dev.miren.ingress/http_route.waf_profile")
 )
 
 type HttpRoute struct {
@@ -20,6 +21,7 @@ type HttpRoute struct {
 	Default       bool            `cbor:"default,omitempty" json:"default,omitempty"`
 	Host          string          `cbor:"host,omitempty" json:"host,omitempty"`
 	OidcProvider  entity.Id       `cbor:"oidc_provider,omitempty" json:"oidc_provider,omitempty"`
+	WafProfile    entity.Id       `cbor:"waf_profile,omitempty" json:"waf_profile,omitempty"`
 }
 
 func (o *HttpRoute) Decode(e entity.AttrGetter) {
@@ -42,6 +44,9 @@ func (o *HttpRoute) Decode(e entity.AttrGetter) {
 	}
 	if a, ok := e.Get(HttpRouteOidcProviderId); ok && a.Value.Kind() == entity.KindId {
 		o.OidcProvider = a.Value.Id()
+	}
+	if a, ok := e.Get(HttpRouteWafProfileId); ok && a.Value.Kind() == entity.KindId {
+		o.WafProfile = a.Value.Id()
 	}
 }
 
@@ -75,6 +80,9 @@ func (o *HttpRoute) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.OidcProvider) {
 		attrs = append(attrs, entity.Ref(HttpRouteOidcProviderId, o.OidcProvider))
 	}
+	if !entity.Empty(o.WafProfile) {
+		attrs = append(attrs, entity.Ref(HttpRouteWafProfileId, o.WafProfile))
+	}
 	attrs = append(attrs, entity.Ref(entity.EntityKind, KindHttpRoute))
 	return
 }
@@ -95,6 +103,9 @@ func (o *HttpRoute) Empty() bool {
 	if !entity.Empty(o.OidcProvider) {
 		return false
 	}
+	if !entity.Empty(o.WafProfile) {
+		return false
+	}
 	return true
 }
 
@@ -105,6 +116,7 @@ func (o *HttpRoute) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Bool("default", "dev.miren.ingress/http_route.default", schema.Doc("Whether this is the default route for routing"), schema.Indexed)
 	sb.String("host", "dev.miren.ingress/http_route.host", schema.Doc("The hostname to match on for the application"), schema.Indexed)
 	sb.Ref("oidc_provider", "dev.miren.ingress/http_route.oidc_provider", schema.Doc("Reference to an OIDC provider for authentication"), schema.Indexed)
+	sb.Ref("waf_profile", "dev.miren.ingress/http_route.waf_profile", schema.Doc("Reference to a WAF profile for request filtering"))
 }
 
 const (
@@ -250,9 +262,58 @@ func (o *OidcProvider) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("scopes", "dev.miren.ingress/oidc_provider.scopes", schema.Doc("Space-separated list of OAuth2 scopes (e.g. \"openid email profile\")"))
 }
 
+const (
+	WafProfileParanoiaLevelId = entity.Id("dev.miren.ingress/waf_profile.paranoia_level")
+)
+
+type WafProfile struct {
+	ID            entity.Id `json:"id"`
+	ParanoiaLevel int64     `cbor:"paranoia_level,omitempty" json:"paranoia_level,omitempty"`
+}
+
+func (o *WafProfile) Decode(e entity.AttrGetter) {
+	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
+	if a, ok := e.Get(WafProfileParanoiaLevelId); ok && a.Value.Kind() == entity.KindInt64 {
+		o.ParanoiaLevel = a.Value.Int64()
+	}
+}
+
+func (o *WafProfile) Is(e entity.AttrGetter) bool {
+	return entity.Is(e, KindWafProfile)
+}
+
+func (o *WafProfile) ShortKind() string {
+	return "waf_profile"
+}
+
+func (o *WafProfile) Kind() entity.Id {
+	return KindWafProfile
+}
+
+func (o *WafProfile) EntityId() entity.Id {
+	return o.ID
+}
+
+func (o *WafProfile) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.ParanoiaLevel) {
+		attrs = append(attrs, entity.Int64(WafProfileParanoiaLevelId, o.ParanoiaLevel))
+	}
+	attrs = append(attrs, entity.Ref(entity.EntityKind, KindWafProfile))
+	return
+}
+
+func (o *WafProfile) Empty() bool {
+	return entity.Empty(o.ParanoiaLevel)
+}
+
+func (o *WafProfile) InitSchema(sb *schema.SchemaBuilder) {
+	sb.Int64("paranoia_level", "dev.miren.ingress/waf_profile.paranoia_level", schema.Doc("OWASP CRS paranoia level (1-4)"))
+}
+
 var (
 	KindHttpRoute    = entity.Id("dev.miren.ingress/kind.http_route")
 	KindOidcProvider = entity.Id("dev.miren.ingress/kind.oidc_provider")
+	KindWafProfile   = entity.Id("dev.miren.ingress/kind.waf_profile")
 	Schema           = entity.Id("dev.miren.ingress/schema.v1alpha")
 )
 
@@ -260,6 +321,7 @@ func init() {
 	schema.Register("dev.miren.ingress", "v1alpha", func(sb *schema.SchemaBuilder) {
 		(&HttpRoute{}).InitSchema(sb)
 		(&OidcProvider{}).InitSchema(sb)
+		(&WafProfile{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.ingress", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\x94\x94\xdbN\x840\x10\x86_\xc4DM\x8c\xc6\x13\xc6'\"]f\x80q{\xb2\xed\x92\xdd[\x13_\xc4\xd3\x1b\xea\xb5a\x80\xb0\x05\x04\xbc\xd9\f\xed\xcc\xf7\xf7\xef\xce\xf4\x03\xb4P\xf8\fX%\x8a\x1c\xea\x84t\xe1\xd0{ܒ\x06\xff\xb6?\x1f\xed<\xd4;I\x19\x82M\x9d\xd9\x05\xfcb\xc2\xfed\x9c\xd8\xe74\xb4\x9f\x1c\x8c\x12\xa4\xc7jyN(\xc1\xbf\xbeo\b\xf6gs\xa4DX˂Y\x1d\x84\x83\xc5\r\xc1g]v;[\x96IA*U\xc2Z҅\a%\xf4\xe1\x9b9z\xb0S#)3\xca\x1a\x8d:\xf4Qks\xac\x92\xfc\xa9\xb2\xd2\xf5\v\xbb\xbe\x1c\x1f?\xa65p>\x056a}\xd4\xdc\aG\xba`\xc4\xd5\"\xa2D\x01蘑\xb7\xf1\x11\xa4\xa8\xd0y2\xba\xa8\x1e\x85\xb4\xa5\x90֑\x12\xee\x90\xd6>\x14\xa3:\x12\xeb]\xcc\xde8`.v2\xb0X\xd1}\xd4j\xb01F2`\xa2\xb9\x8e\x00\xa5\xf1M5p4t{3[l\b\xb2\xd4:SQgX\xc5Km\xeb\xccz~\xea\x81Sfy\x10\"j\xdb$\xa7\xe3\xdc(\xed_\xe3p\xbd\x00K2I\xa8CJ\xc0\xe2\xd4\x7f\x0eo\xec~%\xc9c氹z\x15/\r\x89\x13\x97\x12\x13\xf9\xef\xeb\x7f\x86\xf5wK\xf5]\x90\xee\x9cd\x84\x8cV\x86\xbc\x89!\x8ay>3\x16}3\x00m\xbcz\x00\"\xd20u\xebK\xe3Bڼ\x9a\xc7}\xb3\xfc\x80\xc6\xe0u\x8d\xf6\v\x00\x00\xff\xff\x01\x00\x00\xff\xff+\xdeU\"\xb7\x05\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.ingress", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\x8c\x95\xdb\xf2\xd3 \x10\xc6_D\xc7\xc38\x9e\x8d\xe3\x13ehX\x92\xb5\x9c\x04\x1a\xdbK\x9d\xd1\x17\xf9\xabo\xa8\xd7\x0eK:\t$\xa5\xb9\xe9la\xf7\xb7|\xf0A~q\xcd\x14|\xe106\n\x1d\xe8\x06u\xef\xc0{8\xa2\xe6\xfe\xe1\xfcl5\xf31\xce4C\b\xb6u\xe6\x14\xe0\x0f\x11Ώ։sN\xa2\xfd\x13\xdc(\x86z\xddM\b\x04\xc9\xfdχ\x03\xf2\xf3\xd3\x1a\xa9a\xd6R\xc3.\x06\xe1b\xe1\x80\xfcw,{W-\xeb$C\xd5*f-\xea\xdes\xc5\xf4\xe5/qt1\x13\x91\xd8\x19e\x8d\x06\x1d\xe6h\x92\xb9\xee\xd2\xdc\xec\xb2S\xf5wR\xfdr\xbd\xfc\x9c\x96\xe0\xb4\nHa\\\xaa\xf0\xc1\xa1\xee\t\xf1\xea.b\x00\xc6\xc1\x11CL\xf1\x02ҏ\xe0<\x1aݏ\x9f\x98\xb4\x03\x93֡b\xee\xd2F\x1d\x8aPW\x12\xf5{Q\xddq\x0e\x82\x9dd\xa0f\xfd\xf5O\xec\xc6\x0f\xc6H\x02l\x98k\x01\x18\x8cO՜\xa2R\xed\xdbj\xb1A\u07b5֙\x11\xaf\x82U>4Y\x87P\xaf\xab\xa8\xafL\xc42\x81\x12\bt\\\x0eL\x98\xea\xd6}\x9ea\xe7\xe77\xeeӂ99\xed\xf1:s\x91\xb4\xd3[\xdfH\xdf\xfb*\xaa\xb1\xcc1m\x90\xb5\x12F\x90\xe9V\x14cQf\x87:Tu.7f\xcb\x1c$4;\x85I\xea\x93un\x96\xb6S\xec\x0f\x12\xfb\xe6\x0e\xac\xe9$\x82\x0e-rj\x8e\xf3\xdf\xd2a\x1fv\x92<t\x0e\x92UU>T\x1276%'\x92\xdd矲~\xe3 \xf3\xfakО\\:H\x99\x8d\x94\xbc\x8dG'\xe7\xf9\xceX\xf0\xe9\xc1\x98\xe2\xdd\x0fFF*S\x8f~0.\xb4\xe9+\xb3\xbc \xf7?8\x99\xcdvܧ|!\xfb\x8c\xf9\x1f\x00\x00\xff\xff\x01\x00\x00\xff\xff\xe5\x12\x94\f\x17\a\x00\x00"))
 }

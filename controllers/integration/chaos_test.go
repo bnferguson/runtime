@@ -129,8 +129,8 @@ func (r *chaosReport) emit(t *testing.T) {
 	fmt.Fprintf(&b, "Sandboxes spawned mid-test: %d\n", r.sandboxSpawns)
 
 	b.WriteString("\n── Fault Injection ─────────────────────────────\n")
-	b.WriteString(fmt.Sprintf("  %-25s %8s %8s %7s\n", "Fault", "Attempts", "Injected", "Rate"))
-	b.WriteString(fmt.Sprintf("  %-25s %8s %8s %7s\n", "─────", "────────", "────────", "────"))
+	fmt.Fprintf(&b, "  %-25s %8s %8s %7s\n", "Fault", "Attempts", "Injected", "Rate")
+	fmt.Fprintf(&b, "  %-25s %8s %8s %7s\n", "─────", "────────", "────────", "────")
 
 	// Sort fault names for deterministic output
 	var names []string

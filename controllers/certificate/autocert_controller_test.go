@@ -86,6 +86,7 @@ func TestAutocertController_GetCertificate_FallbackForUnknownHost(t *testing.T) 
 	}
 	if cert == nil {
 		t.Fatal("expected a fallback certificate, got nil")
+		return
 	}
 	if len(cert.Certificate) == 0 {
 		t.Error("expected fallback cert to have certificate data")

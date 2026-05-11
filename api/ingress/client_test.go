@@ -234,6 +234,96 @@ func TestExtractSubdomainLabel(t *testing.T) {
 	}
 }
 
+func TestWAFProfile(t *testing.T) {
+	ctx := context.Background()
+
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	ec := entityserver.NewClient(slog.Default(), inmem.EAC)
+	client := &Client{
+		log: slog.Default(),
+		ec:  ec,
+		eac: inmem.EAC,
+	}
+
+	testAppID := entity.Id("test-app-waf")
+
+	t.Run("CreateAndGet", func(t *testing.T) {
+		profile, err := client.CreateWAFProfile(ctx, 2)
+		require.NoError(t, err)
+		require.Equal(t, int64(2), profile.ParanoiaLevel)
+
+		got, err := client.GetWAFProfileByID(ctx, profile.ID)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		require.Equal(t, int64(2), got.ParanoiaLevel)
+	})
+
+	t.Run("InvalidLevels", func(t *testing.T) {
+		_, err := client.CreateWAFProfile(ctx, 0)
+		require.Error(t, err)
+
+		_, err = client.CreateWAFProfile(ctx, 5)
+		require.Error(t, err)
+	})
+
+	t.Run("SetRouteWAFLevel", func(t *testing.T) {
+		_, err := client.SetRoute(ctx, "waf.example.com", testAppID)
+		require.NoError(t, err)
+
+		route, err := client.SetRouteWAFLevel(ctx, "waf.example.com", 2)
+		require.NoError(t, err)
+		require.False(t, entity.Empty(route.WafProfile))
+
+		profile, err := client.GetWAFProfileByID(ctx, route.WafProfile)
+		require.NoError(t, err)
+		require.Equal(t, int64(2), profile.ParanoiaLevel)
+	})
+
+	t.Run("DetachWAFProfile", func(t *testing.T) {
+		route, err := client.DetachWAFProfile(ctx, "waf.example.com")
+		require.NoError(t, err)
+		require.True(t, entity.Empty(route.WafProfile))
+
+		looked, err := client.Lookup(ctx, "waf.example.com")
+		require.NoError(t, err)
+		require.True(t, entity.Empty(looked.WafProfile))
+	})
+
+	t.Run("NonExistentRoute", func(t *testing.T) {
+		_, err := client.SetRouteWAFLevel(ctx, "nonexistent.example.com", 1)
+		require.Error(t, err)
+	})
+
+	t.Run("SetOnRoute", func(t *testing.T) {
+		_, err := client.SetRoute(ctx, "waf2.example.com", testAppID)
+		require.NoError(t, err)
+
+		route, err := client.Lookup(ctx, "waf2.example.com")
+		require.NoError(t, err)
+
+		updated, err := client.SetRouteWAFLevelOnRoute(ctx, route, 3)
+		require.NoError(t, err)
+		require.False(t, entity.Empty(updated.WafProfile))
+
+		profile, err := client.GetWAFProfileByID(ctx, updated.WafProfile)
+		require.NoError(t, err)
+		require.Equal(t, int64(3), profile.ParanoiaLevel)
+	})
+
+	t.Run("AllParanoiaLevels", func(t *testing.T) {
+		for _, level := range []int{1, 2, 3, 4} {
+			route, err := client.SetRouteWAFLevel(ctx, "waf.example.com", level)
+			require.NoError(t, err)
+
+			profile, err := client.GetWAFProfileByID(ctx, route.WafProfile)
+			require.NoError(t, err)
+			require.Equal(t, int64(level), profile.ParanoiaLevel)
+		}
+	})
+}
+
 func TestValidateWildcardHost(t *testing.T) {
 	tests := []struct {
 		host    string

@@ -218,12 +218,12 @@ func validateRequiredVars(spec core_v1alpha.ConfigSpec) error {
 	b.WriteString("missing required environment variables:\n")
 	for _, m := range missing {
 		if m.service != "" {
-			b.WriteString(fmt.Sprintf("  - %s (service: %s)", m.key, m.service))
+			fmt.Fprintf(&b, "  - %s (service: %s)", m.key, m.service)
 		} else {
-			b.WriteString(fmt.Sprintf("  - %s", m.key))
+			fmt.Fprintf(&b, "  - %s", m.key)
 		}
 		if m.description != "" {
-			b.WriteString(fmt.Sprintf(": %s", m.description))
+			fmt.Fprintf(&b, ": %s", m.description)
 		}
 		b.WriteString("\n")
 	}

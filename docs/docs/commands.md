@@ -184,6 +184,7 @@ Complete reference for all `miren` CLI commands.
 | [`miren route show`](/command/route-show) | Show details of an HTTP route |
 | [`miren route unprotect`](/command/route-unprotect) | Remove identity-provider protection from an HTTP route _(`routeoidc`)_ |
 | [`miren route unset-default`](/command/route-unset-default) | Remove the default route |
+| [`miren route waf`](/command/route-waf) | Manage WAF protection on an HTTP route |
 
 ## runner
 

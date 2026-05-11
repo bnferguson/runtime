@@ -747,7 +747,7 @@ func renderPretty(v interface{}) string {
 		} else {
 			// Render as list
 			for i, item := range val {
-				sb.WriteString(fmt.Sprintf("%d. ", i+1))
+				fmt.Fprintf(&sb, "%d. ", i+1)
 				sb.WriteString(renderPrettyValue(item))
 				sb.WriteString("\n")
 			}

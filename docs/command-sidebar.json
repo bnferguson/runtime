@@ -260,7 +260,8 @@
       "command/route-set-default",
       "command/route-show",
       "command/route-unprotect",
-      "command/route-unset-default"
+      "command/route-unset-default",
+      "command/route-waf"
     ]
   },
   {
