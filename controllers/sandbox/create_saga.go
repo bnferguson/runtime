@@ -266,7 +266,7 @@ func undoBootTask(ctx context.Context, in bootTaskIn, _ bootTaskOut) error {
 		return nil
 	}
 
-	task, err := container.Task(ctx, nil)
+	task, err := container.Task(ctx, cleanupAttach())
 	if err != nil {
 		log.Debug("saga undo: task not found", "id", in.ContainerID)
 		return nil

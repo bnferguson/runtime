@@ -52,6 +52,14 @@ const (
 
 var sandboxImage = imagerefs.Pause
 
+// cleanupAttach is the cio.Attach to pass to container.Task when we're
+// retrieving a task purely to delete it. The non-nil attach makes containerd
+// populate t.io with a FIFO closer that removes /run/containerd/fifo/<n>;
+// passing nil leaves t.io nil and task.Delete silently leaks the directory.
+func cleanupAttach() cio.Attach {
+	return cio.NewAttach()
+}
+
 type containerPorts struct {
 	Ports []observability.BoundPort
 }
@@ -1643,8 +1651,7 @@ func (c *SandboxController) CleanupContainer(ctx context.Context, cont container
 		c.portMonitor.StopMonitoring(containerID)
 	}
 
-	// Try to kill and delete any task first
-	task, err := cont.Task(ctx, nil)
+	task, err := cont.Task(ctx, cleanupAttach())
 	if err == nil && task != nil {
 		task.Kill(ctx, unix.SIGKILL)
 		_, err = task.Delete(ctx, containerd.WithProcessKill)
@@ -2211,7 +2218,7 @@ func (c *SandboxController) DestroySubContainers(ctx context.Context, id entity.
 
 	for i := range containers {
 		info := &containers[i]
-		task, err := info.container.Task(ctx, nil)
+		task, err := info.container.Task(ctx, cleanupAttach())
 		if err != nil {
 			c.Log.Debug("no task found for container", "id", info.id)
 			continue
@@ -2431,7 +2438,7 @@ func (c *SandboxController) StopSandbox(ctx context.Context, id entity.Id) error
 	// Delete pause container
 	c.Log.Debug("deleting pause container", "id", id)
 	if container != nil {
-		task, err := container.Task(ctx, nil)
+		task, err := container.Task(ctx, cleanupAttach())
 		if err != nil {
 			if !errdefs.IsNotFound(err) {
 				c.Log.Error("failed to get pause task", "id", id, "err", err)

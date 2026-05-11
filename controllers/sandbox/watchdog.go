@@ -284,7 +284,7 @@ func (w *ContainerWatchdog) removeContainer(ctx context.Context, container conta
 	containerID := container.ID()
 
 	// Try to delete any task first
-	task, err := container.Task(ctx, nil)
+	task, err := container.Task(ctx, cleanupAttach())
 	if err == nil && task != nil {
 		// Try to delete the task (it should already be dead from SIGQUIT/SIGKILL)
 		_, delErr := task.Delete(ctx, containerd.WithProcessKill)
