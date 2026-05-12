@@ -874,13 +874,20 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		if addr == "" {
 			addr = "127.0.0.1:80"
 		}
-		go func() {
+		httpSrv := &http.Server{Addr: addr, Handler: hs}
+		eg.Go(func() error {
 			ctx.Log.Info("starting HTTP server", "addr", addr)
-			err := http.ListenAndServe(addr, hs)
-			if err != nil {
-				ctx.Log.Error("failed to start HTTP server", "addr", addr, "error", err)
+			if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				return fmt.Errorf("failed to start HTTP server on %s: %w", addr, err)
 			}
-		}()
+			return nil
+		})
+		eg.Go(func() error {
+			<-sub.Done()
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			return httpSrv.Shutdown(shutdownCtx)
+		})
 
 	default:
 		return fmt.Errorf("unrecognized ingress.mode %q (should have been caught by config validation)", mode)

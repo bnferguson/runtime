@@ -47,7 +47,8 @@ http_request_timeout = 60
 mode = "tls-autoprovision"
 
 # Optional bind override (full host:port). Replaces the mode's default bind
-# entirely. Ignored under tls-autoprovision.
+# entirely. Rejected by validation under tls-autoprovision, where the
+# :443 + :80 pair is structural for HTTP-01 ACME.
 # Example: address = "0.0.0.0:80"
 # address = ""
 

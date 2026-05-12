@@ -22,8 +22,8 @@ type CLIFlags struct {
 	EtcdConfigPeerPort                   *int     `long:"etcd-peer-port" description:"Etcd peer port"`
 	EtcdConfigPrefix                     *string  `long:"etcd-prefix" short:"p" description:"Etcd prefix"`
 	EtcdConfigStartEmbedded              *bool    `long:"start-etcd" description:"Start embedded etcd server"`
-	IngressConfigAddress                 *string  `long:"ingress-address" description:"Optional bind override. Replaces the mode's default bind entirely (interface and port). Ignored for tls-autoprovision. Reserved unix:/path prefix is not yet supported."`
-	IngressConfigMode                    *string  `long:"ingress-mode" description:"Ingress mode: tls-autoprovision (default, :443 + :80 with ACME or self-signed), behind-proxy-http (plain HTTP for use behind a TLS-terminating proxy), behind-proxy-https (TLS terminated by Miren with externally-provided certs, no ACME provisioning)"`
+	IngressConfigAddress                 *string  `long:"ingress-address" description:"Optional bind override. Replaces the mode's default bind entirely (interface and port). Rejected by validation in tls-autoprovision (where :443 + :80 is structural). Reserved unix:/path prefix is not yet supported."`
+	IngressConfigMode                    *string  `long:"ingress-mode" description:"Ingress mode: tls-autoprovision (default, :443 + :80 with ACME or self-signed), behind-proxy-http (plain HTTP for use behind a TLS-terminating proxy), behind-proxy-https (TLS terminated by Miren; certs come from self-signed or DNS-01 ACME, since :80 isn't bound for HTTP-01)"`
 	ServerConfigAddress                  *string  `long:"address" short:"a" description:"Address to listen on (host:port). For IPv6 use brackets, e.g. \"[::1]:8443\"."`
 	ServerConfigConfigClusterName        *string  `long:"config-cluster-name" short:"C" description:"Name of the cluster in client config"`
 	ServerConfigDataPath                 *string  `long:"data-path" short:"d" description:"Data path"`
