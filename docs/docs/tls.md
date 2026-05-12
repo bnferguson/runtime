@@ -109,15 +109,29 @@ AWS_REGION=us-east-1
 
 See the [lego DNS provider documentation](https://go-acme.github.io/lego/dns/) for the full list of supported providers and their required environment variables.
 
-## Server Configuration Reference
+## Ingress Modes and TLS
 
-All TLS settings live under the `[tls]` section of the server config file (typically `/var/lib/miren/server/config.toml`):
+Whether Miren terminates TLS at all (and on which ports) is set by `ingress.mode`. The default `tls-autoprovision` mode is what this page has been describing: TLS on `:443`, plus `:80` for the HTTPS redirect and HTTP-01 ACME challenges.
+
+Two other modes are available for deployments where Miren sits behind a TLS-terminating proxy (nginx, Caddy, Cloudflare Tunnel, ALB):
+
+| Mode | What Miren does | Cert source |
+|------|-----------------|-------------|
+| `tls-autoprovision` (default) | Binds `:443` for TLS and `:80` for redirect / HTTP-01 ACME | `[tls]` (ACME or self-signed) |
+| `behind-proxy-http` | Plain HTTP at the configured address (default `127.0.0.1:80`); TLS lives at the proxy | n/a — `[tls]` is unused |
+| `behind-proxy-https` | TLS terminated at the configured address (default `127.0.0.1:443`); no `:80` listener, so no HTTP-01 ACME | `[tls]` self-signed or DNS-01 ACME only |
+
+See [Server Configuration Reference → `[ingress]`](/server-config#ingress) for the full schema. The HTTP-01 ACME flow described above only applies under `tls-autoprovision`; under `behind-proxy-https`, certs must come from DNS-01 ACME or be self-signed because Miren doesn't bind `:80` in that mode (and the public DNS for the hostname points at the proxy anyway, not at Miren).
+
+## TLS Settings Reference
+
+All TLS settings live under the `[tls]` section of the server config file (typically `/var/lib/miren/server/config.toml`). Consulted only under TLS-terminating ingress modes:
 
 | Setting | CLI Flag | Description |
 |---------|----------|-------------|
 | `acme_email` | `--acme-email` | Email for Let's Encrypt account registration and expiry notifications |
 | `acme_dns_provider` | `--acme-dns-provider` | DNS provider name for DNS-01 challenges (e.g., `cloudflare`, `route53`, `dnsimple`) |
-| `standard_tls` | `--serve-tls` | Enable TLS on ports 443/80 (default: `true`) |
+| `self_signed` | `--self-signed-tls` | Use a self-signed cert instead of ACME (development, or behind a non-verifying TLS proxy) |
 
 ## Troubleshooting
 

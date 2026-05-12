@@ -437,7 +437,8 @@ func ServerInstall(ctx *Context, opts struct {
 			execStartParts = append(execStartParts, fmt.Sprintf("--address=%s", opts.Address))
 		}
 
-		execStartParts = append(execStartParts, "--serve-tls")
+		// Ingress mode defaults to tls-autoprovision; no flag needed to opt into
+		// the standard :443 + :80 TLS setup that systemd-installed servers want.
 
 		execStart := strings.Join(execStartParts, " ")
 
@@ -767,8 +768,9 @@ func waitForSystemdServerReady(ctx *Context, serverAddress string) error {
 	maxRetries := 30
 	retryDelay := 2 * time.Second
 
-	// Parse the server address to build the health URL
-	// Server install always uses --serve-tls so it's always HTTPS
+	// Parse the server address to build the health URL.
+	// Systemd-installed servers run in the default tls-autoprovision mode, so
+	// the API is always served over HTTPS.
 	host, port, err := net.SplitHostPort(serverAddress)
 	if err != nil {
 		// No port specified, use default

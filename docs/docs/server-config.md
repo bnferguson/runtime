@@ -39,8 +39,10 @@ data_path = "/var/lib/miren"
 network_backend = "vxlan"
 http_request_timeout = 60
 
+[ingress]
+mode = "tls-autoprovision"
+
 [tls]
-standard_tls = true
 acme_email = "admin@example.com"
 
 [etcd]
@@ -84,18 +86,38 @@ In standalone mode, embedded services start automatically unless explicitly disa
 | `stop_sandboxes_on_shutdown` | bool | `false` | Stop all sandboxes when server shuts down (useful in development) | `MIREN_SERVER_STOP_SANDBOXES_ON_SHUTDOWN` | `--stop-sandboxes-on-shutdown` |
 | `network_backend` | string | `vxlan` | Network backend: `vxlan` or `wireguard` | `MIREN_SERVER_NETWORK_BACKEND` | `--network-backend` |
 
+## `[ingress]` — Ingress Settings {#ingress}
+
+Selects the deployment shape for Miren's HTTP/HTTPS ingress. The mode determines where Miren listens and whether it terminates TLS. See [TLS](/tls) for cert sourcing under each mode.
+
+| Field | Type | Default | Description | Env Var | CLI Flag |
+|-------|------|---------|-------------|---------|----------|
+| `mode` | string | `tls-autoprovision` | Ingress mode: `tls-autoprovision`, `behind-proxy-http`, or `behind-proxy-https` | `MIREN_INGRESS_MODE` | `--ingress-mode` |
+| `address` | string | — | Optional bind override (full `host:port`). Replaces the mode's default bind entirely. Ignored under `tls-autoprovision`. | `MIREN_INGRESS_ADDRESS` | `--ingress-address` |
+
+### Modes
+
+| Mode | Default bind | TLS terminated | Cert source |
+|------|--------------|----------------|-------------|
+| `tls-autoprovision` (default) | `0.0.0.0:443` plus `:80` for redirect / HTTP-01 ACME | yes | `[tls]` (ACME or self-signed) |
+| `behind-proxy-http` | `127.0.0.1:80` | no | n/a |
+| `behind-proxy-https` | `127.0.0.1:443` | yes | `[tls]` (self-signed or DNS-01 ACME) |
+
+The `behind-proxy-*` modes default to localhost to keep accidental misconfigurations from quietly exposing an internal endpoint to the network. Set `ingress.address = "0.0.0.0:80"` (or similar) explicitly when the proxy is on a different host.
+
+`unix:/path` is reserved for a future release and rejected today with a clear error.
+
 ## `[tls]` — TLS Settings {#tls}
 
-Controls TLS certificates for the server and HTTP ingress. See [TLS](/tls) for setup guides.
+Controls cert sourcing for ingress modes that terminate TLS (`tls-autoprovision` and `behind-proxy-https`). Ignored under `behind-proxy-http`; populating these fields under that mode is an error. See [TLS](/tls) for setup guides.
 
 | Field | Type | Default | Description | Env Var | CLI Flag |
 |-------|------|---------|-------------|---------|----------|
 | `additional_names` | string[] | `[]` | Extra DNS names for the server certificate | `MIREN_TLS_ADDITIONAL_NAMES` | `--dns-names` |
 | `additional_ips` | string[] | `[]` | Extra IPs for the server certificate | `MIREN_TLS_ADDITIONAL_IPS` | `--ips` |
-| `standard_tls` | bool | `true` | Expose HTTP ingress on standard TLS ports (443) | `MIREN_TLS_STANDARD_TLS` | `--serve-tls` |
-| `acme_dns_provider` | string | — | DNS provider for ACME DNS-01 challenges (e.g. `cloudflare`, `route53`) | `MIREN_TLS_ACME_DNS_PROVIDER` | `--acme-dns-provider` |
+| `acme_dns_provider` | string | — | DNS provider for ACME DNS-01 challenges (e.g. `cloudflare`, `route53`). Required under `behind-proxy-https` if not using `self_signed`. | `MIREN_TLS_ACME_DNS_PROVIDER` | `--acme-dns-provider` |
 | `acme_email` | string | — | Email for ACME account registration | `MIREN_TLS_ACME_EMAIL` | `--acme-email` |
-| `self_signed` | bool | `false` | Use self-signed certificates (development only) | `MIREN_TLS_SELF_SIGNED` | `--self-signed-tls` |
+| `self_signed` | bool | `false` | Use self-signed certificates (development only, or behind a TLS-terminating proxy that doesn't verify) | `MIREN_TLS_SELF_SIGNED` | `--self-signed-tls` |
 
 ## `[etcd]` — Etcd Settings {#etcd}
 

@@ -67,6 +67,10 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	if err != nil {
 		return fmt.Errorf("failed to load configuration: %w", err)
 	}
+	if err := cfg.ValidateIngressCoherence(); err != nil {
+		return fmt.Errorf("configuration validation failed: %w", err)
+	}
+	cfg.WarnDeprecatedConfig(ctx.Log)
 
 	// Initialize Miren Labs feature flags
 	labs.Init(ctx.Log, cfg.Labs)
@@ -825,9 +829,9 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		}
 	}()
 
-	if cfg.TLS.GetStandardTLS() {
+	switch mode := cfg.Ingress.GetMode(); mode {
+	case serverconfig.IngressModeAutoprovision:
 		if cfg.TLS.GetSelfSigned() {
-			// Use self-signed certificate (for development/testing)
 			if err := autotls.ServeTLSSelfSigned(sub, ctx.Log, hs); err != nil {
 				ctx.Log.Error("failed to enable self-signed TLS", "error", err)
 				return err
@@ -845,13 +849,49 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 				readyFn()
 			}
 		}
-	} else {
-		go func() {
-			err := http.ListenAndServe(":80", hs)
-			if err != nil {
-				ctx.Log.Error("failed to start HTTP server", "error", err)
+
+	case serverconfig.IngressModeBehindProxyHTTPS:
+		addr := cfg.Ingress.GetAddress()
+		if addr == "" {
+			addr = "127.0.0.1:443"
+		}
+		if cfg.TLS.GetSelfSigned() {
+			if err := autotls.ServeTLSSelfSignedOnAddr(sub, ctx.Log, hs, addr); err != nil {
+				ctx.Log.Error("failed to enable self-signed TLS on custom address", "error", err)
+				return err
 			}
-		}()
+		} else {
+			certProvider := co.CertificateProvider()
+			if certProvider == nil {
+				return fmt.Errorf("no certificate provider available")
+			}
+			if err := autotls.ServeTLSWithControllerOnAddr(sub, ctx.Log, certProvider, hs, addr); err != nil {
+				return err
+			}
+		}
+
+	case serverconfig.IngressModeBehindProxyHTTP:
+		addr := cfg.Ingress.GetAddress()
+		if addr == "" {
+			addr = "127.0.0.1:80"
+		}
+		httpSrv := &http.Server{Addr: addr, Handler: hs}
+		eg.Go(func() error {
+			ctx.Log.Info("starting HTTP server", "addr", addr)
+			if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				return fmt.Errorf("failed to start HTTP server on %s: %w", addr, err)
+			}
+			return nil
+		})
+		eg.Go(func() error {
+			<-sub.Done()
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			return httpSrv.Shutdown(shutdownCtx)
+		})
+
+	default:
+		return fmt.Errorf("unrecognized ingress.mode %q (should have been caught by config validation)", mode)
 	}
 
 	registry := ocireg.NewRegistry(cfg.Server.GetDataPath(), ctx.Log, ec)

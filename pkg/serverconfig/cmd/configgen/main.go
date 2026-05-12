@@ -50,6 +50,7 @@ type CLIConfig struct {
 	Long        string `yaml:"long"`
 	Short       string `yaml:"short"`
 	Description string `yaml:"description"`
+	Hidden      bool   `yaml:"hidden"`
 }
 
 // Validation represents field validation rules
@@ -445,7 +446,7 @@ type CLIFlags struct {
 	{{- range $cname, $config := .Configs}}
 	{{- range $fname, $field := $config.Fields}}
 	{{- if $field.CLI}}
-	{{if eq $cname "Config"}}{{$fname | title}}{{else}}{{$cname}}{{$fname | title}}{{end}} {{goType $field.Type}} ` + "`" + `{{if $field.CLI.Long}}long:"{{$field.CLI.Long}}"{{end}}{{if $field.CLI.Short}} short:"{{$field.CLI.Short}}"{{end}}{{if $field.CLI.Description}} description:"{{$field.CLI.Description | escapeTag}}"{{end}}` + "`" + `
+	{{if eq $cname "Config"}}{{$fname | title}}{{else}}{{$cname}}{{$fname | title}}{{end}} {{goType $field.Type}} ` + "`" + `{{if $field.CLI.Long}}long:"{{$field.CLI.Long}}"{{end}}{{if $field.CLI.Short}} short:"{{$field.CLI.Short}}"{{end}}{{if $field.CLI.Description}} description:"{{$field.CLI.Description | escapeTag}}"{{end}}{{if $field.CLI.Hidden}} hidden:"yes"{{end}}` + "`" + `
 	{{- end}}
 	{{- end}}
 	{{- end}}

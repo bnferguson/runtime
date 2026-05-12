@@ -13,6 +13,7 @@ func DefaultConfig() *Config {
 		Buildkit:        DefaultBuildkitConfig(),
 		Containerd:      DefaultContainerdConfig(),
 		Etcd:            DefaultEtcdConfig(),
+		Ingress:         DefaultIngressConfig(),
 		Labs:            []string{},
 		Mode:            strPtr("standalone"),
 		Server:          DefaultServerConfig(),
@@ -54,6 +55,14 @@ func DefaultEtcdConfig() EtcdConfig {
 	}
 }
 
+// DefaultIngressConfig returns default IngressConfig
+func DefaultIngressConfig() IngressConfig {
+	return IngressConfig{
+		Address: strPtr(""),
+		Mode:    strPtr("tls-autoprovision"),
+	}
+}
+
 // DefaultServerConfig returns default ServerConfig
 func DefaultServerConfig() ServerConfig {
 	return ServerConfig{
@@ -79,7 +88,7 @@ func DefaultTLSConfig() TLSConfig {
 		AdditionalIPs:   []string{},
 		AdditionalNames: []string{},
 		SelfSigned:      boolPtr(false),
-		StandardTLS:     boolPtr(true),
+		StandardTLS:     nil,
 	}
 }
 
