@@ -36,8 +36,8 @@ miren server [flags]
 - `--etcd-peer-port` — Etcd peer port
 - `--etcd-prefix, -p` — Etcd prefix
 - `--http-request-timeout` — HTTP request timeout in seconds
-- `--ingress-address` — Optional bind override. Replaces the mode's default bind entirely (interface and port). Ignored for tls-autoprovision. Reserved unix:/path prefix is not yet supported.
-- `--ingress-mode` — Ingress mode: tls-autoprovision (default, :443 + :80 with ACME or self-signed), behind-proxy-http (plain HTTP for use behind a TLS-terminating proxy), behind-proxy-https (TLS terminated by Miren with externally-provided certs, no ACME provisioning)
+- `--ingress-address` — Optional bind override. Replaces the mode's default bind entirely (interface and port). Rejected by validation in tls-autoprovision (where :443 + :80 is structural). Reserved unix:/path prefix is not yet supported.
+- `--ingress-mode` — Ingress mode: tls-autoprovision (default, :443 + :80 with ACME or self-signed), behind-proxy-http (plain HTTP for use behind a TLS-terminating proxy), behind-proxy-https (TLS terminated by Miren; certs come from self-signed or DNS-01 ACME, since :80 isn't bound for HTTP-01)
 - `--ips` — Additional IPs assigned to the server cert
 - `--labs` — Comma-separated list of Miren Labs features to enable/disable. Prefix with - to disable.
 - `--mode, -m` — Server mode: standalone (default), distributed (experimental)
