@@ -329,11 +329,11 @@ miren deploy --analyze
 		WithDescription(sandboxExecDescription),
 		WithExample(mflags.Example{
 			Name: "Open a shell in a running sandbox",
-			Body: "miren sandbox exec --id sb_abc123",
+			Body: "miren sandbox exec sb_abc123",
 		}),
 		WithExample(mflags.Example{
 			Name: "Run a command in a sandbox",
-			Body: "miren sandbox exec --id sb_abc123 -- ls -la /app",
+			Body: "miren sandbox exec sb_abc123 -- ls -la /app",
 		}),
 	))
 

@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"os/signal"
@@ -14,10 +15,19 @@ import (
 
 func SandboxExec(ctx *Context, opts struct {
 	ConfigCentric
-	Id string `short:"i" long:"id" description:"Sandbox ID" default:"miren-sandbox"`
+	Id string `short:"i" long:"id" description:"Sandbox ID"`
 
 	Args []string `rest:"true"`
 }) error {
+	id := opts.Id
+	args := opts.Args
+	if id == "" {
+		if len(args) == 0 {
+			return fmt.Errorf("sandbox ID is required (pass as first positional arg or via --id)")
+		}
+		id, args = args[0], args[1:]
+	}
+
 	cl, err := ctx.RPCClient("dev.miren.runtime/exec")
 	if err != nil {
 		return err
@@ -35,7 +45,7 @@ func SandboxExec(ctx *Context, opts struct {
 		out io.Writer
 	)
 
-	opt.SetCommand(opts.Args)
+	opt.SetCommand(args)
 
 	// Set up interactive console if available, otherwise use standard streams
 	if con, err := console.ConsoleFromFile(os.Stdin); err == nil {
@@ -86,8 +96,8 @@ func SandboxExec(ctx *Context, opts struct {
 
 	res, err := sec.Exec(
 		ctx,
-		"id", opts.Id,
-		strings.Join(opts.Args, " "),
+		"id", id,
+		strings.Join(args, " "),
 		opt,
 		input, output,
 		winUS,
