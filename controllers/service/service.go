@@ -286,29 +286,45 @@ func (s *ServiceController) addServiceChain(tx *knftables.Transaction, ip netip.
 	})
 }
 
-// setEndpoints fills in the body of a service-IP or nodeport chain: counter,
-// per-prefix mark-for-masq jumps, and a numgen-random vmap that load-balances
-// across the endpoint chains. Skips the flush+rebuild when the endpoint set
-// hasn't changed from the cache, which avoids resetting the named counter and
-// reduces unnecessary kernel transactions on the periodic resync.
+// setEndpoints fills in the body of a service-IP or nodeport chain. Skips the
+// flush+rebuild when the endpoint set hasn't changed from the cache to avoid
+// resetting the named counter on each event-driven reconcile. For the
+// unconditional-rebuild path used by Periodic, see writeChainBody.
 func (s *ServiceController) setEndpoints(tx *knftables.Transaction, chain, counterName string, endpoints []string) {
-	if len(endpoints) == 0 {
-		return
-	}
-
-	slices.Sort(endpoints)
+	sorted := append([]string(nil), endpoints...)
+	slices.Sort(sorted)
 
 	s.mu.Lock()
 	cur, ok := s.chainEndpoints[chain]
-	if ok && slices.Equal(cur, endpoints) {
+	if ok && slices.Equal(cur, sorted) {
 		s.mu.Unlock()
 		return
 	}
-	s.chainEndpoints[chain] = endpoints
+	s.chainEndpoints[chain] = sorted
 	s.mu.Unlock()
 
+	s.writeChainBody(tx, chain, counterName, sorted)
+}
+
+// writeChainBody flushes a service-IP or nodeport chain and re-emits its full
+// rule set: counter, per-prefix mark-for-masq jumps, and a numgen-random vmap
+// across endpoint chains. When endpoints is empty the chain is rebuilt with
+// just `counter + drop` so traffic to a service with no backends is dropped
+// rather than DNAT'd to a stale address. Bypasses the chainEndpoints cache;
+// callers that want the cached fast path should go through setEndpoints.
+func (s *ServiceController) writeChainBody(tx *knftables.Transaction, chain, counterName string, endpoints []string) {
 	tx.Flush(&knftables.Chain{Name: chain})
 	tx.Add(&knftables.Rule{Chain: chain, Rule: knftables.Concat("counter name", `"`+counterName+`"`)})
+
+	if len(endpoints) == 0 {
+		// `drop` rather than `reject` because the calling path includes
+		// nat-prerouting, where `reject` isn't permitted. Result is a connect
+		// timeout instead of ECONNREFUSED, but still preferable to forwarding
+		// traffic to a stale endpoint address.
+		tx.Add(&knftables.Rule{Chain: chain, Rule: "drop"})
+		return
+	}
+
 	for _, rp := range s.routablePrefixes {
 		if rp.Addr().Is4() {
 			tx.Add(&knftables.Rule{Chain: chain, Rule: knftables.Concat("ip saddr !=", rp, "counter jump", chainMarkForMasq)})
@@ -331,11 +347,9 @@ func (s *ServiceController) setEndpoints(tx *knftables.Transaction, chain, count
 // this node's NodePort to one of the service's endpoint sandbox IPs, picked
 // at random. Mirrors addServiceChain + setEndpoints but stands alone so that
 // NodePort works on every node regardless of whether the service has an
-// allocated cluster IP yet.
+// allocated cluster IP yet. When endpoints is empty, setEndpoints writes a
+// `drop` body so the NodePort gets the same fail-shut treatment as cluster IPs.
 func (s *ServiceController) addNodePort(tx *knftables.Transaction, nport int, proto string, endpoints []string) {
-	if len(endpoints) == 0 {
-		return
-	}
 	chain := s.nodeportChain(nport, proto)
 	tx.Add(&knftables.Chain{Name: chain})
 	tx.Add(&knftables.Element{

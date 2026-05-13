@@ -29,6 +29,23 @@ func nftChains(t *testing.T, ctx context.Context, sc *ServiceController) set.Set
 	return out
 }
 
+func nftRuleCount(t *testing.T, ctx context.Context, sc *ServiceController, chain string) int {
+	t.Helper()
+	rules, err := sc.nft.ListRules(ctx, chain)
+	require.NoError(t, err)
+	return len(rules)
+}
+
+func putEndpoints(t *testing.T, ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient, eps *network_v1alpha.Endpoints) {
+	t.Helper()
+	var rpcE entityserver_v1alpha.Entity
+	rpcE.SetAttrs(entity.New(
+		entity.Keyword(entity.Ident, eps.ID.String()),
+		eps.Encode).Attrs())
+	_, err := eac.Put(ctx, &rpcE)
+	require.NoError(t, err)
+}
+
 func nftMapElementKeys(t *testing.T, ctx context.Context, sc *ServiceController, mapName string) set.Set[string] {
 	t.Helper()
 	els, err := sc.nft.ListElements(ctx, "map", mapName)
@@ -217,6 +234,175 @@ func TestServicePeriodic(t *testing.T) {
 		r.NoError(sc.Periodic(ctx))
 
 		r.True(nftChains(t, ctx, sc).Contains(epChain), "endpoint chain still in use by svcB should not be pruned")
+	})
+
+	t.Run("rebuilds parent chain body to drop traffic when endpoints drop to empty", func(t *testing.T) {
+		r := require.New(t)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		testDeps, cleanup := testutils.NewTestDeps()
+		defer cleanup()
+
+		sc, err := newServiceController(testDeps)
+		r.NoError(err)
+		r.NoError(sc.Init(ctx))
+
+		const sandboxIP = "10.8.123.7"
+		const svcIP = "10.99.123.1"
+		const port = 6669
+
+		svcID := entity.Id(svcName())
+		svc := &network_v1alpha.Service{
+			ID:   svcID,
+			Ip:   []string{svcIP},
+			Port: []network_v1alpha.Port{{Name: "irc", Port: port}},
+		}
+		putService(t, ctx, testDeps.EAC, svc)
+
+		epsID := entity.Id("endpoints-" + svcID.String())
+		eps := &network_v1alpha.Endpoints{
+			ID:       epsID,
+			Service:  svcID,
+			Endpoint: []network_v1alpha.Endpoint{{Ip: sandboxIP, Port: port}},
+		}
+		putEndpoints(t, ctx, testDeps.EAC, eps)
+
+		r.NoError(sc.Create(ctx, svc, &entity.Meta{Entity: entity.New(svc.Encode), Revision: 1}))
+
+		parentChain := sc.serviceChain(netip.MustParseAddr(svcIP), port, "tcp")
+		epChain := sc.endpointChain(netip.MustParseAddr(sandboxIP), port, "tcp")
+
+		r.True(nftChains(t, ctx, sc).Contains(parentChain))
+		r.True(nftChains(t, ctx, sc).Contains(epChain))
+
+		// Drop the Endpoints entity. Pre-fix, setEndpoints({}) would early-return
+		// here on the next event, leaving the parent's vmap pointing at the
+		// now-orphan endpoint chain and the GC pass aborting with EBUSY every
+		// 5 minutes. We never fire that event in the test — we go straight to
+		// Periodic, which exercises the self-heal path.
+		_, err = testDeps.EAC.Delete(ctx, epsID.String())
+		r.NoError(err)
+
+		r.NoError(sc.Periodic(ctx))
+
+		r.True(nftChains(t, ctx, sc).Contains(parentChain), "parent chain should still exist")
+		r.False(nftChains(t, ctx, sc).Contains(epChain), "orphan endpoint chain should be deleted now that the parent no longer pins it")
+
+		// Parent body when empty: counter + drop = 2 rules.
+		r.Equal(2, nftRuleCount(t, ctx, sc, parentChain), "empty-endpoint parent should be counter + drop")
+	})
+
+	t.Run("rebuilds parent chain vmap when endpoint IP rotates", func(t *testing.T) {
+		r := require.New(t)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		testDeps, cleanup := testutils.NewTestDeps()
+		defer cleanup()
+
+		sc, err := newServiceController(testDeps)
+		r.NoError(err)
+		r.NoError(sc.Init(ctx))
+
+		const oldIP = "10.8.54.24"
+		const newIP = "10.8.29.42"
+		const svcIP = "10.99.124.1"
+		const port = 6669
+
+		svcID := entity.Id(svcName())
+		svc := &network_v1alpha.Service{
+			ID:   svcID,
+			Ip:   []string{svcIP},
+			Port: []network_v1alpha.Port{{Name: "irc", Port: port}},
+		}
+		putService(t, ctx, testDeps.EAC, svc)
+
+		oldEpsID := entity.Id("endpoints-old-" + svcID.String())
+		putEndpoints(t, ctx, testDeps.EAC, &network_v1alpha.Endpoints{
+			ID:       oldEpsID,
+			Service:  svcID,
+			Endpoint: []network_v1alpha.Endpoint{{Ip: oldIP, Port: port}},
+		})
+
+		r.NoError(sc.Create(ctx, svc, &entity.Meta{Entity: entity.New(svc.Encode), Revision: 1}))
+
+		parentChain := sc.serviceChain(netip.MustParseAddr(svcIP), port, "tcp")
+		oldEpChain := sc.endpointChain(netip.MustParseAddr(oldIP), port, "tcp")
+		newEpChain := sc.endpointChain(netip.MustParseAddr(newIP), port, "tcp")
+
+		r.True(nftChains(t, ctx, sc).Contains(oldEpChain))
+		r.False(nftChains(t, ctx, sc).Contains(newEpChain))
+
+		// Rotate the endpoint IP without firing UpdateEndpoints. Old Endpoints
+		// entity is gone (its sandbox died), new Endpoints entity took its
+		// place. Periodic should rebuild the parent vmap to the new chain and
+		// drop the orphan.
+		_, err = testDeps.EAC.Delete(ctx, oldEpsID.String())
+		r.NoError(err)
+		putEndpoints(t, ctx, testDeps.EAC, &network_v1alpha.Endpoints{
+			ID:       entity.Id("endpoints-new-" + svcID.String()),
+			Service:  svcID,
+			Endpoint: []network_v1alpha.Endpoint{{Ip: newIP, Port: port}},
+		})
+
+		r.NoError(sc.Periodic(ctx))
+
+		r.True(nftChains(t, ctx, sc).Contains(parentChain), "parent chain still exists")
+		r.True(nftChains(t, ctx, sc).Contains(newEpChain), "new endpoint chain created")
+		r.False(nftChains(t, ctx, sc).Contains(oldEpChain), "stale endpoint chain pruned")
+
+		// Non-empty parent: counter + one masq jump per routablePrefix + vmap.
+		// TestDeps installs 3 routable prefixes (subnet, 10.10.0.0/16, fd47:.../64).
+		r.Equal(5, nftRuleCount(t, ctx, sc, parentChain), "parent chain should be rebuilt to current shape")
+	})
+
+	t.Run("rebuilds parent chain when extra rules have accumulated", func(t *testing.T) {
+		r := require.New(t)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		testDeps, cleanup := testutils.NewTestDeps()
+		defer cleanup()
+
+		sc, err := newServiceController(testDeps)
+		r.NoError(err)
+		r.NoError(sc.Init(ctx))
+
+		const sandboxIP = "10.8.125.7"
+		const svcIP = "10.99.125.1"
+		const port = 6669
+
+		svcID := entity.Id(svcName())
+		svc := &network_v1alpha.Service{
+			ID:   svcID,
+			Ip:   []string{svcIP},
+			Port: []network_v1alpha.Port{{Name: "irc", Port: port}},
+		}
+		putService(t, ctx, testDeps.EAC, svc)
+		putEndpoints(t, ctx, testDeps.EAC, &network_v1alpha.Endpoints{
+			ID:       entity.Id("endpoints-" + svcID.String()),
+			Service:  svcID,
+			Endpoint: []network_v1alpha.Endpoint{{Ip: sandboxIP, Port: port}},
+		})
+
+		r.NoError(sc.Create(ctx, svc, &entity.Meta{Entity: entity.New(svc.Encode), Revision: 1}))
+
+		parentChain := sc.serviceChain(netip.MustParseAddr(svcIP), port, "tcp")
+		r.Equal(5, nftRuleCount(t, ctx, sc, parentChain), "fresh parent should have 5 rules")
+
+		// Inject the kind of stacked-duplicate state that the pre-#795
+		// append-without-flush code would leave behind across redeploys.
+		injectTx := sc.nft.NewTransaction()
+		injectTx.Add(&knftables.Rule{Chain: parentChain, Rule: `counter name "services"`})
+		injectTx.Add(&knftables.Rule{Chain: parentChain, Rule: "ip saddr 10.123.0.0/16 jump mark-for-masq"})
+		injectTx.Add(&knftables.Rule{Chain: parentChain, Rule: "ip saddr 10.124.0.0/16 jump mark-for-masq"})
+		r.NoError(sc.nft.Run(ctx, injectTx))
+		r.Greater(nftRuleCount(t, ctx, sc, parentChain), 5, "injection should have added rules")
+
+		r.NoError(sc.Periodic(ctx))
+
+		r.Equal(5, nftRuleCount(t, ctx, sc, parentChain), "Periodic should flush and rebuild to the canonical 5-rule shape")
 	})
 
 	t.Run("does not touch chains outside managed prefixes", func(t *testing.T) {

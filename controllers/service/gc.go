@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -62,9 +63,37 @@ var managedMaps = []string{mapServiceIP4s, mapServiceIP6s, mapServiceNodePort}
 // targetState captures what the kernel should look like, derived from the
 // current Service and Endpoints entities. Chain names plus expected map
 // element keys (canonicalized).
+//
+// serviceSpecs, nodePortSpecs, and endpointSpecs carry enough info for the
+// Periodic reconcile pass to rebuild every live chain's body unconditionally.
+// Knowing the chain name alone (in `chains`) is sufficient for orphan detection
+// but not enough to recompute the chain's rules.
 type targetState struct {
 	chains   set.Set[string]
 	elements map[string]set.Set[string] // mapName -> canonicalKey set
+
+	serviceSpecs  []serviceChainSpec
+	nodePortSpecs []nodePortChainSpec
+	endpointSpecs map[string]endpointChainSpec // chain name -> spec, deduplicated
+}
+
+type serviceChainSpec struct {
+	ip        netip.Addr
+	port      uint16
+	proto     string
+	endpoints []string // endpoint chain names, sorted
+}
+
+type nodePortChainSpec struct {
+	nport     int
+	proto     string
+	endpoints []string // endpoint chain names, sorted
+}
+
+type endpointChainSpec struct {
+	ip    netip.Addr
+	port  uint16
+	proto string
 }
 
 // kernelState captures what the kernel actually has, observed via knftables.
@@ -102,8 +131,9 @@ func (s *ServiceController) Periodic(ctx context.Context) error {
 
 func (s *ServiceController) computeTargetState(ctx context.Context) (*targetState, error) {
 	target := &targetState{
-		chains:   set.New[string](),
-		elements: make(map[string]set.Set[string]),
+		chains:        set.New[string](),
+		elements:      make(map[string]set.Set[string]),
+		endpointSpecs: make(map[string]endpointChainSpec),
 	}
 	for _, m := range managedMaps {
 		target.elements[m] = set.New[string]()
@@ -133,6 +163,31 @@ func (s *ServiceController) computeTargetState(ctx context.Context) (*targetStat
 
 		for _, tp := range srv.Port {
 			proto := nftProto(tp.Protocol)
+			targetPort := tp.TargetPort
+			if targetPort == 0 {
+				targetPort = tp.Port
+			}
+
+			// Resolve endpoint chain names once per (port, proto). Service-IP
+			// and NodePort dispatchers share the same backend set, so each
+			// (ip, port, proto) tuple maps to a single endpoint chain by hash.
+			var epChains []string
+			for _, ep := range endpointsByService[srv.ID] {
+				for _, e := range ep.Endpoint {
+					ip, err := netip.ParseAddr(e.Ip)
+					if err != nil {
+						return nil, fmt.Errorf("parse endpoint IP %q: %w", e.Ip, err)
+					}
+					epChain := s.endpointChain(ip, uint16(targetPort), proto)
+					target.chains.Add(epChain)
+					epChains = append(epChains, epChain)
+					target.endpointSpecs[epChain] = endpointChainSpec{
+						ip: ip, port: uint16(targetPort), proto: proto,
+					}
+				}
+			}
+			slices.Sort(epChains)
+			epChains = slices.Compact(epChains)
 
 			for _, sip := range srv.Ip {
 				ip, err := netip.ParseAddr(sip)
@@ -143,6 +198,10 @@ func (s *ServiceController) computeTargetState(ctx context.Context) (*targetStat
 				target.elements[mapForServiceIP(ip)].Add(canonicalKey(
 					[]string{ip.String(), proto, strconv.FormatInt(tp.Port, 10)},
 				))
+				target.serviceSpecs = append(target.serviceSpecs, serviceChainSpec{
+					ip: ip, port: uint16(tp.Port), proto: proto,
+					endpoints: epChains,
+				})
 			}
 
 			if tp.NodePort != 0 {
@@ -150,20 +209,10 @@ func (s *ServiceController) computeTargetState(ctx context.Context) (*targetStat
 				target.elements[mapServiceNodePort].Add(canonicalKey(
 					[]string{proto, strconv.FormatInt(tp.NodePort, 10)},
 				))
-			}
-
-			targetPort := tp.TargetPort
-			if targetPort == 0 {
-				targetPort = tp.Port
-			}
-			for _, ep := range endpointsByService[srv.ID] {
-				for _, e := range ep.Endpoint {
-					ip, err := netip.ParseAddr(e.Ip)
-					if err != nil {
-						return nil, fmt.Errorf("parse endpoint IP %q: %w", e.Ip, err)
-					}
-					target.chains.Add(s.endpointChain(ip, uint16(targetPort), proto))
-				}
+				target.nodePortSpecs = append(target.nodePortSpecs, nodePortChainSpec{
+					nport: int(tp.NodePort), proto: proto,
+					endpoints: epChains,
+				})
 			}
 		}
 	}
@@ -207,6 +256,10 @@ func (s *ServiceController) snapshotKernelState(ctx context.Context) (*kernelSta
 func (s *ServiceController) applyGC(ctx context.Context, target *targetState, actual *kernelState) error {
 	tx := s.nft.NewTransaction()
 
+	// Drop stale dispatcher map elements first so that the reconcile-add path
+	// below doesn't trip "File exists" when a live key needs a fresh value
+	// (e.g. across a chain-hash-function bump: same proto+port, but the goto
+	// target chain name shifted).
 	staleElements := 0
 	for mapName, expected := range target.elements {
 		for canonKey, el := range actual.elements[mapName] {
@@ -226,17 +279,30 @@ func (s *ServiceController) applyGC(ctx context.Context, target *targetState, ac
 		}
 	}
 
-	// Orphan chains in two phases. Service and nodeport chains contain
-	// `goto endpoint_*` rules; deleting an endpoint chain while one of
-	// those rules still references it triggers EBUSY even inside an
-	// atomic batch (commands process sequentially). So drop parents
-	// first, leaves last.
-	var orphanParents, orphanLeaves []string
+	// Reconcile live chain bodies. Periodic runs even when no entity changed,
+	// so this is the self-heal path: if a live parent chain ended up with a
+	// stale vmap (UpdateEndpoints event missed, setEndpoints called with an
+	// empty list pre-fix, pre-#795 stacked rules, etc.), flush+rebuild here
+	// corrects it, and the orphan endpoint chains it was pinning become
+	// deletable in the same tx.
+	s.reconcileLiveChains(tx, target)
+
+	// Orphan chains in three phases. nft processes batch deletes sequentially
+	// even inside an atomic transaction, so we have to delete in reverse-
+	// dependency order to avoid EBUSY on chains that still have referrers:
+	//   nodeport_* may contain `goto service_*` (pre-#795 shape) → delete first
+	//   service_*  contains `goto endpoint_*` via vmap                → next
+	//   endpoint_* are leaves                                          → last
+	var orphanNodePorts, orphanServices, orphanLeaves []string
 	for chain, kind := range actual.chains {
 		switch kind {
-		case chainKindService, chainKindNodePort:
+		case chainKindNodePort:
 			if !target.chains.Contains(chain) {
-				orphanParents = append(orphanParents, chain)
+				orphanNodePorts = append(orphanNodePorts, chain)
+			}
+		case chainKindService:
+			if !target.chains.Contains(chain) {
+				orphanServices = append(orphanServices, chain)
 			}
 		case chainKindEndpoint:
 			if !target.chains.Contains(chain) {
@@ -245,8 +311,12 @@ func (s *ServiceController) applyGC(ctx context.Context, target *targetState, ac
 		}
 		// chainKindStatic and chainKindUnknown: leave alone.
 	}
+	orphanParentCount := len(orphanNodePorts) + len(orphanServices)
 
-	for _, chain := range orphanParents {
+	for _, chain := range orphanNodePorts {
+		tx.Delete(&knftables.Chain{Name: chain})
+	}
+	for _, chain := range orphanServices {
 		tx.Delete(&knftables.Chain{Name: chain})
 	}
 	for _, chain := range orphanLeaves {
@@ -257,17 +327,44 @@ func (s *ServiceController) applyGC(ctx context.Context, target *targetState, ac
 		return nil
 	}
 
-	s.Log.Info("GC pass pruning stale nft state",
+	s.Log.Info("GC pass reconciling nft state",
+		"reconciled_chains", len(target.serviceSpecs)+len(target.nodePortSpecs)+len(target.endpointSpecs),
 		"stale_elements", staleElements,
-		"orphan_chains", len(orphanParents)+len(orphanLeaves),
+		"orphan_chains", orphanParentCount+len(orphanLeaves),
 	)
 
 	if err := s.nft.Run(ctx, tx); err != nil {
 		return fmt.Errorf("apply GC batch: %w", err)
 	}
 
-	s.invalidateCacheAfterGC(append(orphanParents, orphanLeaves...))
+	deleted := append(append(orphanNodePorts, orphanServices...), orphanLeaves...)
+	s.syncCachesAfterGC(target, deleted)
 	return nil
+}
+
+// reconcileLiveChains emits Add+Flush+rules for every endpoint chain, service
+// chain, and nodeport chain that the entity store currently claims. It does
+// not consult the chainEndpoints cache; that's the whole point — Periodic
+// runs as a backstop, so whatever the kernel currently looks like, this
+// rebuilds it to match the entity store.
+func (s *ServiceController) reconcileLiveChains(tx *knftables.Transaction, target *targetState) {
+	for _, ep := range target.endpointSpecs {
+		s.addEndpointChain(tx, ep.ip, ep.port, ep.proto)
+	}
+	for _, sp := range target.serviceSpecs {
+		s.addServiceChain(tx, sp.ip, int(sp.port), sp.proto)
+		s.writeChainBody(tx, s.serviceChain(sp.ip, sp.port, sp.proto), "services", sp.endpoints)
+	}
+	for _, sp := range target.nodePortSpecs {
+		chain := s.nodeportChain(sp.nport, sp.proto)
+		tx.Add(&knftables.Chain{Name: chain})
+		tx.Add(&knftables.Element{
+			Map:   mapServiceNodePort,
+			Key:   []string{sp.proto, strconv.Itoa(sp.nport)},
+			Value: []string{"goto " + chain},
+		})
+		s.writeChainBody(tx, chain, "nodeports", sp.endpoints)
+	}
 }
 
 // gotoTarget extracts the target chain from a verdict-map element's value.
@@ -282,13 +379,22 @@ func gotoTarget(el *knftables.Element) string {
 	return el.Value[0][len(prefix):]
 }
 
-// invalidateCacheAfterGC keeps the chainEndpoints cache in sync after deletes.
-// If we delete a chain but leave its name in the cache, the next Create()
-// would skip the rebuild thinking nothing changed, leaving the chain absent
-// while the dispatcher's map element points at it.
-func (s *ServiceController) invalidateCacheAfterGC(deletedChains []string) {
+// syncCachesAfterGC keeps the chainEndpoints cache aligned with what we just
+// wrote to the kernel. Reconciled chains get their current endpoint set
+// recorded (so the next event-driven setEndpoints can no-op when truly
+// unchanged); deleted chains are dropped from the cache (so a future Create
+// doesn't skip the rebuild thinking nothing changed).
+func (s *ServiceController) syncCachesAfterGC(target *targetState, deletedChains []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	for _, sp := range target.serviceSpecs {
+		chain := s.serviceChain(sp.ip, sp.port, sp.proto)
+		s.chainEndpoints[chain] = append([]string(nil), sp.endpoints...)
+	}
+	for _, sp := range target.nodePortSpecs {
+		chain := s.nodeportChain(sp.nport, sp.proto)
+		s.chainEndpoints[chain] = append([]string(nil), sp.endpoints...)
+	}
 	for _, c := range deletedChains {
 		delete(s.chainEndpoints, c)
 	}
