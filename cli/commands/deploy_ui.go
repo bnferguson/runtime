@@ -112,8 +112,8 @@ type deployInfo struct {
 	finalUploadSpeed float64
 
 	// Upload progress estimation
-	uploadPct      float64 // 0.0–1.0 fraction, -1 if unknown
-	uploadEstTotal int64   // estimated compressed total bytes
+	uploadPct float64       // 0.0–1.0 fraction, -1 if unknown
+	uploadETA time.Duration // estimated time remaining; 0 if unknown
 
 	// Source cache info
 	cachedFiles int32
@@ -275,7 +275,7 @@ func (m *deployInfo) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.uploadBytes = msg.BytesRead
 			m.finalUploadSpeed = msg.BytesPerSecond
 			m.uploadPct = msg.Fraction
-			m.uploadEstTotal = msg.EstimatedTotalBytes
+			m.uploadETA = msg.ETA
 
 			// Continue reading upload progress
 			if m.uploadProgress != nil {
@@ -354,10 +354,14 @@ func (m *deployInfo) View() string {
 		if pct < 0 {
 			pct = 0
 		}
-		pctStr := deployPrefixStyle.Render(fmt.Sprintf("%d%% — %s at %s",
+		pctText := fmt.Sprintf("%d%% — %s at %s",
 			int(pct*100),
 			upload.FormatBytes(m.uploadBytes),
-			m.uploadSpeed))
+			m.uploadSpeed)
+		if m.uploadETA > 0 {
+			pctText += fmt.Sprintf(" (eta ~%s)", upload.FormatDuration(m.uploadETA))
+		}
+		pctStr := deployPrefixStyle.Render(pctText)
 		currentLine = fmt.Sprintf("  %s Uploading artifacts...\n      %s %s",
 			m.uploadSpin.View(), m.prog.ViewAs(pct), pctStr)
 	} else if m.currentPhase != "completed" {
