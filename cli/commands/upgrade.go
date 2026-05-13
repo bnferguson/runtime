@@ -32,9 +32,14 @@ func Upgrade(ctx *Context, opts struct {
 	mgrOpts.InstallPath = exe
 	mgrOpts.SkipHealthCheck = true // CLI doesn't need health check
 
+	version, err := resolveVersionChannel(opts.Version, opts.Channel)
+	if err != nil {
+		return err
+	}
+
 	// Check mode - just report if update is available
 	if opts.Check {
-		current, latest, err := CheckVersionStatus(ctx, opts.Version, &mgrOpts)
+		current, latest, err := CheckVersionStatus(ctx, version, &mgrOpts)
 		if err != nil {
 			return err
 		}
@@ -129,20 +134,6 @@ func Upgrade(ctx *Context, opts struct {
 	// Update manager with final install path
 	mgrOpts.InstallPath = installPath
 	mgr := release.NewManager(mgrOpts)
-
-	// Determine version/channel
-	version := opts.Version
-	channel := opts.Channel
-
-	// If neither specified, default to latest channel
-	if version == "" && channel == "" {
-		channel = "latest"
-	}
-
-	// If channel specified, use it as version
-	if channel != "" {
-		version = channel
-	}
 
 	needsUpgrade, err := CheckIfUpgradeNeeded(ctx, version, opts.Force, &mgrOpts)
 	if err != nil {
