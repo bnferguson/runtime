@@ -39,7 +39,7 @@ miren sandbox exec [args...] [flags]
 
 - `--cluster, -C` — Cluster name
 - `--config` — Path to the config file
-- `--id, -i` — Sandbox ID (default: `miren-sandbox`)
+- `--id, -i` — Sandbox ID
 
 ## Global Options
 
@@ -52,13 +52,13 @@ miren sandbox exec [args...] [flags]
 **Open a shell in a running sandbox:**
 
 ```bash
-miren sandbox exec --id sb_abc123
+miren sandbox exec sb_abc123
 ```
 
 **Run a command in a sandbox:**
 
 ```bash
-miren sandbox exec --id sb_abc123 -- ls -la /app
+miren sandbox exec sb_abc123 -- ls -la /app
 ```
 
 ## See also

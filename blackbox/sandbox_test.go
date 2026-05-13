@@ -30,10 +30,15 @@ func TestSandboxExec(t *testing.T) {
 		Testdata: "go-server",
 	})
 
-	// Get sandbox ID from JSON listing
 	sandboxID := harness.GetSandboxID(t, m, name)
 
-	// Exec a simple command in the sandbox
-	r := m.MustRun("sandbox", "exec", "-i", sandboxID, "--", "echo", "hello-from-sandbox")
-	r.RequireContains(t, "hello-from-sandbox")
+	t.Run("positional", func(t *testing.T) {
+		r := m.MustRun("sandbox", "exec", sandboxID, "--", "echo", "hello-from-sandbox")
+		r.RequireContains(t, "hello-from-sandbox")
+	})
+
+	t.Run("id-flag", func(t *testing.T) {
+		r := m.MustRun("sandbox", "exec", "-i", sandboxID, "--", "echo", "hello-from-sandbox")
+		r.RequireContains(t, "hello-from-sandbox")
+	})
 }
