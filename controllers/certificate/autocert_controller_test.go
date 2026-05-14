@@ -189,6 +189,46 @@ func TestAutocertController_HostPolicy_WildcardMatching(t *testing.T) {
 	}
 }
 
+// TestAutocertController_IsAllowedHost_EphemeralSubdomain verifies that an
+// ephemeral subdomain of a normal (non-wildcard) route is allowed, matching
+// the request-routing behavior in httpingress.lookupEphemeralRoute. Without
+// this, ephemeral deploy URLs like pr-33.app.example.com would serve the
+// fallback self-signed cert instead of provisioning via autocert.
+func TestAutocertController_IsAllowedHost_EphemeralSubdomain(t *testing.T) {
+	c := newTestAutocertController(t)
+	c.allowedHosts.Store("app.example.com", struct{}{})
+
+	tests := []struct {
+		host    string
+		allowed bool
+	}{
+		{"app.example.com", true},        // exact match (the registered route)
+		{"pr-33.app.example.com", true},  // ephemeral subdomain of the route
+		{"feat-x.app.example.com", true}, // another ephemeral label
+		{"app.example.org", false},       // unrelated TLD
+		{"example.com", false},           // parent of the route, not a subdomain
+		{"other.com", false},             // unrelated domain
+	}
+
+	for _, tt := range tests {
+		got := c.isAllowedHost(tt.host)
+		if got != tt.allowed {
+			t.Errorf("isAllowedHost(%q) = %v, want %v", tt.host, got, tt.allowed)
+		}
+	}
+}
+
+func TestAutocertController_HostPolicy_EphemeralSubdomain(t *testing.T) {
+	c := newTestAutocertController(t)
+	c.allowedHosts.Store("app.example.com", struct{}{})
+
+	// Ephemeral subdomain of a normal route should be accepted by HostPolicy
+	// so autocert will attempt ACME provisioning instead of falling back.
+	if err := c.mgr.HostPolicy(context.Background(), "pr-33.app.example.com"); err != nil {
+		t.Errorf("expected host policy to accept ephemeral subdomain, got: %v", err)
+	}
+}
+
 func TestAutocertController_Init_PrePopulatesAllowedHosts(t *testing.T) {
 	ctx := context.Background()
 
