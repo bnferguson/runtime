@@ -18,6 +18,8 @@ miren debug advertise [flags]
 
 - `--additional-ip` — Simulate a server-configured AdditionalIP (repeatable)
 - `--cloud-url` — Cloud URL to use for netcheck (default: https://api.miren.cloud)
+- `--format` — Output format (text, json) (default: `text`)
+- `--json` — Shorthand for --format json
 - `--listen` — Simulate the server's listen address (default: 0.0.0.0:8443)
 - `--skip-netcheck` — Skip the netcheck call and only report interface scan
 

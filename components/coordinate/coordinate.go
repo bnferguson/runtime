@@ -1285,47 +1285,38 @@ func (c *Coordinator) runNetcheck(ctx context.Context) {
 	}
 }
 
-// PublicIPs returns the cluster's known public IP addresses from netcheck,
-// falling back to user-provided AdditionalIPs and auto-discovered IPs
-// (filtered to global unicast, non-private) if netcheck hasn't run yet.
+// PublicIPs returns the cluster's known public IP addresses, applying the
+// same filtering rules as the advertised API addresses. Routes through
+// ComputeAdvertise so the AutocertController's DNS sanity check honors
+// per-family netcheck state (no leaking the source IP when its family has
+// zero reachable ports) and the CGNAT filter (no advertising tailnet
+// addresses as "public").
 func (c *Coordinator) PublicIPs() []net.IP {
 	c.netcheckMu.RLock()
-	result := c.netcheckResult
+	netcheck := c.netcheckResult
 	c.netcheckMu.RUnlock()
+
+	cands, _ := ComputeAdvertise(AdvertiseInput{
+		IPs:      c.IPs.All(),
+		Netcheck: netcheck,
+	})
 
 	seen := make(map[string]struct{})
 	var ips []net.IP
-
-	if result != nil {
-		for _, resp := range []*cloudauth.NetcheckResponse{result.IPv4, result.IPv6} {
-			if resp == nil || resp.SourceAddress == "" {
-				continue
-			}
-			ip := net.ParseIP(resp.SourceAddress)
-			if ip == nil {
-				continue
-			}
-			if _, ok := seen[resp.SourceAddress]; !ok {
-				seen[resp.SourceAddress] = struct{}{}
-				ips = append(ips, ip)
-			}
+	for _, cand := range cands {
+		if !cand.Included || cand.IP == nil {
+			continue
 		}
-	}
-
-	if len(ips) == 0 {
-		for _, sip := range c.IPs.All() {
-			ip := sip.IP
-			if ip == nil || !ip.IsGlobalUnicast() || ip.IsPrivate() {
-				continue
-			}
-			s := ip.String()
-			if _, ok := seen[s]; !ok {
-				seen[s] = struct{}{}
-				ips = append(ips, ip)
-			}
+		if cand.Classification != "global-unicast" {
+			continue
 		}
+		s := cand.IP.String()
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		ips = append(ips, cand.IP)
 	}
-
 	return ips
 }
 

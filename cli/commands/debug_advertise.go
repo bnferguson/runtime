@@ -16,6 +16,7 @@ import (
 // the final advertised list, so we can debug cases where the server
 // advertises addresses that aren't actually reachable from clients.
 func DebugAdvertise(ctx *Context, opts struct {
+	FormatOptions
 	CloudURL      string   `long:"cloud-url" description:"Cloud URL to use for netcheck (default: https://api.miren.cloud)"`
 	SkipNetcheck  bool     `long:"skip-netcheck" description:"Skip the netcheck call and only report interface scan"`
 	AdditionalIPs []string `long:"additional-ip" description:"Simulate a server-configured AdditionalIP (repeatable)"`
@@ -30,22 +31,34 @@ func DebugAdvertise(ctx *Context, opts struct {
 		listenAddr = "0.0.0.0:8443"
 	}
 
-	ctx.Info("debug advertise — reproducing server advertisement logic")
-	ctx.Info("  cloud URL:    %s", cloudURL)
-	ctx.Info("  listen:       %s", listenAddr)
-	ctx.Info("  netcheck:     %s", boolWord(!opts.SkipNetcheck, "enabled", "skipped"))
-	ctx.Info("")
+	// JSON output silences the human-oriented progress logs so the resulting
+	// document is the only thing on stdout.
+	humanInfo := func(format string, args ...any) {
+		if opts.IsJSON() {
+			return
+		}
+		ctx.Info(format, args...)
+	}
+
+	humanInfo("debug advertise — reproducing server advertisement logic")
+	humanInfo("  cloud URL:    %s", cloudURL)
+	humanInfo("  listen:       %s", listenAddr)
+	humanInfo("  netcheck:     %s", boolWord(!opts.SkipNetcheck, "enabled", "skipped"))
+	humanInfo("")
 
 	discoveryOpts := ipdiscovery.Options{}
 	if !opts.SkipNetcheck {
 		discoveryOpts.NetcheckURL = cloudURL
 	}
 
-	ctx.Info("Step 1: interface scan")
+	humanInfo("Step 1: interface scan")
 	discovery, err := ipdiscovery.DiscoverWithTimeout(15*time.Second, ctx.Log, discoveryOpts)
 	if err != nil {
+		// Match server.go: warn and keep going so the command can still
+		// exercise the explicit-IP and netcheck paths it's designed to
+		// diagnose, even when interface discovery itself misbehaves.
 		ctx.Warn("ipdiscovery.Discover failed: %v", err)
-		return err
+		discovery = &ipdiscovery.Discovery{}
 	}
 
 	ipSet := coordinate.NewIPSet()
@@ -57,10 +70,10 @@ func DebugAdvertise(ctx *Context, opts struct {
 		// server.go drops link-local addresses before handing the list
 		// to the coordinator — mirror that here.
 		if ip.IsLinkLocalUnicast() {
-			ctx.Info("  %-15s %-40s [skipped: link-local]", a.Interface, a.IP)
+			humanInfo("  %-15s %-40s [skipped: link-local]", a.Interface, a.IP)
 			continue
 		}
-		ctx.Info("  %-15s %-40s (discovered)", a.Interface, a.IP)
+		humanInfo("  %-15s %-40s (discovered)", a.Interface, a.IP)
 		ipSet.AddDiscovered(ip)
 	}
 
@@ -70,15 +83,15 @@ func DebugAdvertise(ctx *Context, opts struct {
 			ctx.Warn("--additional-ip %q is not a valid IP, skipping", s)
 			continue
 		}
-		ctx.Info("  %-15s %-40s (explicit)", "user", ip.String())
+		humanInfo("  %-15s %-40s (explicit)", "user", ip.String())
 		ipSet.AddExplicit(ip)
 	}
-	ctx.Info("")
+	humanInfo("")
 
-	ctx.Info("Step 2: dual-stack netcheck")
+	humanInfo("Step 2: dual-stack netcheck")
 	var netcheckResult *cloudauth.NetcheckDualStackResult
 	if opts.SkipNetcheck {
-		ctx.Info("  skipped (--skip-netcheck)")
+		humanInfo("  skipped (--skip-netcheck)")
 	} else {
 		ports := []cloudauth.NetcheckPort{
 			{Port: 8443, Protocol: "https"},
@@ -88,18 +101,50 @@ func DebugAdvertise(ctx *Context, opts struct {
 		if err != nil {
 			ctx.Warn("netcheck failed: %v", err)
 			netcheckResult = nil
-		} else {
+		} else if !opts.IsJSON() {
 			printNetcheckResponse(ctx, "IPv4", netcheckResult.IPv4)
 			printNetcheckResponse(ctx, "IPv6", netcheckResult.IPv6)
 		}
 	}
-	ctx.Info("")
+	humanInfo("")
 
 	candidates, final := coordinate.ComputeAdvertise(coordinate.AdvertiseInput{
 		ListenAddr: listenAddr,
 		IPs:        ipSet.All(),
 		Netcheck:   netcheckResult,
 	})
+
+	if opts.IsJSON() {
+		type candidateJSON struct {
+			Source         string `json:"source"`
+			HostPort       string `json:"host_port"`
+			IP             string `json:"ip,omitempty"`
+			Classification string `json:"classification,omitempty"`
+			Included       bool   `json:"included"`
+			Reason         string `json:"reason"`
+		}
+		type output struct {
+			Candidates []candidateJSON `json:"candidates"`
+			Advertised []string        `json:"advertised"`
+		}
+		out := output{
+			Candidates: make([]candidateJSON, len(candidates)),
+			Advertised: final,
+		}
+		for i, c := range candidates {
+			out.Candidates[i] = candidateJSON{
+				Source:         c.Source,
+				HostPort:       c.HostPort,
+				Classification: c.Classification,
+				Included:       c.Included,
+				Reason:         c.Reason,
+			}
+			if c.IP != nil {
+				out.Candidates[i].IP = c.IP.String()
+			}
+		}
+		return PrintJSON(out)
+	}
 
 	ctx.Info("Step 3: per-candidate classification and inclusion decision")
 	ctx.Info("")

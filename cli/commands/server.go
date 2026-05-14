@@ -98,6 +98,18 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		ctx.Log.Info("discovered IPs", "addresses", len(discovery.Addresses))
 	}
 
+	// Parse explicit AdditionalIPs up front so they're included in TLS cert
+	// SANs everywhere — both the API cert and the etcd cert (used by
+	// distributed runners), the latter of which is built earlier in startup.
+	for _, ip := range cfg.TLS.AdditionalIPs {
+		addr := net.ParseIP(ip)
+		if addr == nil {
+			ctx.Log.Error("failed to parse additional IP", "ip", ip)
+			return fmt.Errorf("failed to parse additional IP %s", ip)
+		}
+		ipSet.AddExplicit(addr)
+	}
+
 	switch cfg.GetMode() {
 	case "standalone":
 		// Mode defaults are already applied by serverconfig.Load
@@ -519,15 +531,6 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	defer batchWriter.Close()
 	systemHandler := observability.NewSystemLogHandler(ctx.Log.Handler(), batchWriter)
 	ctx.Log = slog.New(systemHandler)
-
-	for _, ip := range cfg.TLS.AdditionalIPs {
-		addr := net.ParseIP(ip)
-		if addr == nil {
-			ctx.Log.Error("failed to parse additional IP", "ip", ip)
-			return fmt.Errorf("failed to parse additional IP %s", ip)
-		}
-		ipSet.AddExplicit(addr)
-	}
 
 	// Create HTTP metrics
 	httpMetrics := metrics.NewHTTPMetrics(ctx.Log, ctx.ServerState.Writer, ctx.ServerState.Reader)
