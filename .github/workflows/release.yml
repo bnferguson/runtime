@@ -50,7 +50,7 @@ jobs:
     secrets: inherit
 
   package:
-    needs: [init, test]
+    needs: [init]
     strategy:
       matrix:
         include:
@@ -95,7 +95,7 @@ jobs:
         retention-days: 1
 
   build-binaries:
-    needs: [init, test]
+    needs: [init]
     strategy:
       matrix:
         include:
@@ -125,6 +125,7 @@ jobs:
       uses: actions/setup-go@v6
       with:
         go-version-file: 'go.mod'
+        cache: true
 
     - name: Build binary for ${{ matrix.os }}-${{ matrix.arch }}
       run: |
@@ -195,7 +196,7 @@ jobs:
         rm certificate.p12
 
     - name: Build macOS .pkg installer
-      if: matrix.os == 'darwin' && env.INSTALLER_IDENTITY != ''
+      if: matrix.os == 'darwin' && env.INSTALLER_IDENTITY != '' && startsWith(needs.init.outputs.ref, 'v')
       run: |
         mkdir -p pkg-root/usr/local/bin
         cp bin/miren pkg-root/usr/local/bin/miren
@@ -208,49 +209,60 @@ jobs:
           miren-darwin-${{ matrix.arch }}.pkg
         rm -rf pkg-root
 
-    - name: Notarize macOS binary
-      if: matrix.os == 'darwin'
+    - name: Notarize macOS artifacts
+      if: matrix.os == 'darwin' && startsWith(needs.init.outputs.ref, 'v')
       env:
         APPLE_ID: ${{ secrets.APPLE_ID }}
         APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
         APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       run: |
-        # Create a zip for notarization of the bare binary
+        # Run bare-binary and .pkg notarization submits in parallel — each
+        # one sits on Apple's notarization service for a couple of minutes,
+        # so doing them concurrently roughly halves the wall time.
+
         zip -j miren-notarize.zip bin/miren
 
-        # Submit bare binary for notarization
         xcrun notarytool submit miren-notarize.zip \
           --apple-id "$APPLE_ID" \
           --password "$APPLE_ID_PASSWORD" \
           --team-id "$APPLE_TEAM_ID" \
-          --wait
+          --wait &
+        BIN_PID=$!
 
-        rm miren-notarize.zip
-
-        # Note: Can't staple bare binaries (only .app/.pkg/.dmg)
-        # The binary is still notarized - Gatekeeper checks online on first run
-
-    - name: Notarize and staple macOS .pkg
-      if: matrix.os == 'darwin' && env.INSTALLER_IDENTITY != ''
-      env:
-        APPLE_ID: ${{ secrets.APPLE_ID }}
-        APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
-        APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      run: |
         PKG_NAME="miren-darwin-${{ matrix.arch }}.pkg"
+        PKG_PID=
+        if [ -f "$PKG_NAME" ]; then
+          xcrun notarytool submit "$PKG_NAME" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_ID_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait &
+          PKG_PID=$!
+        fi
 
-        # Submit .pkg for notarization (no zip wrapper needed for .pkg)
-        xcrun notarytool submit "$PKG_NAME" \
-          --apple-id "$APPLE_ID" \
-          --password "$APPLE_ID_PASSWORD" \
-          --team-id "$APPLE_TEAM_ID" \
-          --wait
+        wait "$BIN_PID"; BIN_RC=$?
+        PKG_RC=0
+        if [ -n "$PKG_PID" ]; then
+          wait "$PKG_PID"; PKG_RC=$?
+        fi
 
-        # Staple the notarization ticket to the .pkg
-        xcrun stapler staple "$PKG_NAME"
+        rm -f miren-notarize.zip
 
-        # Validate stapling
-        xcrun stapler validate "$PKG_NAME"
+        if [ "$BIN_RC" -ne 0 ]; then
+          echo "Bare-binary notarization failed (exit $BIN_RC)" >&2
+          exit "$BIN_RC"
+        fi
+        if [ "$PKG_RC" -ne 0 ]; then
+          echo ".pkg notarization failed (exit $PKG_RC)" >&2
+          exit "$PKG_RC"
+        fi
+
+        # Bare binaries can't be stapled (only .app/.pkg/.dmg). Gatekeeper
+        # checks the bare binary online on first run.
+        if [ -f "$PKG_NAME" ]; then
+          xcrun stapler staple "$PKG_NAME"
+          xcrun stapler validate "$PKG_NAME"
+        fi
 
     - name: Package binary
       run: |
@@ -268,7 +280,7 @@ jobs:
         retention-days: 1
 
     - name: Upload macOS .pkg artifact
-      if: matrix.os == 'darwin' && env.INSTALLER_IDENTITY != ''
+      if: matrix.os == 'darwin' && env.INSTALLER_IDENTITY != '' && startsWith(needs.init.outputs.ref, 'v')
       uses: actions/upload-artifact@v4
       with:
         name: miren-darwin-${{ matrix.arch }}-pkg
@@ -276,7 +288,7 @@ jobs:
         retention-days: 1
 
   build-and-push-docker:
-    needs: [init, package, upload-to-miren]
+    needs: [init, test, package]
     runs-on: depot-ubuntu-latest
     permissions:
       contents: read
@@ -351,7 +363,7 @@ jobs:
           cache-to: type=gha,mode=max
 
   upload-to-miren:
-    needs: [init, package, build-binaries]
+    needs: [init, test, package, build-binaries]
     runs-on: depot-ubuntu-latest
     concurrency:
       group: upload-to-miren-${{ needs.init.outputs.ref }}
