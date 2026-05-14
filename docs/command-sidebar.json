@@ -101,6 +101,7 @@
       "id": "command/debug"
     },
     "items": [
+      "command/debug-advertise",
       "command/debug-bundle",
       "command/debug-colors",
       "command/debug-connection",
