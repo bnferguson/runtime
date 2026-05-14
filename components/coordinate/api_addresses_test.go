@@ -9,7 +9,7 @@ import (
 	"miren.dev/runtime/pkg/cloudauth"
 )
 
-func explicit(ip string) SourcedIP  { return SourcedIP{IP: net.ParseIP(ip), Explicit: true} }
+func explicit(ip string) SourcedIP   { return SourcedIP{IP: net.ParseIP(ip), Explicit: true} }
 func discovered(ip string) SourcedIP { return SourcedIP{IP: net.ParseIP(ip), Explicit: false} }
 
 func makeIPSet(entries ...SourcedIP) *IPSet {
