@@ -2,6 +2,8 @@ package stream
 
 import (
 	"context"
+	"io"
+	"sync"
 	"testing"
 	"time"
 
@@ -130,5 +132,138 @@ func TestStream(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatal("timed out waiting for output channel to close")
 		}
+	})
+}
+
+// drippyReader returns one byte per Read. Used as a worst-case source for
+// the streaming-vs-batching tests: in streaming mode each drip becomes its
+// own Recv response, in batching mode many drips collapse into one.
+type drippyReader struct {
+	mu     sync.Mutex
+	data   []byte
+	pos    int
+	closed bool
+}
+
+func (d *drippyReader) Read(p []byte) (int, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.closed {
+		return 0, io.ErrClosedPipe
+	}
+	if d.pos >= len(d.data) {
+		return 0, io.EOF
+	}
+	if len(p) == 0 {
+		return 0, nil
+	}
+	p[0] = d.data[d.pos]
+	d.pos++
+	return 1, nil
+}
+
+func (d *drippyReader) Close() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.closed = true
+	return nil
+}
+
+// serveAndCount wires a ServeReader-backed RecvStream into a fresh RPC pair
+// and drives the stream by calling Recv directly so we can count how many
+// responses it took to drain the source. Returns the assembled bytes and
+// the chunk count (a chunk being one non-empty Recv response; the final
+// zero-byte EOF response is not counted).
+func serveAndCount(t *testing.T, src io.Reader, opts ...ServeReaderOption) ([]byte, int) {
+	t.Helper()
+	r := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ss, err := rpc.NewState(ctx, rpc.WithSkipVerify)
+	r.NoError(err)
+	ss.Server().ExposeValue("stream", AdaptRecvStream(ServeReader(ctx, src, opts...)))
+
+	cs, err := rpc.NewState(ctx, rpc.WithSkipVerify)
+	r.NoError(err)
+	c, err := cs.Connect(ss.ListenAddr(), "stream")
+	r.NoError(err)
+
+	rsc := NewRecvStreamClient[[]byte](c)
+
+	var out []byte
+	var chunks int
+	for {
+		res, err := rsc.Recv(ctx, streamChunkSize)
+		r.NoError(err)
+		v := res.Value()
+		if len(v) == 0 {
+			break
+		}
+		chunks++
+		out = append(out, v...)
+		if chunks > 10_000_000 {
+			t.Fatal("runaway: chunk count exceeded sanity ceiling")
+		}
+	}
+	return out, chunks
+}
+
+func TestServeReader(t *testing.T) {
+	t.Run("WithBulkBatching collapses a drip source into a handful of Recv responses", func(t *testing.T) {
+		r := require.New(t)
+
+		// 4 MB delivered one byte at a time. Bulk mode batches at 1 MB,
+		// so we expect ~4 data chunks plus the final partial chunk; the
+		// assertion ceiling has slack to absorb the partial.
+		const total = 4 * 1024 * 1024
+		src := &drippyReader{data: make([]byte, total)}
+		for i := range src.data {
+			src.data[i] = byte(i)
+		}
+
+		got, chunks := serveAndCount(t, src, WithBulkBatching())
+
+		r.Equal(src.data, got, "all bytes round-trip intact")
+		r.LessOrEqual(chunks, 6, "expected ≤6 chunks under 1 MB batching, got %d", chunks)
+	})
+
+	t.Run("streaming mode (default) emits one chunk per underlying Read", func(t *testing.T) {
+		r := require.New(t)
+
+		// 1024 bytes from the drip source; without batching every byte
+		// should land in its own Recv response, exactly like interactive
+		// stdin would. If this ever ratchets down, it means we
+		// accidentally re-enabled batching for non-bulk callers.
+		const total = 1024
+		src := &drippyReader{data: make([]byte, total)}
+		for i := range src.data {
+			src.data[i] = byte(i)
+		}
+
+		got, chunks := serveAndCount(t, src)
+
+		r.Equal(src.data, got)
+		r.Equal(total, chunks, "streaming mode must emit one chunk per byte from a drip source")
+	})
+
+	t.Run("tiny bulk-batched stream below the floor still terminates cleanly", func(t *testing.T) {
+		r := require.New(t)
+
+		src := &drippyReader{data: []byte("hello world")}
+		got, chunks := serveAndCount(t, src, WithBulkBatching())
+
+		r.Equal([]byte("hello world"), got)
+		r.Equal(1, chunks, "partial-final batch should ship in a single chunk")
+	})
+
+	t.Run("empty stream terminates without error", func(t *testing.T) {
+		r := require.New(t)
+
+		src := &drippyReader{data: nil}
+		got, chunks := serveAndCount(t, src, WithBulkBatching())
+
+		r.Empty(got)
+		r.Equal(0, chunks)
 	})
 }

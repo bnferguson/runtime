@@ -601,10 +601,10 @@ func Deploy(ctx *Context, opts struct {
 	}
 	buildCall := func(callCtx context.Context, tarReader io.ReadCloser, cb stream.SendStream[*build_v1alpha.Status]) (buildResults, error) {
 		if useOptimized {
-			tarStream := stream.ServeReader(callCtx, tarReader)
+			tarStream := stream.ServeReader(callCtx, tarReader, stream.WithBulkBatching())
 			return bc.BuildFromPrepared(callCtx, sessionID, tarStream, cb, envVars, ephemeralLabel, ephemeralTTL)
 		}
-		return bc.BuildFromTar(callCtx, name, stream.ServeReader(callCtx, tarReader), cb, envVars, ephemeralLabel, ephemeralTTL)
+		return bc.BuildFromTar(callCtx, name, stream.ServeReader(callCtx, tarReader, stream.WithBulkBatching()), cb, envVars, ephemeralLabel, ephemeralTTL)
 	}
 
 	var (
@@ -1314,7 +1314,7 @@ func analyzeApp(ctx *Context, bc *build_v1alpha.BuilderClient, dir string) error
 
 	defer r.Close()
 
-	result, err := bc.AnalyzeApp(ctx, stream.ServeReader(ctx, r))
+	result, err := bc.AnalyzeApp(ctx, stream.ServeReader(ctx, r, stream.WithBulkBatching()))
 	if err != nil {
 		return fmt.Errorf("analysis failed: %w", err)
 	}
