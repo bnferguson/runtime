@@ -5,50 +5,50 @@ package serverconfig
 // CLIFlags represents command-line flags for server configuration
 // All fields are pointers to distinguish between set and unset values
 type CLIFlags struct {
-	BuildkitConfigGcKeepDuration         *string  `long:"buildkit-gc-duration" description:"How long to keep BuildKit cache entries (e.g., 7d, 24h)"`
-	BuildkitConfigGcKeepStorage          *string  `long:"buildkit-gc-storage" description:"Maximum BuildKit layer cache size (e.g., 10GB, 50GB)"`
-	BuildkitConfigSocketDir              *string  `long:"buildkit-socket-dir" description:"Directory for embedded BuildKit Unix socket (defaults to data_path/buildkit/socket)"`
-	BuildkitConfigSocketPath             *string  `long:"buildkit-socket" description:"Path to external BuildKit Unix socket (for distributed mode)"`
-	BuildkitConfigStartEmbedded          *bool    `long:"start-buildkit" description:"Start embedded BuildKit daemon for container image builds"`
+	BuildkitConfigGcKeepDuration         *string  `long:"buildkit-gc-duration" description:"How long to keep BuildKit cache entries (e.g., 7d, 24h)" env:"MIREN_BUILDKIT_GC_KEEP_DURATION"`
+	BuildkitConfigGcKeepStorage          *string  `long:"buildkit-gc-storage" description:"Maximum BuildKit layer cache size (e.g., 10GB, 50GB)" env:"MIREN_BUILDKIT_GC_KEEP_STORAGE"`
+	BuildkitConfigSocketDir              *string  `long:"buildkit-socket-dir" description:"Directory for embedded BuildKit Unix socket (defaults to data_path/buildkit/socket)" env:"MIREN_BUILDKIT_SOCKET_DIR"`
+	BuildkitConfigSocketPath             *string  `long:"buildkit-socket" description:"Path to external BuildKit Unix socket (for distributed mode)" env:"MIREN_BUILDKIT_SOCKET_PATH"`
+	BuildkitConfigStartEmbedded          *bool    `long:"start-buildkit" description:"Start embedded BuildKit daemon for container image builds" env:"MIREN_BUILDKIT_START_EMBEDDED"`
 	ConfigFile                           *string  `long:"config" description:"Path to configuration file"`
-	Labs                                 []string `long:"labs" description:"Comma-separated list of Miren Labs features to enable/disable. Prefix with - to disable."`
-	Mode                                 *string  `long:"mode" short:"m" description:"Server mode: standalone (default), distributed (experimental)"`
-	ContainerdConfigBinaryPath           *string  `long:"containerd-binary" description:"Path to containerd binary"`
-	ContainerdConfigSocketPath           *string  `long:"containerd-socket" description:"Path to containerd socket"`
-	ContainerdConfigStartEmbedded        *bool    `long:"start-containerd" description:"Start embedded containerd daemon"`
-	EtcdConfigClientPort                 *int     `long:"etcd-client-port" description:"Etcd client port"`
-	EtcdConfigEndpoints                  []string `long:"etcd" short:"e" description:"Etcd endpoints"`
-	EtcdConfigHTTPClientPort             *int     `long:"etcd-http-client-port" description:"Etcd HTTP client port"`
-	EtcdConfigPeerPort                   *int     `long:"etcd-peer-port" description:"Etcd peer port"`
-	EtcdConfigPrefix                     *string  `long:"etcd-prefix" short:"p" description:"Etcd prefix"`
-	EtcdConfigStartEmbedded              *bool    `long:"start-etcd" description:"Start embedded etcd server"`
-	IngressConfigAddress                 *string  `long:"ingress-address" description:"Optional bind override. Replaces the mode's default bind entirely (interface and port). Rejected by validation in tls-autoprovision (where :443 + :80 is structural). Reserved unix:/path prefix is not yet supported."`
-	IngressConfigMode                    *string  `long:"ingress-mode" description:"Ingress mode: tls-autoprovision (default, :443 + :80 with ACME or self-signed), behind-proxy-http (plain HTTP for use behind a TLS-terminating proxy), behind-proxy-https (TLS terminated by Miren; certs come from self-signed or DNS-01 ACME, since :80 isn't bound for HTTP-01)"`
-	ServerConfigAddress                  *string  `long:"address" short:"a" description:"Address to listen on (host:port). For IPv6 use brackets, e.g. \"[::1]:8443\"."`
-	ServerConfigConfigClusterName        *string  `long:"config-cluster-name" short:"C" description:"Name of the cluster in client config"`
-	ServerConfigDataPath                 *string  `long:"data-path" short:"d" description:"Data path"`
-	ServerConfigDiskMode                 *string  `long:"disk-mode" description:"Disk I/O mode: auto (default, detect from hardware), universal (loop devices), or accelerator (lbd devices)"`
-	ServerConfigHTTPRequestTimeout       *int     `long:"http-request-timeout" description:"HTTP request timeout in seconds"`
-	ServerConfigNetworkBackend           *string  `long:"network-backend" description:"Network backend for sandbox connectivity: vxlan (default) or wireguard"`
-	ServerConfigReleasePath              *string  `long:"release-path" description:"Path to release directory containing binaries"`
-	ServerConfigRunnerAddress            *string  `long:"runner-address" description:"Runner address (host:port). For IPv6 use brackets, e.g. \"[::1]:8444\"."`
-	ServerConfigRunnerID                 *string  `long:"runner-id" short:"r" description:"Runner ID"`
-	ServerConfigSkipClientConfig         *bool    `long:"skip-client-config" description:"Skip writing client config file to clientconfig.d"`
-	ServerConfigStopSandboxesOnShutdown  *bool    `long:"stop-sandboxes-on-shutdown" description:"Stop all sandboxes when server shuts down (useful in development)"`
-	TLSConfigAcmeDNSProvider             *string  `long:"acme-dns-provider" description:"DNS provider for ACME DNS-01 challenges (e.g., cloudflare, route53, exec). When set, uses DNS challenge instead of HTTP challenge. See https://go-acme.github.io/lego/dns/ for available providers."`
-	TLSConfigAcmeEmail                   *string  `long:"acme-email" description:"Email address for ACME account registration (recommended for account recovery and notifications)"`
-	TLSConfigAdditionalIPs               []string `long:"ips" description:"Additional IPs assigned to the server cert"`
-	TLSConfigAdditionalNames             []string `long:"dns-names" description:"Additional DNS names assigned to the server cert"`
-	TLSConfigSelfSigned                  *bool    `long:"self-signed-tls" description:"Use self-signed certificates for TLS (for development/testing only)"`
-	TLSConfigStandardTLS                 *bool    `long:"serve-tls" description:"Deprecated and ignored. Retained as a no-op so existing systemd unit files, env vars, and config files from pre-RFD-84 installs still parse. Use ingress.mode to pick the deployment shape." hidden:"yes"`
-	VictoriaLogsConfigAddress            *string  `long:"victorialogs-addr" description:"VictoriaLogs address (when not using embedded)"`
-	VictoriaLogsConfigHTTPPort           *int     `long:"victorialogs-http-port" description:"VictoriaLogs HTTP port in embedded mode"`
-	VictoriaLogsConfigRetentionPeriod    *string  `long:"victorialogs-retention" description:"VictoriaLogs retention period (e.g. 30d, 2w, 1y)"`
-	VictoriaLogsConfigStartEmbedded      *bool    `long:"start-victorialogs" description:"Start embedded VictoriaLogs server"`
-	VictoriaMetricsConfigAddress         *string  `long:"victoriametrics-addr" description:"VictoriaMetrics address (when not using embedded)"`
-	VictoriaMetricsConfigHTTPPort        *int     `long:"victoriametrics-http-port" description:"VictoriaMetrics HTTP port in embedded mode"`
-	VictoriaMetricsConfigRetentionPeriod *string  `long:"victoriametrics-retention" description:"VictoriaMetrics retention period in months"`
-	VictoriaMetricsConfigStartEmbedded   *bool    `long:"start-victoriametrics" description:"Start embedded VictoriaMetrics server"`
+	Labs                                 []string `long:"labs" description:"Comma-separated list of Miren Labs features to enable/disable. Prefix with - to disable." env:"MIREN_LABS"`
+	Mode                                 *string  `long:"mode" short:"m" description:"Server mode: standalone (default), distributed (experimental)" env:"MIREN_MODE"`
+	ContainerdConfigBinaryPath           *string  `long:"containerd-binary" description:"Path to containerd binary" env:"MIREN_CONTAINERD_BINARY_PATH"`
+	ContainerdConfigSocketPath           *string  `long:"containerd-socket" description:"Path to containerd socket" env:"MIREN_CONTAINERD_SOCKET_PATH"`
+	ContainerdConfigStartEmbedded        *bool    `long:"start-containerd" description:"Start embedded containerd daemon" env:"MIREN_CONTAINERD_START_EMBEDDED"`
+	EtcdConfigClientPort                 *int     `long:"etcd-client-port" description:"Etcd client port" env:"MIREN_ETCD_CLIENT_PORT"`
+	EtcdConfigEndpoints                  []string `long:"etcd" short:"e" description:"Etcd endpoints" env:"MIREN_ETCD_ENDPOINTS"`
+	EtcdConfigHTTPClientPort             *int     `long:"etcd-http-client-port" description:"Etcd HTTP client port" env:"MIREN_ETCD_HTTP_CLIENT_PORT"`
+	EtcdConfigPeerPort                   *int     `long:"etcd-peer-port" description:"Etcd peer port" env:"MIREN_ETCD_PEER_PORT"`
+	EtcdConfigPrefix                     *string  `long:"etcd-prefix" short:"p" description:"Etcd prefix" env:"MIREN_ETCD_PREFIX"`
+	EtcdConfigStartEmbedded              *bool    `long:"start-etcd" description:"Start embedded etcd server" env:"MIREN_ETCD_START_EMBEDDED"`
+	IngressConfigAddress                 *string  `long:"ingress-address" description:"Optional bind override. Replaces the mode's default bind entirely (interface and port). Rejected by validation in tls-autoprovision (where :443 + :80 is structural). Reserved unix:/path prefix is not yet supported." env:"MIREN_INGRESS_ADDRESS"`
+	IngressConfigMode                    *string  `long:"ingress-mode" description:"Ingress mode: tls-autoprovision (default, :443 + :80 with ACME or self-signed), behind-proxy-http (plain HTTP for use behind a TLS-terminating proxy), behind-proxy-https (TLS terminated by Miren; certs come from self-signed or DNS-01 ACME, since :80 isn't bound for HTTP-01)" env:"MIREN_INGRESS_MODE"`
+	ServerConfigAddress                  *string  `long:"address" short:"a" description:"Address to listen on (host:port). For IPv6 use brackets, e.g. \"[::1]:8443\"." env:"MIREN_SERVER_ADDRESS"`
+	ServerConfigConfigClusterName        *string  `long:"config-cluster-name" short:"C" description:"Name of the cluster in client config" env:"MIREN_SERVER_CONFIG_CLUSTER_NAME"`
+	ServerConfigDataPath                 *string  `long:"data-path" short:"d" description:"Data path" env:"MIREN_SERVER_DATA_PATH"`
+	ServerConfigDiskMode                 *string  `long:"disk-mode" description:"Disk I/O mode: auto (default, detect from hardware), universal (loop devices), or accelerator (lbd devices)" env:"MIREN_DISK_MODE"`
+	ServerConfigHTTPRequestTimeout       *int     `long:"http-request-timeout" description:"HTTP request timeout in seconds" env:"MIREN_SERVER_HTTP_REQUEST_TIMEOUT"`
+	ServerConfigNetworkBackend           *string  `long:"network-backend" description:"Network backend for sandbox connectivity: vxlan (default) or wireguard" env:"MIREN_SERVER_NETWORK_BACKEND"`
+	ServerConfigReleasePath              *string  `long:"release-path" description:"Path to release directory containing binaries" env:"MIREN_SERVER_RELEASE_PATH"`
+	ServerConfigRunnerAddress            *string  `long:"runner-address" description:"Runner address (host:port). For IPv6 use brackets, e.g. \"[::1]:8444\"." env:"MIREN_SERVER_RUNNER_ADDRESS"`
+	ServerConfigRunnerID                 *string  `long:"runner-id" short:"r" description:"Runner ID" env:"MIREN_SERVER_RUNNER_ID"`
+	ServerConfigSkipClientConfig         *bool    `long:"skip-client-config" description:"Skip writing client config file to clientconfig.d" env:"MIREN_SERVER_SKIP_CLIENT_CONFIG"`
+	ServerConfigStopSandboxesOnShutdown  *bool    `long:"stop-sandboxes-on-shutdown" description:"Stop all sandboxes when server shuts down (useful in development)" env:"MIREN_SERVER_STOP_SANDBOXES_ON_SHUTDOWN"`
+	TLSConfigAcmeDNSProvider             *string  `long:"acme-dns-provider" description:"DNS provider for ACME DNS-01 challenges (e.g., cloudflare, route53, exec). When set, uses DNS challenge instead of HTTP challenge. See https://go-acme.github.io/lego/dns/ for available providers." env:"MIREN_TLS_ACME_DNS_PROVIDER"`
+	TLSConfigAcmeEmail                   *string  `long:"acme-email" description:"Email address for ACME account registration (recommended for account recovery and notifications)" env:"MIREN_TLS_ACME_EMAIL"`
+	TLSConfigAdditionalIPs               []string `long:"ips" description:"Additional IPs assigned to the server cert" env:"MIREN_TLS_ADDITIONAL_IPS"`
+	TLSConfigAdditionalNames             []string `long:"dns-names" description:"Additional DNS names assigned to the server cert" env:"MIREN_TLS_ADDITIONAL_NAMES"`
+	TLSConfigSelfSigned                  *bool    `long:"self-signed-tls" description:"Use self-signed certificates for TLS (for development/testing only)" env:"MIREN_TLS_SELF_SIGNED"`
+	TLSConfigStandardTLS                 *bool    `long:"serve-tls" description:"Deprecated and ignored. Retained as a no-op so existing systemd unit files, env vars, and config files from pre-RFD-84 installs still parse. Use ingress.mode to pick the deployment shape." env:"MIREN_TLS_STANDARD_TLS" hidden:"yes"`
+	VictoriaLogsConfigAddress            *string  `long:"victorialogs-addr" description:"VictoriaLogs address (when not using embedded)" env:"MIREN_VICTORIALOGS_ADDRESS"`
+	VictoriaLogsConfigHTTPPort           *int     `long:"victorialogs-http-port" description:"VictoriaLogs HTTP port in embedded mode" env:"MIREN_VICTORIALOGS_HTTP_PORT"`
+	VictoriaLogsConfigRetentionPeriod    *string  `long:"victorialogs-retention" description:"VictoriaLogs retention period (e.g. 30d, 2w, 1y)" env:"MIREN_VICTORIALOGS_RETENTION_PERIOD"`
+	VictoriaLogsConfigStartEmbedded      *bool    `long:"start-victorialogs" description:"Start embedded VictoriaLogs server" env:"MIREN_VICTORIALOGS_START_EMBEDDED"`
+	VictoriaMetricsConfigAddress         *string  `long:"victoriametrics-addr" description:"VictoriaMetrics address (when not using embedded)" env:"MIREN_VICTORIAMETRICS_ADDRESS"`
+	VictoriaMetricsConfigHTTPPort        *int     `long:"victoriametrics-http-port" description:"VictoriaMetrics HTTP port in embedded mode" env:"MIREN_VICTORIAMETRICS_HTTP_PORT"`
+	VictoriaMetricsConfigRetentionPeriod *string  `long:"victoriametrics-retention" description:"VictoriaMetrics retention period in months" env:"MIREN_VICTORIAMETRICS_RETENTION_PERIOD"`
+	VictoriaMetricsConfigStartEmbedded   *bool    `long:"start-victoriametrics" description:"Start embedded VictoriaMetrics server" env:"MIREN_VICTORIAMETRICS_START_EMBEDDED"`
 }
 
 // NewCLIFlags creates a new CLIFlags struct for parsing

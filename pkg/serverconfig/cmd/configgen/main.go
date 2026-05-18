@@ -97,7 +97,6 @@ func main() {
 		{"loader.gen.go", loaderTemplate, generateLoader},
 		{"defaults.gen.go", defaultsTemplate, generateDefaults},
 		{"validation.gen.go", validationTemplate, generateValidation},
-		{"env.gen.go", envTemplate, generateEnv},
 	}
 
 	for _, gen := range generators {
@@ -201,23 +200,6 @@ func generateValidation(schema *Schema) (string, error) {
 	tmpl, err := template.New("validation").Funcs(template.FuncMap{
 		"title": toGoName,
 	}).Parse(validationTemplate)
-	if err != nil {
-		return "", err
-	}
-
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, schema); err != nil {
-		return "", err
-	}
-
-	return buf.String(), nil
-}
-
-// generateEnv generates environment variable handling
-func generateEnv(schema *Schema) (string, error) {
-	tmpl, err := template.New("env").Funcs(template.FuncMap{
-		"title": toGoName,
-	}).Parse(envTemplate)
 	if err != nil {
 		return "", err
 	}
@@ -446,7 +428,7 @@ type CLIFlags struct {
 	{{- range $cname, $config := .Configs}}
 	{{- range $fname, $field := $config.Fields}}
 	{{- if $field.CLI}}
-	{{if eq $cname "Config"}}{{$fname | title}}{{else}}{{$cname}}{{$fname | title}}{{end}} {{goType $field.Type}} ` + "`" + `{{if $field.CLI.Long}}long:"{{$field.CLI.Long}}"{{end}}{{if $field.CLI.Short}} short:"{{$field.CLI.Short}}"{{end}}{{if $field.CLI.Description}} description:"{{$field.CLI.Description | escapeTag}}"{{end}}{{if $field.CLI.Hidden}} hidden:"yes"{{end}}` + "`" + `
+	{{if eq $cname "Config"}}{{$fname | title}}{{else}}{{$cname}}{{$fname | title}}{{end}} {{goType $field.Type}} ` + "`" + `{{if $field.CLI.Long}}long:"{{$field.CLI.Long}}"{{end}}{{if $field.CLI.Short}} short:"{{$field.CLI.Short}}"{{end}}{{if $field.CLI.Description}} description:"{{$field.CLI.Description | escapeTag}}"{{end}}{{if $field.Env}} env:"{{$field.Env}}"{{end}}{{if $field.CLI.Hidden}} hidden:"yes"{{end}}` + "`" + `
 	{{- end}}
 	{{- end}}
 	{{- end}}
@@ -469,27 +451,39 @@ import (
 	"log/slog"
 
 	"github.com/pelletier/go-toml/v2"
+	"miren.dev/mflags"
 )
 
 // Load loads configuration from all sources with proper precedence:
 // CLI flags > Environment variables > Config file > Defaults
+//
+// Environment variables are applied via mflags' env:"..." struct tags on
+// CLIFlags. When flags is nil, Load materializes a CLIFlags from env vars
+// so callers (typically tests) that only set env still see the same
+// precedence as the CLI path.
 func Load(configPath string, flags *CLIFlags, log *slog.Logger) (*Config, error) {
 	if log == nil {
 		log = slog.Default()
 	}
 
+	if flags == nil {
+		flags = NewCLIFlags()
+		fs := mflags.NewFlagSet("serverconfig")
+		if err := fs.FromStruct(flags); err != nil {
+			return nil, fmt.Errorf("failed to wire CLIFlags for env application: %w", err)
+		}
+	}
+
 	cfg := DefaultConfig()
 
 	// Determine data path for config discovery with proper precedence
-	// CLI > Env > Defaults
+	// CLI/env (carried by flags) > Defaults
 	var dataPathForSearch string
 	if cfg.Server.DataPath != nil {
 		dataPathForSearch = *cfg.Server.DataPath
 	}
-	if flags != nil && flags.ServerConfigDataPath != nil && *flags.ServerConfigDataPath != "" {
+	if flags.ServerConfigDataPath != nil && *flags.ServerConfigDataPath != "" {
 		dataPathForSearch = *flags.ServerConfigDataPath
-	} else if envDataPath := os.Getenv("MIREN_SERVER_DATA_PATH"); envDataPath != "" {
-		dataPathForSearch = envDataPath
 	}
 
 	// Load config file
@@ -503,16 +497,15 @@ func Load(configPath string, flags *CLIFlags, log *slog.Logger) (*Config, error)
 		return nil, fmt.Errorf("config file not found: %s", configPath)
 	}
 
-	// Resolve the effective mode first (CLI > Env > Config > Default)
-	// We need this to apply mode-specific defaults correctly
+	// Resolve the effective mode first (CLI/env > Config > Default)
+	// We need this to apply mode-specific defaults correctly.
+	// CLI and env both flow through flags.Mode (mflags' env tag handling
+	// puts env values into the flags struct during FromStruct).
 	var effectiveMode string
 	if cfg.Mode != nil {
 		effectiveMode = *cfg.Mode
 	}
-	if envMode := os.Getenv("MIREN_MODE"); envMode != "" {
-		effectiveMode = envMode
-	}
-	if flags != nil && flags.Mode != nil && *flags.Mode != "" {
+	if flags.Mode != nil && *flags.Mode != "" {
 		effectiveMode = *flags.Mode
 	}
 
@@ -533,15 +526,8 @@ func Load(configPath string, flags *CLIFlags, log *slog.Logger) (*Config, error)
 	{{- end}}
 	{{- end}}
 
-	// Apply environment variables (can override mode defaults)
-	if err := applyEnvironmentVariables(cfg, log); err != nil {
-		return nil, fmt.Errorf("failed to apply environment variables: %w", err)
-	}
-
-	// Apply CLI flags (can override everything)
-	if flags != nil {
-		applyCLIFlags(cfg, flags)
-	}
+	// Apply CLI flags (env values are already in flags via mflags env tags).
+	applyCLIFlags(cfg, flags)
 
 	// Post-process etcd configuration
 	// If embedded etcd is enabled and no endpoints are specified, set default endpoint
@@ -793,67 +779,4 @@ func (c *{{$name}}) Validate() error {
 }
 {{end}}
 {{end}}
-`
-
-const envTemplate = `// Code generated by configgen. DO NOT EDIT.
-
-package {{.Package}}
-
-import (
-	"log/slog"
-	"os"
-	"strconv"
-	"strings"
-)
-
-// applyEnvironmentVariables applies environment variables to the configuration
-func applyEnvironmentVariables(cfg *Config, log *slog.Logger) error {
-	{{range $cname, $config := .Configs}}
-	{{$structField := $cname}}{{range $k, $v := (index $.Configs "Config").Fields}}{{if eq $v.Type $cname}}{{$structField = ($k | title)}}{{end}}{{end}}
-	{{range $fname, $field := $config.Fields}}
-	{{if $field.Env}}
-	// Apply {{$field.Env}}
-	if val := os.Getenv("{{$field.Env}}"); val != "" {
-		{{if eq $field.Type "string"}}
-		cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = &val
-		log.Debug("applied env var", "key", "{{$field.Env}}")
-		{{else if eq $field.Type "int"}}
-		if i, err := strconv.Atoi(val); err == nil {
-			cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = &i
-			log.Debug("applied env var", "key", "{{$field.Env}}")
-		} else {
-			log.Warn("invalid {{$field.Env}} value", "value", val, "error", err)
-		}
-		{{else if eq $field.Type "bool"}}
-		if b, err := strconv.ParseBool(val); err == nil {
-			cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = &b
-			log.Debug("applied env var", "key", "{{$field.Env}}")
-		} else {
-			log.Warn("invalid {{$field.Env}} value", "value", val, "error", err)
-		}
-		{{else if eq $field.Type "[]string"}}
-		// Split and clean CSV list
-		parts := strings.Split(val, ",")
-		cleaned := make([]string, 0, len(parts))
-		seen := make(map[string]struct{})
-		for _, p := range parts {
-			p = strings.TrimSpace(p)
-			if p == "" {
-				continue
-			}
-			if _, exists := seen[p]; exists {
-				continue
-			}
-			seen[p] = struct{}{}
-			cleaned = append(cleaned, p)
-		}
-		cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = cleaned
-		log.Debug("applied env var", "key", "{{$field.Env}}", "count", len(cleaned))
-		{{end}}
-	}
-	{{end}}
-	{{end}}
-	{{end}}
-	return nil
-}
 `

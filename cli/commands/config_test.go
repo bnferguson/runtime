@@ -40,7 +40,10 @@ func TestCheckFingerprint(t *testing.T) {
 	})
 }
 
-func TestLoadClusterEnvVar(t *testing.T) {
+// TestLoadClusterFromCluster covers the unified resolution path that handles
+// both -C and MIREN_CLUSTER (which now flows through the env:"MIREN_CLUSTER"
+// struct tag in production, populating Cluster identically to -C).
+func TestLoadClusterFromCluster(t *testing.T) {
 	t.Run("known cluster name", func(t *testing.T) {
 		r := require.New(t)
 
@@ -49,8 +52,7 @@ func TestLoadClusterEnvVar(t *testing.T) {
 			Hostname: "10.0.0.1:8443",
 		})
 
-		cc := ConfigCentric{cfg: cfg}
-		t.Setenv("MIREN_CLUSTER", "known-name")
+		cc := ConfigCentric{Cluster: "known-name", cfg: cfg}
 
 		cluster, name, err := cc.LoadCluster()
 		r.NoError(err)
@@ -67,8 +69,7 @@ func TestLoadClusterEnvVar(t *testing.T) {
 			Hostname: "10.0.0.1:8443",
 		})
 
-		cc := ConfigCentric{cfg: cfg}
-		t.Setenv("MIREN_CLUSTER", "known-name;sha1:extra")
+		cc := ConfigCentric{Cluster: "known-name;sha1:extra", cfg: cfg}
 
 		cluster, name, err := cc.LoadCluster()
 		r.NoError(err)
@@ -80,8 +81,7 @@ func TestLoadClusterEnvVar(t *testing.T) {
 		r := require.New(t)
 
 		cfg := clientconfig.NewConfig()
-		cc := ConfigCentric{cfg: cfg}
-		t.Setenv("MIREN_CLUSTER", "unknown-addr:8443")
+		cc := ConfigCentric{Cluster: "unknown-addr:8443", cfg: cfg}
 
 		_, _, err := cc.LoadCluster()
 		r.Error(err)
@@ -92,14 +92,14 @@ func TestLoadClusterEnvVar(t *testing.T) {
 		r := require.New(t)
 
 		cfg := clientconfig.NewConfig()
-		cc := ConfigCentric{cfg: cfg}
-		t.Setenv("MIREN_CLUSTER", "unknown-addr:8443;sha1:abc")
+		cc := ConfigCentric{Cluster: "unknown-addr:8443;sha1:abc", cfg: cfg}
 
 		_, _, err := cc.LoadCluster()
 		r.Error(err)
 		r.Contains(err.Error(), "unknown-addr:8443")
-		// The fingerprint portion should not appear in the address part of the error
-		r.NotContains(err.Error(), `"unknown-addr:8443;sha1:abc"`)
+		// The fingerprint portion should not appear in the address argument of
+		// the failed-to-connect clause (it is part of the cluster %q prefix).
+		r.Contains(err.Error(), `to "unknown-addr:8443":`)
 	})
 }
 
@@ -221,8 +221,9 @@ func TestConfigCentricPerAppState(t *testing.T) {
 		cfg.SetCluster("app-cluster", &clientconfig.ClusterConfig{Hostname: "10.0.0.1:8443"})
 		cfg.SetCluster("env-cluster", &clientconfig.ClusterConfig{Hostname: "10.0.0.4:8443"})
 
-		cc := ConfigCentric{cfg: cfg}
-		t.Setenv("MIREN_CLUSTER", "env-cluster")
+		// In production, mflags reads env:"MIREN_CLUSTER" into Cluster during
+		// flag parsing. Simulate that here by populating Cluster directly.
+		cc := ConfigCentric{Cluster: "env-cluster", cfg: cfg}
 
 		cluster, name, err := cc.LoadCluster()
 		r.NoError(err)

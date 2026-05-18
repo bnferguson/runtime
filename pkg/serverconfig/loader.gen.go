@@ -9,27 +9,39 @@ import (
 	"path/filepath"
 
 	"github.com/pelletier/go-toml/v2"
+	"miren.dev/mflags"
 )
 
 // Load loads configuration from all sources with proper precedence:
 // CLI flags > Environment variables > Config file > Defaults
+//
+// Environment variables are applied via mflags' env:"..." struct tags on
+// CLIFlags. When flags is nil, Load materializes a CLIFlags from env vars
+// so callers (typically tests) that only set env still see the same
+// precedence as the CLI path.
 func Load(configPath string, flags *CLIFlags, log *slog.Logger) (*Config, error) {
 	if log == nil {
 		log = slog.Default()
 	}
 
+	if flags == nil {
+		flags = NewCLIFlags()
+		fs := mflags.NewFlagSet("serverconfig")
+		if err := fs.FromStruct(flags); err != nil {
+			return nil, fmt.Errorf("failed to wire CLIFlags for env application: %w", err)
+		}
+	}
+
 	cfg := DefaultConfig()
 
 	// Determine data path for config discovery with proper precedence
-	// CLI > Env > Defaults
+	// CLI/env (carried by flags) > Defaults
 	var dataPathForSearch string
 	if cfg.Server.DataPath != nil {
 		dataPathForSearch = *cfg.Server.DataPath
 	}
-	if flags != nil && flags.ServerConfigDataPath != nil && *flags.ServerConfigDataPath != "" {
+	if flags.ServerConfigDataPath != nil && *flags.ServerConfigDataPath != "" {
 		dataPathForSearch = *flags.ServerConfigDataPath
-	} else if envDataPath := os.Getenv("MIREN_SERVER_DATA_PATH"); envDataPath != "" {
-		dataPathForSearch = envDataPath
 	}
 
 	// Load config file
@@ -43,16 +55,15 @@ func Load(configPath string, flags *CLIFlags, log *slog.Logger) (*Config, error)
 		return nil, fmt.Errorf("config file not found: %s", configPath)
 	}
 
-	// Resolve the effective mode first (CLI > Env > Config > Default)
-	// We need this to apply mode-specific defaults correctly
+	// Resolve the effective mode first (CLI/env > Config > Default)
+	// We need this to apply mode-specific defaults correctly.
+	// CLI and env both flow through flags.Mode (mflags' env tag handling
+	// puts env values into the flags struct during FromStruct).
 	var effectiveMode string
 	if cfg.Mode != nil {
 		effectiveMode = *cfg.Mode
 	}
-	if envMode := os.Getenv("MIREN_MODE"); envMode != "" {
-		effectiveMode = envMode
-	}
-	if flags != nil && flags.Mode != nil && *flags.Mode != "" {
+	if flags.Mode != nil && *flags.Mode != "" {
 		effectiveMode = *flags.Mode
 	}
 
@@ -85,15 +96,8 @@ func Load(configPath string, flags *CLIFlags, log *slog.Logger) (*Config, error)
 		}
 	}
 
-	// Apply environment variables (can override mode defaults)
-	if err := applyEnvironmentVariables(cfg, log); err != nil {
-		return nil, fmt.Errorf("failed to apply environment variables: %w", err)
-	}
-
-	// Apply CLI flags (can override everything)
-	if flags != nil {
-		applyCLIFlags(cfg, flags)
-	}
+	// Apply CLI flags (env values are already in flags via mflags env tags).
+	applyCLIFlags(cfg, flags)
 
 	// Post-process etcd configuration
 	// If embedded etcd is enabled and no endpoints are specified, set default endpoint

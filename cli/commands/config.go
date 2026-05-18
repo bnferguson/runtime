@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 
 	"miren.dev/runtime/appconfig"
@@ -13,7 +12,7 @@ import (
 
 type ConfigCentric struct {
 	Config  string `long:"config" description:"Path to the config file"`
-	Cluster string `short:"C" long:"cluster" description:"Cluster name"`
+	Cluster string `short:"C" long:"cluster" description:"Cluster name" env:"MIREN_CLUSTER"`
 
 	cfg *clientconfig.Config
 }
@@ -37,7 +36,7 @@ func (c *ConfigCentric) LoadConfig() (*clientconfig.Config, error) {
 	}
 
 	if err != nil {
-		if errors.Is(err, clientconfig.ErrNoConfig) && os.Getenv("MIREN_CLUSTER") != "" {
+		if errors.Is(err, clientconfig.ErrNoConfig) && c.Cluster != "" {
 			c.cfg = clientconfig.NewConfig()
 			return c.cfg, nil
 		}
@@ -45,7 +44,7 @@ func (c *ConfigCentric) LoadConfig() (*clientconfig.Config, error) {
 	}
 
 	if cfg == nil {
-		if os.Getenv("MIREN_CLUSTER") != "" {
+		if c.Cluster != "" {
 			c.cfg = clientconfig.NewConfig()
 			return c.cfg, nil
 		}
@@ -76,48 +75,45 @@ func (c *ConfigCentric) LoadCluster() (*clientconfig.ClusterConfig, string, erro
 	)
 
 	if c.Cluster != "" {
-		// -C flag takes priority
-		name = c.Cluster
-	} else if envCluster := os.Getenv("MIREN_CLUSTER"); envCluster != "" {
-		// Check if the full value matches a known cluster name first
-		cc, err := cfg.GetCluster(envCluster)
+		// Cluster came from -C or MIREN_CLUSTER (env:"MIREN_CLUSTER" on the field).
+		// Prefer an exact name match (including any literal ";sha1:..." suffix),
+		// otherwise parse as "address;sha1:fingerprint" and probe.
+		cc, err := cfg.GetCluster(c.Cluster)
 		if err == nil && cc != nil {
-			return cc, envCluster, nil
+			return cc, c.Cluster, nil
 		}
 
-		// Parse optional fingerprint: "address;sha1:abcdef..."
-		address := envCluster
+		address := c.Cluster
 		var fingerprint string
-		if idx := strings.Index(envCluster, ";"); idx >= 0 {
-			address = envCluster[:idx]
-			fingerprint = envCluster[idx+1:]
+		if idx := strings.Index(c.Cluster, ";"); idx >= 0 {
+			address = c.Cluster[:idx]
+			fingerprint = c.Cluster[idx+1:]
 		}
 
-		// Not a known cluster name — treat as an address and probe it
 		cc, name, err := setupClusterFromAddress(cfg, address, fingerprint)
 		if err != nil {
-			return nil, "", fmt.Errorf("MIREN_CLUSTER: failed to connect to %q: %w", address, err)
+			return nil, "", fmt.Errorf("cluster %q: failed to connect to %q: %w", c.Cluster, address, err)
 		}
 		return cc, name, nil
-	} else {
-		// Check per-app state if we're in an app directory.
-		if ac, err := appconfig.LoadAppConfig(); err != nil {
-			printConfigWarning(err)
-		} else if ac != nil && ac.Name != "" {
-			state, err := appconfig.LoadAppState(ac.Name)
-			if err == nil && state != nil && state.Cluster != "" {
-				cc, err := cfg.GetCluster(state.Cluster)
-				if err == nil && cc != nil {
-					return cc, state.Cluster, nil
-				}
-				// State references unknown cluster; fall through to global default.
-			}
-		}
+	}
 
-		name = cfg.ActiveCluster()
-		if name == "" {
-			return nil, "", nil
+	// Check per-app state if we're in an app directory.
+	if ac, err := appconfig.LoadAppConfig(); err != nil {
+		printConfigWarning(err)
+	} else if ac != nil && ac.Name != "" {
+		state, err := appconfig.LoadAppState(ac.Name)
+		if err == nil && state != nil && state.Cluster != "" {
+			cc, err := cfg.GetCluster(state.Cluster)
+			if err == nil && cc != nil {
+				return cc, state.Cluster, nil
+			}
+			// State references unknown cluster; fall through to global default.
 		}
+	}
+
+	name = cfg.ActiveCluster()
+	if name == "" {
+		return nil, "", nil
 	}
 
 	cc, err := cfg.GetCluster(name)

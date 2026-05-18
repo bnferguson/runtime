@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"miren.dev/mflags"
 )
 
 func writeAppToml(t *testing.T, dir, content string) {
@@ -214,6 +216,44 @@ command = ["foo", "bar"]
 		}
 		if !strings.Contains(err.Error(), "miren init") {
 			t.Errorf("expected error to mention 'miren init', got: %v", err)
+		}
+	})
+}
+
+// TestAppCentric_MIREN_APP_EnvTag confirms that env:"MIREN_APP" on AppCentric.App
+// actually flows through mflags' FromStruct path (which silently ignored the tag
+// before the env-tag support landed in mflags MIR-986). It also verifies the
+// CLI-beats-env precedence the rest of the system relies on.
+func TestAppCentric_MIREN_APP_EnvTag(t *testing.T) {
+	t.Run("env populates App when CLI flag absent", func(t *testing.T) {
+		t.Setenv("MIREN_APP", "from-env")
+
+		var a AppCentric
+		fs := mflags.NewFlagSet("app")
+		if err := fs.FromStruct(&a); err != nil {
+			t.Fatalf("FromStruct: %v", err)
+		}
+		if err := fs.Parse(nil); err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+		if a.App != "from-env" {
+			t.Errorf("App = %q, want %q (env tag should have fired)", a.App, "from-env")
+		}
+	})
+
+	t.Run("CLI flag beats env", func(t *testing.T) {
+		t.Setenv("MIREN_APP", "from-env")
+
+		var a AppCentric
+		fs := mflags.NewFlagSet("app")
+		if err := fs.FromStruct(&a); err != nil {
+			t.Fatalf("FromStruct: %v", err)
+		}
+		if err := fs.Parse([]string{"--app=from-cli"}); err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+		if a.App != "from-cli" {
+			t.Errorf("App = %q, want from-cli (CLI should beat env)", a.App)
 		}
 	})
 }
