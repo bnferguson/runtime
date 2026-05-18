@@ -73,6 +73,12 @@ type Stack interface {
 	// BaseDistro returns the package manager family of the stack's base image
 	// ("debian" or "alpine"). Used to dispatch apt vs apk for augmentations.
 	BaseDistro() string
+
+	// metaStack returns the embedded *MetaStack. Unexported so only stacks in
+	// this package can satisfy Stack — and since every concrete stack embeds
+	// MetaStack, the method is auto-fulfilled, making it impossible to add a
+	// new stack without also wiring up augmentation/events plumbing.
+	metaStack() *MetaStack
 }
 
 // DetectStack identifies the programming stack in the given directory
@@ -103,32 +109,10 @@ func DetectStack(dir string, opts BuildOptions) (Stack, error) {
 // stack so that Events() reports them and GenerateLLB() can apply them.
 func attachAugmentations(stack Stack, dir string) {
 	augs, skipInstall, events := DetectAugmentations(dir, stack.Name())
-	if ms, ok := metaStackOf(stack); ok {
-		ms.augmentations = augs
-		ms.skipJSInstall = skipInstall
-		ms.events = append(ms.events, events...)
-	}
-}
-
-// metaStackOf returns the embedded *MetaStack from a Stack implementation.
-// All concrete stacks in this package embed MetaStack, so this should always
-// succeed for stacks created by DetectStack.
-func metaStackOf(stack Stack) (*MetaStack, bool) {
-	switch s := stack.(type) {
-	case *RubyStack:
-		return &s.MetaStack, true
-	case *PythonStack:
-		return &s.MetaStack, true
-	case *NodeStack:
-		return &s.MetaStack, true
-	case *BunStack:
-		return &s.MetaStack, true
-	case *GoStack:
-		return &s.MetaStack, true
-	case *RustStack:
-		return &s.MetaStack, true
-	}
-	return nil, false
+	ms := stack.metaStack()
+	ms.augmentations = augs
+	ms.skipJSInstall = skipInstall
+	ms.events = append(ms.events, events...)
 }
 
 // MetaStack provides shared functionality for all stack implementations
@@ -138,6 +122,12 @@ type MetaStack struct {
 	events        []DetectionEvent
 	augmentations []Augmentation
 	skipJSInstall bool
+}
+
+// metaStack returns s itself, fulfilling the unexported Stack interface
+// requirement automatically for every concrete stack that embeds MetaStack.
+func (s *MetaStack) metaStack() *MetaStack {
+	return s
 }
 
 // Augmentations returns the secondary tooling layers (npm, bun, ...) attached

@@ -16,8 +16,9 @@ import (
 type Augmentation string
 
 const (
-	AugNpm Augmentation = "npm"
-	AugBun Augmentation = "bun"
+	AugNpm  Augmentation = "npm"
+	AugYarn Augmentation = "yarn"
+	AugBun  Augmentation = "bun"
 )
 
 // DetectAugmentations returns the set of augmentations needed for the app
@@ -42,15 +43,23 @@ func DetectAugmentations(dir, primaryStack string) (augs []Augmentation, skipIns
 	}
 
 	if hasRegularFile(dir, "package.json") {
-		augs = append(augs, AugNpm)
 		switch {
+		case hasRegularFile(dir, "yarn.lock"):
+			augs = append(augs, AugYarn)
+			events = append(events, DetectionEvent{
+				Kind:    "augmentation",
+				Name:    "yarn",
+				Message: "Found yarn.lock — installing yarn via corepack",
+			})
 		case hasRegularFile(dir, "package-lock.json"):
+			augs = append(augs, AugNpm)
 			events = append(events, DetectionEvent{
 				Kind:    "augmentation",
 				Name:    "npm",
 				Message: "Found package-lock.json — installing npm",
 			})
 		default:
+			augs = append(augs, AugNpm)
 			events = append(events, DetectionEvent{
 				Kind:    "augmentation",
 				Name:    "npm",
@@ -138,6 +147,11 @@ func (h *highlevelBuilder) applyAugmentations(cur, localCtx llb.State, distro st
 			if !skipInstall {
 				cur = h.runNpmInstall(cur, localCtx)
 			}
+		case AugYarn:
+			cur = h.installYarn(cur, distro)
+			if !skipInstall {
+				cur = h.runYarnInstall(cur, localCtx)
+			}
 		case AugBun:
 			cur = h.installBun(cur)
 			if !skipInstall {
@@ -146,6 +160,17 @@ func (h *highlevelBuilder) applyAugmentations(cur, localCtx llb.State, distro st
 		}
 	}
 	return cur
+}
+
+// installYarn layers nodejs+npm and enables corepack so the yarn shim is on
+// PATH. Yarn itself is provisioned lazily by corepack from package.json's
+// "packageManager" field (or falls back to classic yarn 1).
+func (h *highlevelBuilder) installYarn(cur llb.State, distro string) llb.State {
+	cur = h.installNpm(cur, distro)
+	return cur.Run(
+		llb.Shlex("corepack enable"),
+		llb.WithCustomName("[phase] Enabling corepack for yarn"),
+	).State
 }
 
 // ensureAppDir creates /app owned by the app user so the install can run
@@ -169,7 +194,7 @@ func (h *highlevelBuilder) runNpmInstall(cur, mnt llb.State) llb.State {
 	cur = h.ensureAppDir(cur)
 
 	cur = cur.File(llb.Copy(mnt, "/", "/app", &llb.CopyInfo{
-		IncludePatterns:    []string{"package.json", "package-lock.json", "yarn.lock"},
+		IncludePatterns:    []string{"package.json", "package-lock.json"},
 		CreateDestPath:     true,
 		AllowWildcard:      true,
 		AllowEmptyWildcard: true,
@@ -181,6 +206,29 @@ func (h *highlevelBuilder) runNpmInstall(cur, mnt llb.State) llb.State {
 		llb.AddEnv("HOME", "/home/app"),
 		llb.User("app"),
 		llb.WithCustomName("[phase] Installing JS deps with npm augmentation"),
+	).State
+}
+
+// runYarnInstall copies yarn package files into /app and runs yarn install as
+// the app user. COREPACK_ENABLE_DOWNLOAD_PROMPT silences the interactive
+// download prompt newer corepack versions emit when fetching a yarn release.
+func (h *highlevelBuilder) runYarnInstall(cur, mnt llb.State) llb.State {
+	cur = h.ensureAppDir(cur)
+
+	cur = cur.File(llb.Copy(mnt, "/", "/app", &llb.CopyInfo{
+		IncludePatterns:    []string{"package.json", "yarn.lock", ".yarnrc", ".yarnrc.yml"},
+		CreateDestPath:     true,
+		AllowWildcard:      true,
+		AllowEmptyWildcard: true,
+		ChownOpt:           &appChown,
+	}), llb.WithCustomName("copy yarn package files"))
+
+	return cur.Dir("/app").Run(
+		llb.Shlex("yarn install"),
+		llb.AddEnv("HOME", "/home/app"),
+		llb.AddEnv("COREPACK_ENABLE_DOWNLOAD_PROMPT", "0"),
+		llb.User("app"),
+		llb.WithCustomName("[phase] Installing JS deps with yarn augmentation"),
 	).State
 }
 

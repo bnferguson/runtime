@@ -46,6 +46,33 @@ func TestDetectAugmentations_NpmFromPackageJsonOnly(t *testing.T) {
 	require.Contains(t, events[0].Message, "package.json")
 }
 
+func TestDetectAugmentations_YarnFromLock(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{
+		"package.json": `{"name":"frontend"}`,
+		"yarn.lock":    ``,
+	})
+
+	augs, skipInstall, events := DetectAugmentations(dir, "ruby")
+	require.False(t, skipInstall)
+	require.Equal(t, []Augmentation{AugYarn}, augs)
+	require.Len(t, events, 1)
+	require.Equal(t, "yarn", events[0].Name)
+	require.Contains(t, events[0].Message, "yarn.lock")
+}
+
+func TestDetectAugmentations_YarnWinsOverPackageLock(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{
+		"package.json":      `{"name":"frontend"}`,
+		"yarn.lock":         ``,
+		"package-lock.json": `{}`,
+	})
+
+	augs, _, _ := DetectAugmentations(dir, "ruby")
+	require.Equal(t, []Augmentation{AugYarn}, augs, "yarn.lock should win when both lockfiles exist")
+}
+
 func TestDetectAugmentations_BunFromLock(t *testing.T) {
 	dir := t.TempDir()
 	writeFiles(t, dir, map[string]string{
@@ -152,8 +179,7 @@ func TestDetectStack_AttachesAugmentationsToPython(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "python", stack.Name())
 
-	ms, ok := metaStackOf(stack)
-	require.True(t, ok)
+	ms := stack.metaStack()
 	require.Equal(t, []Augmentation{AugNpm}, ms.Augmentations())
 
 	hasAugmentationEvent := false
@@ -177,8 +203,7 @@ func TestDetectStack_NoAugmentationForNode(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "node", stack.Name())
 
-	ms, ok := metaStackOf(stack)
-	require.True(t, ok)
+	ms := stack.metaStack()
 	require.Nil(t, ms.Augmentations())
 }
 
@@ -194,8 +219,7 @@ func TestDetectStack_SkipInstallWhenNodeModulesPresent(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "python", stack.Name())
 
-	ms, ok := metaStackOf(stack)
-	require.True(t, ok)
+	ms := stack.metaStack()
 	require.Equal(t, []Augmentation{AugNpm}, ms.Augmentations())
 	require.True(t, ms.SkipJSInstall())
 }
@@ -212,8 +236,7 @@ func TestDetectStack_AttachesAugmentationsToGo(t *testing.T) {
 	require.Equal(t, "go", stack.Name())
 	require.Equal(t, "alpine", stack.BaseDistro())
 
-	ms, ok := metaStackOf(stack)
-	require.True(t, ok)
+	ms := stack.metaStack()
 	require.Equal(t, []Augmentation{AugNpm}, ms.Augmentations())
 }
 
