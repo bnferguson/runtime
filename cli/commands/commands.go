@@ -8,6 +8,7 @@ import (
 func RegisterAll(d *mflags.Dispatcher) {
 	// Core commands
 	d.Dispatch("version", Infer("version", "Print the version", Version,
+		WithGroup(GroupClient),
 		WithExample(mflags.Example{
 			Name: "Print version",
 			Body: "miren version",
@@ -18,6 +19,7 @@ func RegisterAll(d *mflags.Dispatcher) {
 		}),
 	))
 	d.Dispatch("login", Infer("login", "Authenticate with miren.cloud", Login,
+		WithGroup(GroupClient),
 		WithExample(mflags.Example{
 			Name: "Login",
 			Body: "miren login",
@@ -28,12 +30,14 @@ func RegisterAll(d *mflags.Dispatcher) {
 		}),
 	))
 	d.Dispatch("logout", Infer("logout", "Remove local authentication credentials", Logout,
+		WithGroup(GroupClient),
 		WithExample(mflags.Example{
 			Name: "Logout",
 			Body: "miren logout",
 		}),
 	))
 	d.Dispatch("whoami", Infer("whoami", "Display information about the current authenticated user", Whoami,
+		WithGroup(GroupClient),
 		WithExample(mflags.Example{
 			Name: "Show current user",
 			Body: "miren whoami",
@@ -46,6 +50,7 @@ func RegisterAll(d *mflags.Dispatcher) {
 
 	// Doctor commands
 	d.Dispatch("doctor", Infer("doctor", "Diagnose miren environment and connectivity", Doctor,
+		WithGroup(GroupClient),
 		WithExample(mflags.Example{
 			Name: "Run all diagnostics",
 			Body: "miren doctor",
@@ -72,6 +77,7 @@ func RegisterAll(d *mflags.Dispatcher) {
 
 	// App lifecycle commands
 	d.Dispatch("init", Infer("init", "Initialize a new application", Init,
+		WithGroup(GroupGettingStarted),
 		WithExample(mflags.Example{
 			Name: "Initialize in current directory",
 			Body: "miren init",
@@ -82,6 +88,7 @@ func RegisterAll(d *mflags.Dispatcher) {
 		}),
 	))
 	d.Dispatch("deploy", Infer("deploy", "Deploy an application", Deploy,
+		WithGroup(GroupGettingStarted),
 		WithExample(mflags.Example{
 			Name: "Basic",
 			Body: "miren deploy",
@@ -114,6 +121,7 @@ miren deploy --analyze
 		}),
 	))
 	d.Dispatch("rollback", Infer("rollback", "Roll back to a previous version", Rollback,
+		WithGroup(GroupGettingStarted),
 		WithExample(mflags.Example{
 			Name: "Rollback the app in the current directory",
 			Body: "miren rollback",
@@ -124,6 +132,7 @@ miren deploy --analyze
 		}),
 	))
 	d.Dispatch("logs", Infer("logs", "View logs (defaults to app logs)", LogsApp,
+		WithGroup(GroupMonitoring),
 		WithDescription(logsDescription),
 		WithExample(mflags.Example{
 			Name: "View logs for the current app",
@@ -190,6 +199,7 @@ miren deploy --analyze
 
 	// App management commands
 	d.Dispatch("app", Infer("app", "Get information about an application", App,
+		WithGroup(GroupMonitoring),
 		WithExample(mflags.Example{
 			Name: "Show app info for the current directory",
 			Body: "miren app",
@@ -287,6 +297,7 @@ miren deploy --analyze
 		}),
 	))
 	d.Dispatch("apps", Infer("apps", "List all applications (alias for 'app list')", AppList,
+		WithGroup(GroupMonitoring),
 		WithExample(mflags.Example{
 			Name: "List all apps",
 			Body: "miren apps",
@@ -294,7 +305,7 @@ miren deploy --analyze
 	))
 
 	// Sandbox commands
-	d.Dispatch("sandbox", Section("sandbox", "Sandbox management commands", "", WithSectionDescription(sandboxSectionDescription)))
+	d.Dispatch("sandbox", Section("sandbox", "Sandbox management commands", "", WithSectionDescription(sandboxSectionDescription), WithSectionGroup(GroupMonitoring)))
 	d.Dispatch("sandbox list", Infer("sandbox list", "List sandboxes (excludes dead by default)", SandboxList,
 		WithExample(mflags.Example{
 			Name: "List running sandboxes",
@@ -338,7 +349,7 @@ miren deploy --analyze
 	))
 
 	// Sandbox pool commands
-	d.Dispatch("sandbox-pool", Section("sandbox-pool", "Sandbox pool management commands", ""))
+	d.Dispatch("sandbox-pool", Section("sandbox-pool", "Sandbox pool management commands", "", WithSectionGroup(GroupMonitoring)))
 	d.Dispatch("sandbox-pool list", Infer("sandbox-pool list", "List all sandbox pools", SandboxPoolList,
 		WithExample(mflags.Example{
 			Name: "List all pools",
@@ -353,7 +364,7 @@ miren deploy --analyze
 	))
 
 	// Environment variable commands
-	d.Dispatch("env", Section("env", "Environment variable management commands", ""))
+	d.Dispatch("env", Section("env", "Environment variable management commands", "", WithSectionGroup(GroupConfiguring)))
 	d.Dispatch("env set", Infer("env set", "Set environment variables for an application", EnvSet,
 		WithExample(mflags.Example{
 			Name: "Set an environment variable",
@@ -409,7 +420,7 @@ miren deploy --analyze
 
 	// Addon commands (gated behind labs flag)
 	if labs.Addons() {
-		d.Dispatch("addon", Section("addon", "Addon management commands", ""))
+		d.Dispatch("addon", Section("addon", "Addon management commands", "", WithSectionGroup(GroupConfiguring)))
 		d.Dispatch("addon list-available", Infer("addon list-available", "List available addons", AddonListAvailable,
 			WithLabsFeature(labs.FeatureAddons),
 			WithExample(mflags.Example{
@@ -457,6 +468,7 @@ miren deploy --analyze
 
 	// Route commands
 	d.Dispatch("route", Infer("route", "List all HTTP routes", Route,
+		WithGroup(GroupConfiguring),
 		WithExample(mflags.Example{
 			Name: "List all routes",
 			Body: "miren route",
@@ -557,7 +569,7 @@ miren deploy --analyze
 	))
 
 	// Config commands
-	d.Dispatch("config", Section("config", "Configuration file management", ""))
+	d.Dispatch("config", Section("config", "Configuration file management", "", WithSectionGroup(GroupClient)))
 	d.Dispatch("config info", Infer("config info", "Show configuration file locations and format", ConfigInfo,
 		WithExample(mflags.Example{
 			Name: "Show config info",
@@ -577,6 +589,7 @@ miren deploy --analyze
 
 	// Cluster commands
 	d.Dispatch("cluster", Infer("cluster", "List configured clusters", Cluster,
+		WithGroup(GroupClient),
 		WithExample(mflags.Example{
 			Name: "List clusters",
 			Body: "miren cluster",
@@ -635,7 +648,7 @@ miren deploy --analyze
 
 	// Runner commands (distributed runners) - behind feature flag
 	if labs.DistributedRunners() {
-		d.Dispatch("runner", Section("runner", "Runner management commands", ""))
+		d.Dispatch("runner", Section("runner", "Runner management commands", "", WithSectionGroup(GroupServer)))
 		d.Dispatch("runner token", Section("runner token", "Manage join tokens", ""))
 		d.Dispatch("runner token create", Infer("runner token create", "Create a join token for a runner", RunnerTokenCreate,
 			WithLabsFeature(labs.FeatureDistributedRunners),
@@ -768,6 +781,7 @@ miren deploy --analyze
 
 	// Server commands
 	d.Dispatch("server", Infer("server", "Start the miren server", Server,
+		WithGroup(GroupServer),
 		WithExample(mflags.Example{
 			Name: "Start in standalone mode",
 			Body: "miren server --mode standalone",
@@ -847,7 +861,7 @@ miren deploy --analyze
 	))
 
 	// CLI management commands
-	d.Dispatch("download", Section("download", "Download management commands", ""))
+	d.Dispatch("download", Section("download", "Download management commands", "", WithSectionGroup(GroupServer)))
 	d.Dispatch("download release", Infer("download release", "Download and extract miren release", DownloadRelease,
 		WithExample(mflags.Example{
 			Name: "Download the latest release",
@@ -855,6 +869,7 @@ miren deploy --analyze
 		}),
 	))
 	d.Dispatch("upgrade", Infer("upgrade", "Upgrade miren CLI to latest version", Upgrade,
+		WithGroup(GroupClient),
 		WithExample(mflags.Example{
 			Name: "Upgrade to latest",
 			Body: "miren upgrade",
@@ -870,7 +885,7 @@ miren deploy --analyze
 	))
 
 	// Auth commands
-	d.Dispatch("auth", Section("auth", "Authentication commands", ""))
+	d.Dispatch("auth", Section("auth", "Authentication commands", "", WithSectionGroup(GroupConfiguring)))
 	d.Dispatch("auth generate", Infer("auth generate", "Generate authentication config file", AuthGenerate,
 		WithExample(mflags.Example{
 			Name: "Generate auth config",
@@ -899,6 +914,7 @@ miren deploy --analyze
 
 	// Admin commands
 	d.Dispatch("admin", Infer("admin", "Call an admin method on an application", Admin,
+		WithGroup(GroupConfiguring),
 		WithDescription(adminDescription),
 		WithExample(mflags.Example{
 			Name: "List available admin methods",
@@ -924,7 +940,7 @@ Use these commands to help diagnose issues with the miren runtime.
 
 Warning: These commands are intended for advanced users and developers. They may change or be removed without notice.
 
-`))
+`, WithSectionGroup(GroupServer)))
 	d.Dispatch("debug connection", Infer("debug connection", "Test connectivity and authentication with a server", DebugConnection))
 	d.Dispatch("debug advertise", Infer("debug advertise", "Show which addresses the server would advertise and why", DebugAdvertise))
 	d.Dispatch("debug reindex", Infer("debug reindex", "Rebuild all entity indexes from scratch", DebugReindex))
@@ -953,6 +969,7 @@ Warning: These commands are intended for advanced users and developers. They may
 	d.Dispatch("debug entity ensure", Infer("debug entity ensure", "Ensure an entity exists", EntityEnsure))
 
 	// Disk commands
+	d.Dispatch("disk", Section("disk", "Disk backup and recovery", "", WithSectionGroup(GroupServer)))
 	d.Dispatch("disk backup", Infer("disk backup", "Backup a disk to a snapshot file", DiskBackup))
 	d.Dispatch("disk restore", Infer("disk restore", "Restore a disk from a snapshot file", DiskRestore))
 	d.Dispatch("disk undelete", Infer("disk undelete", "Restore a recently deleted disk", DiskUndelete))
@@ -984,21 +1001,14 @@ Warning: These commands are intended for advanced users and developers. They may
 	d.Dispatch("debug netdb gc", Infer("debug netdb gc", "Find and release orphaned IP leases", DebugNetDBGC))
 
 	// Internal commands (hidden from help, used by miren internals)
-	d.Dispatch("internal", Section("internal", "Internal commands used by miren components", ""))
+	d.Dispatch("internal", Section("internal", "Internal commands used by miren components", "", WithSectionGroup(GroupHidden)))
 
 	// Alias commands
+	d.Dispatch("alias", Section("alias", "CLI alias management", "", WithSectionGroup(GroupClient)))
 	d.Dispatch("alias list", Infer("alias list", "List configured CLI aliases", AliasList))
 
 	// Help command (registered last so it can reference all other commands)
 	d.Dispatch("help", NewHelpCommand(d))
-	d.Dispatch("help alias", Infer("help alias", "Learn how to define and use CLI aliases", HelpAlias))
 
 	addCommands(d)
-}
-
-func HiddenCommands() []string {
-	return []string{
-		"internal",
-		"debug",
-	}
 }

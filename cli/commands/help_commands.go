@@ -29,10 +29,18 @@ func NewHelpCommand(d *mflags.Dispatcher) *Cmd {
 				return runListCommands(d, opts)
 			}
 			if len(opts.Commands) > 0 {
+				// If the joined args form a real command path, treat them as one.
+				// This makes `miren help debug entity list` work the same as
+				// `miren help debug.entity.list`.
+				if len(opts.Commands) > 1 && d.HasCommand(strings.Join(opts.Commands, " ")) {
+					opts.Commands = []string{strings.Join(opts.Commands, " ")}
+				}
 				return runMultiHelp(d, opts)
 			}
-			return mflags.ErrShowHelp
+			RenderTopLevelHelp(d)
+			return nil
 		},
+		WithGroup(GroupClient),
 		WithExample(mflags.Example{
 			Name: "List all commands",
 			Body: "miren help --commands",

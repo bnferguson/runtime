@@ -11,6 +11,7 @@ type section struct {
 	help        string
 	desc        string
 	description string
+	group       string
 	fs          *mflags.FlagSet
 }
 
@@ -22,6 +23,13 @@ type SectionOption func(*section)
 func WithSectionDescription(desc string) SectionOption {
 	return func(s *section) {
 		s.description = desc
+	}
+}
+
+// WithSectionGroup assigns this section to a named group for help rendering.
+func WithSectionGroup(group string) SectionOption {
+	return func(s *section) {
+		s.group = group
 	}
 }
 
@@ -76,4 +84,9 @@ func (s *section) Synopsis() string {
 // Description implements mflags.DescriptionProvider.
 func (s *section) Description() string {
 	return s.description
+}
+
+// CommandGroup implements mflags.CommandGroupProvider.
+func (s *section) CommandGroup() string {
+	return s.group
 }

@@ -26,6 +26,7 @@ type Cmd struct {
 	examples    []mflags.Example
 	labsFeature string
 	description string
+	group       string
 }
 
 type CommandOption func(*Cmd)
@@ -47,6 +48,13 @@ func WithDescription(desc string) CommandOption {
 func WithLabsFeature(feature string) CommandOption {
 	return func(c *Cmd) {
 		c.labsFeature = feature
+	}
+}
+
+// WithGroup assigns this command to a named group for help rendering.
+func WithGroup(group string) CommandOption {
+	return func(c *Cmd) {
+		c.group = group
 	}
 }
 
@@ -125,6 +133,11 @@ func (w *Cmd) RequiredFeature() string {
 // Description implements mflags.DescriptionProvider.
 func (w *Cmd) Description() string {
 	return w.description
+}
+
+// CommandGroup implements mflags.CommandGroupProvider.
+func (w *Cmd) CommandGroup() string {
+	return w.group
 }
 
 // FlagSet implements mflags.Command

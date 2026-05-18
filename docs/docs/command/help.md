@@ -45,7 +45,3 @@ miren help --commands --format json
 ```bash
 miren help app.list version sandbox.stop
 ```
-
-## Subcommands
-
-- [`miren help alias`](/command/help-alias) — Learn how to define and use CLI aliases

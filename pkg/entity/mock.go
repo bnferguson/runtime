@@ -125,6 +125,35 @@ func (m *MockStore) validateSessionAttrs(ctx context.Context, attrs []Attr, opts
 	return nil
 }
 
+// ensureShortIdLocked mirrors the real store's auto-allocation of db/short-id
+// on kinded entities that don't already carry one. Without this, tests that
+// resolve entities by their short id would have to inject one by hand.
+//
+// The caller must hold m.mu for writing so that candidate uniqueness and the
+// subsequent insert are serialized; otherwise two concurrent CreateEntity
+// calls could each see a candidate as free and both commit it.
+func (m *MockStore) ensureShortIdLocked(entity *Entity) error {
+	if _, hasKind := entity.Get(EntityKind); !hasKind {
+		return nil
+	}
+	if _, hasShortId := entity.Get(DBShortId); hasShortId {
+		return nil
+	}
+	shortId, err := AllocateShortId(string(entity.Id()), func(candidate string) (bool, error) {
+		for _, ent := range m.Entities {
+			if attr, ok := ent.Get(DBShortId); ok && attr.Value.String() == candidate {
+				return true, nil
+			}
+		}
+		return false, nil
+	})
+	if err != nil {
+		return fmt.Errorf("failed to allocate short-id: %w", err)
+	}
+	entity.Set(String(DBShortId, shortId))
+	return nil
+}
+
 func (m *MockStore) CreateEntity(ctx context.Context, entity *Entity, opts ...EntityOption) (*Entity, error) {
 	if err := m.validateSessionAttrs(ctx, entity.attrs, opts); err != nil {
 		return nil, err
@@ -138,6 +167,10 @@ func (m *MockStore) CreateEntity(ctx context.Context, entity *Entity, opts ...En
 	entity.SetRevision(1)
 
 	m.mu.Lock()
+	if err := m.ensureShortIdLocked(entity); err != nil {
+		m.mu.Unlock()
+		return nil, err
+	}
 	m.Entities[entity.Id()] = entity
 	m.mu.Unlock()
 

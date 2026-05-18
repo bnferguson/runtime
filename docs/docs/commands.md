@@ -29,7 +29,7 @@ Complete reference for all `miren` CLI commands.
 
 | Command | Description |
 |---------|-------------|
-| [`miren alias`](/command/alias) |  |
+| [`miren alias`](/command/alias) | CLI alias management |
 | [`miren alias list`](/command/alias-list) | List configured CLI aliases |
 
 ## app
@@ -98,7 +98,7 @@ Complete reference for all `miren` CLI commands.
 
 | Command | Description |
 |---------|-------------|
-| [`miren disk`](/command/disk) |  |
+| [`miren disk`](/command/disk) | Disk backup and recovery |
 | [`miren disk backup`](/command/disk-backup) | Backup a disk to a snapshot file |
 | [`miren disk list-deleted`](/command/disk-list-deleted) | List deleted disks available for recovery |
 | [`miren disk restore`](/command/disk-restore) | Restore a disk from a snapshot file |
@@ -135,7 +135,6 @@ Complete reference for all `miren` CLI commands.
 | Command | Description |
 |---------|-------------|
 | [`miren help`](/command/help) | Show help for one or more commands |
-| [`miren help alias`](/command/help-alias) | Learn how to define and use CLI aliases |
 
 ## init
 

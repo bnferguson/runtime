@@ -48,6 +48,11 @@ func Run(args []string) int {
 		return 1
 	}
 
+	if shouldShowTopLevelHelp(execArgs) {
+		commands.RenderTopLevelHelp(d)
+		return 0
+	}
+
 	err = d.Execute(execArgs)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -64,6 +69,22 @@ func Run(args []string) int {
 	}
 
 	return 0
+}
+
+// shouldShowTopLevelHelp returns true when the args indicate we should render
+// top-level help (no args, or just -h/--help with no command).
+func shouldShowTopLevelHelp(args []string) bool {
+	if len(args) == 0 {
+		return true
+	}
+	// Only help flags, no command words
+	for _, arg := range args {
+		if arg == "-h" || arg == "--help" {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // printError renders an error to stderr. If the error implements
