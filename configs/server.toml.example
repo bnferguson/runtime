@@ -41,6 +41,17 @@ skip_client_config = false
 # HTTP request timeout in seconds
 http_request_timeout = 60
 
+[ingress]
+# Ingress mode: tls-autoprovision (default), behind-proxy-http, behind-proxy-https.
+# See https://rfd.miren.garden/rfd/84 for details.
+mode = "tls-autoprovision"
+
+# Optional bind override (full host:port). Replaces the mode's default bind
+# entirely. Rejected by validation under tls-autoprovision, where the
+# :443 + :80 pair is structural for HTTP-01 ACME.
+# Example: address = "0.0.0.0:80"
+# address = ""
+
 [tls]
 # Additional DNS names to include in the server certificate
 # Example: ["miren.local", "*.miren.local"]
@@ -49,9 +60,6 @@ additional_names = []
 # Additional IP addresses to include in the server certificate
 # Example: ["10.0.0.1", "192.168.1.100"]
 additional_ips = []
-
-# Expose the HTTP ingress on standard TLS ports (443)
-standard_tls = false
 
 [etcd]
 # Etcd endpoints for distributed mode
@@ -111,10 +119,13 @@ socket_path = ""
 # address = "0.0.0.0:8443"
 # data_path = "/data/miren"
 #
+# [ingress]
+# mode = "tls-autoprovision"
+#
 # [tls]
 # additional_names = ["miren.prod.example.com", "*.miren.prod.example.com"]
 # additional_ips = ["10.0.1.10", "10.0.2.10"]
-# standard_tls = true
+# acme_email = "ops@example.com"
 #
 # [etcd]
 # endpoints = ["https://etcd-1:2379", "https://etcd-2:2379"]

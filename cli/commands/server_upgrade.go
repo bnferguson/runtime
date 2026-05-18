@@ -29,19 +29,9 @@ func ServerUpgrade(ctx *Context, opts struct {
 		return fmt.Errorf("miren server is not running. Use 'miren upgrade' to upgrade the CLI binary instead")
 	}
 
-	// Determine version/channel
-	version := opts.Version
-	channel := opts.Channel
-
-	if version != "" && channel != "" {
-		return fmt.Errorf("--version and --channel are mutually exclusive")
-	}
-
-	if version == "" && channel == "" {
-		channel = "latest"
-	}
-	if channel != "" {
-		version = channel
+	version, err := resolveVersionChannel(opts.Version, opts.Channel)
+	if err != nil {
+		return err
 	}
 
 	// Create manager with server configuration

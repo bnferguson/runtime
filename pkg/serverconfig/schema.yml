@@ -37,6 +37,11 @@ configs:
         toml: server
         nested: true
 
+      ingress:
+        type: IngressConfig
+        toml: ingress
+        nested: true
+
       tls:
         type: TLSConfig
         toml: tls
@@ -183,9 +188,41 @@ configs:
         validation:
           enum: ["", auto, universal, accelerator]
 
-  TLSConfig:
-    description: TLS/certificate settings
+  IngressConfig:
+    description: HTTP/HTTPS ingress configuration. See RFD-84 for the mode-based design.
     fields:
+      mode:
+        type: string
+        default: tls-autoprovision
+        cli:
+          long: ingress-mode
+          description: "Ingress mode: tls-autoprovision (default, :443 + :80 with ACME or self-signed), behind-proxy-http (plain HTTP for use behind a TLS-terminating proxy), behind-proxy-https (TLS terminated by Miren; certs come from self-signed or DNS-01 ACME, since :80 isn't bound for HTTP-01)"
+        env: MIREN_INGRESS_MODE
+        toml: mode
+        validation:
+          enum: [tls-autoprovision, behind-proxy-http, behind-proxy-https]
+
+      address:
+        type: string
+        default: ""
+        cli:
+          long: ingress-address
+          description: "Optional bind override. Replaces the mode's default bind entirely (interface and port). Rejected by validation in tls-autoprovision (where :443 + :80 is structural). Reserved unix:/path prefix is not yet supported."
+        env: MIREN_INGRESS_ADDRESS
+        toml: address
+
+  TLSConfig:
+    description: TLS certificate settings. Consulted only when ingress.mode is tls-autoprovision or behind-proxy-https.
+    fields:
+      standard_tls:
+        type: bool
+        cli:
+          long: serve-tls
+          description: "Deprecated and ignored. Retained as a no-op so existing systemd unit files, env vars, and config files from pre-RFD-84 installs still parse. Use ingress.mode to pick the deployment shape."
+          hidden: true
+        env: MIREN_TLS_STANDARD_TLS
+        toml: standard_tls
+
       additional_names:
         type: "[]string"
         default: []
@@ -205,15 +242,6 @@ configs:
         toml: additional_ips
         validation:
           format: ip_list
-
-      standard_tls:
-        type: bool
-        default: true
-        cli:
-          long: serve-tls
-          description: Expose the http ingress on standard TLS ports
-        env: MIREN_TLS_STANDARD_TLS
-        toml: standard_tls
 
       acme_dns_provider:
         type: string

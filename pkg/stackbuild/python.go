@@ -99,6 +99,10 @@ type PythonStack struct {
 	requiredEnvVars []EnvVarRequirement
 }
 
+func (s *PythonStack) BaseDistro() string {
+	return "debian"
+}
+
 func (s *PythonStack) Name() string {
 	return "python"
 }
@@ -250,6 +254,9 @@ func (s *PythonStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, er
 
 	base = s.addAppUser(base)
 
+	h := &highlevelBuilder{opts}
+	base = h.applyAugmentations(base, localCtx, s.BaseDistro(), s.Augmentations(), s.SkipJSInstall())
+
 	// Create pip cache mount
 	pipCache := llb.Scratch().File(
 		llb.Mkdir("/pip-cache", 0777, llb.WithParents(true)),
@@ -343,8 +350,6 @@ func (s *PythonStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, er
 			llb.WithCustomName("[phase] Installing Python dependencies with uv"),
 		).Root()
 	}
-
-	h := &highlevelBuilder{opts}
 
 	// Copy the rest of the application code
 	state = h.copyApp(state, localCtx)

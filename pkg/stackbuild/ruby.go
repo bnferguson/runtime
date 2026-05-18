@@ -102,6 +102,10 @@ type RubyStack struct {
 	requiredEnvVars []EnvVarRequirement
 }
 
+func (s *RubyStack) BaseDistro() string {
+	return "debian"
+}
+
 func (s *RubyStack) Name() string {
 	return "ruby"
 }
@@ -219,8 +223,12 @@ func (s *RubyStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 
 	h := &highlevelBuilder{opts}
 
-	// My kingdom for a pipe operator.
+	// nodejs is load-bearing here even with the npm augmentation: some rubygems
+	// shell out to `node` directly during install/runtime without a package.json,
+	// so it must be present on every Ruby build regardless of augmentation state.
 	base = h.aptInstall(base, "build-essential", "libpq-dev", "nodejs", "libyaml-dev", "postgresql-client", "git", "curl", "ssh")
+
+	base = h.applyAugmentations(base, localCtx, s.BaseDistro(), s.Augmentations(), s.SkipJSInstall())
 
 	base = base.
 		AddEnv("SECRET_KEY_BASE_DUMMY", "1").

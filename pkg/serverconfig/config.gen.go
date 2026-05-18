@@ -85,6 +85,7 @@ type Config struct {
 	Buildkit        BuildkitConfig        `toml:"buildkit"`
 	Containerd      ContainerdConfig      `toml:"containerd"`
 	Etcd            EtcdConfig            `toml:"etcd"`
+	Ingress         IngressConfig         `toml:"ingress"`
 	Labs            []string              `toml:"labs" env:"MIREN_LABS"`
 	Mode            *string               `toml:"mode" env:"MIREN_MODE"`
 	Server          ServerConfig          `toml:"server"`
@@ -225,6 +226,38 @@ func (c *EtcdConfig) GetStartEmbedded() bool {
 // SetStartEmbedded sets the value of StartEmbedded
 func (c *EtcdConfig) SetStartEmbedded(v bool) {
 	c.StartEmbedded = &v
+}
+
+// IngressConfig HTTP/HTTPS ingress configuration. See RFD-84 for the mode-based design.
+type IngressConfig struct {
+	Address *string `toml:"address" env:"MIREN_INGRESS_ADDRESS"`
+	Mode    *string `toml:"mode" env:"MIREN_INGRESS_MODE"`
+}
+
+// GetAddress returns the value of Address or its zero value if nil
+func (c *IngressConfig) GetAddress() string {
+	if c.Address != nil {
+		return *c.Address
+	}
+	return ""
+}
+
+// SetAddress sets the value of Address
+func (c *IngressConfig) SetAddress(v string) {
+	c.Address = &v
+}
+
+// GetMode returns the value of Mode or its zero value if nil
+func (c *IngressConfig) GetMode() string {
+	if c.Mode != nil {
+		return *c.Mode
+	}
+	return ""
+}
+
+// SetMode sets the value of Mode
+func (c *IngressConfig) SetMode(v string) {
+	c.Mode = &v
 }
 
 // ServerConfig Core server settings
@@ -385,7 +418,7 @@ func (c *ServerConfig) SetStopSandboxesOnShutdown(v bool) {
 	c.StopSandboxesOnShutdown = &v
 }
 
-// TLSConfig TLS/certificate settings
+// TLSConfig TLS certificate settings. Consulted only when ingress.mode is tls-autoprovision or behind-proxy-https.
 type TLSConfig struct {
 	AcmeDNSProvider *string  `toml:"acme_dns_provider" env:"MIREN_TLS_ACME_DNS_PROVIDER"`
 	AcmeEmail       *string  `toml:"acme_email" env:"MIREN_TLS_ACME_EMAIL"`

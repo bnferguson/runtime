@@ -47,6 +47,15 @@ func StreamRecv[T any](fn func(T) error) SendStream[T] {
 
 const streamChunkSize = 10 * 1024 * 1024 // 10MB chunks for efficient streaming over high-latency links
 
+// bulkBatchSize is the minimum number of bytes a bulk-mode ServeReader waits
+// to accumulate before responding to a Recv. The Recv↔Read loop is one
+// round-trip per response, so without batching, each gzip flush (often a
+// few hundred bytes) becomes its own RTT, capping a transcontinental deploy
+// at ~2.5 KB/s. 1 MB lifts the ceiling to roughly batch/RTT (~10 MB/s at
+// 100 ms RTT). Opt in via WithBulkBatching; interactive callers like exec
+// stdin must not use this, or they would stall until the buffer fills.
+const bulkBatchSize = 1024 * 1024
+
 type rscReader struct {
 	ctx    context.Context
 	rsc    *RecvStreamClient[[]byte]
@@ -97,7 +106,22 @@ func ToReader(ctx context.Context, x *RecvStreamClient[[]byte]) io.ReadCloser {
 }
 
 type serveReader struct {
-	r io.Reader
+	r        io.Reader
+	minBatch int // 0 means stream as bytes arrive; >0 means batch until ≥minBatch.
+}
+
+// ServeReaderOption configures a ServeReader. The zero-config default is
+// streaming: each underlying Read becomes one Recv response so callers like
+// interactive stdin pipes don't wait for a buffer to fill.
+type ServeReaderOption func(*serveReader)
+
+// WithBulkBatching tells the ServeReader to wait until at least bulkBatchSize
+// bytes are available before responding to a Recv (or until EOF). Use for
+// bulk transfers where the round-trip per chunk is the bottleneck, like
+// shipping a deploy tarball. Must NOT be used for interactive streams —
+// it would stall every key the user types until the buffer fills.
+func WithBulkBatching() ServeReaderOption {
+	return func(s *serveReader) { s.minBatch = bulkBatchSize }
 }
 
 func (s *serveReader) Recv(ctx context.Context, state *RecvStreamRecv[[]byte]) error {
@@ -111,27 +135,54 @@ func (s *serveReader) Recv(ctx context.Context, state *RecvStreamRecv[[]byte]) e
 
 	buf := make([]byte, readSize)
 
-	n, err := s.r.Read(buf)
-	if err != nil {
-		if errors.Is(err, io.EOF) {
-			if c, ok := s.r.(io.Closer); ok {
-				c.Close()
-			}
-			state.Results().SetValue(nil)
-			return nil
+	var (
+		n   int
+		err error
+	)
+	if s.minBatch > 0 {
+		minBatch := s.minBatch
+		if minBatch > readSize {
+			minBatch = readSize
 		}
-		return err
+		n, err = io.ReadAtLeast(s.r, buf, minBatch)
+	} else {
+		// Streaming mode: ship whatever the underlying reader yields right
+		// now, so per-byte interactive sources (tty stdin, etc.) don't stall
+		// waiting to fill a buffer.
+		n, err = s.r.Read(buf)
 	}
 
-	buf = buf[:n]
+	if err != nil {
+		// EOF (no bytes) or short-read EOF (partial final batch in bulk
+		// mode) are both the natural end of stream. Anything else is real.
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			if n == 0 {
+				if c, ok := s.r.(io.Closer); ok {
+					c.Close()
+				}
+				state.Results().SetValue(nil)
+				return nil
+			}
+			// Ship the partial batch without closing s.r — the next Recv
+			// will hit a clean (0, EOF) and close there. Closing now would
+			// turn the next Read into ErrClosedPipe and surface as an RPC
+			// error instead of an orderly end-of-stream.
+		} else {
+			return err
+		}
+	}
 
-	state.Results().SetValue(buf)
+	state.Results().SetValue(buf[:n])
 
 	return nil
 }
 
-func ServeReader(ctx context.Context, r io.Reader) RecvStream[[]byte] {
-	return &serveReader{r: r}
+func ServeReader(ctx context.Context, r io.Reader, opts ...ServeReaderOption) RecvStream[[]byte] {
+	s := &serveReader{r: r}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 type serveWriter struct {

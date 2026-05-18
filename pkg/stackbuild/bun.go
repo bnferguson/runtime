@@ -46,6 +46,10 @@ type BunStack struct {
 	requiredEnvVars []EnvVarRequirement
 }
 
+func (s *BunStack) BaseDistro() string {
+	return "debian"
+}
+
 func (s *BunStack) Name() string {
 	return "bun"
 }

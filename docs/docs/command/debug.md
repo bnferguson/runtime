@@ -16,6 +16,7 @@ miren debug [flags]
 
 ## Subcommands
 
+- [`miren debug advertise`](/command/debug-advertise) — Show which addresses the server would advertise and why
 - [`miren debug bundle`](/command/debug-bundle) — Create a support bundle with system debug information
 - [`miren debug colors`](/command/debug-colors) — Print some colors
 - [`miren debug connection`](/command/debug-connection) — Test connectivity and authentication with a server

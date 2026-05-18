@@ -188,6 +188,7 @@ jobs:
       run: docker save runtime-shell -o /tmp/iso-image.tar
 
   test-blackbox:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: depot-ubuntu-latest
     steps:
     - uses: actions/checkout@v5
@@ -264,6 +265,7 @@ jobs:
       run: make dev-stop || true
 
   test-blackbox-pop:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: depot-ubuntu-latest
     steps:
     - uses: actions/checkout@v5
@@ -357,10 +359,18 @@ jobs:
     steps:
     - name: Check results
       run: |
-        if [[ "${{ needs.test-runner.result }}" != "success" || "${{ needs.test-blackbox.result }}" != "success" || "${{ needs.test-blackbox-pop.result }}" != "success" ]]; then
-          echo "test-runner result: ${{ needs.test-runner.result }}"
-          echo "test-blackbox result: ${{ needs.test-blackbox.result }}"
-          echo "test-blackbox-pop result: ${{ needs.test-blackbox-pop.result }}"
+        echo "test-runner result: ${{ needs.test-runner.result }}"
+        echo "test-blackbox result: ${{ needs.test-blackbox.result }}"
+        echo "test-blackbox-pop result: ${{ needs.test-blackbox-pop.result }}"
+
+        if [[ "${{ needs.test-runner.result }}" != "success" ]]; then
+          exit 1
+        fi
+        # Blackbox tests are skipped for external (fork) PRs
+        if [[ "${{ needs.test-blackbox.result }}" != "success" && "${{ needs.test-blackbox.result }}" != "skipped" ]]; then
+          exit 1
+        fi
+        if [[ "${{ needs.test-blackbox-pop.result }}" != "success" && "${{ needs.test-blackbox-pop.result }}" != "skipped" ]]; then
           exit 1
         fi
 

@@ -67,6 +67,10 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	if err != nil {
 		return fmt.Errorf("failed to load configuration: %w", err)
 	}
+	if err := cfg.ValidateIngressCoherence(); err != nil {
+		return fmt.Errorf("configuration validation failed: %w", err)
+	}
+	cfg.WarnDeprecatedConfig(ctx.Log)
 
 	// Initialize Miren Labs feature flags
 	labs.Init(ctx.Log, cfg.Labs)
@@ -75,10 +79,10 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	ctx.UILog.Info("starting miren server", "version", versionInfo.Version, "commit", versionInfo.Commit)
 
 	// Discover local and public IPs early so they're available for TLS cert SANs.
-	// We track discovered IPs separately from user-configured IPs so the
-	// coordinator can treat them differently (netcheck can replace discovered
-	// public IPs but user-configured IPs always pass through).
-	var discoveredIps []net.IP
+	// IPs are tagged with whether they are user-configured (explicit) or
+	// auto-discovered from interfaces. The coordinator uses this to decide
+	// which IPs to prune (discovered) vs always include (explicit).
+	ipSet := coordinate.NewIPSet()
 	discovery, err := ipdiscovery.DiscoverWithTimeout(10*time.Second, ctx.Log, ipdiscovery.Options{
 		NetcheckURL: coordinate.DefaultCloudURL,
 	})
@@ -88,10 +92,22 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		for _, addr := range discovery.Addresses {
 			ip := net.ParseIP(addr.IP)
 			if ip != nil && !ip.IsLinkLocalUnicast() {
-				discoveredIps = append(discoveredIps, ip)
+				ipSet.AddDiscovered(ip)
 			}
 		}
 		ctx.Log.Info("discovered IPs", "addresses", len(discovery.Addresses))
+	}
+
+	// Parse explicit AdditionalIPs up front so they're included in TLS cert
+	// SANs everywhere — both the API cert and the etcd cert (used by
+	// distributed runners), the latter of which is built earlier in startup.
+	for _, ip := range cfg.TLS.AdditionalIPs {
+		addr := net.ParseIP(ip)
+		if addr == nil {
+			ctx.Log.Error("failed to parse additional IP", "ip", ip)
+			return fmt.Errorf("failed to parse additional IP %s", ip)
+		}
+		ipSet.AddExplicit(addr)
 	}
 
 	switch cfg.GetMode() {
@@ -296,7 +312,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 			ctx.Log.Info("setting up etcd mTLS for distributed runners")
 
 			var err error
-			etcdTLSSetup, err = coordinate.SetupEtcdTLS(ctx.Log, cfg.Server.GetDataPath(), cfg.TLS.AdditionalNames, discoveredIps)
+			etcdTLSSetup, err = coordinate.SetupEtcdTLS(ctx.Log, cfg.Server.GetDataPath(), cfg.TLS.AdditionalNames, ipSet.RawIPs())
 			if err != nil {
 				ctx.Log.Error("failed to set up etcd TLS", "error", err)
 				return err
@@ -516,22 +532,6 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	systemHandler := observability.NewSystemLogHandler(ctx.Log.Handler(), batchWriter)
 	ctx.Log = slog.New(systemHandler)
 
-	var additionalIps []net.IP
-	seen := make(map[string]struct{})
-	for _, ip := range cfg.TLS.AdditionalIPs {
-		addr := net.ParseIP(ip)
-		if addr == nil {
-			ctx.Log.Error("failed to parse additional IP", "ip", ip)
-			return fmt.Errorf("failed to parse additional IP %s", ip)
-		}
-		key := addr.String()
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		additionalIps = append(additionalIps, addr)
-	}
-
 	// Create HTTP metrics
 	httpMetrics := metrics.NewHTTPMetrics(ctx.Log, ctx.ServerState.Writer, ctx.ServerState.Reader)
 	ctx.ServerState.HTTPMetrics = httpMetrics
@@ -618,8 +618,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		NetworkBackend:         cfg.Server.GetNetworkBackend(),
 		DataPath:               cfg.Server.GetDataPath(),
 		AdditionalNames:        cfg.TLS.AdditionalNames,
-		AdditionalIPs:          additionalIps,
-		DiscoveredIPs:          discoveredIps,
+		IPs:                    ipSet,
 		AcmeEmail:              cfg.TLS.GetAcmeEmail(),
 		AcmeDNSProvider:        cfg.TLS.GetAcmeDNSProvider(),
 		Resolver:               res,
@@ -825,9 +824,9 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		}
 	}()
 
-	if cfg.TLS.GetStandardTLS() {
+	switch mode := cfg.Ingress.GetMode(); mode {
+	case serverconfig.IngressModeAutoprovision:
 		if cfg.TLS.GetSelfSigned() {
-			// Use self-signed certificate (for development/testing)
 			if err := autotls.ServeTLSSelfSigned(sub, ctx.Log, hs); err != nil {
 				ctx.Log.Error("failed to enable self-signed TLS", "error", err)
 				return err
@@ -845,13 +844,49 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 				readyFn()
 			}
 		}
-	} else {
-		go func() {
-			err := http.ListenAndServe(":80", hs)
-			if err != nil {
-				ctx.Log.Error("failed to start HTTP server", "error", err)
+
+	case serverconfig.IngressModeBehindProxyHTTPS:
+		addr := cfg.Ingress.GetAddress()
+		if addr == "" {
+			addr = "127.0.0.1:443"
+		}
+		if cfg.TLS.GetSelfSigned() {
+			if err := autotls.ServeTLSSelfSignedOnAddr(sub, ctx.Log, hs, addr); err != nil {
+				ctx.Log.Error("failed to enable self-signed TLS on custom address", "error", err)
+				return err
 			}
-		}()
+		} else {
+			certProvider := co.CertificateProvider()
+			if certProvider == nil {
+				return fmt.Errorf("no certificate provider available")
+			}
+			if err := autotls.ServeTLSWithControllerOnAddr(sub, ctx.Log, certProvider, hs, addr); err != nil {
+				return err
+			}
+		}
+
+	case serverconfig.IngressModeBehindProxyHTTP:
+		addr := cfg.Ingress.GetAddress()
+		if addr == "" {
+			addr = "127.0.0.1:80"
+		}
+		httpSrv := &http.Server{Addr: addr, Handler: hs}
+		eg.Go(func() error {
+			ctx.Log.Info("starting HTTP server", "addr", addr)
+			if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				return fmt.Errorf("failed to start HTTP server on %s: %w", addr, err)
+			}
+			return nil
+		})
+		eg.Go(func() error {
+			<-sub.Done()
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			return httpSrv.Shutdown(shutdownCtx)
+		})
+
+	default:
+		return fmt.Errorf("unrecognized ingress.mode %q (should have been caught by config validation)", mode)
 	}
 
 	registry := ocireg.NewRegistry(cfg.Server.GetDataPath(), ctx.Log, ec)

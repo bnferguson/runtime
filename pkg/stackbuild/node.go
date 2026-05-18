@@ -84,6 +84,10 @@ type NodeStack struct {
 	requiredEnvVars []EnvVarRequirement
 }
 
+func (s *NodeStack) BaseDistro() string {
+	return "debian"
+}
+
 func (s *NodeStack) Name() string {
 	return "node"
 }

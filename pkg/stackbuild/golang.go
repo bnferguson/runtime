@@ -76,6 +76,10 @@ type GoStack struct {
 	requiredEnvVars []EnvVarRequirement
 }
 
+func (s *GoStack) BaseDistro() string {
+	return "alpine"
+}
+
 func (s *GoStack) Name() string {
 	return "go"
 }
@@ -196,6 +200,8 @@ func (s *GoStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error)
 
 	// Add app user before copying code so copyApp can set ownership
 	state = s.addAppUser(state)
+
+	state = h.applyAugmentations(state, localCtx, s.BaseDistro(), s.Augmentations(), s.SkipJSInstall())
 
 	// Copy the application code (now owned by app user)
 	appState := h.copyApp(state, localCtx)

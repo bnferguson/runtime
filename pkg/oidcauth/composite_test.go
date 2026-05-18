@@ -91,6 +91,7 @@ func TestCompositeAuthenticator_PrimaryErrorOIDCSucceeds(t *testing.T) {
 	}
 	if identity == nil {
 		t.Fatal("expected OIDC identity, got nil")
+		return
 	}
 	if identity.Subject != "repo:acme/app:ref:refs/heads/main" {
 		t.Errorf("subject = %q, want %q", identity.Subject, "repo:acme/app:ref:refs/heads/main")

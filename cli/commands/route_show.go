@@ -55,6 +55,18 @@ func RouteShow(ctx *Context, opts struct {
 		routeLabel = opts.Host
 	}
 
+	wafEnabled := !entity.Empty(route.WafProfile)
+	var wafProfile *ingress_v1alpha.WafProfile
+	if wafEnabled {
+		wafProfile = &ingress_v1alpha.WafProfile{}
+		if err := ic.GetEntityStore().GetById(ctx, route.WafProfile, wafProfile); err != nil {
+			if !errors.Is(err, cond.ErrNotFound{}) {
+				return fmt.Errorf("failed to get WAF profile: %w", err)
+			}
+			wafProfile = nil
+		}
+	}
+
 	protected := !entity.Empty(route.OidcProvider)
 	var provider *ingress_v1alpha.OidcProvider
 	if protected {
@@ -78,6 +90,12 @@ func RouteShow(ctx *Context, opts struct {
 			ProviderURL     string              `json:"provider_url,omitempty"`
 			ProviderMissing bool                `json:"provider_missing,omitempty"`
 			ClaimMappings   []map[string]string `json:"claim_mappings,omitempty"`
+			WafLevel        int                 `json:"waf_level"`
+		}
+
+		wafLevel := 0
+		if wafProfile != nil {
+			wafLevel = int(wafProfile.ParanoiaLevel)
 		}
 
 		r := RouteJSON{
@@ -86,6 +104,7 @@ func RouteShow(ctx *Context, opts struct {
 			Default:     route.Default,
 			Protected:   protected,
 			OIDCEnabled: protected,
+			WafLevel:    wafLevel,
 		}
 
 		if protected {
@@ -110,6 +129,9 @@ func RouteShow(ctx *Context, opts struct {
 	ctx.Printf("  App:       %s\n", ui.CleanEntityID(string(route.App)))
 	ctx.Printf("  Default:   %v\n", route.Default)
 	ctx.Printf("  Protected: %v\n", protected)
+	if wafProfile != nil {
+		ctx.Printf("  WAF Level: %d\n", wafProfile.ParanoiaLevel)
+	}
 
 	if protected {
 		if provider != nil {

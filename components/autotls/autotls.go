@@ -3,6 +3,7 @@ package autotls
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -57,14 +58,6 @@ func ServeTLSWithController(ctx context.Context, log *slog.Logger, certProvider 
 			host = hostWithoutPort
 		}
 
-		isLocalhost := host == "localhost" || host == "127.0.0.1" || host == "::1"
-		isIPAddress := net.ParseIP(host) != nil
-
-		if isLocalhost || isIPAddress {
-			h.ServeHTTP(w, r)
-			return
-		}
-
 		if r.Method != "GET" && r.Method != "HEAD" {
 			http.Error(w, "Use HTTPS", http.StatusBadRequest)
 			return
@@ -112,6 +105,56 @@ func ServeTLSWithController(ctx context.Context, log *slog.Logger, certProvider 
 			log.Error("HTTP server shutdown error", "error", err)
 		}
 		log.Info("HTTPS and HTTP servers shutdown complete")
+	}()
+
+	return nil
+}
+
+// ServeTLSWithControllerOnAddr serves HTTPS on a single configurable address
+// without binding port 80. Used by the behind-proxy-https ingress mode, where
+// the public hostname lives at a proxy and Miren only handles the TLS leg.
+// Because :80 is not bound, ACME HTTP-01 and TLS-ALPN-01 challenges cannot
+// complete in this mode; certificates must come from DNS-01 ACME or be
+// self-signed (use ServeTLSSelfSignedOnAddr for the self-signed case).
+func ServeTLSWithControllerOnAddr(ctx context.Context, log *slog.Logger, certProvider CertificateProvider, h http.Handler, addr string) error {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("listen %s: %w", addr, err)
+	}
+	return serveTLSOnListener(ctx, log, certProvider, h, ln)
+}
+
+func serveTLSOnListener(ctx context.Context, log *slog.Logger, certProvider CertificateProvider, h http.Handler, ln net.Listener) error {
+	log = log.With("module", "autotls", "mode", "controller", "addr", ln.Addr().String())
+	log.Info("serving TLS with certificate controller")
+
+	tlsConfig := &tls.Config{
+		GetCertificate: certProvider.GetCertificate,
+		MinVersion:     tls.VersionTLS12,
+		NextProtos:     []string{"h2", "http/1.1"},
+	}
+
+	server := &http.Server{
+		Handler:           h,
+		TLSConfig:         tlsConfig,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	go func() {
+		err := server.ServeTLS(ln, "", "")
+		if err != nil && err != http.ErrServerClosed {
+			log.Error("error serving HTTPS", "error", err)
+		}
+	}()
+
+	go func() {
+		<-ctx.Done()
+		log.Info("shutting down HTTPS server")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Error("HTTPS server shutdown error", "error", err)
+		}
 	}()
 
 	return nil

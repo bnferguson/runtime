@@ -5,6 +5,7 @@ package network
 import (
 	"fmt"
 	"log/slog"
+	"net/netip"
 
 	"github.com/vishvananda/netlink"
 )
@@ -27,4 +28,8 @@ func ConfigureGW(br netlink.Link, ec *EndpointConfig) error {
 
 func MasqueradeEndpoint(ec *EndpointConfig) error {
 	return fmt.Errorf("network masquerade not supported on this platform")
+}
+
+func ReconcileBridgeAddresses(log *slog.Logger, br netlink.Link, desired []netip.Prefix) error {
+	return fmt.Errorf("bridge reconciliation not supported on this platform")
 }

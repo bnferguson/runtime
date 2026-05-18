@@ -2,11 +2,9 @@ package commands
 
 import (
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"syscall"
-	"time"
 
 	"miren.dev/runtime/pkg/runnerconfig"
 )
@@ -24,15 +22,7 @@ func RunnerStatus(ctx *Context, opts struct {
 	}
 
 	ctx.Printf("Runner ID:    %s\n", cfg.RunnerID)
-
-	// Check coordinator reachability
-	conn, err := net.DialTimeout("tcp", cfg.CoordinatorAddress, 3*time.Second)
-	if err != nil {
-		ctx.Printf("Coordinator:  %s (unreachable)\n", cfg.CoordinatorAddress)
-	} else {
-		conn.Close()
-		ctx.Printf("Coordinator:  %s (reachable)\n", cfg.CoordinatorAddress)
-	}
+	ctx.Printf("Coordinator:  %s\n", cfg.CoordinatorAddress)
 
 	// Check containerd
 	socketPath := filepath.Join(opts.DataPath, "containerd", "containerd.sock")

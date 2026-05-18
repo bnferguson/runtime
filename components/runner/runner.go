@@ -844,17 +844,17 @@ func (r *Runner) SetupControllers(
 
 	cm.AddController(sbController)
 
-	cm.AddController(
-		controller.NewReconcileController(
-			"service",
-			log,
-			entity.Ref(entity.EntityKind, network_v1alpha.KindService),
-			eas,
-			controller.AdaptController(serviceController),
-			time.Minute,
-			workers,
-		),
+	svcController := controller.NewReconcileController(
+		"service",
+		log,
+		entity.Ref(entity.EntityKind, network_v1alpha.KindService),
+		eas,
+		controller.AdaptController(serviceController),
+		time.Minute,
+		workers,
 	)
+	svcController.SetPeriodic(5*time.Minute, serviceController.Periodic)
+	cm.AddController(svcController)
 
 	cm.AddController(
 		controller.NewReconcileController(

@@ -38,6 +38,7 @@ import (
 	"miren.dev/runtime/pkg/httputil"
 	"miren.dev/runtime/pkg/oidc"
 	"miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/pkg/waf"
 )
 
 // idleTimeoutConn wraps a net.Conn and sets a read deadline before each
@@ -95,6 +96,10 @@ type Server struct {
 	oidcSessionManager *oidc.SessionManager
 	oidcMu             sync.RWMutex
 	oidcHandlers       map[string]*oidcHandler
+
+	wafEngine       *waf.Engine
+	wafProfileMu    sync.RWMutex
+	wafProfileCache map[entity.Id]*wafProfileEntry
 }
 
 type appUsage struct {
@@ -155,6 +160,8 @@ func NewServer(
 		apps:               make(map[string]*appUsage),
 		oidcSessionManager: oidc.NewSessionManager(false, "", signingKey),
 		oidcHandlers:       make(map[string]*oidcHandler),
+		wafEngine:          waf.NewEngine(log.With("component", "waf")),
+		wafProfileCache:    make(map[entity.Id]*wafProfileEntry),
 	}
 
 	if httpMetrics == nil {
@@ -506,17 +513,6 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 
 		// Check for ephemeral subdomain label (only relevant for wildcard routes)
 		ephemeralLabel = ingress.ExtractSubdomainLabel(onlyHost, route.Host)
-
-		// Check if OIDC authentication is required
-		if !entity.Empty(route.OidcProvider) {
-			// Wrap the request handler with OIDC middleware
-			oidcWrapped := h.oidcMiddleware(route, func(w http.ResponseWriter, r *http.Request) {
-				// Continue with normal request handling after auth
-				h.serveAuthenticatedRequest(w, r, targetAppId, routeType, ephemeralLabel, appName)
-			})
-			oidcWrapped(w, req)
-			return
-		}
 	} else if label, baseRoute, err := h.lookupEphemeralRoute(ctx, onlyHost); err == nil && baseRoute != nil {
 		// No exact or wildcard match, but stripping the first subdomain label
 		// matched an existing route — this is an ephemeral subdomain request.
@@ -524,14 +520,6 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 		targetAppId = baseRoute.App
 		routeType = "route"
 		ephemeralLabel = label
-
-		if !entity.Empty(baseRoute.OidcProvider) {
-			oidcWrapped := h.oidcMiddleware(route, func(w http.ResponseWriter, r *http.Request) {
-				h.serveAuthenticatedRequest(w, r, targetAppId, routeType, ephemeralLabel, appName)
-			})
-			oidcWrapped(w, req)
-			return
-		}
 	} else {
 		// No route found, try to find a default route
 		h.Log.Debug("no http route found, checking for default route", "host", onlyHost)
@@ -549,26 +537,24 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 			return
 		}
 
-		// Use the default route
+		route = defaultRoute
 		targetAppId = defaultRoute.App
 		routeType = "default"
 		h.Log.Debug("using default route", "host", onlyHost, "app", targetAppId)
-
-		// Check if OIDC authentication is required for default route
-		if !entity.Empty(defaultRoute.OidcProvider) {
-			// Update route reference
-			route = defaultRoute
-			// Wrap with OIDC middleware
-			oidcWrapped := h.oidcMiddleware(route, func(w http.ResponseWriter, r *http.Request) {
-				h.serveAuthenticatedRequest(w, r, targetAppId, routeType, ephemeralLabel, appName)
-			})
-			oidcWrapped(w, req)
-			return
-		}
 	}
 
-	// Continue with normal request handling
-	h.serveAuthenticatedRequest(w, req, targetAppId, routeType, ephemeralLabel, appName)
+	// Compose middleware chain: WAF → OIDC → serve
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		h.serveAuthenticatedRequest(w, r, targetAppId, routeType, ephemeralLabel, appName)
+	}
+
+	if !entity.Empty(route.OidcProvider) {
+		handler = h.oidcMiddleware(route, handler)
+	}
+
+	handler = h.wafMiddleware(route, handler)
+
+	handler(w, req)
 }
 
 // lookupEphemeralRoute checks whether the request host is an ephemeral

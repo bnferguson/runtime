@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/netip"
 	"os"
@@ -52,6 +51,14 @@ const (
 )
 
 var sandboxImage = imagerefs.Pause
+
+// cleanupAttach is the cio.Attach to pass to container.Task when we're
+// retrieving a task purely to delete it. The non-nil attach makes containerd
+// populate t.io with a FIFO closer that removes /run/containerd/fifo/<n>;
+// passing nil leaves t.io nil and task.Delete silently leaks the directory.
+func cleanupAttach() cio.Attach {
+	return cio.NewAttach()
+}
 
 type containerPorts struct {
 	Ports []observability.BoundPort
@@ -438,6 +445,16 @@ func (c *SandboxController) Init(ctx context.Context) error {
 		return err
 	}
 
+	// Drop any bridge addresses, NAT rules, or POSTROUTING jumps left over
+	// from a previous flannel lease era. Without this, a runner whose lease
+	// rotated (typically after >24h offline) ends up with two pod subnets
+	// pinned to the same bridge and a NAT chain whose ACCEPT rules end up
+	// after the catch-all MASQUERADE (MIR-1108).
+	err = network.ReconcileBridgeAddresses(c.Log, link, bc.Addresses)
+	if err != nil {
+		return err
+	}
+
 	err = network.MasqueradeEndpoint(ep)
 	if err != nil {
 		return err
@@ -679,64 +696,96 @@ func (c *SandboxController) isContainerHealthy(ctx context.Context, containerID 
 	}
 }
 
-// checkNetworkHealth verifies that a sandbox is reachable on its network address
-// Returns true if the sandbox has no ports (background workers) or if at least one port is reachable
-// Returns false if the sandbox has ports but none are reachable
+// checkNetworkHealth verifies that a sandbox's app is still listening on at
+// least one declared TCP port. Returns true for sandboxes with no exposed
+// TCP ports (background workers, UDP-only) or no allocated network. Returns
+// false if TCP ports are declared but none are in LISTEN state inside the
+// pause container's network namespace.
+//
+// The check reads /proc/<pause-pid>/net/tcp{,6} rather than dialing the pod
+// IP from the host. Host-to-pod TCP dials traverse the bridge's POSTROUTING
+// chain and can be intercepted by MASQUERADE, breaking connection tracking
+// on the dialing host. PortMonitor switched away from dials for the same
+// reason (commit 63661df3); MIR-1108 is the same class of bug here.
+//
+// Only TCP ports are probed because /proc/net/tcp does not expose UDP
+// listeners; a UDP-only sandbox would be wrongly killed if we treated UDP
+// ports as health-relevant.
 func (c *SandboxController) checkNetworkHealth(ctx context.Context, sb *compute.Sandbox) bool {
-	// Skip if sandbox has no network allocated
 	if len(sb.Network) == 0 {
 		c.Log.Debug("sandbox has no network, skipping network health check", "sandbox_id", sb.ID)
 		return true
 	}
 
-	// Parse network address to get IP
-	addr := sb.Network[0].Address
-	ip, err := netutil.ParseNetworkAddress(addr)
+	hasTCPPorts := false
+	for _, container := range sb.Spec.Container {
+		for _, p := range container.Port {
+			if portIsTCP(p) {
+				hasTCPPorts = true
+				break
+			}
+		}
+		if hasTCPPorts {
+			break
+		}
+	}
+	if !hasTCPPorts {
+		c.Log.Debug("sandbox has no exposed TCP ports, skipping network health check", "sandbox_id", sb.ID)
+		return true
+	}
+
+	pauseID := pauseContainerId(sb.ID)
+	pid, err := c.pauseContainerPID(ctx, pauseID)
 	if err != nil {
-		c.Log.Debug("failed to parse sandbox address", "sandbox_id", sb.ID, "address", addr, "error", err)
+		c.Log.Debug("failed to resolve pause container PID for health check",
+			"sandbox_id", sb.ID, "pause_id", pauseID, "error", err)
 		return false
 	}
 
-	// Iterate over containers, trying each container's first port until one succeeds
-	checkedCount := 0
-	dialer := &net.Dialer{
-		Timeout: 2 * time.Second,
-	}
-
 	for _, container := range sb.Spec.Container {
-		if len(container.Port) == 0 {
-			continue
+		for _, p := range container.Port {
+			if !portIsTCP(p) {
+				continue
+			}
+			port := int(p.Port)
+			if checkPort(pid, port) {
+				c.Log.Debug("network health check passed",
+					"sandbox_id", sb.ID, "container_name", container.Name, "port", port)
+				return true
+			}
+			c.Log.Debug("network health check found no listener for port",
+				"sandbox_id", sb.ID, "container_name", container.Name, "port", port)
 		}
-
-		// Check first port for this container
-		port := container.Port[0].Port
-		address := net.JoinHostPort(ip, fmt.Sprintf("%d", port))
-		checkedCount++
-
-		conn, err := dialer.DialContext(ctx, "tcp", address)
-		if err != nil {
-			c.Log.Debug("network health check failed for port",
-				"sandbox_id", sb.ID,
-				"container_name", container.Name,
-				"address", address,
-				"error", err)
-			continue
-		}
-		conn.Close()
-
-		// At least one port is reachable, network is healthy
-		c.Log.Debug("network health check passed", "sandbox_id", sb.ID, "address", address)
-		return true
 	}
 
-	// If no ports were checked (background worker), consider it healthy
-	if checkedCount == 0 {
-		c.Log.Debug("sandbox has no exposed ports, skipping network health check", "sandbox_id", sb.ID)
-		return true
-	}
-
-	// All checked ports failed
 	return false
+}
+
+// portIsTCP returns true for ports declared as TCP. Empty Protocol defaults
+// to TCP (matches mapLegacyProtocol), so ports without a protocol set are
+// treated as TCP as well.
+func portIsTCP(p compute.SandboxSpecContainerPort) bool {
+	return p.Protocol == "" || p.Protocol == compute.SandboxSpecContainerPortTCP
+}
+
+// pauseContainerPID returns the PID of the pause container's task. The
+// pause container shares its network namespace with all sub-containers,
+// so its /proc/<pid>/net/tcp{,6} reflects the listening sockets of the
+// app processes inside the sandbox.
+func (c *SandboxController) pauseContainerPID(ctx context.Context, pauseID string) (int, error) {
+	ctx = namespaces.WithNamespace(ctx, c.Namespace)
+
+	container, err := c.CC.LoadContainer(ctx, pauseID)
+	if err != nil {
+		return 0, fmt.Errorf("loading pause container: %w", err)
+	}
+
+	task, err := container.Task(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("getting pause task: %w", err)
+	}
+
+	return int(task.Pid()), nil
 }
 
 // reattachLogs reattaches log consumers to a container's task after controller restart.
@@ -1602,8 +1651,7 @@ func (c *SandboxController) CleanupContainer(ctx context.Context, cont container
 		c.portMonitor.StopMonitoring(containerID)
 	}
 
-	// Try to kill and delete any task first
-	task, err := cont.Task(ctx, nil)
+	task, err := cont.Task(ctx, cleanupAttach())
 	if err == nil && task != nil {
 		task.Kill(ctx, unix.SIGKILL)
 		_, err = task.Delete(ctx, containerd.WithProcessKill)
@@ -2170,7 +2218,7 @@ func (c *SandboxController) DestroySubContainers(ctx context.Context, id entity.
 
 	for i := range containers {
 		info := &containers[i]
-		task, err := info.container.Task(ctx, nil)
+		task, err := info.container.Task(ctx, cleanupAttach())
 		if err != nil {
 			c.Log.Debug("no task found for container", "id", info.id)
 			continue
@@ -2390,7 +2438,7 @@ func (c *SandboxController) StopSandbox(ctx context.Context, id entity.Id) error
 	// Delete pause container
 	c.Log.Debug("deleting pause container", "id", id)
 	if container != nil {
-		task, err := container.Task(ctx, nil)
+		task, err := container.Task(ctx, cleanupAttach())
 		if err != nil {
 			if !errdefs.IsNotFound(err) {
 				c.Log.Error("failed to get pause task", "id", id, "err", err)

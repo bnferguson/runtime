@@ -601,10 +601,10 @@ func Deploy(ctx *Context, opts struct {
 	}
 	buildCall := func(callCtx context.Context, tarReader io.ReadCloser, cb stream.SendStream[*build_v1alpha.Status]) (buildResults, error) {
 		if useOptimized {
-			tarStream := stream.ServeReader(callCtx, tarReader)
+			tarStream := stream.ServeReader(callCtx, tarReader, stream.WithBulkBatching())
 			return bc.BuildFromPrepared(callCtx, sessionID, tarStream, cb, envVars, ephemeralLabel, ephemeralTTL)
 		}
-		return bc.BuildFromTar(callCtx, name, stream.ServeReader(callCtx, tarReader), cb, envVars, ephemeralLabel, ephemeralTTL)
+		return bc.BuildFromTar(callCtx, name, stream.ServeReader(callCtx, tarReader, stream.WithBulkBatching()), cb, envVars, ephemeralLabel, ephemeralTTL)
 	}
 
 	var (
@@ -640,11 +640,14 @@ func Deploy(ctx *Context, opts struct {
 			if progress.Fraction > 0 && time.Since(lastPrintTime) >= 500*time.Millisecond {
 				lastPrintTime = time.Now()
 				fmt.Fprintf(os.Stderr, "\r\033[K") // Clear to end of line
-				fmt.Fprintf(os.Stderr, "Uploading artifacts: %d%% — %s / ~%s at %s",
+				line := fmt.Sprintf("Uploading artifacts: %d%% — %s at %s",
 					int(progress.Fraction*100),
 					upload.FormatBytes(progress.BytesRead),
-					upload.FormatBytes(progress.EstimatedTotalBytes),
 					upload.FormatSpeed(progress.BytesPerSecond))
+				if progress.ETA > 0 {
+					line += fmt.Sprintf(" (eta ~%s)", upload.FormatDuration(progress.ETA))
+				}
+				fmt.Fprint(os.Stderr, line)
 			}
 		})
 		r = progressReader
@@ -927,15 +930,27 @@ func Deploy(ctx *Context, opts struct {
 	return nil
 }
 
-// enrichUploadProgress fills in Fraction and EstimatedTotalBytes on a Progress
-// snapshot using the atomic uncompressed-byte counter and the known total.
+// enrichUploadProgress fills in Fraction and ETA on a Progress snapshot using
+// the atomic uncompressed-byte counter and the known total uncompressed size.
+//
+// Fraction is computed against uncompressed source bytes (not compressed bytes
+// sent over the wire). We deliberately avoid projecting a compressed total:
+// the source-bytes counter and the network-bytes counter are sampled on
+// different sides of a gzip buffer plus io.Pipe, so their ratio swings wildly
+// under back-pressure and produces a misleading "estimated total."
+//
+// ETA is extrapolated in the time domain — elapsed * (1 - frac) / frac — which
+// avoids the unit-mixing that broke the old compressed-total math. It's only
+// emitted after a brief warmup so the first few ticks (when Fraction is near
+// zero) don't produce nonsense.
 func enrichUploadProgress(p *upload.Progress, written *atomic.Int64, totalUncompressed int64) {
 	if totalUncompressed <= 0 {
 		return
 	}
 	p.Fraction = float64(written.Load()) / float64(totalUncompressed)
-	if p.Fraction > 0 {
-		p.EstimatedTotalBytes = int64(float64(p.BytesRead) / p.Fraction)
+	if p.Fraction > 0 && p.Fraction < 1 && p.Duration >= 5*time.Second {
+		remaining := float64(p.Duration) * (1 - p.Fraction) / p.Fraction
+		p.ETA = time.Duration(remaining)
 	}
 }
 
@@ -1314,7 +1329,7 @@ func analyzeApp(ctx *Context, bc *build_v1alpha.BuilderClient, dir string) error
 
 	defer r.Close()
 
-	result, err := bc.AnalyzeApp(ctx, stream.ServeReader(ctx, r))
+	result, err := bc.AnalyzeApp(ctx, stream.ServeReader(ctx, r, stream.WithBulkBatching()))
 	if err != nil {
 		return fmt.Errorf("analysis failed: %w", err)
 	}

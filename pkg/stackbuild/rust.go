@@ -75,6 +75,10 @@ type RustStack struct {
 	requiredEnvVars []EnvVarRequirement
 }
 
+func (s *RustStack) BaseDistro() string {
+	return "debian"
+}
+
 func (s *RustStack) Name() string {
 	return "rust"
 }
@@ -164,6 +168,8 @@ func (s *RustStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 	base = s.addAppUser(base)
 
 	h := &highlevelBuilder{opts}
+
+	base = h.applyAugmentations(base, localCtx, s.BaseDistro(), s.Augmentations(), s.SkipJSInstall())
 
 	// Copy the application code
 	state := h.copyApp(base, localCtx)

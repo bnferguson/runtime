@@ -329,11 +329,11 @@ miren deploy --analyze
 		WithDescription(sandboxExecDescription),
 		WithExample(mflags.Example{
 			Name: "Open a shell in a running sandbox",
-			Body: "miren sandbox exec --id sb_abc123",
+			Body: "miren sandbox exec sb_abc123",
 		}),
 		WithExample(mflags.Example{
 			Name: "Run a command in a sandbox",
-			Body: "miren sandbox exec --id sb_abc123 -- ls -la /app",
+			Body: "miren sandbox exec sb_abc123 -- ls -la /app",
 		}),
 	))
 
@@ -500,6 +500,42 @@ miren deploy --analyze
 		WithExample(mflags.Example{
 			Name: "Remove the default route",
 			Body: "miren route unset-default",
+		}),
+	))
+
+	d.Dispatch("route protect", Infer("route protect", "Protect an HTTP route with an identity provider", RouteProtect,
+		WithExample(mflags.Example{
+			Name: "Protect a route with an identity provider",
+			Body: "miren route protect example.com --provider my-google-oidc --claim-header email:X-User-Email",
+		}),
+		WithExample(mflags.Example{
+			Name: "Protect the default route",
+			Body: "miren route protect --default --provider my-google-oidc",
+		}),
+	))
+	d.Dispatch("route unprotect", Infer("route unprotect", "Remove identity-provider protection from an HTTP route", RouteUnprotect,
+		WithExample(mflags.Example{
+			Name: "Remove protection from a route",
+			Body: "miren route unprotect example.com",
+		}),
+	))
+
+	d.Dispatch("route waf", Infer("route waf", "Manage WAF protection on an HTTP route", RouteWaf,
+		WithExample(mflags.Example{
+			Name: "Enable WAF on a route with default paranoia level",
+			Body: "miren route waf example.com",
+		}),
+		WithExample(mflags.Example{
+			Name: "Enable WAF with a specific paranoia level",
+			Body: "miren route waf example.com --level 2",
+		}),
+		WithExample(mflags.Example{
+			Name: "Enable WAF on the default route",
+			Body: "miren route waf --default",
+		}),
+		WithExample(mflags.Example{
+			Name: "Disable WAF on a route",
+			Body: "miren route waf example.com --disable",
 		}),
 	))
 
@@ -890,6 +926,7 @@ Warning: These commands are intended for advanced users and developers. They may
 
 `))
 	d.Dispatch("debug connection", Infer("debug connection", "Test connectivity and authentication with a server", DebugConnection))
+	d.Dispatch("debug advertise", Infer("debug advertise", "Show which addresses the server would advertise and why", DebugAdvertise))
 	d.Dispatch("debug reindex", Infer("debug reindex", "Rebuild all entity indexes from scratch", DebugReindex))
 	d.Dispatch("debug test", Section("debug test", "Debug test commands", ""))
 	d.Dispatch("debug test load", Infer("debug test load", "Loadtest a URL", TestLoad))

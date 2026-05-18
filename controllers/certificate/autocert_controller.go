@@ -349,19 +349,28 @@ func (c *AutocertController) dnsPointsToUs(domain string) bool {
 }
 
 // isAllowedHost checks whether host is covered by the allowed set, including
-// wildcard entries. For example, if "*.example.com" is in the set,
-// "foo.example.com" is allowed but "example.com" is not — the wildcard
-// matches exactly one DNS label.
+// wildcard entries and ephemeral subdomains. For example, if "*.example.com"
+// is in the set, "foo.example.com" is allowed but "example.com" is not — the
+// wildcard matches exactly one DNS label. Additionally, if "example.com" is
+// in the set as a normal (non-wildcard) route, "label.example.com" is allowed
+// to support ephemeral deploys, which prepend a label to the route's hostname
+// (see httpingress.lookupEphemeralRoute for the matching request-routing logic).
 func (c *AutocertController) isAllowedHost(host string) bool {
 	if _, ok := c.allowedHosts.Load(host); ok {
 		return true
 	}
-	// Check if a wildcard covers this subdomain: foo.example.com → *.example.com
-	if idx := strings.IndexByte(host, '.'); idx >= 0 {
-		wildcard := "*" + host[idx:]
-		if _, ok := c.allowedHosts.Load(wildcard); ok {
-			return true
-		}
+	idx := strings.IndexByte(host, '.')
+	if idx <= 0 {
+		return false
+	}
+	parent := host[idx+1:]
+	// Wildcard route covers this subdomain: foo.example.com → *.example.com
+	if _, ok := c.allowedHosts.Load("*." + parent); ok {
+		return true
+	}
+	// Ephemeral subdomain of a normal route: pr-33.app.example.com → app.example.com
+	if _, ok := c.allowedHosts.Load(parent); ok {
+		return true
 	}
 	return false
 }

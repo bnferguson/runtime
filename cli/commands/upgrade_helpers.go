@@ -7,6 +7,22 @@ import (
 	"miren.dev/runtime/pkg/release"
 )
 
+// resolveVersionChannel collapses the --version and --channel flags into a
+// single target version string. The two flags are mutually exclusive; when
+// neither is set the target defaults to the "latest" channel.
+func resolveVersionChannel(version, channel string) (string, error) {
+	if version != "" && channel != "" {
+		return "", fmt.Errorf("--version and --channel are mutually exclusive")
+	}
+	if version == "" && channel == "" {
+		return "latest", nil
+	}
+	if channel != "" {
+		return channel, nil
+	}
+	return version, nil
+}
+
 // CheckVersionStatus checks if an update is available for the given target version
 // Returns the current and latest version info
 // If mgrOpts is nil, uses default manager options (for server path)
