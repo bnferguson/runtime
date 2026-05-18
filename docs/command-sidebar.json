@@ -214,18 +214,7 @@
       "command/env-set"
     ]
   },
-  {
-    "type": "category",
-    "label": "help",
-    "collapsed": true,
-    "link": {
-      "type": "doc",
-      "id": "command/help"
-    },
-    "items": [
-      "command/help-alias"
-    ]
-  },
+  "command/help",
   "command/init",
   "command/login",
   "command/logout",

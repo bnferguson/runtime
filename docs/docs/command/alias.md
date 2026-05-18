@@ -1,12 +1,12 @@
 ---
 title: "miren alias"
 sidebar_label: "alias"
-description: ""
+description: "CLI alias management"
 ---
 
 # miren alias
 
-
+CLI alias management
 
 ## Usage
 
