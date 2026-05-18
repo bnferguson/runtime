@@ -395,6 +395,45 @@ func TestRemoveRunnerNotFound(t *testing.T) {
 	}
 }
 
+func TestRemoveRunnerByShortId(t *testing.T) {
+	ctx := context.Background()
+	env, cleanup := newTestServer(t)
+	defer cleanup()
+
+	secret := env.createInviteAndDecode(t, ctx)
+
+	joinResult, err := env.client.Join(ctx, secret, "", "10.0.0.3:8443", "v1", nil, "runner-short")
+	if err != nil {
+		t.Fatalf("Join failed: %v", err)
+	}
+	if joinResult.HasError() {
+		t.Fatalf("Join returned error: %s", joinResult.Error())
+	}
+
+	listResult, err := env.client.ListRunners(ctx)
+	if err != nil {
+		t.Fatalf("ListRunners failed: %v", err)
+	}
+	if len(listResult.Runners()) != 1 {
+		t.Fatalf("expected 1 runner, got %d", len(listResult.Runners()))
+	}
+	shortId := listResult.Runners()[0].ShortId()
+	if shortId == "" {
+		t.Fatalf("expected runner to have a short id assigned")
+	}
+
+	removeResult, err := env.client.RemoveRunner(ctx, shortId, false)
+	if err != nil {
+		t.Fatalf("RemoveRunner failed: %v", err)
+	}
+	if removeResult.Error() != "" {
+		t.Fatalf("RemoveRunner returned error: %s", removeResult.Error())
+	}
+	if removeResult.Name() != "runner-short" {
+		t.Errorf("RemoveRunner returned name %q, want %q", removeResult.Name(), "runner-short")
+	}
+}
+
 func TestRemoveRunnerByRunnerId(t *testing.T) {
 	ctx := context.Background()
 	env, cleanup := newTestServer(t)

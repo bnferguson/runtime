@@ -487,9 +487,8 @@ func (s *RegistrationServer) ListRunners(ctx context.Context, req *runner_v1alph
 		}
 		info.SetName(name)
 
-		wrapper := &rpcEntityWrapper{entity: e}
-		if attr, ok := wrapper.Get(entity.DBShortId); ok {
-			info.SetShortId(attr.Value.String())
+		if sid := e.Entity().ShortId(); sid != "" {
+			info.SetShortId(sid)
 		}
 		info.SetStatus(string(node.Status))
 		info.SetVersion(node.Version)
@@ -632,10 +631,11 @@ func (s *RegistrationServer) findNodeByQuery(ctx context.Context, query string) 
 
 		id := entity.Id(e.Id())
 
-		// Exact match by entity ID, runner ID, or name
+		// Exact match by entity ID, runner ID, name, or short ID
 		if string(id) == query ||
 			node.RunnerId == query ||
-			(node.Name != "" && node.Name == query) {
+			(node.Name != "" && node.Name == query) ||
+			e.Entity().ShortId() == query {
 			return &node, id, nil
 		}
 

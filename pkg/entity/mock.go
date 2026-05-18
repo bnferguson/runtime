@@ -125,8 +125,39 @@ func (m *MockStore) validateSessionAttrs(ctx context.Context, attrs []Attr, opts
 	return nil
 }
 
+// ensureShortId mirrors the real store's auto-allocation of db/short-id on
+// kinded entities that don't already carry one. Without this, tests that
+// resolve entities by their short id would have to inject one by hand.
+func (m *MockStore) ensureShortId(entity *Entity) error {
+	if _, hasKind := entity.Get(EntityKind); !hasKind {
+		return nil
+	}
+	if _, hasShortId := entity.Get(DBShortId); hasShortId {
+		return nil
+	}
+	shortId, err := AllocateShortId(string(entity.Id()), func(candidate string) (bool, error) {
+		m.mu.RLock()
+		defer m.mu.RUnlock()
+		for _, ent := range m.Entities {
+			if attr, ok := ent.Get(DBShortId); ok && attr.Value.String() == candidate {
+				return true, nil
+			}
+		}
+		return false, nil
+	})
+	if err != nil {
+		return fmt.Errorf("failed to allocate short-id: %w", err)
+	}
+	entity.Set(String(DBShortId, shortId))
+	return nil
+}
+
 func (m *MockStore) CreateEntity(ctx context.Context, entity *Entity, opts ...EntityOption) (*Entity, error) {
 	if err := m.validateSessionAttrs(ctx, entity.attrs, opts); err != nil {
+		return nil, err
+	}
+
+	if err := m.ensureShortId(entity); err != nil {
 		return nil, err
 	}
 
