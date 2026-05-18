@@ -42,6 +42,45 @@ If an exact route also exists for a specific subdomain, the exact route takes pr
 
 The wildcard `*` must be the first label — patterns like `foo.*.example.com` are not supported. The domain must have at least two labels after the wildcard (e.g., `*.example.com` is valid, `*.com` is not).
 
+### Custom Domains
+
+To put your own domain in front of an app on Miren, point DNS at your cluster and set a route. TLS provisions automatically.
+
+**Find your cluster's hostname.** Clusters registered with Miren Cloud get a hostname under `miren.systems` — something like `cluster-jwomf2l0tn8z.miren.systems`. You'll find yours on the cluster page in [miren.cloud](https://miren.cloud). If you're running standalone without cloud, use your server's public hostname or IP.
+
+**Point DNS at your cluster.** For most setups, point both the apex and a wildcard so you can add or change routes later without touching DNS again:
+
+```text
+yourdomain.com.      ALIAS    cluster-jwomf2l0tn8z.miren.systems.
+*.yourdomain.com.    CNAME    cluster-jwomf2l0tn8z.miren.systems.
+```
+
+Most DNS providers don't allow a CNAME at the apex (`yourdomain.com` with no subdomain). Use an ALIAS or ANAME record where your provider supports it, or an A record pointing at your cluster's IP. The wildcard record can always be a CNAME.
+
+If you only need one hostname on Miren, a single CNAME for that name is fine on its own:
+
+```text
+app.yourdomain.com.  CNAME    cluster-jwomf2l0tn8z.miren.systems.
+```
+
+**Then set a route.** Map any host that resolves to your cluster to an app:
+
+<CliCommand context="client">
+```miren
+miren route set app.yourdomain.com myapp
+```
+</CliCommand>
+
+If you set up wildcard DNS above, you can also send every subdomain to the same app with a [wildcard route](#wildcard-routes):
+
+<CliCommand context="client">
+```miren
+miren route set '*.yourdomain.com' myapp
+```
+</CliCommand>
+
+You don't have to do anything else for HTTPS — Miren provisions Let's Encrypt certificates as requests arrive. See [TLS Certificates](/tls) for the details.
+
 ### Choosing a Port
 
 Miren sets the `PORT` environment variable to tell your app which port to listen on. Your app should bind to `PORT`:

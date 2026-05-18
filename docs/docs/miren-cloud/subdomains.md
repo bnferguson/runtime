@@ -6,7 +6,7 @@ keywords: [subdomains, dns, run.garden, miren.app, custom domain, wildcard]
 
 # Subdomains
 
-You've got a Miren cluster running your stuff — now give it an address people can actually visit. You can always bring your own domain, but if you'd rather skip the DNS busywork, Miren Cloud lets you claim a subdomain like `mycluster.run.garden`, point it at your cluster, and you're live.
+You've got a Miren cluster running your stuff — now give it an address people can actually visit. You can always [bring your own domain](/traffic-routing#custom-domains), but if you'd rather skip the DNS busywork, Miren Cloud lets you claim a subdomain like `mycluster.run.garden`, point it at your cluster, and you're live.
 
 ## Available Base Domains
 
