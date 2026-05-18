@@ -72,9 +72,12 @@ func TestTextFormatter_Format(t *testing.T) {
 		err := schema.Apply(ctx, store)
 		r.NoError(err)
 
+		// Pre-set short-id so the assertion is deterministic; MockStore would
+		// otherwise allocate a random one for any kinded entity.
 		testEntity, err := store.CreateEntity(context.Background(), entity.New(
 			entity.Ident, types.Keyword("test/myproject"),
 			entity.EntityKind, entity.RefValue("dev.miren.core/kind.project"),
+			entity.DBShortId, "fixed",
 		))
 		r.NoError(err)
 
@@ -94,6 +97,8 @@ attrs:
     value: 2006-01-02T15:04:05Z
   - id: db/id
     value: test/myproject
+  - id: db/short-id
+    value: fixed
   - id: entity/kind
     value: dev.miren.core/kind.project
 `
