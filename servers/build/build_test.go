@@ -704,6 +704,33 @@ func TestBuildServicesConfig(t *testing.T) {
 				assert.Len(t, services, 0, "should have no services")
 			},
 		},
+		{
+			name: "service with port_timeout copies through to ConfigSpec",
+			appConfig: &appconfig.AppConfig{
+				Services: map[string]*appconfig.ServiceConfig{
+					"web": {
+						Command:     "bin/start",
+						Port:        4000,
+						PortTimeout: "120s",
+					},
+					"worker": {
+						Command: "bin/worker",
+					},
+				},
+			},
+			procfileServices: nil,
+			validateServices: func(t *testing.T, services []core_v1alpha.ConfigSpecServices) {
+				require.Len(t, services, 2)
+				byName := make(map[string]core_v1alpha.ConfigSpecServices, len(services))
+				for _, s := range services {
+					byName[s.Name] = s
+				}
+				require.Contains(t, byName, "web")
+				assert.Equal(t, "120s", byName["web"].PortTimeout)
+				require.Contains(t, byName, "worker")
+				assert.Empty(t, byName["worker"].PortTimeout, "unset field stays empty so resolvePortWaitTimeout falls back to default")
+			},
+		},
 	}
 
 	for _, tt := range tests {

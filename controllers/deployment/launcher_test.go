@@ -3155,3 +3155,45 @@ func TestDisklessServiceNotDrained(t *testing.T) {
 	assert.Equal(t, int64(1), newPool.DesiredInstances, "new pool should be active")
 	assert.Equal(t, int64(0), oldPool.DesiredInstances, "old pool should be scaled down")
 }
+
+// TestPortTimeoutPropagatesToSandboxSpec verifies that a per-service
+// port_timeout in ConfigSpec is copied into SandboxSpec.PortWaitTimeout
+// for the matching service, and left empty for siblings.
+func TestPortTimeoutPropagatesToSandboxSpec(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{Project: entity.Id("project-1")}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	ver := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", ver)
+	require.NoError(t, err)
+	ver.ID = verID
+
+	cfgSpec := &core_v1alpha.ConfigSpec{
+		Services: []core_v1alpha.ConfigSpecServices{
+			{Name: "web", Port: 4000, PortTimeout: "120s"},
+			{Name: "worker"},
+		},
+	}
+
+	l := newTestLauncher(log, server.EAC)
+
+	webSpec, err := l.buildSandboxSpec(ctx, app, ver, cfgSpec, "web", "test:latest")
+	require.NoError(t, err)
+	assert.Equal(t, "120s", webSpec.PortWaitTimeout, "web service should propagate explicit timeout")
+
+	workerSpec, err := l.buildSandboxSpec(ctx, app, ver, cfgSpec, "worker", "test:latest")
+	require.NoError(t, err)
+	assert.Empty(t, workerSpec.PortWaitTimeout, "worker without timeout stays empty so default applies in resolvePortWaitTimeout")
+}

@@ -448,6 +448,9 @@ components:
         port_type:
           type: string
           doc: The type of the port (e.g. http, tcp)
+        port_timeout:
+          type: string
+          doc: Custom port-wait timeout (e.g. "60s", "2m"). Empty falls back to the 15s default; invalid duration strings are rejected at parse time.
         ports:
           type: component
           doc: Network ports this service listens on. Overrides scalar port/port_name/port_type.

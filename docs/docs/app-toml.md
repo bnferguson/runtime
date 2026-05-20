@@ -144,6 +144,7 @@ image = "postgres:16"
 | `port_name` | string | Named port identifier (single-port shorthand) | Service name |
 | `port_type` | string | `"http"` or `"tcp"` (single-port shorthand) | `"http"` |
 | `ports` | [[port]](#ports) | Multi-port configuration array | — |
+| `port_timeout` | duration | Time to wait for the service to bind its port at startup (e.g. `"60s"`, `"2m"`) | `"15s"` |
 | `image` | string | Container image to use instead of the app's built image | App's built image |
 | `env` | [[env]](#env) | Service-specific environment variables (same schema as global `[[env]]`) | — |
 | `concurrency` | [concurrency](#concurrency) | Scaling configuration | See defaults below |

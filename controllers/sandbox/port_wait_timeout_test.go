@@ -14,6 +14,8 @@ func TestResolvePortWaitTimeout(t *testing.T) {
 		{"empty", "", defaultPortWaitTimeout},
 		{"valid 30s", "30s", 30 * time.Second},
 		{"valid 1m", "1m", time.Minute},
+		{"valid 120s exceeds default", "120s", 120 * time.Second},
+		{"valid 2m exceeds default", "2m", 2 * time.Minute},
 		{"valid 500ms", "500ms", 500 * time.Millisecond},
 		{"zero", "0s", defaultPortWaitTimeout},
 		{"negative", "-5s", defaultPortWaitTimeout},

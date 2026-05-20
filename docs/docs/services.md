@@ -189,6 +189,7 @@ Each service can configure:
 | `image` | Container image to use | App's built image |
 | `port` | Port the service listens on (single-port shorthand) | 3000 (web only) |
 | `ports` | Port configuration array (multi-port, see [Traffic Routing](/traffic-routing)) | (none) |
+| `port_timeout` | Time to wait for the service to bind its port at startup (e.g. `"60s"`, `"2m"`) | `15s` |
 | `env` | Service-specific environment variables | (none) |
 | `concurrency` | Scaling configuration | See [Scaling](/scaling) |
 | `concurrency.shutdown_timeout` | Time to wait for graceful shutdown during redeploy | `10s` |

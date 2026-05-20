@@ -436,6 +436,10 @@ func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[st
 				}
 			}
 
+			if serviceConfig.PortTimeout != "" {
+				svc.PortTimeout = serviceConfig.PortTimeout
+			}
+
 			if serviceConfig.Concurrency != nil {
 				svc.Concurrency = core_v1alpha.ConfigSpecServicesConcurrency{
 					Mode:                serviceConfig.Concurrency.Mode,
