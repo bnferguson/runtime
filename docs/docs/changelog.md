@@ -11,6 +11,11 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *main*
 
+---
+
+## v0.8.0
+*2026-05-20*
+
 **Breaking Changes**
 - **Ingress configuration reshaped around named modes** - The ingress and TLS configuration is now organized as three explicit modes — `tls-autoprovision` (default, behavior unchanged), `behind-proxy-http`, and `behind-proxy-https` — with an optional `ingress.address` for custom bind addresses. The legacy `tls.standard_tls` knob is retired (dev environments already used `--self-signed-tls`). One small behavior change in autoprovision mode: requests to raw-IP or localhost Hosts on `:80` now follow the HTTPS redirect like any other request instead of being shortcut to the default route over plain HTTP. Pick `behind-proxy-http` if you want explicit plain-HTTP for a dev workflow. ([#799](https://github.com/mirendev/runtime/pull/799))
 
