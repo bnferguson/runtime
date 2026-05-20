@@ -8,7 +8,7 @@ keywords: [miren, agent skills, claude code, codex, amp, ai, llm]
 
 You shouldn't have to context-switch out of your editor to deploy an app or check why something's unhealthy. Miren's agent skills let your AI coding agent operate your infrastructure directly — deploy, diagnose, and manage apps without leaving the conversation.
 
-The skills work with [Claude Code](https://claude.ai/code), [Codex](https://github.com/openai/codex), [Amp](https://ampcode.com), [Pi](https://github.com/anthropics/pi), and [OpenCode](https://github.com/opencode-ai/opencode). Source and setup instructions are at [github.com/mirendev/miren-skills](https://github.com/mirendev/miren-skills).
+The skills work with [Claude Code](https://claude.ai/code), [Codex](https://github.com/openai/codex), [Amp](https://ampcode.com), [Pi](https://pi.dev), and [OpenCode](https://github.com/opencode-ai/opencode). Source and setup instructions are at [github.com/mirendev/miren-skills](https://github.com/mirendev/miren-skills).
 
 :::note
 Skills make these docs faster to act on — your agent can read a page about scaling and immediately run the commands — but the docs remain the authoritative reference. When in doubt, the docs are the source of truth.
@@ -26,15 +26,15 @@ Skills make these docs faster to act on — your agent can read a page about sca
 ### Codex CLI
 
 ```bash
-mkdir -p ~/.agents/skills
-cp -r /path/to/miren-skills/.agents/skills/* ~/.agents/skills/
+git clone https://github.com/mirendev/miren-skills
+cp -r miren-skills/.agents/skills/* ~/.agents/skills/
 ```
 
 ### Amp
 
 From the command palette (`Ctrl+O` in CLI, `Cmd+Shift+P` in VS Code):
 
-```
+```text
 skill: add https://github.com/mirendev/miren-skills
 ```
 
@@ -47,8 +47,8 @@ pi install git:github.com/mirendev/miren-skills
 ### OpenCode
 
 ```bash
-mkdir -p ~/.config/opencode/skills
-cp -r /path/to/miren-skills/.agents/skills/* ~/.config/opencode/skills/
+git clone https://github.com/mirendev/miren-skills
+cp -r miren-skills/.agents/skills/* ~/.config/opencode/skills/
 ```
 
 ## What's included
@@ -87,8 +87,7 @@ The skills teach agents to discover commands on their own via `miren help`:
 
 ```bash
 miren help --commands             # list all commands
-miren help app.list               # help for a specific command (use . for spaces)
-miren help "app list"             # alternative: quote the command
+miren help app list               # help for a specific command
 ```
 
 Most commands accept `-C <cluster>` to target a specific cluster.
