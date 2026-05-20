@@ -5,6 +5,10 @@ description: Miren is a container platform for small teams — deploy apps to a 
 keywords: [miren, container platform, deploy, self-hosted, paas]
 ---
 
+:::tip[Working with an AI coding agent?]
+Point it at [llms.txt](https://miren.md/llms.txt) or [llms-full.txt](https://miren.md/llms-full.txt) for LLM-friendly docs, or install [Miren agent skills](https://github.com/mirendev/miren-skills) so it can deploy and manage your apps directly.
+:::
+
 # Miren
 
 Miren is a container platform for small teams. You install it on a Linux server, point your CLI at it, and deploy with `miren deploy`. It handles builds, scaling, routing, TLS, and backups so you don't have to stitch together a platform from parts.

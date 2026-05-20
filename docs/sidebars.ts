@@ -83,6 +83,7 @@ const sidebars: SidebarsConfig = {
       label: 'Resources',
       collapsed: false,
       items: [
+        'agent-skills',
         'troubleshooting',
         'terminology',
         'labs',
