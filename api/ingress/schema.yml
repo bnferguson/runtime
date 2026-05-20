@@ -44,11 +44,15 @@ kinds:
   oidc_provider:
     name:
       type: string
-      doc: A unique name for this OIDC provider
+      doc: A unique name for this auth provider. Despite the kind name, this entity backs all OAuth2-flavored providers (OIDC discovery, GitHub, and other connector-based ones). Kept under the `oidc_provider` kind for backward compatibility with existing v0.8.0 entities.
+      indexed: true
+    connector_type:
+      type: string
+      doc: 'The provider implementation. Empty or "oidc" uses the built-in OIDC discovery client (consumes provider_url + scopes). Any other value names a Dex-backed connector (e.g. "github") and uses config_json for connector-specific configuration.'
       indexed: true
     provider_url:
       type: string
-      doc: The OIDC provider URL (e.g. https://accounts.google.com)
+      doc: The OIDC provider URL (e.g. https://accounts.google.com). Only meaningful when connector_type is empty or "oidc".
       indexed: true
     client_id:
       type: string
@@ -58,7 +62,10 @@ kinds:
       doc: The OAuth2 client secret
     scopes:
       type: string
-      doc: Space-separated list of OAuth2 scopes (e.g. "openid email profile")
+      doc: Space-separated list of OAuth2 scopes (e.g. "openid email profile"). Only meaningful when connector_type is empty or "oidc"; connectors choose their own scopes.
+    config_json:
+      type: string
+      doc: Connector-specific configuration as a JSON object (e.g. {"orgs":[{"name":"mirendev"}]}). Only meaningful when connector_type is non-empty and not "oidc".
   waf_profile:
     paranoia_level:
       type: int

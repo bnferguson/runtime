@@ -103,6 +103,9 @@ type Server struct {
 
 	passwordMu       sync.RWMutex
 	passwordHandlers map[string]*passwordHandler
+
+	connectorMu       sync.RWMutex
+	connectorHandlers map[string]*connectorHandler
 }
 
 type appUsage struct {
@@ -166,6 +169,7 @@ func NewServer(
 		wafEngine:          waf.NewEngine(log.With("component", "waf")),
 		wafProfileCache:    make(map[entity.Id]*wafProfileEntry),
 		passwordHandlers:   make(map[string]*passwordHandler),
+		connectorHandlers:  make(map[string]*connectorHandler),
 	}
 
 	if httpMetrics == nil {
@@ -603,7 +607,15 @@ func (h *Server) authMiddleware(route *ingress_v1alpha.HttpRoute, next http.Hand
 
 		switch {
 		case entity.Is(ent, ingress_v1alpha.KindOidcProvider):
-			h.oidcMiddleware(route, ent, next)(w, r)
+			// The oidc_provider entity backs both OIDC discovery clients
+			// and connector-based providers; dispatch on connector_type.
+			var op ingress_v1alpha.OidcProvider
+			op.Decode(ent)
+			if op.ConnectorType != "" && op.ConnectorType != "oidc" {
+				h.connectorMiddleware(route, ent, next)(w, r)
+			} else {
+				h.oidcMiddleware(route, ent, next)(w, r)
+			}
 		case entity.Is(ent, ingress_v1alpha.KindPasswordProvider):
 			h.passwordMiddleware(route, ent, next)(w, r)
 		default:
