@@ -109,7 +109,7 @@ The `behind-proxy-*` modes default to localhost to keep accidental misconfigurat
 
 ## `[tls]` — TLS Settings {#tls}
 
-Controls cert sourcing for ingress modes that terminate TLS (`tls-autoprovision` and `behind-proxy-https`). Ignored under `behind-proxy-http`; populating these fields under that mode is an error. See [TLS](/tls) for setup guides.
+Settings under `[tls]` cover two kinds of certs. `acme_email`, `acme_dns_provider`, and `self_signed` configure the ingress cert and only apply when Miren terminates TLS (`tls-autoprovision` or `behind-proxy-https`); they're rejected at startup under `behind-proxy-http`. `additional_names` and `additional_ips` are different: they extend the SANs on the API server and etcd certs, which exist regardless of ingress mode, so they're valid under any mode. See [TLS](/tls) for setup guides.
 
 | Field | Type | Default | Description | Env Var | CLI Flag |
 |-------|------|---------|-------------|---------|----------|
