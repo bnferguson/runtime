@@ -425,6 +425,10 @@ kinds:
       many: true
       indexed: true
 
+    ephemeral:
+      type: bool
+      doc: True when this pool backs an ephemeral AppVersion. Ephemeral pools never scale beyond 1 instance.
+
   node:
     constraints:
       type: label

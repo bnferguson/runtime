@@ -3197,3 +3197,281 @@ func TestPortTimeoutPropagatesToSandboxSpec(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, workerSpec.PortWaitTimeout, "worker without timeout stays empty so default applies in resolvePortWaitTimeout")
 }
+
+// TestCreatePoolForVersionEphemeral verifies that the web pool of an ephemeral
+// AppVersion is seeded at DesiredInstances=1 even when the user's web config
+// asks for a higher fixed count. EphemeralStrategy handles the cap at runtime.
+func TestCreatePoolForVersionEphemeral(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{
+		Project: entity.Id("project-1"),
+	}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	version := &core_v1alpha.AppVersion{
+		App:            app.ID,
+		Version:        "v1",
+		ImageUrl:       "test:latest",
+		EphemeralLabel: "feat-x",
+		EphemeralTtl:   "48h",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						// Even if the config asks for many instances, an ephemeral
+						// deploy must stay at 1.
+						Mode:         "fixed",
+						NumInstances: 5,
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", version)
+	require.NoError(t, err)
+	version.ID = verID
+
+	launcher := newTestLauncher(log, server.EAC)
+
+	// Ephemeral versions do not set ActiveVersion. The activator drives pool
+	// creation via CreatePoolForVersion for these.
+	poolID, err := launcher.CreatePoolForVersion(ctx, version, "web")
+	require.NoError(t, err)
+	assert.NotEmpty(t, poolID, "expected a new pool to be created")
+
+	pools := listAllPools(t, ctx, server)
+	require.Len(t, pools, 1, "should create exactly one pool")
+
+	pool := pools[0]
+	assert.Equal(t, int64(1), pool.DesiredInstances, "ephemeral pool must seed DesiredInstances at 1 regardless of fixed-mode config")
+	assert.Equal(t, "web", pool.Service)
+	assert.Contains(t, pool.ReferencedByVersions, version.ID)
+}
+
+// TestNonEphemeralPoolUnaffected guards against the ephemeral changes leaking
+// into normal deploys: a non-ephemeral fixed-mode version must still get the
+// configured instance count.
+func TestNonEphemeralPoolUnaffected(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{
+		Project: entity.Id("project-1"),
+	}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	version := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		// No EphemeralLabel: this is a normal deploy.
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "postgres",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 3,
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", version)
+	require.NoError(t, err)
+	version.ID = verID
+
+	app.ActiveVersion = version.ID
+	err = server.Client.Update(ctx, app)
+	require.NoError(t, err)
+
+	launcher := newTestLauncher(log, server.EAC)
+	err = launcher.Reconcile(ctx, app, nil)
+	require.NoError(t, err)
+
+	pools := listAllPools(t, ctx, server)
+	require.Len(t, pools, 1)
+
+	pool := pools[0]
+	assert.Equal(t, int64(3), pool.DesiredInstances, "non-ephemeral fixed mode must honor configured NumInstances")
+}
+
+// TestEphemeralNonWebHonorsFixedConcurrency guards the supporting-service
+// case: a "db" service on an ephemeral preview deploy is not the routed web
+// service, so it must honor its configured fixed-mode NumInstances rather
+// than getting capped to 1 by the ephemeral routing.
+func TestEphemeralNonWebHonorsFixedConcurrency(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{
+		Project: entity.Id("project-1"),
+	}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	version := &core_v1alpha.AppVersion{
+		App:            app.ID,
+		Version:        "v1",
+		ImageUrl:       "test:latest",
+		EphemeralLabel: "feat-x",
+		EphemeralTtl:   "48h",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					// Default auto-mode concurrency; ephemeral routing caps at 1 anyway.
+				},
+				{
+					Name: "db",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 3,
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", version)
+	require.NoError(t, err)
+	version.ID = verID
+
+	launcher := newTestLauncher(log, server.EAC)
+
+	webPoolID, err := launcher.CreatePoolForVersion(ctx, version, "web")
+	require.NoError(t, err)
+	assert.NotEmpty(t, webPoolID)
+
+	dbPoolID, err := launcher.CreatePoolForVersion(ctx, version, "db")
+	require.NoError(t, err)
+	assert.NotEmpty(t, dbPoolID)
+
+	pools := listAllPools(t, ctx, server)
+	require.Len(t, pools, 2, "should create one pool per service")
+
+	var webPool, dbPool *compute_v1alpha.SandboxPool
+	for i := range pools {
+		switch pools[i].Service {
+		case "web":
+			webPool = &pools[i]
+		case "db":
+			dbPool = &pools[i]
+		}
+	}
+	require.NotNil(t, webPool, "web pool should exist")
+	require.NotNil(t, dbPool, "db pool should exist")
+
+	assert.Equal(t, int64(1), webPool.DesiredInstances,
+		"ephemeral web pool seeds at 1 regardless of config")
+	assert.Equal(t, int64(3), dbPool.DesiredInstances,
+		"db service on ephemeral version honors its fixed-mode NumInstances")
+}
+
+// TestEphemeralVersionDoesNotReuseExistingPool guards the isolation invariant:
+// an ephemeral version with an identical SandboxSpec to an existing
+// non-ephemeral version must NOT reuse the existing pool. Sharing a pool would
+// mean the pool's scaling behavior depends on which version is making the
+// request (different strategies for ephemeral vs non-ephemeral), which leaves
+// the activator unable to register the ephemeral version on an existing
+// running sandbox.
+func TestEphemeralVersionDoesNotReuseExistingPool(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{
+		Project: entity.Id("project-1"),
+	}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	svcCfg := core_v1alpha.Config{
+		Port: 3000,
+		Services: []core_v1alpha.Services{
+			{
+				Name: "web",
+				ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+					Mode:                "auto",
+					RequestsPerInstance: 10,
+				},
+			},
+		},
+	}
+
+	// First deploy a normal version and let reconcile create its pool.
+	normalVer := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "normal",
+		ImageUrl: "test:shared-spec",
+		Config:   svcCfg,
+	}
+	normalID, err := server.Client.Create(ctx, "normal-ver", normalVer)
+	require.NoError(t, err)
+	normalVer.ID = normalID
+
+	app.ActiveVersion = normalVer.ID
+	err = server.Client.Update(ctx, app)
+	require.NoError(t, err)
+
+	launcher := newTestLauncher(log, server.EAC)
+	err = launcher.Reconcile(ctx, app, nil)
+	require.NoError(t, err)
+
+	pools := listAllPools(t, ctx, server)
+	require.Len(t, pools, 1, "normal deploy should create exactly one pool")
+
+	// Now deploy an ephemeral version with identical spec. The launcher must
+	// create a fresh pool rather than reuse the existing one.
+	ephemeralVer := &core_v1alpha.AppVersion{
+		App:            app.ID,
+		Version:        "ephem",
+		ImageUrl:       "test:shared-spec",
+		EphemeralLabel: "feat-x",
+		Config:         svcCfg,
+	}
+	verID, err := server.Client.Create(ctx, "ephem-ver", ephemeralVer)
+	require.NoError(t, err)
+	ephemeralVer.ID = verID
+
+	_, err = launcher.CreatePoolForVersion(ctx, ephemeralVer, "web")
+	require.NoError(t, err)
+
+	pools = listAllPools(t, ctx, server)
+	require.Len(t, pools, 2, "ephemeral and non-ephemeral pools must not share")
+
+	// Verify the ephemeral pool references only the ephemeral version.
+	var ephPool, normalPool *compute_v1alpha.SandboxPool
+	for i := range pools {
+		refs := pools[i].ReferencedByVersions
+		if len(refs) == 1 && refs[0] == ephemeralVer.ID {
+			ephPool = &pools[i]
+		} else if len(refs) == 1 && refs[0] == normalVer.ID {
+			normalPool = &pools[i]
+		}
+	}
+	require.NotNil(t, ephPool, "ephemeral version should have its own pool")
+	require.NotNil(t, normalPool, "normal version's pool should remain unshared")
+}

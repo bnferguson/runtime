@@ -22,6 +22,7 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/network/network_v1alpha"
+	"miren.dev/runtime/pkg/concurrency"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/containerdx"
 	"miren.dev/runtime/pkg/controller"
@@ -368,19 +369,27 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 		return "", fmt.Errorf("failed to build sandbox spec: %w", err)
 	}
 
-	// Calculate desired instances based on concurrency mode
-	// Auto mode starts with 1 to boot immediately after deploy (can scale down later)
-	// Fixed mode uses the configured number of instances
+	// Ask the strategy for the pool's enforced minimum. Strategies that don't
+	// enforce a minimum (auto, ephemeral) return 0, in which case we still seed
+	// the pool with 1 so the deploy boots a sandbox immediately. Fixed-mode
+	// services return their configured NumInstances and the launcher honors it.
+	sc := core_v1alpha.ServiceConcurrency(svcConcurrency)
+	strategy := concurrency.NewStrategyForVersion(ver, serviceName, &sc)
 	desiredInstances := int64(1)
-	fixedMode := svcConcurrency.Mode == "fixed" && svcConcurrency.NumInstances > 0
-	if fixedMode {
-		desiredInstances = svcConcurrency.NumInstances
+	if min := int64(strategy.MinInstances()); min > 0 {
+		desiredInstances = min
 	}
 
-	// Try to find existing pool with matching spec
-	poolWithEntity, err := l.findMatchingPool(ctx, app.ID, serviceName, sbSpec)
-	if err != nil {
-		return "", fmt.Errorf("failed to find matching pool: %w", err)
+	// Ephemeral versions always get an isolated pool. Sharing a pool with a
+	// non-ephemeral version (or another ephemeral with a different label) would
+	// mean the pool's scaling behavior depends on which version is making the
+	// request, which is the kind of cross-strategy mixing we want to avoid.
+	var poolWithEntity *PoolWithEntity
+	if ver.EphemeralLabel == "" {
+		poolWithEntity, err = l.findMatchingPool(ctx, app.ID, serviceName, sbSpec)
+		if err != nil {
+			return "", fmt.Errorf("failed to find matching pool: %w", err)
+		}
 	}
 
 	if poolWithEntity != nil {
@@ -415,13 +424,14 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 			needsUpdate = true
 		}
 
-		// For fixed mode services, update desired instances if they've changed
-		// For auto mode, the activator manages desired instances - don't touch it
-		if fixedMode && poolWithEntity.Pool.DesiredInstances != desiredInstances {
-			poolWithEntity.Pool.DesiredInstances = desiredInstances
-			l.Log.Info("fixed mode service, updating desired instances",
+		// Only force DesiredInstances when the strategy enforces a minimum
+		// (fixed mode). Auto and ephemeral strategies leave the activator and
+		// sandboxpool manager to drive DesiredInstances dynamically.
+		if min := int64(strategy.MinInstances()); min > 0 && poolWithEntity.Pool.DesiredInstances != min {
+			poolWithEntity.Pool.DesiredInstances = min
+			l.Log.Info("strategy-enforced minimum, updating desired instances",
 				"service", serviceName,
-				"desired_instances", desiredInstances)
+				"desired_instances", min)
 			needsUpdate = true
 		}
 
@@ -441,8 +451,8 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 		"app", app.ID,
 		"version", ver.Version)
 
-	if fixedMode {
-		l.Log.Info("fixed mode service, starting with desired instances",
+	if desiredInstances > 1 {
+		l.Log.Info("strategy-enforced minimum, starting with desired instances",
 			"service", serviceName,
 			"desired_instances", desiredInstances)
 	}
@@ -781,7 +791,7 @@ func dirHasData(path string) bool {
 	return err == nil && len(entries) > 0
 }
 
-// findMatchingPool searches for an existing pool with matching spec
+// findMatchingPool searches for an existing pool with matching spec.
 func (l *Launcher) findMatchingPool(ctx context.Context, appID entity.Id, serviceName string, desiredSpec *compute_v1alpha.SandboxSpec) (*PoolWithEntity, error) {
 	// List all sandbox pools for this app
 	poolsResp, err := l.EAC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool))

@@ -372,7 +372,7 @@ func TestActivatorRecoveryIntegration(t *testing.T) {
 	assert.Len(t, ps.sandboxes, 3, "should recover all 3 sandboxes")
 
 	// Verify strategy configuration
-	assert.Equal(t, 0, ps.strategy.DesiredInstances()) // Auto mode scales to zero
+	assert.Equal(t, 0, ps.strategy.MinInstances()) // Auto mode scales to zero
 }
 
 // TestActivatorAcquireLeaseFromDeadSandbox verifies that DEAD sandboxes
@@ -2512,7 +2512,7 @@ func TestActivatorRefreshesStaleMaxPoolSizeCache(t *testing.T) {
 
 	// Set up activator with a STALE cache that thinks DesiredInstances = MaxPoolSize
 	stalePool := *pool
-	stalePool.DesiredInstances = MaxPoolSize
+	stalePool.DesiredInstances = concurrency.MaxPoolSize
 
 	activator := &localActivator{
 		log: log,
@@ -2667,4 +2667,347 @@ func TestWatchPoolsUpdatesDesiredInstances(t *testing.T) {
 	activator.mu.RUnlock()
 	assert.Equal(t, int64(2), ps.pool.DesiredInstances,
 		"poolSandboxes pool pointer should reflect the updated DesiredInstances")
+}
+
+// TestRequestPoolCapacityScalesNormalPool is a regression guard for the
+// normal scale-up path: a non-ephemeral cached pool should still get its
+// DesiredInstances incremented on capacity requests.
+func TestRequestPoolCapacityScalesNormalPool(t *testing.T) {
+	ctx := context.Background()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+
+	testVer := &core_v1alpha.AppVersion{
+		App:      appID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Services: []core_v1alpha.Services{
+				{Name: "web"},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", testVer)
+	require.NoError(t, err)
+	testVer.ID = verID
+
+	pool := &compute_v1alpha.SandboxPool{
+		Service:              "web",
+		SandboxSpec:          compute_v1alpha.SandboxSpec{Version: testVer.ID},
+		ReferencedByVersions: []entity.Id{testVer.ID},
+		DesiredInstances:     1,
+		// Ephemeral defaults to false.
+	}
+	poolID, err := server.Client.Create(ctx, "test-pool", pool)
+	require.NoError(t, err)
+	pool.ID = poolID
+
+	getRes, err := server.EAC.Get(ctx, poolID.String())
+	require.NoError(t, err)
+	initialRevision := getRes.Entity().Revision()
+
+	activator := &localActivator{
+		log:             log,
+		eac:             server.EAC,
+		versions:        make(map[verKey]*versionPoolRef),
+		poolSandboxes:   make(map[entity.Id]*poolSandboxes),
+		pools:           make(map[verKey]*poolState),
+		newSandboxChans: make(map[verKey][]chan struct{}),
+	}
+
+	key := verKey{testVer.ID.String(), "web"}
+	activator.pools[key] = &poolState{
+		pool:       pool,
+		revision:   initialRevision,
+		inProgress: false,
+	}
+
+	resultPool, err := activator.requestPoolCapacity(ctx, testVer, "web")
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), resultPool.DesiredInstances,
+		"non-ephemeral pool should still scale up normally")
+}
+
+// TestRequestPoolCapacityAtMaxReturnsExistingPool verifies that when a cached
+// pool is already at its strategy-enforced cap (e.g. an ephemeral pool seeded
+// at DesiredInstances=1 with MaxInstances=1), requestPoolCapacity returns the
+// pool without erroring. The original "at cap" check was a runaway guard that
+// errored; with type-driven caps, "at cap" is the normal operating point for
+// ephemeral pools and must not surface as a lease-acquisition failure.
+func TestRequestPoolCapacityAtMaxReturnsExistingPool(t *testing.T) {
+	ctx := context.Background()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+
+	testVer := &core_v1alpha.AppVersion{
+		App:            appID,
+		Version:        "v1",
+		ImageUrl:       "test:latest",
+		EphemeralLabel: "feat-x",
+		Config: core_v1alpha.Config{
+			Services: []core_v1alpha.Services{
+				{Name: "web"},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", testVer)
+	require.NoError(t, err)
+	testVer.ID = verID
+
+	pool := &compute_v1alpha.SandboxPool{
+		Service:              "web",
+		SandboxSpec:          compute_v1alpha.SandboxSpec{Version: testVer.ID},
+		ReferencedByVersions: []entity.Id{testVer.ID},
+		DesiredInstances:     1,
+	}
+	poolID, err := server.Client.Create(ctx, "test-pool", pool)
+	require.NoError(t, err)
+	pool.ID = poolID
+
+	getRes, err := server.EAC.Get(ctx, poolID.String())
+	require.NoError(t, err)
+	initialRevision := getRes.Entity().Revision()
+
+	activator := &localActivator{
+		log:             log,
+		eac:             server.EAC,
+		versions:        make(map[verKey]*versionPoolRef),
+		poolSandboxes:   make(map[entity.Id]*poolSandboxes),
+		pools:           make(map[verKey]*poolState),
+		newSandboxChans: make(map[verKey][]chan struct{}),
+	}
+
+	key := verKey{testVer.ID.String(), "web"}
+	activator.pools[key] = &poolState{
+		pool:       pool,
+		revision:   initialRevision,
+		inProgress: false,
+	}
+
+	for i := 0; i < 5; i++ {
+		resultPool, err := activator.requestPoolCapacity(ctx, testVer, "web")
+		require.NoError(t, err, "iteration %d: at-cap pool must not error", i)
+		require.NotNil(t, resultPool)
+		assert.Equal(t, int64(1), resultPool.DesiredInstances,
+			"iteration %d: pool must not be incremented past EphemeralStrategy's MaxInstances=1", i)
+	}
+
+	finalRes, err := server.EAC.Get(ctx, poolID.String())
+	require.NoError(t, err)
+	assert.Equal(t, initialRevision, finalRes.Entity().Revision(),
+		"no Patch should have been issued; entity revision should not advance")
+}
+
+// TestWaitForSandboxSkipsEmptyURL verifies that checkForSandbox does not
+// return a Lease for a sandbox that is RUNNING but whose URL has not yet
+// been populated. Returning such a lease would cause the proxy to fail
+// with "unsupported protocol scheme """ on an empty target URL.
+func TestWaitForSandboxSkipsEmptyURL(t *testing.T) {
+	ctx := context.Background()
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	testVer := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", testVer)
+	require.NoError(t, err)
+	testVer.ID = verID
+
+	log := testutils.TestLogger(t)
+	activator := &localActivator{
+		log:             log,
+		eac:             server.EAC,
+		versions:        make(map[verKey]*versionPoolRef),
+		poolSandboxes:   make(map[entity.Id]*poolSandboxes),
+		pools:           make(map[verKey]*poolState),
+		newSandboxChans: make(map[verKey][]chan struct{}),
+	}
+
+	strategy := concurrency.NewStrategy(&testVer.Config.Services[0].ServiceConcurrency)
+	tracker := strategy.InitializeTracker()
+
+	// A sandbox that has flipped to RUNNING but whose URL is not yet populated.
+	// This mimics the window where watchSandboxes observed the status change
+	// in one watch event but the network address has not yet arrived.
+	sb := &sandbox{
+		sandbox: &compute_v1alpha.Sandbox{
+			ID:     entity.Id("sandbox/test-sb"),
+			Status: compute_v1alpha.RUNNING,
+			Spec:   compute_v1alpha.SandboxSpec{Version: testVer.ID},
+		},
+		ent:         entity.Blank(),
+		lastRenewal: time.Now(),
+		url:         "", // intentionally empty
+		tracker:     tracker,
+	}
+
+	poolID := entity.Id("pool-1")
+	key := verKey{testVer.ID.String(), "web"}
+	activator.mu.Lock()
+	activator.versions[key] = &versionPoolRef{
+		ver:      testVer,
+		poolID:   poolID,
+		service:  "web",
+		strategy: strategy,
+	}
+	activator.poolSandboxes[poolID] = &poolSandboxes{
+		pool:      &compute_v1alpha.SandboxPool{ID: poolID},
+		sandboxes: []*sandbox{sb},
+		service:   "web",
+		strategy:  strategy,
+	}
+	activator.mu.Unlock()
+
+	// Use incrementPool=false so we don't try to patch a pool; we just want
+	// to exercise the polling helper. Give it a short outer context so the
+	// test does not have to wait for the 120s internal timeout.
+	waitCtx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	defer cancel()
+
+	lease, err := activator.waitForSandbox(waitCtx, testVer, "web", false)
+	require.Error(t, err, "should not return a Lease for an empty-URL sandbox")
+	assert.Nil(t, lease)
+}
+
+// TestAcquireLeaseSucceedsAfterURLArrives verifies the full path: a sandbox is
+// tracked as RUNNING with an empty URL; a waiter is blocked in waitForSandbox;
+// once the URL becomes available and the notification fires, the waiter wakes
+// and receives a Lease pointing at the real URL.
+func TestAcquireLeaseSucceedsAfterURLArrives(t *testing.T) {
+	ctx := context.Background()
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	testVer := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:                "auto",
+						RequestsPerInstance: 10,
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", testVer)
+	require.NoError(t, err)
+	testVer.ID = verID
+
+	log := testutils.TestLogger(t)
+	activator := &localActivator{
+		log:             log,
+		eac:             server.EAC,
+		versions:        make(map[verKey]*versionPoolRef),
+		poolSandboxes:   make(map[entity.Id]*poolSandboxes),
+		pools:           make(map[verKey]*poolState),
+		newSandboxChans: make(map[verKey][]chan struct{}),
+	}
+
+	strategy := concurrency.NewStrategy(&testVer.Config.Services[0].ServiceConcurrency)
+	tracker := strategy.InitializeTracker()
+
+	sb := &sandbox{
+		sandbox: &compute_v1alpha.Sandbox{
+			ID:     entity.Id("sandbox/late-url"),
+			Status: compute_v1alpha.RUNNING,
+			Spec:   compute_v1alpha.SandboxSpec{Version: testVer.ID},
+		},
+		ent:         entity.Blank(),
+		lastRenewal: time.Now(),
+		url:         "", // arrives later
+		tracker:     tracker,
+	}
+
+	poolID := entity.Id("pool-1")
+	key := verKey{testVer.ID.String(), "web"}
+	activator.mu.Lock()
+	activator.versions[key] = &versionPoolRef{
+		ver:      testVer,
+		poolID:   poolID,
+		service:  "web",
+		strategy: strategy,
+	}
+	activator.poolSandboxes[poolID] = &poolSandboxes{
+		pool:      &compute_v1alpha.SandboxPool{ID: poolID},
+		sandboxes: []*sandbox{sb},
+		service:   "web",
+		strategy:  strategy,
+	}
+	activator.mu.Unlock()
+
+	// Populate the URL after a short delay and notify waiters — this is
+	// what Fix 2 would arrange when a watch event populates the URL on a
+	// sandbox that was already RUNNING.
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		activator.mu.Lock()
+		sb.url = "http://10.0.0.1:3000"
+		chans := activator.newSandboxChans[key]
+		for _, ch := range chans {
+			select {
+			case ch <- struct{}{}:
+			default:
+			}
+		}
+		activator.mu.Unlock()
+	}()
+
+	// Bound the wait so a regression in the URL-arrival notification path
+	// fails fast (within 2s) rather than hanging for the full 120s internal
+	// timeout on waitForSandbox.
+	waitCtx, cancelWait := context.WithTimeout(ctx, 2*time.Second)
+	defer cancelWait()
+
+	start := time.Now()
+	lease, err := activator.waitForSandbox(waitCtx, testVer, "web", false)
+	elapsed := time.Since(start)
+
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+	assert.Equal(t, "http://10.0.0.1:3000", lease.URL, "lease should carry the populated URL")
+	assert.Greater(t, elapsed, 50*time.Millisecond, "should have waited for the URL to arrive")
+	assert.Less(t, elapsed, 2*time.Second, "should not have timed out")
 }
