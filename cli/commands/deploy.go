@@ -484,6 +484,16 @@ func Deploy(ctx *Context, opts struct {
 		}
 	}
 
+	// If the deploy panics (e.g. a stream-callback race), mark the deployment
+	// failed so the server-side lock is released immediately instead of waiting
+	// for its 30-minute TTL, then re-panic so the user still sees the trace.
+	defer func() {
+		if r := recover(); r != nil {
+			updateDeploymentOnError(fmt.Sprintf("CLI panic: %v", r))
+			panic(r)
+		}
+	}()
+
 	// Load AppConfig to get include patterns
 	var includePatterns []string
 	ac, err := appconfig.LoadAppConfigUnder(dir)
@@ -627,6 +637,7 @@ func Deploy(ctx *Context, opts struct {
 		if err != nil {
 			return err
 		}
+		safeStatus := &safeStatusCh{ch: pw.Status()}
 
 		// Add upload progress tracking in explain mode
 		uploadStartTime := time.Now()
@@ -675,13 +686,7 @@ func Deploy(ctx *Context, opts struct {
 				uploadBytes = 0 // Only print once
 			}
 
-			select {
-			case <-buildCtx.Done():
-				return buildCtx.Err()
-			case pw.Status() <- status:
-				// ok
-			}
-			return nil
+			return safeStatus.Send(buildCtx, status)
 		}
 
 		cb = createBuildStatusCallback(buildCtx, nil, nil, &buildErrors, nil, &deployWarnings, progressHandler)
@@ -718,7 +723,7 @@ func Deploy(ctx *Context, opts struct {
 			return err
 		}
 
-		close(pw.Status())
+		safeStatus.Close()
 		<-pw.Done()
 
 		if pw.Err() != nil {
@@ -969,6 +974,40 @@ func printBuildErrors(ctx *Context, buildErrors []string, buildLogs []string) {
 			ctx.Printf("%s\n", log)
 		}
 	}
+}
+
+// safeStatusCh serializes sends and close on a buildkit status channel so the
+// build status callback (invoked from RPC stream-handler goroutines that can
+// outlive the parent RPC call — see pkg/rpc/client.go callInline) cannot race
+// with the deploy command closing the channel.
+type safeStatusCh struct {
+	mu     sync.Mutex
+	ch     chan *client.SolveStatus
+	closed bool
+}
+
+func (s *safeStatusCh) Send(ctx context.Context, v *client.SolveStatus) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case s.ch <- v:
+		return nil
+	}
+}
+
+func (s *safeStatusCh) Close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	s.closed = true
+	close(s.ch)
 }
 
 // createBuildStatusCallback creates a callback for handling build status updates
