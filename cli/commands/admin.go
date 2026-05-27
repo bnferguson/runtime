@@ -47,15 +47,16 @@ func Admin(ctx *Context, opts struct {
 		return fmt.Errorf("method name is required (use --list to see available methods)")
 	}
 
-	// Handle --rpc-help flag
-	if opts.FuncHelp {
+	// Handle --func-help flag, or natural --help/-h on a method (treated the same)
+	if opts.FuncHelp || hasHelpFlag(opts.Unknown) {
 		return adminMethodHelp(ctx, adminClient, opts.App, opts.Method)
 	}
 
 	// Fetch method introspection for type-aware parsing and validation
+	var methodInfo *admin_v1alpha.AdminMethod
 	var paramTypes map[string]string
 	if !opts.NoValidate {
-		methodInfo, err := fetchMethodInfo(ctx, adminClient, opts.App, opts.Method)
+		methodInfo, err = fetchMethodInfo(ctx, adminClient, opts.App, opts.Method)
 		if err != nil {
 			return err
 		}
@@ -127,6 +128,18 @@ func Admin(ctx *Context, opts struct {
 		}
 		paramSources[key] = "argument"
 		params[key] = parsed
+	}
+
+	// If the method declares params but none were supplied, error out with the
+	// method help block instead of letting an empty call fall through to a raw
+	// JSON-RPC error. Returning an error keeps the exit code non-zero so shell
+	// chains (e.g. `&&`) don't treat a help-rendered call as success — matching
+	// the missing-required-params branch in validateAdminCall.
+	// Skipped under --no-validate so power users can still issue empty calls.
+	if !opts.NoValidate && len(params) == 0 && methodInfo != nil &&
+		methodInfo.HasParams() && len(methodInfo.Params()) > 0 {
+		return fmt.Errorf("no parameters supplied\n\n%s",
+			renderMethodHelpString(opts.App, methodInfo))
 	}
 
 	// Validate method and parameters against introspection (unless --no-validate)
@@ -361,6 +374,24 @@ func parseUnknownFlags(unknown []string, params map[string]any, paramSources map
 	return nil
 }
 
+// hasHelpFlag reports whether the unknown-flag slice contains a help flag
+// (--help, -h, or --help=…/-h=…) so it can be intercepted before
+// parseUnknownFlags rejects it as an unknown parameter. Bare "help" is
+// intentionally not matched — it could be a legitimate value for another
+// flag (e.g. --topic help).
+func hasHelpFlag(unknown []string) bool {
+	for _, arg := range unknown {
+		switch arg {
+		case "--help", "-h":
+			return true
+		}
+		if strings.HasPrefix(arg, "--help=") || strings.HasPrefix(arg, "-h=") {
+			return true
+		}
+	}
+	return false
+}
+
 // looksLikeNumber checks if a string starting with "-" is a negative number
 // rather than a flag. Returns true for values like "-5", "-3.14", "-.5".
 func looksLikeNumber(s string) bool {
@@ -415,8 +446,11 @@ func validateAdminCall(ctx *Context, client *admin_v1alpha.AdminClient, app, met
 			method, strings.Join(availableMethods, "\n  "))
 	}
 
-	// Validate parameters if method has param info
-	if methodInfo.HasParams() && len(methodInfo.Params()) > 0 {
+	// Validate parameters when the method declares them (even a declared-empty
+	// list — that's a positive assertion of "no params" and any supplied param
+	// is unknown). If params are not advertised at all, skip validation and let
+	// the server decide.
+	if methodInfo.HasParams() {
 		expectedParams := make(map[string]*admin_v1alpha.AdminMethodParam)
 		var requiredParams []string
 
@@ -435,7 +469,9 @@ func validateAdminCall(ctx *Context, client *admin_v1alpha.AdminClient, app, met
 			}
 		}
 		if len(missingRequired) > 0 {
-			return fmt.Errorf("missing required parameter(s): %s", strings.Join(missingRequired, ", "))
+			return fmt.Errorf("missing required parameter(s): %s\n\n%s",
+				strings.Join(missingRequired, ", "),
+				renderMethodHelpString(app, methodInfo))
 		}
 
 		// Check for unknown parameters
@@ -446,17 +482,84 @@ func validateAdminCall(ctx *Context, client *admin_v1alpha.AdminClient, app, met
 			}
 		}
 		if len(unknownParams) > 0 {
-			var expectedNames []string
-			for name := range expectedParams {
-				expectedNames = append(expectedNames, name)
-			}
-			sort.Strings(expectedNames)
-			return fmt.Errorf("unknown parameter(s): %s\n\nExpected parameters:\n  %s",
-				strings.Join(unknownParams, ", "), strings.Join(expectedNames, "\n  "))
+			return fmt.Errorf("unknown parameter(s): %s\n\n%s",
+				strings.Join(unknownParams, ", "),
+				renderMethodHelpString(app, methodInfo))
 		}
 	}
 
 	return nil
+}
+
+// methodDefinition converts an AdminMethod into a ui.Definition, populating the
+// description (with optional category suffix) and one DefinitionDetail per param.
+func methodDefinition(m *admin_v1alpha.AdminMethod) ui.Definition {
+	def := ui.Definition{
+		Term: m.Name(),
+	}
+
+	if m.HasDescription() && m.Description() != "" {
+		desc := m.Description()
+		if m.HasCategory() && m.Category() != "" {
+			desc = fmt.Sprintf("%s (%s)", desc, m.Category())
+		}
+		def.Description = desc
+	}
+
+	if m.HasParams() && len(m.Params()) > 0 {
+		for _, param := range m.Params() {
+			paramType := "string"
+			if param.HasParamType() && param.ParamType() != "" {
+				paramType = param.ParamType()
+			}
+
+			def.Details = append(def.Details, ui.DefinitionDetail{
+				Name:     param.Name(),
+				Type:     paramType,
+				Required: param.HasRequired() && param.Required(),
+			})
+		}
+	}
+
+	return def
+}
+
+// paramShapeNote returns a short faint line clarifying the method's parameter
+// shape so callers can tell "method takes no parameters" apart from "method
+// did not advertise its parameters". Returns the empty string when params are
+// listed (the tree already speaks for itself).
+func paramShapeNote(m *admin_v1alpha.AdminMethod) string {
+	faint := lipgloss.NewStyle().Faint(true)
+	switch {
+	case !m.HasParams():
+		return faint.Render("  (parameters not advertised by this method)")
+	case len(m.Params()) == 0:
+		return faint.Render("  (no parameters)")
+	default:
+		return ""
+	}
+}
+
+// renderMethodHelpString returns the rendered method-help block (definition list
+// plus usage hint) as a string. Callers that print to ctx should use
+// renderMethodHelp; this form is used to embed help in error messages.
+func renderMethodHelpString(appName string, m *admin_v1alpha.AdminMethod) string {
+	defList := ui.NewDefinitionList([]ui.Definition{methodDefinition(m)})
+	var sb strings.Builder
+	sb.WriteString(defList.Render())
+	if note := paramShapeNote(m); note != "" {
+		sb.WriteString("\n")
+		sb.WriteString(note)
+	}
+	sb.WriteString("\n")
+	hint := ui.NewHint(fmt.Sprintf("Usage: miren admin -a %s %s [key=value ...]", appName, m.Name()))
+	sb.WriteString(hint.Render())
+	return sb.String()
+}
+
+// renderMethodHelp prints method help (definition list + usage hint) to ctx.
+func renderMethodHelp(ctx *Context, appName string, m *admin_v1alpha.AdminMethod) {
+	ctx.Printf("%s\n", renderMethodHelpString(appName, m))
 }
 
 func adminListMethods(ctx *Context, adminClient *admin_v1alpha.AdminClient, appName string) error {
@@ -474,52 +577,21 @@ func adminListMethods(ctx *Context, adminClient *admin_v1alpha.AdminClient, appN
 		return nil
 	}
 
-	// Sort methods by name for consistent output
 	methods := result.Methods()
 	sort.Slice(methods, func(i, j int) bool {
 		return methods[i].Name() < methods[j].Name()
 	})
 
-	// Convert to Definition items
 	definitions := make([]ui.Definition, len(methods))
 	for i, method := range methods {
-		def := ui.Definition{
-			Term: method.Name(),
-		}
-
-		if method.HasDescription() && method.Description() != "" {
-			desc := method.Description()
-			if method.HasCategory() && method.Category() != "" {
-				desc = fmt.Sprintf("%s (%s)", desc, method.Category())
-			}
-			def.Description = desc
-		}
-
-		if method.HasParams() && len(method.Params()) > 0 {
-			for _, param := range method.Params() {
-				paramType := "string"
-				if param.HasParamType() && param.ParamType() != "" {
-					paramType = param.ParamType()
-				}
-
-				def.Details = append(def.Details, ui.DefinitionDetail{
-					Name:     param.Name(),
-					Type:     paramType,
-					Required: param.HasRequired() && param.Required(),
-				})
-			}
-		}
-
-		definitions[i] = def
+		definitions[i] = methodDefinition(method)
 	}
 
-	// Render the definition list
 	defList := ui.NewDefinitionList(definitions,
 		ui.WithDefinitionListTitle(fmt.Sprintf("Admin methods for %s", appName)),
 	)
 	ctx.Printf("%s\n", defList.Render())
 
-	// Usage hint
 	hint := ui.NewHint(fmt.Sprintf("Usage: miren admin -a %s <method> [key=value ...]", appName))
 	ctx.Printf("%s\n", hint.Render())
 
@@ -540,42 +612,7 @@ func adminMethodHelp(ctx *Context, adminClient *admin_v1alpha.AdminClient, appNa
 		return fmt.Errorf("unknown method %q (use --list to see available methods)", method)
 	}
 
-	methodInfo := result.Methods()[0]
-
-	def := ui.Definition{
-		Term: methodInfo.Name(),
-	}
-
-	if methodInfo.HasDescription() && methodInfo.Description() != "" {
-		desc := methodInfo.Description()
-		if methodInfo.HasCategory() && methodInfo.Category() != "" {
-			desc = fmt.Sprintf("%s (%s)", desc, methodInfo.Category())
-		}
-		def.Description = desc
-	}
-
-	if methodInfo.HasParams() && len(methodInfo.Params()) > 0 {
-		for _, param := range methodInfo.Params() {
-			paramType := "string"
-			if param.HasParamType() && param.ParamType() != "" {
-				paramType = param.ParamType()
-			}
-
-			def.Details = append(def.Details, ui.DefinitionDetail{
-				Name:     param.Name(),
-				Type:     paramType,
-				Required: param.HasRequired() && param.Required(),
-			})
-		}
-	}
-
-	defList := ui.NewDefinitionList([]ui.Definition{def})
-	ctx.Printf("%s\n", defList.Render())
-
-	// Usage hint
-	hint := ui.NewHint(fmt.Sprintf("Usage: miren admin -a %s %s [key=value ...]", appName, method))
-	ctx.Printf("%s\n", hint.Render())
-
+	renderMethodHelp(ctx, appName, result.Methods()[0])
 	return nil
 }
 
