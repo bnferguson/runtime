@@ -65,7 +65,7 @@ If you need isolation from production data, run ephemeral deploys against a sepa
 
 Because ephemeral versions share config with the active version, a preview deployed against your production app talks to your production database, queues, and external services. That's fine for read-mostly UI changes, but risky as soon as a PR writes data, runs migrations, or fires background jobs.
 
-The recommended pattern is to keep a second app — typically `myapp-staging` — that points at a staging database and any other backing services you want isolated. Run all PR previews against that app instead of production.
+Set up a second app — typically `myapp-staging` — that points at a staging database and any other backing services you want isolated, then run all PR previews against that app instead of production.
 
 **Step 1: Create the staging app.** Deploy your main branch to it with whatever staging-specific config you want:
 
@@ -135,7 +135,7 @@ miren deploy --ephemeral "$(git rev-parse --abbrev-ref HEAD)"
 
 `--ttl` takes a Go duration string (`30m`, `2h`, `48h`) and defaults to `24h`. Expiration is fixed at deploy time.
 
-A background controller sweeps expired versions every five minutes. Requests to an expired label return a 404 once the next sweep runs. There's no extend command — redeploy with the same label to refresh the TTL.
+Requests to an expired label return 404 immediately — the ephemeral lookup filters expired versions itself, so the cutoff is enforced as soon as the timestamp passes. A background controller sweeps the actual entities every five minutes to free their resources. There's no extend command — redeploy with the same label to refresh the TTL.
 
 **Per-app limit.** Each app can have at most 10 ephemeral versions at once. Deploying an 11th evicts the version nearest to expiry. Replacing an existing label doesn't count against the limit, since the old version is deleted before the new one is created.
 
@@ -228,22 +228,7 @@ The preview URL follows the pattern `pr-<number>.staging.<your-host>`, so a foll
 
 ## Command Reference
 
-### `miren deploy`
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--ephemeral LABEL` | Deploy as an ephemeral preview with this label. Label is normalized to a DNS-safe form. | (off) |
-| `--ttl DURATION` | TTL for the ephemeral version (e.g. `30m`, `48h`). Used only with `--ephemeral`. | `24h` |
-
-### `miren app versions`
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--ephemeral` | Show only ephemeral versions for the app. | (off) |
-| `-n, --limit N` | Max versions to show. | `20` |
-| `--format` | Output format (`table`, `json`). | `table` |
-
-See the full [`miren deploy`](/command/deploy) and [`miren app versions`](/command/app-versions) reference pages for all options.
+The flags introduced on this page are `--ephemeral` and `--ttl` on [`miren deploy`](/command/deploy), and `--ephemeral` on [`miren app versions`](/command/app-versions). Those reference pages have the full flag listings.
 
 ## Next Steps
 
