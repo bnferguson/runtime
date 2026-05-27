@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/moby/buildkit/client"
 )
@@ -12,7 +13,7 @@ func TestSafeStatusChNoPanicOnConcurrentClose(t *testing.T) {
 	const senders = 16
 	const sendsPerGoroutine = 1000
 
-	s := &safeStatusCh{ch: make(chan *client.SolveStatus, 4)}
+	s := newSafeStatusCh(make(chan *client.SolveStatus, 4))
 
 	// Drain the channel so senders don't block forever.
 	var drainerWG sync.WaitGroup
@@ -25,6 +26,12 @@ func TestSafeStatusChNoPanicOnConcurrentClose(t *testing.T) {
 
 	ctx := context.Background()
 
+	// midflight signals that every sender has issued at least one Send, so
+	// Close is guaranteed to land while sends are in flight rather than after
+	// everyone has finished.
+	var midflightWG sync.WaitGroup
+	midflightWG.Add(senders)
+
 	var senderWG sync.WaitGroup
 	senderWG.Add(senders)
 	for i := 0; i < senders; i++ {
@@ -35,26 +42,24 @@ func TestSafeStatusChNoPanicOnConcurrentClose(t *testing.T) {
 					t.Errorf("Send returned error: %v", err)
 					return
 				}
+				if j == 0 {
+					midflightWG.Done()
+				}
 			}
 		}()
 	}
 
-	// Close concurrently with sends. The race detector + nopanic semantics are
-	// what we're verifying here.
-	go func() {
-		s.Close()
-	}()
-
-	senderWG.Wait()
-	// Final close in case the goroutine above lost the race.
+	midflightWG.Wait()
 	s.Close()
 	// Idempotent Close.
 	s.Close()
+
+	senderWG.Wait()
 	drainerWG.Wait()
 }
 
 func TestSafeStatusChSendAfterCloseIsNoop(t *testing.T) {
-	s := &safeStatusCh{ch: make(chan *client.SolveStatus, 1)}
+	s := newSafeStatusCh(make(chan *client.SolveStatus, 1))
 	s.Close()
 
 	if err := s.Send(context.Background(), &client.SolveStatus{}); err != nil {
@@ -62,9 +67,44 @@ func TestSafeStatusChSendAfterCloseIsNoop(t *testing.T) {
 	}
 }
 
+func TestSafeStatusChCloseUnblocksParkedSend(t *testing.T) {
+	// Unbuffered channel with no drainer: a Send is parked inside the select.
+	// Close must wake it up rather than deadlocking on the channel send.
+	s := newSafeStatusCh(make(chan *client.SolveStatus))
+
+	parked := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		close(parked)
+		done <- s.Send(context.Background(), &client.SolveStatus{})
+	}()
+
+	<-parked
+	// Give the Send a moment to enter the select.
+	for i := 0; i < 1000; i++ {
+		_ = i
+	}
+
+	closeReturned := make(chan struct{})
+	go func() {
+		s.Close()
+		close(closeReturned)
+	}()
+
+	select {
+	case <-closeReturned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close() did not return; parked Send caused a deadlock")
+	}
+
+	if err := <-done; err != nil {
+		t.Fatalf("Send returned error: %v", err)
+	}
+}
+
 func TestSafeStatusChSendRespectsContext(t *testing.T) {
 	// Unbuffered channel with no consumer → Send blocks until ctx is cancelled.
-	s := &safeStatusCh{ch: make(chan *client.SolveStatus)}
+	s := newSafeStatusCh(make(chan *client.SolveStatus))
 
 	ctx, cancel := context.WithCancel(context.Background())
 
