@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/core/core_v1alpha"
 )
 
@@ -48,7 +49,7 @@ func TestAutoStrategy_SlotCalculations(t *testing.T) {
 	assert.False(t, tracker.HasCapacity()) // 10+2 > 10
 
 	assert.Equal(t, 15*time.Minute, strategy.ScaleDownDelay())
-	assert.Equal(t, 0, strategy.DesiredInstances()) // Scale to zero
+	assert.Equal(t, 0, strategy.MinInstances()) // Scale to zero
 }
 
 func TestAutoStrategy_MinimumLeaseSize(t *testing.T) {
@@ -123,7 +124,7 @@ func TestFixedStrategy_NoSlotTracking(t *testing.T) {
 	assert.Equal(t, 1, tracker.Used()) // Still 1, release is no-op
 
 	assert.Equal(t, time.Duration(0), strategy.ScaleDownDelay())
-	assert.Equal(t, 3, strategy.DesiredInstances())
+	assert.Equal(t, 3, strategy.MinInstances())
 }
 
 func TestFixedStrategy_SingleInstance(t *testing.T) {
@@ -133,7 +134,7 @@ func TestFixedStrategy_SingleInstance(t *testing.T) {
 	}
 
 	strategy := NewStrategy(svc)
-	assert.Equal(t, 1, strategy.DesiredInstances())
+	assert.Equal(t, 1, strategy.MinInstances())
 }
 
 func TestNewStrategy_ModeSelection(t *testing.T) {
@@ -192,4 +193,117 @@ func TestAutoStrategy_CapacityBoundary(t *testing.T) {
 
 	// At 10 used (full), definitely no capacity (10+2 > 10)
 	assert.False(t, tracker.HasCapacity())
+}
+
+func TestNewStrategyForVersion_EphemeralWebRoutesToEphemeralStrategy(t *testing.T) {
+	// The web service of an ephemeral version must produce an EphemeralStrategy
+	// regardless of the configured ServiceConcurrency. The strategy caps the
+	// pool at a single sandbox and scales it to zero when idle.
+	ver := &core_v1alpha.AppVersion{
+		Version:        "v1",
+		EphemeralLabel: "feat-x",
+	}
+	svc := &core_v1alpha.ServiceConcurrency{
+		Mode:                "auto",
+		RequestsPerInstance: 50,
+		ScaleDownDelay:      "30m",
+	}
+
+	strategy := NewStrategyForVersion(ver, "web", svc)
+
+	eph, ok := strategy.(*EphemeralStrategy)
+	require.True(t, ok, "ephemeral web service must produce an EphemeralStrategy")
+	assert.Equal(t, 1, eph.MaxInstances(), "ephemeral pool is capped at 1 sandbox")
+	assert.Equal(t, 0, eph.MinInstances(), "ephemeral pool scales to zero when idle")
+	assert.Equal(t, 30*time.Minute, eph.ScaleDownDelay(), "should inherit configured ScaleDownDelay")
+}
+
+func TestNewStrategyForVersion_EphemeralUsesDefaultsWhenSvcUnset(t *testing.T) {
+	ver := &core_v1alpha.AppVersion{
+		Version:        "v1",
+		EphemeralLabel: "feat-x",
+	}
+
+	strategy := NewStrategyForVersion(ver, "web", nil)
+
+	eph, ok := strategy.(*EphemeralStrategy)
+	require.True(t, ok)
+	assert.Equal(t, 15*time.Minute, eph.ScaleDownDelay(),
+		"default ScaleDownDelay is generous enough that browsing a preview doesn't churn cold starts")
+}
+
+func TestNewStrategyForVersion_EphemeralNonWebHonorsConfig(t *testing.T) {
+	// Supporting services on an ephemeral preview (databases, workers, etc.)
+	// are not the URL-routed service and must honor their configured
+	// ServiceConcurrency like a normal deploy. A fixed-mode db service with
+	// NumInstances=3 should produce a FixedStrategy{3}, NOT EphemeralStrategy.
+	ver := &core_v1alpha.AppVersion{
+		Version:        "v1",
+		EphemeralLabel: "feat-x",
+	}
+	svc := &core_v1alpha.ServiceConcurrency{
+		Mode:         "fixed",
+		NumInstances: 3,
+	}
+
+	strategy := NewStrategyForVersion(ver, "db", svc)
+
+	fixed, ok := strategy.(*FixedStrategy)
+	require.True(t, ok, "non-web service on ephemeral version must honor configured strategy")
+	assert.Equal(t, 3, fixed.MinInstances(),
+		"fixed-mode db service must keep its configured NumInstances even on ephemeral preview")
+	assert.Equal(t, 3, fixed.MaxInstances())
+}
+
+func TestMaxInstances_StrategyDefaults(t *testing.T) {
+	auto := NewStrategy(&core_v1alpha.ServiceConcurrency{Mode: "auto"})
+	assert.Equal(t, MaxPoolSize, auto.MaxInstances(),
+		"auto-mode strategy returns the global cap")
+
+	fixed := NewStrategy(&core_v1alpha.ServiceConcurrency{Mode: "fixed", NumInstances: 4})
+	assert.Equal(t, 4, fixed.MaxInstances(),
+		"fixed-mode strategy caps at its configured count")
+}
+
+func TestEphemeralStrategy_AlwaysHasCapacity(t *testing.T) {
+	// There's no scaling alternative for an overloaded preview sandbox
+	// (MaxInstances=1), so capacity is not tracked; all traffic routes at
+	// the single sandbox. Mirrors FixedStrategy's capacity model.
+	eph := &EphemeralStrategy{scaleDownDelay: 5 * time.Minute}
+	tracker := eph.InitializeTracker()
+
+	for i := 0; i < 50; i++ {
+		assert.True(t, tracker.HasCapacity(), "iteration %d should still have capacity", i)
+		tracker.AcquireLease()
+	}
+}
+
+func TestNewStrategyForVersion_NonEphemeralDelegates(t *testing.T) {
+	ver := &core_v1alpha.AppVersion{
+		Version: "v1",
+	}
+	svc := &core_v1alpha.ServiceConcurrency{
+		Mode:                "auto",
+		RequestsPerInstance: 10,
+		ScaleDownDelay:      "15m",
+	}
+
+	strategy := NewStrategyForVersion(ver, "web", svc)
+
+	_, ok := strategy.(*AutoStrategy)
+	assert.True(t, ok, "non-ephemeral auto version must produce an AutoStrategy")
+}
+
+func TestNewStrategyForVersion_NilVersionDelegates(t *testing.T) {
+	// Defensive: callers without an AppVersion handy fall through to NewStrategy.
+	svc := &core_v1alpha.ServiceConcurrency{
+		Mode:         "fixed",
+		NumInstances: 3,
+	}
+
+	strategy := NewStrategyForVersion(nil, "web", svc)
+
+	fixed, ok := strategy.(*FixedStrategy)
+	require.True(t, ok, "nil version with fixed config must delegate to FixedStrategy")
+	assert.Equal(t, 3, fixed.MinInstances())
 }

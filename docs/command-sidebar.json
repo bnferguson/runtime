@@ -63,6 +63,8 @@
       "command/auth-generate",
       "command/auth-provider",
       "command/auth-provider-add",
+      "command/auth-provider-add-github",
+      "command/auth-provider-add-oidc",
       "command/auth-provider-add-password",
       "command/auth-provider-list",
       "command/auth-provider-remove",

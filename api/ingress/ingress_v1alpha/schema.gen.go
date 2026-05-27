@@ -164,20 +164,24 @@ func (o *ClaimMappings) InitSchema(sb *schema.SchemaBuilder) {
 }
 
 const (
-	OidcProviderClientIdId     = entity.Id("dev.miren.ingress/oidc_provider.client_id")
-	OidcProviderClientSecretId = entity.Id("dev.miren.ingress/oidc_provider.client_secret")
-	OidcProviderNameId         = entity.Id("dev.miren.ingress/oidc_provider.name")
-	OidcProviderProviderUrlId  = entity.Id("dev.miren.ingress/oidc_provider.provider_url")
-	OidcProviderScopesId       = entity.Id("dev.miren.ingress/oidc_provider.scopes")
+	OidcProviderClientIdId      = entity.Id("dev.miren.ingress/oidc_provider.client_id")
+	OidcProviderClientSecretId  = entity.Id("dev.miren.ingress/oidc_provider.client_secret")
+	OidcProviderConfigJsonId    = entity.Id("dev.miren.ingress/oidc_provider.config_json")
+	OidcProviderConnectorTypeId = entity.Id("dev.miren.ingress/oidc_provider.connector_type")
+	OidcProviderNameId          = entity.Id("dev.miren.ingress/oidc_provider.name")
+	OidcProviderProviderUrlId   = entity.Id("dev.miren.ingress/oidc_provider.provider_url")
+	OidcProviderScopesId        = entity.Id("dev.miren.ingress/oidc_provider.scopes")
 )
 
 type OidcProvider struct {
-	ID           entity.Id `json:"id"`
-	ClientId     string    `cbor:"client_id,omitempty" json:"client_id,omitempty"`
-	ClientSecret string    `cbor:"client_secret,omitempty" json:"client_secret,omitempty"`
-	Name         string    `cbor:"name,omitempty" json:"name,omitempty"`
-	ProviderUrl  string    `cbor:"provider_url,omitempty" json:"provider_url,omitempty"`
-	Scopes       string    `cbor:"scopes,omitempty" json:"scopes,omitempty"`
+	ID            entity.Id `json:"id"`
+	ClientId      string    `cbor:"client_id,omitempty" json:"client_id,omitempty"`
+	ClientSecret  string    `cbor:"client_secret,omitempty" json:"client_secret,omitempty"`
+	ConfigJson    string    `cbor:"config_json,omitempty" json:"config_json,omitempty"`
+	ConnectorType string    `cbor:"connector_type,omitempty" json:"connector_type,omitempty"`
+	Name          string    `cbor:"name,omitempty" json:"name,omitempty"`
+	ProviderUrl   string    `cbor:"provider_url,omitempty" json:"provider_url,omitempty"`
+	Scopes        string    `cbor:"scopes,omitempty" json:"scopes,omitempty"`
 }
 
 func (o *OidcProvider) Decode(e entity.AttrGetter) {
@@ -187,6 +191,12 @@ func (o *OidcProvider) Decode(e entity.AttrGetter) {
 	}
 	if a, ok := e.Get(OidcProviderClientSecretId); ok && a.Value.Kind() == entity.KindString {
 		o.ClientSecret = a.Value.String()
+	}
+	if a, ok := e.Get(OidcProviderConfigJsonId); ok && a.Value.Kind() == entity.KindString {
+		o.ConfigJson = a.Value.String()
+	}
+	if a, ok := e.Get(OidcProviderConnectorTypeId); ok && a.Value.Kind() == entity.KindString {
+		o.ConnectorType = a.Value.String()
 	}
 	if a, ok := e.Get(OidcProviderNameId); ok && a.Value.Kind() == entity.KindString {
 		o.Name = a.Value.String()
@@ -222,6 +232,12 @@ func (o *OidcProvider) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.ClientSecret) {
 		attrs = append(attrs, entity.String(OidcProviderClientSecretId, o.ClientSecret))
 	}
+	if !entity.Empty(o.ConfigJson) {
+		attrs = append(attrs, entity.String(OidcProviderConfigJsonId, o.ConfigJson))
+	}
+	if !entity.Empty(o.ConnectorType) {
+		attrs = append(attrs, entity.String(OidcProviderConnectorTypeId, o.ConnectorType))
+	}
 	if !entity.Empty(o.Name) {
 		attrs = append(attrs, entity.String(OidcProviderNameId, o.Name))
 	}
@@ -242,6 +258,12 @@ func (o *OidcProvider) Empty() bool {
 	if !entity.Empty(o.ClientSecret) {
 		return false
 	}
+	if !entity.Empty(o.ConfigJson) {
+		return false
+	}
+	if !entity.Empty(o.ConnectorType) {
+		return false
+	}
 	if !entity.Empty(o.Name) {
 		return false
 	}
@@ -257,9 +279,11 @@ func (o *OidcProvider) Empty() bool {
 func (o *OidcProvider) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("client_id", "dev.miren.ingress/oidc_provider.client_id", schema.Doc("The OAuth2 client ID"))
 	sb.String("client_secret", "dev.miren.ingress/oidc_provider.client_secret", schema.Doc("The OAuth2 client secret"))
-	sb.String("name", "dev.miren.ingress/oidc_provider.name", schema.Doc("A unique name for this OIDC provider"), schema.Indexed)
-	sb.String("provider_url", "dev.miren.ingress/oidc_provider.provider_url", schema.Doc("The OIDC provider URL (e.g. https://accounts.google.com)"), schema.Indexed)
-	sb.String("scopes", "dev.miren.ingress/oidc_provider.scopes", schema.Doc("Space-separated list of OAuth2 scopes (e.g. \"openid email profile\")"))
+	sb.String("config_json", "dev.miren.ingress/oidc_provider.config_json", schema.Doc("Connector-specific configuration as a JSON object (e.g. {\"orgs\":[{\"name\":\"mirendev\"}]}). Only meaningful when connector_type is non-empty and not \"oidc\"."))
+	sb.String("connector_type", "dev.miren.ingress/oidc_provider.connector_type", schema.Doc("The provider implementation. Empty or \"oidc\" uses the built-in OIDC discovery client (consumes provider_url + scopes). Any other value names a Dex-backed connector (e.g. \"github\") and uses config_json for connector-specific configuration."), schema.Indexed)
+	sb.String("name", "dev.miren.ingress/oidc_provider.name", schema.Doc("A unique name for this auth provider. Despite the kind name, this entity backs all OAuth2-flavored providers (OIDC discovery, GitHub, and other connector-based ones). Kept under the `oidc_provider` kind for backward compatibility with existing v0.8.0 entities."), schema.Indexed)
+	sb.String("provider_url", "dev.miren.ingress/oidc_provider.provider_url", schema.Doc("The OIDC provider URL (e.g. https://accounts.google.com). Only meaningful when connector_type is empty or \"oidc\"."), schema.Indexed)
+	sb.String("scopes", "dev.miren.ingress/oidc_provider.scopes", schema.Doc("Space-separated list of OAuth2 scopes (e.g. \"openid email profile\"). Only meaningful when connector_type is empty or \"oidc\"; connectors choose their own scopes."))
 }
 
 const (
@@ -388,5 +412,5 @@ func init() {
 		(&PasswordProvider{}).InitSchema(sb)
 		(&WafProfile{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.ingress", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\x94\x95ے\xd30\f\x86_\x04\x86\xe3p&\xcc>Qƍ\x95Dԧ\xb5\xddl{\t3\xf0\",\xbc!\\3\x91\xd3Ml\xa7\xa9\xf7\xa6\xa3\xca\xf2'K\xfe\xe5\xdcs\xc5$\xdcr\x18*\x89\x16T\x85\xaa\xb3\xe0\x1c\xecQqw\x7f|\x91\xad|\x19W\xaa\xde{S[}\xf0\xf0\x87\b\xc7'y\xe0\x1c\x13h\xffZ\xae%C\x95gk[\x04\xc1\xdd\xcf_;\xe4\xc7\xe7[\xa4\x8a\x19C\t\x9b\xd1\xf0'\x03;\xe4\xb4\xed\xc3\xf6\xb6\x83\xefkc\xf5\x80\x1c,\x01d\xec\x9aP\xbfG\xd4\xc7MT#\x18\xcaZ2cPu\x8eK\xa6N\x7f\x89\xa8\x92\x95\x11\x89\x8d\x96F+P~\xb6\xa6\x8e\xe5Y\xaa\x8bY\n\x1b\xf8\x9d:\xf1&?~L\vp:\x05\x04s<j\xeb\xbcE\xd5\x11\xe2\xedUD\x0f\xec\xdc\xc9v\xb2\x17\x90n\x00\xebP\xabn\xb8a\xc2\xf4L\x18\x8b\x92\xd9S=\xd6!\tu&Q\xbeכ\x1d\xe7в\x83\xf0\x94\xac;\xff\x19\xb3\xf1\x9dւ\x00+:]\x00z\xed\xc2nNVZ\xed\xbb\xcd\xcdw\xac\x1deҢ\x00b엎I6\x9b\xf5~\x9daǗ\x17\xe6i\xc1\x9c\xe4\xf14\x8f\\\x04\x15\n\xe2\x1b\xd5\xf7i\x13U\x19f\x99\xd2\xc8j\x01\x03\x88 \xe5\xc47\x96٠\xf2\x9bu.\x1b\xb3v\xa3T\xa8F\xde<L\xddT\xea\xb3<6\n+,\xf6\a\x15\xfb\xfe\n\xacj\x04\x82\xf25rJ\x8e\xf3\xdfT\x16\x9f\vI\x0e\x1a\vA_2v\xa5ĕ\xa6\xc4D\xd2\xe8\xfc\x93\xee_\xb9\xc8x\xff٨\x0f6\\\xa4\x88<)o奈y\xae\xd1\x06\\\x98\xf2\xc9.\x9e\xf2\x88\xb46c\xa4\aÜ\xbbӖ\xa7\x9ax\x95\xc7g\xa1\x8fz\x15W\x0e\x90\x01\xaf\xf5\xff\xa6\x84\xf1\xe0\xe9\x99\xeb\x83*bWi\ao3v\x1a\xbew\xbd\xb6\xbe\x0e\xdf\xea\xe53s\xfd\xb3\x1d\rk\xc1\xab\x94\\g\xd1x\xe7\x05\x94\xcb\xe0?\x00\x00\x00\xff\xff\x01\x00\x00\xff\xff;\xd8hV\x99\b\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.ingress", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\x94\x96ے\xd30\f\x86_\x04\x86\xe3p&\xcc>\x91\xc7\x1b+\x89\xb6>\xad\xedv\xdbK\xb8\x80\aa\xe1\rᚉ\x9cnb;\x9b\x9a\x9b\x8e\xaaH\x9f,\xe5\xb7&\xf7Bs\x05\xb7\x02\x0e\x8dB\a\xbaA\xdd;\xf0\x1ev\xa8\x85\xbf?\xbe(\x9e|\x19\x9f4C\b\x969\xb3\x0f\xf0\x9b\b\xc7'e\xe0\x1c\x13i\x7f;a\x14G]V\xeb:\x04)\xfc\xf7\x9f\xd7(\x8eϷH\r\xb7\x96\n\xb6\xa3\x11N\x16\xaeQPڇ\xed\xb4}\x18\x98u\xe6\x80\x02\x1c\x01T\xea\x9aP\xbfF\xd4\xc7MT+9*\xa6\xb8\xb5\xa8{/\x14ק?D\xd4ٓ\x11\x89\xadQ\xd6h\xd0a\xb6\xa6\x89\x95U\x9aG\xabT\x0e\xf0\x1bM\xe2My\xfc\x94\x16\xe1t\n\x88\xe6x\xd4\xce\a\x87\xba'\xc4ۋ\x88\x01\xf8y\x92\xddd/ \xfd\x01\x9cG\xa3\xfb\xc3\x15\x97v\xe0\xd2:Tܝ\xd8؇\"ԙD\xf5^oN\\@\xc7\xf72P\xb1\xfe\xfcg\xac&\xae\x8d\x91\x04X\xd1\xe9\x020\x18\x1f\xb3\x05Yy\xb7\xef6\x93\xefx7ʤC\t\xc4\xd8-\x1d\x93l6\xfb\xbd\x99aǗ\x8fܧ\x05s\x92\xc7\xd32r\x11T)\x88\xaf\xd4ߧMTc\xb9\xe3\xda g\x12\x0e \xa3\x943\xdf\xd8f\x8b:l\xf6\xb9\x1c\xcc\xda\x1b\xa5F\r\x8a\xf6\xe1\xd6M\xad>+c\x93\xb0\xcaf\x7fP\xb3\xef/\xc0\x9aV\"\xe8\xc0PPq\x9c\xff\xe6\xb2\xf8\\I\xf2\xd0:\x88\xfaR\xa9+'\xae,\x96\x8cht\x87=\xbb\xf1FG\xad-\x1d9\xad\xa9\xa0ih\x83q\x8c.K\xdcQ\xa9/g\xae\xbc\xb6\x94I\xb7h\xfe\xc9\xf3W\xa4\x96\xe6\x9f\r\xb6wQj2\xf1伕]\x96\xf2|k,\xf8\xb8\x87&\xbbz\x0f%\xa4\xb5-@\x8a\xb5\xdc\xfb;\xe3D\xae\xdaWe|\x11\xfa_{{\xe5\x00\x05\xf0\xd2\xfc\xafj\x18\x0f\x9e\x81\xfb!\xea6u\xd5N\xf0\xb6`\xe7\xe1;?\x18\x17X\xfc\x9aX.\xc2\xcb\x1f\x16\xc9:\xa9؛\xd9\xeb\xacZ@e\x03\xf52\xf8\a\x00\x00\xff\xff\x01\x00\x00\xff\xff\xfc\xecL2;\t\x00\x00"))
 }

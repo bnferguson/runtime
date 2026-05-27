@@ -609,7 +609,7 @@ func (m *Manager) checkAllPoolsForScaleDown(ctx context.Context) error {
 
 		// Use concurrency strategy to determine scale-down delay
 		sc := core_v1alpha.ServiceConcurrency(svcConcurrency)
-		strategy := concurrency.NewStrategy(&sc)
+		strategy := concurrency.NewStrategyForVersion(&ver, pool.Service, &sc)
 		scaleDownDelay := strategy.ScaleDownDelay()
 
 		// Skip pools that never scale down (fixed mode)
@@ -618,7 +618,7 @@ func (m *Manager) checkAllPoolsForScaleDown(ctx context.Context) error {
 		}
 
 		// Get desired instances from strategy (for fixed mode minimum)
-		minInstances := int64(strategy.DesiredInstances())
+		minInstances := int64(strategy.MinInstances())
 
 		// Check if this pool has idle sandboxes that should be retired
 		if err := m.checkPoolForScaleDown(ctx, &pool, scaleDownDelay, minInstances); err != nil {

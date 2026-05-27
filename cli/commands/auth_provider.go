@@ -5,91 +5,17 @@ import (
 	"strings"
 
 	"miren.dev/runtime/api/ingress"
-	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/pkg/ui"
 )
 
-func AuthProviderAdd(ctx *Context, opts struct {
-	Name         string   `position:"0" usage:"Name for this identity provider" required:"true"`
-	ProviderURL  string   `long:"provider-url" description:"OIDC provider URL (e.g., https://accounts.google.com)" required:"true"`
-	ClientID     string   `long:"client-id" description:"OAuth2 client ID" required:"true"`
-	ClientSecret string   `long:"client-secret" description:"OAuth2 client secret" required:"true"`
-	Scopes       []string `long:"scope" description:"OAuth2 scopes (can be specified multiple times)"`
-	Update       bool     `long:"update" description:"Overwrite an existing provider with the same name (rotates client secret)"`
-	ConfigCentric
-}) error {
-
-	if opts.Name == "" {
-		return fmt.Errorf("provider name is required")
+// providerType returns the user-facing type label for an OIDC provider entity.
+// Connector-backed providers (e.g. github) surface as their connector type
+// directly so the CLI exposes a flat three-type model: oidc, github, password.
+func providerType(connectorType string) string {
+	if connectorType == "" || connectorType == "oidc" {
+		return "oidc"
 	}
-
-	if opts.ProviderURL == "" {
-		return fmt.Errorf("--provider-url is required")
-	}
-
-	if opts.ClientID == "" || opts.ClientSecret == "" {
-		return fmt.Errorf("--client-id and --client-secret are required")
-	}
-
-	// Ensure "openid" scope is always included
-	hasOpenID := false
-	for _, s := range opts.Scopes {
-		if s == "openid" {
-			hasOpenID = true
-			break
-		}
-	}
-	scopeList := opts.Scopes
-	if !hasOpenID {
-		scopeList = append([]string{"openid"}, scopeList...)
-	}
-	scopes := strings.Join(scopeList, " ")
-
-	client, err := ctx.RPCClient("entities")
-	if err != nil {
-		return err
-	}
-
-	ic := ingress.NewClient(ctx.Log, client)
-
-	existing, err := ic.GetOIDCProvider(ctx, opts.Name)
-	if err != nil {
-		return fmt.Errorf("failed to check for existing identity provider: %w", err)
-	}
-	if existing != nil && !opts.Update {
-		return fmt.Errorf("identity provider %q already exists. Pass --update to overwrite (rotates client secret)", opts.Name)
-	}
-
-	pwExisting, err := ic.GetPasswordProvider(ctx, opts.Name)
-	if err != nil {
-		return fmt.Errorf("failed to check for existing password provider: %w", err)
-	}
-	if pwExisting != nil {
-		return fmt.Errorf("a password provider named %q already exists. Provider names must be unique across types", opts.Name)
-	}
-
-	provider := &ingress_v1alpha.OidcProvider{
-		Name:         opts.Name,
-		ProviderUrl:  opts.ProviderURL,
-		ClientId:     opts.ClientID,
-		ClientSecret: opts.ClientSecret,
-		Scopes:       scopes,
-	}
-
-	_, err = ic.CreateOrUpdateOIDCProvider(ctx, provider)
-	if err != nil {
-		return fmt.Errorf("failed to create identity provider: %w", err)
-	}
-
-	items := []ui.NamedValue{
-		ui.NewNamedValue("Name", opts.Name),
-		ui.NewNamedValue("Provider URL", opts.ProviderURL),
-		ui.NewNamedValue("Client ID", opts.ClientID),
-		ui.NewNamedValue("Scopes", scopes),
-	}
-
-	ctx.Printf("%s\n", ui.NewNamedValueList(items).Render())
-	return nil
+	return connectorType
 }
 
 func AuthProviderList(ctx *Context, opts struct {
@@ -121,17 +47,27 @@ func AuthProviderList(ctx *Context, opts struct {
 			ProviderURL string   `json:"provider_url,omitempty"`
 			ClientID    string   `json:"client_id,omitempty"`
 			Scopes      []string `json:"scopes,omitempty"`
+			ConfigJSON  string   `json:"config_json,omitempty"`
 		}
 
 		items := make([]ProviderJSON, 0, len(oidcProviders)+len(pwProviders))
 		for _, p := range oidcProviders {
-			items = append(items, ProviderJSON{
-				Name:        p.Name,
-				Type:        "oidc",
-				ProviderURL: p.ProviderUrl,
-				ClientID:    p.ClientId,
-				Scopes:      strings.Fields(p.Scopes),
-			})
+			if isConnector(p) {
+				items = append(items, ProviderJSON{
+					Name:       p.Name,
+					Type:       providerType(p.ConnectorType),
+					ClientID:   p.ClientId,
+					ConfigJSON: p.ConfigJson,
+				})
+			} else {
+				items = append(items, ProviderJSON{
+					Name:        p.Name,
+					Type:        "oidc",
+					ProviderURL: p.ProviderUrl,
+					ClientID:    p.ClientId,
+					Scopes:      strings.Fields(p.Scopes),
+				})
+			}
 		}
 		for _, p := range pwProviders {
 			items = append(items, ProviderJSON{
@@ -148,13 +84,17 @@ func AuthProviderList(ctx *Context, opts struct {
 	}
 
 	var rows []ui.Row
-	headers := []string{"NAME", "TYPE", "PROVIDER URL", "SCOPES"}
+	headers := []string{"NAME", "TYPE", "DETAILS"}
 
 	for _, p := range oidcProviders {
-		rows = append(rows, ui.Row{p.Name, "oidc", p.ProviderUrl, p.Scopes})
+		if isConnector(p) {
+			rows = append(rows, ui.Row{p.Name, providerType(p.ConnectorType), summarizeConnectorConfig(p.ConfigJson)})
+		} else {
+			rows = append(rows, ui.Row{p.Name, "oidc", p.ProviderUrl})
+		}
 	}
 	for _, p := range pwProviders {
-		rows = append(rows, ui.Row{p.Name, "password", "", ""})
+		rows = append(rows, ui.Row{p.Name, "password", ""})
 	}
 
 	columns := ui.AutoSizeColumns(headers, rows, ui.Columns().NoTruncate(0).NoTruncate(1))
@@ -184,13 +124,42 @@ func AuthProviderShow(ctx *Context, opts struct {
 
 	ic := ingress.NewClient(ctx.Log, client)
 
-	// Try OIDC provider first
 	provider, err := ic.GetOIDCProvider(ctx, opts.Name)
 	if err != nil {
 		return fmt.Errorf("failed to get identity provider: %w", err)
 	}
 
 	if provider != nil {
+		if isConnector(provider) {
+			if opts.IsJSON() {
+				type ProviderJSON struct {
+					Name       string `json:"name"`
+					Type       string `json:"type"`
+					ClientID   string `json:"client_id"`
+					ConfigJSON string `json:"config_json,omitempty"`
+				}
+
+				return PrintJSON(ProviderJSON{
+					Name:       provider.Name,
+					Type:       providerType(provider.ConnectorType),
+					ClientID:   provider.ClientId,
+					ConfigJSON: provider.ConfigJson,
+				})
+			}
+
+			items := []ui.NamedValue{
+				ui.NewNamedValue("Name", provider.Name),
+				ui.NewNamedValue("Type", providerType(provider.ConnectorType)),
+				ui.NewNamedValue("Client ID", provider.ClientId),
+			}
+			if summary := summarizeConnectorConfig(provider.ConfigJson); summary != "" {
+				items = append(items, ui.NewNamedValue("Config", summary))
+			}
+
+			ctx.Printf("%s\n", ui.NewNamedValueList(items).Render())
+			return nil
+		}
+
 		if opts.IsJSON() {
 			type ProviderJSON struct {
 				Name        string   `json:"name"`
@@ -221,7 +190,6 @@ func AuthProviderShow(ctx *Context, opts struct {
 		return nil
 	}
 
-	// Try password provider
 	pwProvider, err := ic.GetPasswordProvider(ctx, opts.Name)
 	if err != nil {
 		return fmt.Errorf("failed to get password provider: %w", err)
@@ -269,13 +237,14 @@ func AuthProviderRemove(ctx *Context, opts struct {
 
 	ic := ingress.NewClient(ctx.Log, client)
 
-	// Try OIDC provider first
 	oidcProvider, err := ic.GetOIDCProvider(ctx, opts.Name)
 	if err != nil {
 		return fmt.Errorf("failed to get identity provider: %w", err)
 	}
 
 	if oidcProvider != nil {
+		label := providerType(oidcProvider.ConnectorType) + " provider"
+
 		if !opts.Force {
 			routes, err := ic.List(ctx)
 			if err != nil {
@@ -285,25 +254,28 @@ func AuthProviderRemove(ctx *Context, opts struct {
 			var inUse []string
 			for _, rm := range routes {
 				if rm.Route.AuthProvider == oidcProvider.ID {
-					inUse = append(inUse, rm.Route.Host)
+					host := rm.Route.Host
+					if rm.Route.Default {
+						host = "(default)"
+					}
+					inUse = append(inUse, host)
 				}
 			}
 
 			if len(inUse) > 0 {
-				return fmt.Errorf("identity provider %q is attached to %d route(s): %s. Detach with `miren route unprotect`, or pass --force to remove anyway", opts.Name, len(inUse), strings.Join(inUse, ", "))
+				return fmt.Errorf("%s %q is attached to %d route(s): %s. Detach with `miren route unprotect`, or pass --force to remove anyway", label, opts.Name, len(inUse), strings.Join(inUse, ", "))
 			}
 		}
 
 		err = ic.DeleteOIDCProvider(ctx, opts.Name)
 		if err != nil {
-			return fmt.Errorf("failed to remove identity provider: %w", err)
+			return fmt.Errorf("failed to remove %s: %w", label, err)
 		}
 
-		ctx.Printf("Removed identity provider: %s\n", opts.Name)
+		ctx.Printf("Removed %s: %s\n", label, opts.Name)
 		return nil
 	}
 
-	// Try password provider
 	pwProvider, err := ic.GetPasswordProvider(ctx, opts.Name)
 	if err != nil {
 		return fmt.Errorf("failed to get password provider: %w", err)

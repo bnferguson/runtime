@@ -89,12 +89,18 @@ func RouteProtect(ctx *Context, opts struct {
 			return fmt.Errorf("failed to protect route: %w", err)
 		}
 
+		providerType := "oidc"
+		if isConnector(oidcProvider) {
+			providerType = "connector"
+		}
+
 		if opts.IsJSON() {
 			type RouteProtectJSON struct {
 				Route         string              `json:"route"`
 				Protected     bool                `json:"protected"`
 				Provider      string              `json:"provider"`
 				ProviderType  string              `json:"provider_type"`
+				ConnectorType string              `json:"connector_type,omitempty"`
 				ClaimMappings []map[string]string `json:"claim_mappings,omitempty"`
 			}
 
@@ -106,20 +112,27 @@ func RouteProtect(ctx *Context, opts struct {
 				})
 			}
 
-			return PrintJSON(RouteProtectJSON{
+			out := RouteProtectJSON{
 				Route:         routeLabel,
 				Protected:     true,
 				Provider:      opts.Provider,
-				ProviderType:  "oidc",
+				ProviderType:  providerType,
 				ClaimMappings: mappings,
-			})
+			}
+			if providerType == "connector" {
+				out.ConnectorType = oidcProvider.ConnectorType
+			}
+			return PrintJSON(out)
 		}
 
 		items := []ui.NamedValue{
 			ui.NewNamedValue("Route", routeLabel),
 			ui.NewNamedValue("Protected", true),
 			ui.NewNamedValue("Provider", opts.Provider),
-			ui.NewNamedValue("Type", "oidc"),
+			ui.NewNamedValue("Type", providerType),
+		}
+		if providerType == "connector" {
+			items = append(items, ui.NewNamedValue("Connector", oidcProvider.ConnectorType))
 		}
 
 		ctx.Printf("%s\n", ui.NewNamedValueList(items).Render())

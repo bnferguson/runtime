@@ -46,12 +46,11 @@ func (c *Config) ValidateIngressCoherence() error {
 		if c.TLS.GetAcmeDNSProvider() != "" {
 			populated = append(populated, "tls.acme_dns_provider")
 		}
-		if len(c.TLS.AdditionalIPs) > 0 {
-			populated = append(populated, "tls.additional_ips")
-		}
-		if len(c.TLS.AdditionalNames) > 0 {
-			populated = append(populated, "tls.additional_names")
-		}
+		// tls.additional_names / tls.additional_ips are intentionally NOT
+		// gated here: they're applied to the API server cert (always-on
+		// TLS on the API port) and the etcd cert. Both exist regardless
+		// of ingress.mode. The fields gated above (self_signed,
+		// acme_email, acme_dns_provider) really are ingress-cert-only.
 		if len(populated) > 0 {
 			return fmt.Errorf("ingress.mode = %q does not terminate TLS, but the following [tls] fields are set and would be ignored: %s. Either remove them or pick a TLS-terminating mode (tls-autoprovision, behind-proxy-https)", mode, strings.Join(populated, ", "))
 		}

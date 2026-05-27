@@ -63,7 +63,9 @@ Complete reference for all `miren` CLI commands.
 | [`miren auth generate`](/command/auth-generate) | Generate authentication config file |
 | [`miren auth provider`](/command/auth-provider) | Identity provider management |
 | [`miren auth provider add`](/command/auth-provider-add) | Add an identity provider for route protection |
-| [`miren auth provider add-password`](/command/auth-provider-add-password) | Add a password provider for route protection |
+| [`miren auth provider add github`](/command/auth-provider-add-github) | Add a GitHub identity provider |
+| [`miren auth provider add oidc`](/command/auth-provider-add-oidc) | Add an OIDC identity provider |
+| [`miren auth provider add password`](/command/auth-provider-add-password) | Add a shared-password identity provider |
 | [`miren auth provider list`](/command/auth-provider-list) | List identity providers |
 | [`miren auth provider remove`](/command/auth-provider-remove) | Remove an identity provider |
 | [`miren auth provider show`](/command/auth-provider-show) | Show an identity provider |

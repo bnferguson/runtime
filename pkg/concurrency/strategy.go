@@ -6,6 +6,11 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 )
 
+// MaxPoolSize is the default upper bound on sandboxes per pool, applied by
+// strategies that have no inherent cap of their own (notably AutoStrategy).
+// It exists to prevent runaway growth from buggy scaling logic.
+const MaxPoolSize = 20
+
 // ConcurrencyTracker manages capacity state for a single sandbox
 type ConcurrencyTracker struct {
 	maxCapacity int
@@ -56,8 +61,14 @@ type ConcurrencyStrategy interface {
 	// ScaleDownDelay returns how long to wait before retiring idle sandbox
 	ScaleDownDelay() time.Duration
 
-	// DesiredInstances returns how many instances should always run (0 = scale to zero)
-	DesiredInstances() int
+	// MinInstances returns the strategy-enforced floor on Pool.DesiredInstances:
+	// the sandboxpool manager will not scale the pool below this count.
+	// 0 allows the pool to scale to zero when idle.
+	MinInstances() int
+
+	// MaxInstances returns the maximum sandbox count the pool may scale to.
+	// Strategies without an inherent cap return MaxPoolSize.
+	MaxInstances() int
 }
 
 // AutoStrategy implements auto-scaling with slot-based capacity
@@ -95,8 +106,12 @@ func (s *AutoStrategy) ScaleDownDelay() time.Duration {
 	return s.scaleDownDelay
 }
 
-func (s *AutoStrategy) DesiredInstances() int {
+func (s *AutoStrategy) MinInstances() int {
 	return 0 // Scale to zero when idle
+}
+
+func (s *AutoStrategy) MaxInstances() int {
+	return MaxPoolSize
 }
 
 // FixedStrategy implements fixed instance count (no slot-based capacity)
@@ -128,8 +143,54 @@ func (s *FixedStrategy) ScaleDownDelay() time.Duration {
 	return 0 // Never scale down fixed instances
 }
 
-func (s *FixedStrategy) DesiredInstances() int {
+func (s *FixedStrategy) MinInstances() int {
 	return s.numInstances
+}
+
+func (s *FixedStrategy) MaxInstances() int {
+	return s.numInstances // Fixed mode never grows past its configured count.
+}
+
+// EphemeralStrategy implements scale-to-zero capped at 1 instance, for
+// ephemeral preview deploys. Capacity tracking matches FixedStrategy
+// (always accepts leases) since there is no scaling alternative for an
+// overloaded preview sandbox: just route everything at the one instance.
+// When the sole sandbox sits idle past ScaleDownDelay, the pool scales to
+// zero and the next request cold-starts a fresh one.
+type EphemeralStrategy struct {
+	scaleDownDelay time.Duration
+}
+
+func (s *EphemeralStrategy) InitializeTracker() *ConcurrencyTracker {
+	return &ConcurrencyTracker{
+		maxCapacity: 1,
+		used:        0,
+		strategy:    s,
+	}
+}
+
+func (s *EphemeralStrategy) LeaseSize() int {
+	return 1 // Used to mark sandbox as active; capacity checks always pass.
+}
+
+func (s *EphemeralStrategy) checkCapacity(used, maxCapacity int) bool {
+	return true // Route all traffic at the single sandbox.
+}
+
+func (s *EphemeralStrategy) releaseCapacity(tracker *ConcurrencyTracker, size int) {
+	// No-op: capacity is not tracked.
+}
+
+func (s *EphemeralStrategy) ScaleDownDelay() time.Duration {
+	return s.scaleDownDelay
+}
+
+func (s *EphemeralStrategy) MinInstances() int {
+	return 0 // Scale to zero when idle so unvisited previews cost nothing.
+}
+
+func (s *EphemeralStrategy) MaxInstances() int {
+	return 1 // Pool may never grow beyond a single sandbox.
 }
 
 // NewStrategy creates a strategy from ServiceConcurrency config
@@ -165,4 +226,26 @@ func NewStrategy(svc *core_v1alpha.ServiceConcurrency) ConcurrencyStrategy {
 		requestsPerInstance: requestsPerInstance,
 		scaleDownDelay:      scaleDownDelay,
 	}
+}
+
+// NewStrategyForVersion returns the concurrency strategy for a request
+// targeting (ver, service). Ephemeral routing semantics apply only to the
+// user-facing "web" service: that service gets EphemeralStrategy (capped at
+// a single sandbox, scale-to-zero on idle), while supporting services on the
+// same ephemeral version (databases, workers, etc.) honor their configured
+// ServiceConcurrency like a normal deploy.
+func NewStrategyForVersion(ver *core_v1alpha.AppVersion, service string, svc *core_v1alpha.ServiceConcurrency) ConcurrencyStrategy {
+	if ver != nil && ver.EphemeralLabel != "" && service == "web" {
+		// Default to a generous 15-minute idle window so a browser tab left
+		// open doesn't churn through cold starts. Configured ScaleDownDelay
+		// on the service still wins if set.
+		scaleDownDelay := 15 * time.Minute
+		if svc != nil && svc.ScaleDownDelay != "" {
+			if d, err := time.ParseDuration(svc.ScaleDownDelay); err == nil {
+				scaleDownDelay = d
+			}
+		}
+		return &EphemeralStrategy{scaleDownDelay: scaleDownDelay}
+	}
+	return NewStrategy(svc)
 }

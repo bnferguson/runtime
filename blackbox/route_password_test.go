@@ -36,7 +36,7 @@ func TestRoutePasswordProtection(t *testing.T) {
 	})
 
 	// Create a password provider and protect the route
-	m.MustRun("auth", "provider", "add-password", "test-pw", "--password", "s3cret")
+	m.MustRun("auth", "provider", "add", "password", "test-pw", "--password", "s3cret")
 	t.Cleanup(func() {
 		m.Run("auth", "provider", "remove", "test-pw", "--force")
 	})
@@ -111,7 +111,7 @@ func TestRoutePasswordProviderLifecycle(t *testing.T) {
 	m := harness.NewMiren(t, c)
 
 	// Create a password provider
-	m.MustRun("auth", "provider", "add-password", "lifecycle-pw", "--password", "test123")
+	m.MustRun("auth", "provider", "add", "password", "lifecycle-pw", "--password", "test123")
 	t.Cleanup(func() {
 		m.Run("auth", "provider", "remove", "lifecycle-pw", "--force")
 	})
@@ -127,7 +127,7 @@ func TestRoutePasswordProviderLifecycle(t *testing.T) {
 	r.RequireContains(t, "password")
 
 	// Update the password
-	m.MustRun("auth", "provider", "add-password", "lifecycle-pw", "--password", "newpass", "--update")
+	m.MustRun("auth", "provider", "add", "password", "lifecycle-pw", "--password", "newpass", "--update")
 
 	// Remove
 	m.MustRun("auth", "provider", "remove", "lifecycle-pw")

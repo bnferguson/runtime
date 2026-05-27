@@ -54,12 +54,6 @@ import (
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
-const (
-	// MaxPoolSize is the maximum number of sandboxes allowed in a pool
-	// This prevents runaway growth even if there are bugs in scaling logic
-	MaxPoolSize = 20
-)
-
 // extractHTTPPort extracts the HTTP port from a sandbox spec's container ports.
 // Returns the port number and true if found, or 0 and false if no HTTP port exists.
 func extractHTTPPort(spec *compute_v1alpha.SandboxSpec) (int64, bool) {
@@ -298,6 +292,21 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 		return a.waitForSandbox(ctx, ver, service, false)
 	}
 
+	// Ephemeral pools must never scale beyond 1 instance — preview deploys
+	// are short-lived and are meant for inspection, not traffic. If the cached
+	// pool is ephemeral, wait for the existing sandbox instead of incrementing.
+	a.mu.RLock()
+	state, statePresent := a.pools[key]
+	isEphemeral := statePresent && !state.inProgress && state.pool != nil && state.pool.Ephemeral
+	a.mu.RUnlock()
+	if isEphemeral {
+		a.log.Info("ephemeral pool — not scaling, waiting for capacity",
+			"app", ver.App,
+			"version", ver.Version,
+			"service", service)
+		return a.waitForSandbox(ctx, ver, service, false)
+	}
+
 	// No RUNNING or PENDING sandboxes - need to scale up via pool
 	a.log.Info("no available sandboxes, requesting capacity from pool",
 		"app", ver.App,
@@ -384,12 +393,17 @@ func (a *localActivator) waitForSandbox(ctx context.Context, ver *core_v1alpha.A
 		close(notifyChan)
 	}()
 
-	pollCtx, cancel := context.WithTimeout(ctx, 50*time.Second)
+	// Cap the per-request wait at 120s. The default PortWaitTimeout is 15s and
+	// a first-time image pull on a node that hasn't seen the image can run
+	// 30-90s, plus container setup. The previous 50s cap was too aggressive
+	// for cold starts and would return ErrPoolTimeout while sandboxes were
+	// still booting. Stay under httpingress' leaseAcquisitionTimeout (2m).
+	pollCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 
-	// Fallback ticker at 30s interval as safety net
+	// Fallback ticker at 60s interval as safety net
 	// If this fires, it means channel notification failed somehow
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
 
 	// Helper to check for available sandbox
@@ -401,11 +415,15 @@ func (a *localActivator) waitForSandbox(ctx context.Context, ver *core_v1alpha.A
 			// Look up the pool's sandboxes
 			ps, poolOk := a.poolSandboxes[versionRef.poolID]
 			if poolOk && len(ps.sandboxes) > 0 {
-				// Try to find a sandbox with capacity
+				// Try to find a sandbox with capacity.
+				// Require url != "" — a sandbox can briefly be tracked as RUNNING
+				// before the watcher has populated its URL, and returning a Lease
+				// with an empty URL would cause the proxy to fail downstream.
+				// Mirrors the predicate in AcquireLease.
 				start := rand.Int() % len(ps.sandboxes)
 				for i := 0; i < len(ps.sandboxes); i++ {
 					s := ps.sandboxes[(start+i)%len(ps.sandboxes)]
-					if s.sandbox.Status == compute_v1alpha.RUNNING && s.tracker.HasCapacity() {
+					if s.sandbox.Status == compute_v1alpha.RUNNING && s.tracker.HasCapacity() && s.url != "" {
 						candidateSandbox = s
 						break
 					}
@@ -416,9 +434,10 @@ func (a *localActivator) waitForSandbox(ctx context.Context, ver *core_v1alpha.A
 
 		if candidateSandbox != nil {
 			a.mu.Lock()
-			// Double-check status and capacity (may have changed between locks)
+			// Double-check status, capacity, and URL (may have changed between locks)
 			if candidateSandbox.sandbox.Status == compute_v1alpha.RUNNING &&
-				candidateSandbox.tracker.HasCapacity() {
+				candidateSandbox.tracker.HasCapacity() &&
+				candidateSandbox.url != "" {
 				leaseSize := candidateSandbox.tracker.AcquireLease()
 				candidateSandbox.lastRenewal = time.Now()
 				a.mu.Unlock()
@@ -522,7 +541,7 @@ func (a *localActivator) waitForSandbox(ctx context.Context, ver *core_v1alpha.A
 
 		select {
 		case <-pollCtx.Done():
-			return nil, fmt.Errorf("%w: no sandbox became available within 50 seconds", ErrPoolTimeout)
+			return nil, fmt.Errorf("%w: no sandbox became available within 120 seconds", ErrPoolTimeout)
 		case <-notifyChan:
 			// Notified of new sandbox availability, loop back to check
 		case <-ticker.C:
@@ -540,6 +559,23 @@ func (a *localActivator) waitForSandbox(ctx context.Context, ver *core_v1alpha.A
 // Uses a sentinel pattern to prevent duplicate capacity requests from concurrent callers.
 func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1alpha.AppVersion, service string) (*compute_v1alpha.SandboxPool, error) {
 	key := verKey{ver.ID.String(), service}
+
+	// Resolve config and build the strategy once at entry: the cap comes from
+	// strategy.MaxInstances(), and the same strategy is reused below when we
+	// register a freshly-discovered pool on the cache-miss path. This is the
+	// scale-up path (only reached when no sandbox has capacity), so the extra
+	// entity store reads are acceptable.
+	spec, err := coreutil.ResolveConfig(ctx, a.eac, ver)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve config: %w", err)
+	}
+	svcConcurrency, err := coreutil.GetServiceConcurrency(spec, service)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get service concurrency: %w", err)
+	}
+	sc := core_v1alpha.ServiceConcurrency(svcConcurrency)
+	strategy := concurrency.NewStrategyForVersion(ver, service, &sc)
+	maxInstances := int64(strategy.MaxInstances())
 
 	for {
 		// Check if pool exists or is being created (read lock)
@@ -574,6 +610,17 @@ func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1al
 					state.pool.ConsecutiveCrashCount)
 			}
 
+			// Ephemeral pools never scale beyond 1 instance. AcquireLease should
+			// already short-circuit this path, but guard here as well so any
+			// future caller can't accidentally scale a preview deploy.
+			if state.pool.Ephemeral && state.pool.DesiredInstances >= 1 {
+				a.log.Debug("ephemeral pool — refusing to increment capacity",
+					"pool", state.pool.ID,
+					"service", service,
+					"desired_instances", state.pool.DesiredInstances)
+				return state.pool, nil
+			}
+
 			// Update existing pool - increment DesiredInstances with optimistic concurrency control
 			// Calculate target ONCE based on the state captured at the start of this iteration
 			// This ensures concurrent goroutines that all saw the same initial value
@@ -586,12 +633,13 @@ func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1al
 			poolDeleted := false
 			for attempt := 0; attempt < maxRetries; attempt++ {
 				a.mu.Lock()
-				if state.pool.DesiredInstances >= MaxPoolSize {
+				if state.pool.DesiredInstances >= maxInstances {
 					poolIDForMaxCheck := state.pool.ID
 					a.mu.Unlock()
 
 					// Cache says we're at max, but it may be stale. Re-read from entity store
-					// to break potential deadlock where pool manager reset DesiredInstances externally.
+					// to detect whether the pool manager scaled down (giving us headroom) or
+					// whether the pool was deleted entirely.
 					freshPoolEnt, getErr := a.eac.Get(ctx, poolIDForMaxCheck.String())
 					if getErr != nil {
 						if errors.Is(getErr, cond.ErrNotFound{}) {
@@ -604,24 +652,26 @@ func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1al
 							poolDeleted = true
 							break
 						}
-						a.log.Warn("pool at maximum size, cannot increment further (re-read failed)",
+						a.log.Warn("pool at maximum size, re-read failed; returning cached pool",
 							"pool", poolIDForMaxCheck,
-							"max_size", MaxPoolSize,
+							"max_size", maxInstances,
 							"error", getErr)
-						return state.pool, fmt.Errorf("pool has reached maximum size of %d", MaxPoolSize)
+						// Caller will poll waitForSandbox for an existing sandbox.
+						return state.pool, nil
 					}
 
 					var freshPool compute_v1alpha.SandboxPool
 					freshPool.Decode(freshPoolEnt.Entity().Entity())
 
 					a.mu.Lock()
-					if freshPool.DesiredInstances >= MaxPoolSize {
+					if freshPool.DesiredInstances >= maxInstances {
 						a.mu.Unlock()
-						a.log.Warn("pool at maximum size, cannot increment further (confirmed by re-read)",
-							"pool", poolIDForMaxCheck,
-							"max_size", MaxPoolSize,
-							"current", freshPool.DesiredInstances)
-						return &freshPool, fmt.Errorf("pool has reached maximum size of %d", MaxPoolSize)
+						// The pool is legitimately at its strategy's cap (e.g. an ephemeral
+						// pool at DesiredInstances=1). Don't error — the caller will wait on
+						// the existing sandbox via waitForSandbox's polling loop. For Auto
+						// pools at MaxPoolSize this is the runaway-prevention case; the wait
+						// will eventually time out via ErrPoolTimeout.
+						return &freshPool, nil
 					}
 
 					// Fresh state is below max - update cache and recalculate target
@@ -806,44 +856,21 @@ func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1al
 		}
 
 		if foundPoolWithRev != nil {
-			// Found pool created by DeploymentLauncher - increment with OCC
+			// Found pool created by DeploymentLauncher - register in caches and
+			// then either increment with OCC or skip if already at cap.
 			foundPool := foundPoolWithRev.pool
 			currentRevision := foundPoolWithRev.revision
-
-			if foundPool.DesiredInstances >= MaxPoolSize {
-				a.mu.Unlock()
-				a.log.Warn("launcher-created pool at maximum size, cannot increment further",
-					"pool", foundPool.ID,
-					"max_size", MaxPoolSize,
-					"current", foundPool.DesiredInstances)
-				return foundPool, fmt.Errorf("pool has reached maximum size of %d", MaxPoolSize)
-			}
-
-			newDesired := foundPool.DesiredInstances + 1
 			poolID := foundPool.ID
 
-			// Get service concurrency and create strategy for version->pool mapping
-			spec, err := coreutil.ResolveConfig(ctx, a.eac, ver)
-			if err != nil {
-				a.mu.Unlock()
-				return nil, fmt.Errorf("failed to resolve config: %w", err)
-			}
-			svcConcurrency, err := coreutil.GetServiceConcurrency(spec, service)
-			if err != nil {
-				a.mu.Unlock()
-				return nil, fmt.Errorf("failed to get service concurrency: %w", err)
-			}
-			sc := core_v1alpha.ServiceConcurrency(svcConcurrency)
-			strategy := concurrency.NewStrategy(&sc)
-
-			// Cache the pool state before releasing lock
+			// Cache the pool state and register strategy before doing anything
+			// else: even when we're at cap and won't patch, the caller needs
+			// to find the pool through the cache for subsequent operations.
 			a.pools[key] = &poolState{
 				pool:       foundPool,
 				revision:   currentRevision,
 				inProgress: false,
 			}
 
-			// Create version->pool mapping
 			a.versions[key] = &versionPoolRef{
 				ver:      ver,
 				poolID:   poolID,
@@ -851,7 +878,6 @@ func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1al
 				strategy: strategy,
 			}
 
-			// Initialize poolSandboxes entry if needed
 			if _, ok := a.poolSandboxes[poolID]; !ok {
 				a.poolSandboxes[poolID] = &poolSandboxes{
 					pool:      foundPool,
@@ -860,6 +886,17 @@ func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1al
 					strategy:  strategy,
 				}
 			}
+
+			// If the pool is already at its strategy's cap, there's nothing
+			// to patch (e.g. ephemeral pools seed at DesiredInstances=1 with
+			// MaxInstances=1). Return the cached pool; the caller will poll
+			// for the existing sandbox via waitForSandbox.
+			if foundPool.DesiredInstances >= maxInstances {
+				a.mu.Unlock()
+				return foundPool, nil
+			}
+
+			newDesired := foundPool.DesiredInstances + 1
 
 			a.mu.Unlock()
 
@@ -1172,6 +1209,7 @@ func (a *localActivator) watchSandboxes(ctx context.Context) {
 				// Now acquire write lock to update shared state
 				a.mu.Lock()
 				oldStatus := trackedSandbox.sandbox.Status
+				oldURL := trackedSandbox.url
 				trackedSandbox.sandbox.Status = sb.Status
 
 				// Re-check conditions under lock and update URL if still needed
@@ -1184,12 +1222,17 @@ func (a *localActivator) watchSandboxes(ctx context.Context) {
 				// They will be cleaned up later by periodic reconciliation or when
 				// new RUNNING sandboxes are discovered
 
-				// Notify waiters when sandbox status changes to RUNNING, STOPPED, or DEAD
-				// RUNNING: sandbox is ready to serve traffic
-				// STOPPED: sandbox process exited, will be cleaned up by reconciliation
-				// DEAD: sandbox cleaned up, only entity remains
-				// Notify ALL versions that reference this pool
-				if oldStatus != sb.Status && (sb.Status == compute_v1alpha.RUNNING || sb.Status == compute_v1alpha.STOPPED || sb.Status == compute_v1alpha.DEAD) {
+				// Notify waiters when:
+				//  - sandbox status changes to RUNNING/STOPPED/DEAD, OR
+				//  - a RUNNING sandbox's URL transitions from empty to populated
+				//    (the sandbox may have been marked RUNNING in a prior watch
+				//    event before its network address was visible; waiters that
+				//    saw RUNNING but no URL were effectively stuck until this
+				//    follow-up event arrives).
+				statusChanged := oldStatus != sb.Status &&
+					(sb.Status == compute_v1alpha.RUNNING || sb.Status == compute_v1alpha.STOPPED || sb.Status == compute_v1alpha.DEAD)
+				urlBecameAvailable := sb.Status == compute_v1alpha.RUNNING && oldURL == "" && trackedSandbox.url != ""
+				if statusChanged || urlBecameAvailable {
 					// Notify all versions that reference this pool
 					// Find all version->service mappings that use this pool
 					for key, versionRef := range a.versions {
@@ -1315,7 +1358,7 @@ func (a *localActivator) watchSandboxes(ctx context.Context) {
 				return nil
 			}
 			sc := core_v1alpha.ServiceConcurrency(svcConcurrency)
-			strategy := concurrency.NewStrategy(&sc)
+			strategy := concurrency.NewStrategyForVersion(&appVer, service, &sc)
 			tracker := strategy.InitializeTracker()
 
 			lsb := &sandbox{
@@ -1494,7 +1537,7 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 			continue
 		}
 		sc := core_v1alpha.ServiceConcurrency(svcConcurrency)
-		strategy := concurrency.NewStrategy(&sc)
+		strategy := concurrency.NewStrategyForVersion(&appVer, service, &sc)
 
 		// Initialize tracker for recovered sandbox (starts empty)
 		tracker := strategy.InitializeTracker()
@@ -1589,7 +1632,7 @@ func (a *localActivator) recoverPools(ctx context.Context) error {
 			continue
 		}
 		sc := core_v1alpha.ServiceConcurrency(svcConcurrency)
-		strategy := concurrency.NewStrategy(&sc)
+		strategy := concurrency.NewStrategyForVersion(&appVer, pool.Service, &sc)
 
 		a.mu.Lock()
 

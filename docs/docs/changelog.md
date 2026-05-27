@@ -11,6 +11,12 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *main*
 
+**Breaking Changes**
+- **`auth provider add` reshaped into per-type subcommands** - The asymmetric pair of `auth provider add NAME --provider-url ...` (OIDC) and the separate `auth provider add-password NAME ...` is gone, replaced by a single shape: `auth provider add oidc|github|password NAME [flags]`. Migration: prepend `oidc` to existing OIDC commands, and replace `add-password` with `add password` (with a space). The CLI now exposes three types directly instead of an "oidc with optional connector" indirection. ([#817](https://github.com/mirendev/runtime/pull/817))
+
+**Features**
+- **Route protection: native GitHub identity provider** - GitHub was the awkward gap in the v0.8.0 route protection story. It has no OIDC endpoint, so the answer was "stand up Dex yourself." Miren now talks to GitHub directly via an embedded Dex connector library, and adding a provider is just `miren auth provider add github my-gh --client-id $ID --client-secret $SECRET --org mirendev:platform,eng`. Org and team membership land in your app as `X-User-Login` and `X-User-Groups` headers. ([#817](https://github.com/mirendev/runtime/pull/817))
+
 ---
 
 ## v0.8.0

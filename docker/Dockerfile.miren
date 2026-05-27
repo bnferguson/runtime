@@ -29,11 +29,10 @@ RUN chmod +x /entrypoint.sh
 # Create necessary directories
 RUN mkdir -p /var/lib/miren
 
-# Download the components to run the server
-# TODO this should be given the specific version to download
-# Right now we're not using the miren binary in the release, just
-# the components like containerd, so it's less of a big deal.
-RUN miren download release -g
+# Install release components for the server runtime (containerd, etc.).
+# Same artifacts as /usr/local/bin above; copying locally avoids racing
+# the upload-to-miren job that publishes these to api.miren.cloud.
+COPY docker/artifacts/${TARGETARCH}/ /var/lib/miren/release/
 
 # Declare volume for data persistence
 VOLUME /var/lib/miren

@@ -22,7 +22,7 @@ Your app receives identity information as plain HTTP headers (e.g., `X-User-Emai
 
 <CliCommand context="client">
 ```miren
-miren auth provider add my-google \
+miren auth provider add oidc my-google \
   --provider-url https://accounts.google.com \
   --client-id $GOOGLE_CLIENT_ID \
   --client-secret $GOOGLE_CLIENT_SECRET \
@@ -84,7 +84,7 @@ Google's identity provider works well when you want to restrict access by email 
 
 <CliCommand context="client">
 ```miren
-miren auth provider add my-google \
+miren auth provider add oidc my-google \
   --provider-url https://accounts.google.com \
   --client-id $GOOGLE_CLIENT_ID \
   --client-secret $GOOGLE_CLIENT_SECRET \
@@ -94,9 +94,47 @@ miren auth provider add my-google \
 
 Your app can then check the `X-User-Email` header's domain for basic authorization (e.g., only allow `@yourcompany.com`).
 
-### GitHub (via federation)
+### GitHub
 
-GitHub doesn't expose a native OIDC provider endpoint. To use GitHub for authentication, you'll need a federated OIDC provider like [Dex](https://dexidp.io/) that can use GitHub as an upstream identity source and encode org and team membership as JWT claims.
+GitHub doesn't expose a native OIDC endpoint, so Miren talks to it through a connector instead of the OIDC discovery path. You still get the same end result: identity arrives at your app as plain HTTP headers.
+
+Register an OAuth App in GitHub (Settings → Developer settings → OAuth Apps) with the callback URL `https://your-route.example.com/.well-known/miren/oidc/callback`, then add the provider with `add github` and the orgs you want to allow:
+
+<CliCommand context="client">
+```miren
+miren auth provider add github my-github \
+  --client-id $GITHUB_CLIENT_ID \
+  --client-secret $GITHUB_CLIENT_SECRET \
+  --org mirendev
+```
+</CliCommand>
+
+To restrict by team membership, suffix the org with one or more team slugs:
+
+<CliCommand context="client">
+```miren
+miren auth provider add github my-github \
+  --client-id $GITHUB_CLIENT_ID \
+  --client-secret $GITHUB_CLIENT_SECRET \
+  --org mirendev:engineering,platform
+```
+</CliCommand>
+
+Repeat `--org` for multiple organizations. Attach the provider to a route as usual:
+
+<CliCommand context="client">
+```miren
+miren route protect myapp.example.com \
+  --provider my-github \
+  --claim-header email:X-User-Email \
+  --claim-header preferred_username:X-User-Login \
+  --claim-header groups:X-User-Groups
+```
+</CliCommand>
+
+The connector exposes the user's GitHub login as `preferred_username`, and any org/team memberships as `groups` (in the form `org:team`). The full set of claims available is `sub`, `email`, `email_verified`, `name`, `preferred_username`, and `groups`. Mix and match `--claim-header` mappings to surface the bits your app cares about.
+
+A wrinkle worth knowing: the `groups` claim only carries entries for *teams* the user belongs to within configured orgs. If you set `--org NAME` with no team suffix, the user is authorized (they must be in NAME to get in) but `groups` is empty because there are no team memberships to surface. For org membership signal, rely on the fact that the request reached your app at all, or configure team filters with `--org NAME:team1,team2` to populate `groups`.
 
 ### GitLab
 
@@ -104,7 +142,7 @@ GitLab has a built-in OIDC provider — no federation layer needed. Register an 
 
 <CliCommand context="client">
 ```miren
-miren auth provider add my-gitlab \
+miren auth provider add oidc my-gitlab \
   --provider-url https://gitlab.com \
   --client-id $GITLAB_CLIENT_ID \
   --client-secret $GITLAB_CLIENT_SECRET \
@@ -118,7 +156,7 @@ miren auth provider add my-gitlab \
 
 <CliCommand context="client">
 ```miren
-miren auth provider add my-keycloak \
+miren auth provider add oidc my-keycloak \
   --provider-url https://keycloak.example.com/realms/myrealm \
   --client-id $KEYCLOAK_CLIENT_ID \
   --client-secret $KEYCLOAK_CLIENT_SECRET \

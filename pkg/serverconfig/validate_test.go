@@ -75,6 +75,32 @@ func TestValidateIngressCoherence(t *testing.T) {
 			wantContains: "tls.acme_email, tls.acme_dns_provider",
 		},
 		{
+			// tls.additional_names / tls.additional_ips also feed the API
+			// server cert (and the etcd cert), which exist regardless of
+			// ingress.mode. So they must be allowed in behind-proxy-http.
+			name: "behind-proxy-http accepts tls.additional_names",
+			setup: func(c *Config) {
+				c.Ingress.SetMode(IngressModeBehindProxyHTTP)
+				c.TLS.AdditionalNames = []string{"miren.example.com"}
+			},
+		},
+		{
+			name: "behind-proxy-http accepts tls.additional_ips",
+			setup: func(c *Config) {
+				c.Ingress.SetMode(IngressModeBehindProxyHTTP)
+				c.TLS.AdditionalIPs = []string{"203.0.113.5"}
+			},
+		},
+		{
+			name: "behind-proxy-http rejects ingress-only fields even when additional_* are also set",
+			setup: func(c *Config) {
+				c.Ingress.SetMode(IngressModeBehindProxyHTTP)
+				c.TLS.SetAcmeEmail("ops@example.com")
+				c.TLS.AdditionalNames = []string{"miren.example.com"}
+			},
+			wantContains: "tls.acme_email",
+		},
+		{
 			name: "rejects unix: address with clear message",
 			setup: func(c *Config) {
 				c.Ingress.SetMode(IngressModeBehindProxyHTTP)

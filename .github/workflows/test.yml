@@ -27,18 +27,19 @@ jobs:
   lint:
     runs-on: depot-ubuntu-latest
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       with:
+        persist-credentials: false
         ref: ${{ inputs.ref }}
 
     - name: Set up Bun
-      uses: oven-sh/setup-bun@v2
+      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
     - name: Docs lint
       run: bun run lint
       working-directory: docs
 
     - name: Set up Go
-      uses: actions/setup-go@v6
+      uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
       with:
         go-version-file: 'go.mod'
         cache: true
@@ -53,7 +54,7 @@ jobs:
 
     - name: Cache Go tools
       id: cache-go-tools
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         path: ~/go/bin
         key: ${{ runner.os }}-go-tools-${{ hashFiles('go.mod') }}
@@ -67,7 +68,7 @@ jobs:
         go install go.uber.org/mock/mockgen@latest
 
     - name: golangci-lint
-      uses: golangci/golangci-lint-action@v8
+      uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8
       with:
         version: v2.6.1
 
@@ -91,8 +92,9 @@ jobs:
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       with:
+        persist-credentials: false
         ref: ${{ inputs.ref }}
 
     - name: Set test matrix
@@ -130,12 +132,13 @@ jobs:
       matrix:
         group: ${{ fromJson(needs.test-groups.outputs.matrix) }}
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       with:
+        persist-credentials: false
         ref: ${{ inputs.ref }}
 
     - name: Set up Go
-      uses: actions/setup-go@v6
+      uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
       with:
         go-version-file: 'go.mod'
         cache: true
@@ -148,7 +151,7 @@ jobs:
 
     - name: Cache iso binary
       id: iso-cache
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         path: ~/go/bin/iso
         key: iso-binary-${{ steps.iso-version.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
@@ -161,7 +164,7 @@ jobs:
       run: echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
 
     - name: Restore iso cache
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         path: /tmp/iso-cache
         key: iso-cache-${{ hashFiles('go.sum') }}
@@ -169,7 +172,7 @@ jobs:
 
     - name: Restore Docker image cache
       id: docker-image-cache
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         path: /tmp/iso-image.tar
         key: iso-image-${{ hashFiles('.iso/Dockerfile', '.iso/.bashrc', 'hack/containerd-config.toml') }}
@@ -191,12 +194,13 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: depot-ubuntu-latest
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       with:
+        persist-credentials: false
         ref: ${{ inputs.ref }}
 
     - name: Set up Go
-      uses: actions/setup-go@v6
+      uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
       with:
         go-version-file: 'go.mod'
         cache: true
@@ -209,7 +213,7 @@ jobs:
 
     - name: Cache iso binary
       id: iso-cache
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         path: ~/go/bin/iso
         key: iso-binary-${{ steps.iso-version.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
@@ -222,7 +226,7 @@ jobs:
       run: echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
 
     - name: Restore iso cache
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         path: /tmp/iso-cache
         key: iso-cache-blackbox-${{ hashFiles('go.sum') }}
@@ -230,7 +234,7 @@ jobs:
 
     - name: Restore Docker image cache
       id: docker-image-cache
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         path: /tmp/iso-image.tar
         key: iso-image-${{ hashFiles('.iso/Dockerfile', '.iso/.bashrc', 'hack/containerd-config.toml') }}
@@ -268,12 +272,13 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: depot-ubuntu-latest
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       with:
+        persist-credentials: false
         ref: ${{ inputs.ref }}
 
     - name: Set up Go
-      uses: actions/setup-go@v6
+      uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
       with:
         go-version-file: 'go.mod'
         cache: true
@@ -286,7 +291,7 @@ jobs:
 
     - name: Cache iso binary
       id: iso-cache
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         path: ~/go/bin/iso
         key: iso-binary-${{ steps.iso-version.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
@@ -299,7 +304,7 @@ jobs:
       run: echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
 
     - name: Restore iso cache
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         path: /tmp/iso-cache
         key: iso-cache-blackbox-pop-${{ hashFiles('go.sum') }}
@@ -307,7 +312,7 @@ jobs:
 
     - name: Restore Docker image cache
       id: docker-image-cache
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         path: /tmp/iso-image.tar
         key: iso-image-${{ hashFiles('.iso/Dockerfile', '.iso/.bashrc', 'hack/containerd-config.toml') }}
@@ -319,8 +324,9 @@ jobs:
     # POP tests need the cloud repo to build cloud and pop binaries from source.
     # Requires CLOUD_REPO_TOKEN secret — a PAT with read access to mirendev/cloud.
     - name: Checkout cloud repo
-      uses: actions/checkout@v5
+      uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       with:
+        persist-credentials: false
         repository: mirendev/cloud
         path: cloud
         token: ${{ secrets.CLOUD_REPO_TOKEN }}
@@ -379,12 +385,13 @@ jobs:
     if: github.event_name != 'workflow_call'
     runs-on: depot-ubuntu-latest
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       with:
+        persist-credentials: false
         ref: ${{ inputs.ref }}
 
     - name: Set up Go
-      uses: actions/setup-go@v6
+      uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
       with:
         go-version-file: 'go.mod'
         cache: true

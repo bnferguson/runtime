@@ -407,7 +407,11 @@ func (s *Server) fetchMethods(ctx context.Context, appName string) ([]*admin_v1a
 			method.SetCategory(m.Category)
 		}
 
-		var params []*admin_v1alpha.AdminMethodParam
+		// A present "params" key (even if empty) means the method explicitly
+		// declares its parameter list. A missing key leaves Params unset on the
+		// wire, so the client can distinguish "method takes no parameters" from
+		// "this method does not advertise its parameters".
+		params := []*admin_v1alpha.AdminMethodParam{}
 		switch p := m.Params.(type) {
 		case map[string]any:
 			for name, typeVal := range mapx.StableOrder(p) {
@@ -418,6 +422,7 @@ func (s *Server) fetchMethods(ctx context.Context, appName string) ([]*admin_v1a
 				}
 				params = append(params, param)
 			}
+			method.SetParams(params)
 		case []any:
 			for i, typeVal := range p {
 				param := &admin_v1alpha.AdminMethodParam{}
@@ -427,8 +432,6 @@ func (s *Server) fetchMethods(ctx context.Context, appName string) ([]*admin_v1a
 				}
 				params = append(params, param)
 			}
-		}
-		if len(params) > 0 {
 			method.SetParams(params)
 		}
 

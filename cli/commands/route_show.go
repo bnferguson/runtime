@@ -85,7 +85,11 @@ func RouteShow(ctx *Context, opts struct {
 			case entity.Is(raw, ingress_v1alpha.KindOidcProvider):
 				oidcProvider = &ingress_v1alpha.OidcProvider{}
 				oidcProvider.Decode(raw)
-				protectionType = "oidc"
+				if isConnector(oidcProvider) {
+					protectionType = "connector"
+				} else {
+					protectionType = "oidc"
+				}
 			case entity.Is(raw, ingress_v1alpha.KindPasswordProvider):
 				pwProvider = &ingress_v1alpha.PasswordProvider{}
 				pwProvider.Decode(raw)
@@ -103,6 +107,7 @@ func RouteShow(ctx *Context, opts struct {
 			ProtectionType  string              `json:"protection_type"`
 			ProviderName    string              `json:"provider_name,omitempty"`
 			ProviderURL     string              `json:"provider_url,omitempty"`
+			ConnectorType   string              `json:"connector_type,omitempty"`
 			ProviderMissing bool                `json:"provider_missing,omitempty"`
 			ClaimMappings   []map[string]string `json:"claim_mappings,omitempty"`
 			WafLevel        int                 `json:"waf_level"`
@@ -123,18 +128,23 @@ func RouteShow(ctx *Context, opts struct {
 		}
 
 		if protected {
-			if oidcProvider != nil {
+			switch {
+			case oidcProvider != nil:
 				r.ProviderName = oidcProvider.Name
-				r.ProviderURL = oidcProvider.ProviderUrl
+				if isConnector(oidcProvider) {
+					r.ConnectorType = oidcProvider.ConnectorType
+				} else {
+					r.ProviderURL = oidcProvider.ProviderUrl
+				}
 				for _, m := range route.ClaimMappings {
 					r.ClaimMappings = append(r.ClaimMappings, map[string]string{
 						"claim":  m.Claim,
 						"header": m.Header,
 					})
 				}
-			} else if pwProvider != nil {
+			case pwProvider != nil:
 				r.ProviderName = pwProvider.Name
-			} else {
+			default:
 				r.ProviderMissing = true
 			}
 		}
@@ -181,6 +191,30 @@ func RouteShow(ctx *Context, opts struct {
 			ctx.Printf("  Provider:  %s\n", pwProvider.Name)
 		} else {
 			ctx.Printf("  Provider:  <missing — provider has been deleted>\n")
+		}
+	case "connector":
+		ctx.Printf("  Type:      connector\n")
+		if oidcProvider != nil {
+			ctx.Printf("  Provider:  %s (%s)\n", oidcProvider.Name, oidcProvider.ConnectorType)
+		} else {
+			ctx.Printf("  Provider:  <missing — provider has been deleted>\n")
+		}
+
+		if len(route.ClaimMappings) > 0 {
+			var rows []ui.Row
+			for _, m := range route.ClaimMappings {
+				rows = append(rows, ui.Row{m.Claim, m.Header})
+			}
+
+			headers := []string{"CLAIM", "HEADER"}
+			columns := ui.AutoSizeColumns(headers, rows, ui.Columns().NoTruncate(0).NoTruncate(1))
+			table := ui.NewTable(
+				ui.WithTableTitle("Claim Mappings"),
+				ui.WithColumns(columns),
+				ui.WithRows(rows),
+			)
+
+			ctx.Printf("\n%s\n", table.Render())
 		}
 	}
 

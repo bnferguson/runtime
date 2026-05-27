@@ -1,17 +1,17 @@
 ---
-title: "miren auth provider add-password"
-sidebar_label: "auth provider add-password"
-description: "Add a password provider for route protection"
+title: "miren auth provider add password"
+sidebar_label: "auth provider add password"
+description: "Add a shared-password identity provider"
 ---
 
-# miren auth provider add-password
+# miren auth provider add password
 
-Add a password provider for route protection
+Add a shared-password identity provider
 
 ## Usage
 
 ```bash
-miren auth provider add-password <name> [flags]
+miren auth provider add password <name> [flags]
 ```
 
 ## Arguments
@@ -36,9 +36,9 @@ miren auth provider add-password <name> [flags]
 **Add a password provider:**
 
 ```bash
-miren auth provider add-password my-pw --password hunter2
+miren auth provider add password my-pw --password hunter2
 ```
 
 ## See also
 
-- [`miren auth provider`](/command/auth-provider)
+- [`miren auth provider add`](/command/auth-provider-add)

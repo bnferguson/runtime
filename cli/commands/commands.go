@@ -902,20 +902,30 @@ miren deploy --analyze
 	d.Dispatch("auth ci remove", Infer("auth ci remove", "Remove a CI authentication binding", AuthCIRemove))
 
 	d.Dispatch("auth provider", Section("auth provider", "Identity provider management", ""))
-	d.Dispatch("auth provider add", Infer("auth provider add", "Add an identity provider for route protection", AuthProviderAdd,
+	d.Dispatch("auth provider add", Section("auth provider add", "Add an identity provider for route protection", ""))
+	d.Dispatch("auth provider add oidc", Infer("auth provider add oidc", "Add an OIDC identity provider", AuthProviderAddOIDC,
 		WithExample(mflags.Example{
 			Name: "Add a Google OIDC provider",
-			Body: `miren auth provider add my-google \
+			Body: `miren auth provider add oidc my-google \
   --provider-url https://accounts.google.com \
   --client-id $CLIENT_ID \
   --client-secret $CLIENT_SECRET \
   --scope email --scope profile`,
 		}),
 	))
-	d.Dispatch("auth provider add-password", Infer("auth provider add-password", "Add a password provider for route protection", AuthProviderAddPassword,
+	d.Dispatch("auth provider add github", Infer("auth provider add github", "Add a GitHub identity provider", AuthProviderAddGitHub,
+		WithExample(mflags.Example{
+			Name: "Add a GitHub provider scoped to a team",
+			Body: `miren auth provider add github my-gh \
+  --client-id $CLIENT_ID \
+  --client-secret $CLIENT_SECRET \
+  --org mirendev:platform,eng`,
+		}),
+	))
+	d.Dispatch("auth provider add password", Infer("auth provider add password", "Add a shared-password identity provider", AuthProviderAddPassword,
 		WithExample(mflags.Example{
 			Name: "Add a password provider",
-			Body: `miren auth provider add-password my-pw --password hunter2`,
+			Body: `miren auth provider add password my-pw --password hunter2`,
 		}),
 	))
 	d.Dispatch("auth provider list", Infer("auth provider list", "List identity providers", AuthProviderList))

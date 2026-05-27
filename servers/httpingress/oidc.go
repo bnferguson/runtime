@@ -233,11 +233,7 @@ func (h *oidcHandler) handleCallback(w http.ResponseWriter, r *http.Request) {
 	// Clear state cookie
 	h.sessionManager.ClearState(w)
 
-	// Redirect to original path
-	returnPath := state.ReturnPath
-	if returnPath == "" {
-		returnPath = "/"
-	}
+	returnPath := safeReturnPath(state.ReturnPath)
 
 	h.logger.Info("OIDC authentication successful", "subject", claims["sub"], "return_path", returnPath)
 	http.Redirect(w, r, returnPath, http.StatusFound)
