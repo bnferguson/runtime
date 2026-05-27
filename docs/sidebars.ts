@@ -35,6 +35,7 @@ const sidebars: SidebarsConfig = {
         'waf',
         'route-protect',
         'ci-deploy',
+        'pr-environments',
         'admin-interface',
         'observability',
         'logs',

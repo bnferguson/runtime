@@ -29,6 +29,7 @@ Configuration lives in `.miren/app.toml` in your project. Environment variables,
 
 - [App Configuration](/app-configuration) - `.miren/app.toml` and how to configure your app
 - [Deployment](/deployment) - Deploy workflows, rollbacks, and CI integration
+- [Pull Request Environments](/pr-environments) - Time-boxed preview deploys, one per PR
 - [Services](/services) - Run multiple processes (web, workers, databases) in one app
 - [Scaling](/scaling) - Autoscaling and fixed instance modes
 - [Traffic Routing](/traffic-routing) - Custom domains, TLS, and path-based routing

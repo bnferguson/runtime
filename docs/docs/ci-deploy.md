@@ -25,6 +25,10 @@ This page covers OIDC for **CI/CD deployment authentication** — letting pipeli
 
 No secrets are stored in your CI system. The OIDC token is issued fresh for each job and expires in minutes.
 
+:::tip Per-PR Preview Deploys
+Pairing OIDC with [Pull Request Environments](/pr-environments) lets each PR get its own short-lived preview URL — see that page for the full workflow.
+:::
+
 ## Quick Start with GitHub Actions
 
 ### Step 1: Get Your Cluster Address

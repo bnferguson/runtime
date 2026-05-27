@@ -182,4 +182,5 @@ Miren automatically captures git metadata (commit, branch, author, dirty state) 
 - [App Configuration](/app-configuration) — Configure your app with `.miren/app.toml`
 - [Services](/services) — Define multiple processes in your app
 - [CI/CD Deployment](/ci-deploy) — Deploy from CI pipelines with OIDC authentication
+- [Pull Request Environments](/pr-environments) — Deploy labeled, time-boxed previews per PR
 - [app.toml Reference](/app-toml) — Complete field reference

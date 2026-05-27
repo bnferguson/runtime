@@ -42,6 +42,8 @@ If an exact route also exists for a specific subdomain, the exact route takes pr
 
 The wildcard `*` must be the first label — patterns like `foo.*.example.com` are not supported. The domain must have at least two labels after the wildcard (e.g., `*.example.com` is valid, `*.com` is not).
 
+For [Pull Request Environments](/pr-environments), you don't need a wildcard route — any subdomain of an existing route automatically resolves to its ephemeral label. You only need wildcard *DNS* pointing at your cluster.
+
 ### Custom Domains
 
 To put your own domain in front of an app on Miren, point DNS at your cluster and set a route. TLS provisions automatically.
