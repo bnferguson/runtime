@@ -11,5 +11,5 @@ features:
 
   - name: sagas
     predicate: Sagas
-    description: Use saga-based crash-recoverable workflows for sandbox lifecycle
+    description: Use saga-based crash-recoverable workflows
     default: false

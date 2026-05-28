@@ -29,7 +29,7 @@ func FeatureDescriptions() map[string]string {
 	return map[string]string{
 		FeatureGlobalRouter:       "Use global NAT traversal router for connectivity",
 		FeatureDistributedRunners: "Schedule jobs across multiple runner nodes",
-		FeatureSagas:              "Use saga-based crash-recoverable workflows for sandbox lifecycle",
+		FeatureSagas:              "Use saga-based crash-recoverable workflows",
 	}
 }
 
@@ -143,7 +143,7 @@ func DistributedRunners() bool {
 }
 
 // Sagas returns whether the sagas feature is enabled.
-// Use saga-based crash-recoverable workflows for sandbox lifecycle
+// Use saga-based crash-recoverable workflows
 func Sagas() bool {
 	return IsEnabled(FeatureSagas)
 }

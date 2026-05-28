@@ -14,7 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/moby/buildkit/client"
 	"github.com/tonistiigi/fsutil"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -1124,8 +1123,6 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 	envVars []*build_v1alpha.EnvironmentVariable,
 	ephemeral *ephemeralOpts) (*buildResult, error) {
 
-	so := new(build_v1alpha.Status)
-
 	// -- build.setup span: app config, stack detection, buildkit connect
 	ctx, setupSpan := buildTracer.Start(ctx, "build.setup")
 
@@ -1149,93 +1146,17 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 		b.Log.Info("loaded app config", "name", ac.Name, "envVarCount", len(ac.EnvVars), "serviceCount", len(ac.Services))
 	}
 
-	var buildStack BuildStack
-	buildStack.CodeDir = path
-
-	if ac != nil && ac.Build != nil {
-		buildStack.OnBuild = ac.Build.OnBuild
-		buildStack.Version = ac.Build.Version
-		buildStack.AlpineImage = ac.Build.AlpineImage
-
-		if ac.Build.Dockerfile != "" {
-			buildStack.Stack = "dockerfile"
-			buildStack.Input = ac.Build.Dockerfile
-
-			b.Log.Info("using dockerfile from app config", "dockerfile", ac.Build.Dockerfile)
-		}
-	}
-
-	if buildStack.Stack == "" {
-		dr, err := tr.Open("Dockerfile.miren")
-		if err == nil {
-			buildStack.Stack = "dockerfile"
-			buildStack.Input = "Dockerfile.miren"
-			dr.Close()
-		} else {
-			buildStack.Stack = "auto"
-		}
-	}
-
-	// Check if stack is supported before launching buildkit
-	if buildStack.Stack == "auto" {
-		detectOpts := stackbuild.BuildOptions{
-			Log:         b.Log,
-			Name:        name,
-			OnBuild:     buildStack.OnBuild,
-			Version:     buildStack.Version,
-			AlpineImage: buildStack.AlpineImage,
-		}
-		_, err := stackbuild.DetectStack(buildStack.CodeDir, detectOpts)
-		if err != nil {
-			setupSpan.RecordError(err)
-			setupSpan.SetStatus(codes.Error, err.Error())
-			setupSpan.End()
-			b.Log.Error("stack detection failed", "error", err, "app", name, "codeDir", buildStack.CodeDir)
-			b.sendErrorStatus(ctx, status, "No supported stack detected for app %s: %v", name, err)
-			return nil, fmt.Errorf("no supported stack detected for app %s: %w", name, err)
-		}
-		b.Log.Debug("stack detection successful, proceeding with build")
-	}
-
-	// Now we know the stack is valid, proceed with buildkit setup
-	b.Log.Debug("setting up buildkit")
-
-	if b.BuildKit == nil {
-		setupSpan.RecordError(fmt.Errorf("buildkit component not configured"))
-		setupSpan.SetStatus(codes.Error, "buildkit component not configured")
-		setupSpan.End()
-		b.Log.Error("buildkit component not configured")
-		b.sendErrorStatus(ctx, status, "BuildKit not configured - ensure server is running with BuildKit enabled")
-		return nil, fmt.Errorf("buildkit component not configured")
-	}
-
-	b.Log.Info("connecting to buildkit daemon")
-	bkc, err := b.BuildKit.Client(ctx)
+	buildStack, err := b.detectBuildStack(path, ac, name, tr)
 	if err != nil {
 		setupSpan.RecordError(err)
 		setupSpan.SetStatus(codes.Error, err.Error())
 		setupSpan.End()
-		b.Log.Error("failed to get buildkit client", "error", err)
-		b.sendErrorStatus(ctx, status, "Failed to connect to BuildKit: %v", err)
+		b.sendErrorStatus(ctx, status, "No supported stack detected for app %s: %v", name, err)
 		return nil, err
-	}
-	defer bkc.Close()
-
-	b.Log.Debug("getting buildkit daemon info")
-	ci, err := bkc.Info(ctx)
-	if err != nil {
-		b.Log.Error("error getting buildkitd info", "error", err)
-	} else {
-		b.Log.Debug("buildkitd info", "version", ci.BuildkitVersion.Version, "rev", ci.BuildkitVersion.Revision)
 	}
 
 	setupSpan.SetAttributes(attribute.String("miren.build.stack", buildStack.Stack))
 	setupSpan.End()
-
-	bk := &Buildkit{
-		Client: bkc,
-		Log:    b.Log,
-	}
 
 	appRec, mrv, existingCfg, _, err := b.nextVersion(ctx, name)
 	if err != nil {
@@ -1244,7 +1165,6 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 		return nil, err
 	}
 
-	// Initialize build log writer for persisting build output to VictoriaLogs
 	buildLog := &buildLogWriter{
 		log:      b.Log,
 		writer:   b.LogWriter,
@@ -1252,150 +1172,34 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 		version:  mrv.Version,
 	}
 
-	// Compute env vars to inject into the build process
-	buildEnvVars := computeBuildEnvVars(existingCfg.Variables, ac, envVars)
-	if len(buildEnvVars) > 0 {
-		b.Log.Info("injecting env vars into build", "count", len(buildEnvVars))
-	}
-
-	var tos []TransformOptions
-
-	tos = append(tos,
-		WithBuildArg("MIREN_VERSION", mrv.Version),
-	)
-
-	// Inject user env vars as build args (for Dockerfile builds)
-	if len(buildEnvVars) > 0 {
-		tos = append(tos, WithBuildArgs(buildEnvVars))
-	}
-
-	// Pass env vars for auto-stack builds
-	buildStack.EnvVars = buildEnvVars
-
-	// Track vertices we've already logged to avoid duplicates
-	vertexStarted := make(map[string]bool)
-	vertexCompleted := make(map[string]bool)
-
-	if status != nil {
-		tos = append(tos, WithPhaseUpdates(func(phase string) {
-			switch phase {
-			case "export":
-				so.Update().SetMessage("Registering image")
-				_, _ = status.Send(ctx, so)
-			case "solving":
-				so.Update().SetMessage("Calculating build")
-				_, _ = status.Send(ctx, so)
-			case "solved":
-				so.Update().SetMessage("Building image")
-				_, _ = status.Send(ctx, so)
-			default:
-				so.Update().SetMessage(phase)
-				_, _ = status.Send(ctx, so)
-			}
-		}))
-	}
-
-	// Single status callback that both persists logs and sends to client
-	tos = append(tos, WithStatusUpdates(func(ss *client.SolveStatus, sj []byte) {
-		// Log vertex status (build steps starting/completing/cached)
-		for _, v := range ss.Vertexes {
-			digestStr := v.Digest.String()
-
-			// Log when a vertex starts
-			if v.Started != nil && !vertexStarted[digestStr] {
-				vertexStarted[digestStr] = true
-				buildLog.write(fmt.Sprintf("[buildkit] %s", v.Name))
-			}
-
-			// Log when a vertex completes with cache status
-			if v.Completed != nil && !vertexCompleted[digestStr] {
-				vertexCompleted[digestStr] = true
-				if v.Cached {
-					buildLog.write(fmt.Sprintf("[buildkit] %s CACHED", v.Name))
-				}
-			}
-		}
-
-		// Log command output from build steps
-		for _, log := range ss.Logs {
-			if log.Data != nil {
-				lines := strings.Split(string(log.Data), "\n")
-				for _, line := range lines {
-					line = strings.TrimRight(line, " \t\r\n")
-					if strings.TrimSpace(line) != "" {
-						buildLog.write(line)
-					}
-				}
-			}
-		}
-
-		// Send raw status to client if connected
-		if status != nil {
-			so := new(build_v1alpha.Status)
-			so.Update().SetBuildkit(sj)
-			_, err := status.Send(ctx, so)
-			if err != nil {
-				b.Log.Warn("error sending status update", "error", err)
-			}
-		}
-	}))
-
-	if status != nil {
-		so.Update().SetMessage("Calculating build")
-		_, _ = status.Send(ctx, so)
-	}
-
-	imgName := mrv.ImageUrl
-
-	// -- build.buildkit span
+	// runBuildkitBuild is also the saga action's implementation, so the
+	// span structure (buildkit + locate_artifact bundled together) is
+	// slightly coarser than the pre-saga code's two separate spans.
+	// Trace continuity matters more than the extra granularity.
 	bkCtx, bkSpan := buildTracer.Start(ctx, "build.buildkit",
-		trace.WithAttributes(attribute.String("miren.build.image", imgName)))
-	res, err := bk.BuildImage(bkCtx, tr, buildStack, name, imgName, tos...)
+		trace.WithAttributes(attribute.String("miren.build.image", mrv.ImageUrl)))
+	statusSender := NewRPCStatusSender(status, b.Log)
+	res, artifactID, finalURL, err := b.runBuildkitBuild(bkCtx, runBuildkitBuildInputs{
+		SourceDir:      path,
+		AppName:        name,
+		VersionName:    mrv.Version,
+		ImageURL:       mrv.ImageUrl,
+		BuildStack:     buildStack,
+		AppConfig:      ac,
+		ExistingConfig: existingCfg,
+		CLIEnvVars:     envVars,
+	}, statusSender, buildLog)
 	if err != nil {
 		bkSpan.RecordError(err)
 		bkSpan.SetStatus(codes.Error, err.Error())
 		bkSpan.End()
-		b.Log.Error("error building image", "error", err)
-		b.sendErrorStatus(ctx, status, "Error building image: %v", err)
 		return nil, err
 	}
 	bkSpan.End()
 
-	// Log detection events from stack analysis
-	for _, event := range res.DetectionEvents {
-		buildLog.write(fmt.Sprintf("[detect] %s: %s", event.Name, event.Message))
-	}
-
-	if res.ManifestDigest == "" {
-		b.Log.Error("build did not return manifest digest")
-		b.sendErrorStatus(ctx, status, "Build did not return manifest digest")
-		return nil, fmt.Errorf("build did not return manifest digest")
-	}
-
-	// -- build.locate_artifact span
-	locateCtx, locateSpan := buildTracer.Start(ctx, "build.locate_artifact",
-		trace.WithAttributes(attribute.String("miren.build.manifest_digest", res.ManifestDigest)))
-
-	var artifact core_v1alpha.Artifact
-
-	err = b.ec.OneAtIndex(locateCtx, entity.String(core_v1alpha.ArtifactManifestDigestId, res.ManifestDigest), &artifact)
-	if err != nil {
-		locateSpan.RecordError(err)
-		locateSpan.SetStatus(codes.Error, err.Error())
-		locateSpan.End()
-		b.Log.Error("error locating artifact by digest", "digest", res.ManifestDigest, "error", err)
-		return nil, fmt.Errorf("error locating artifact by digest %s: %w", res.ManifestDigest, err)
-	}
-	locateSpan.End()
-
-	b.Log.Debug("located stored artifact", "artifact", artifact.ID, "digest", res.ManifestDigest)
-
-	mrv.Artifact = artifact.ID
-
-	// Update ImageUrl to match the artifact we found (which may be reused due to deduplication)
-	artifactName := strings.TrimPrefix(string(artifact.ID), "artifact/")
-	mrv.ImageUrl = "cluster.local:5000/" + name + ":" + artifactName
-
+	mrv.Artifact = entity.Id(artifactID)
+	mrv.ImageUrl = finalURL
+	artifactName := strings.TrimPrefix(artifactID, "artifact/")
 	b.Log.Debug("build complete", "image", mrv.ImageUrl)
 
 	procfileServices, err := b.readProcFile(tr)

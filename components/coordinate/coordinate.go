@@ -1118,7 +1118,18 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	appClient := appclient.NewClient(c.Log, loopback)
 
 	bs := build.NewBuilder(c.Log, eac, appClient, addonsClient, c.Resolver, c.TempDir, c.LogWriter, c.CloudAuth.DNSHostname, c.BuildKit, c.DataPath)
-	server.ExposeValue("dev.miren.runtime/build", build_v1alpha.AdaptBuilder(bs))
+
+	var buildHandler build_v1alpha.Builder = bs
+	if labs.Sagas() {
+		sagaStorage := saga.NewEntityStorage(etcdStore, c.Log)
+		sagaBuilder := build.NewSagaBuilder(bs, sagaStorage, c.Log)
+		if err := sagaBuilder.Init(ctx); err != nil {
+			c.Log.Error("failed to initialize saga builder", "error", err)
+			return err
+		}
+		buildHandler = sagaBuilder
+	}
+	server.ExposeValue("dev.miren.runtime/build", build_v1alpha.AdaptBuilder(buildHandler))
 
 	ls := logs.NewServer(c.Log, ec, c.Logs)
 	server.ExposeValue("dev.miren.runtime/logs", app_v1alpha.AdaptLogs(ls))

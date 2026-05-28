@@ -1,0 +1,733 @@
+package build
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/tonistiigi/fsutil"
+
+	"miren.dev/runtime/api/build/build_v1alpha"
+	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/appconfig"
+	"miren.dev/runtime/pkg/entity"
+	ephemeralx "miren.dev/runtime/pkg/ephemeral"
+	"miren.dev/runtime/pkg/saga"
+	"miren.dev/runtime/pkg/stackbuild"
+)
+
+// Saga definition + action names. Keeping them as constants makes them
+// easy to search for, and lets recovery logs reference stable action
+// identifiers across restarts.
+const (
+	sagaBuildFromTar      = "build-from-tar"
+	actionReceiveTar      = "receive-tar"
+	actionLoadSource      = "load-source"
+	actionGetNextVer      = "get-next-version"
+	actionBuildImage      = "build-image"
+	actionPrepareConfig   = "prepare-config"
+	actionHandleEphemera  = "handle-ephemeral"
+	actionCreateConfigVer = "create-config-version"
+	actionCreateVersion   = "create-version"
+	actionProvisionAddons = "provision-addons"
+	actionSetActiveVer    = "set-active-version"
+	actionFinalize        = "finalize"
+)
+
+// buildSagaDeps holds the collaborators injected into the saga context.
+// Actions retrieve it via saga.Get[*buildSagaDeps](ctx) and call through to
+// the inner Builder for real operations (entity writes, buildkit calls,
+// log writes, etc.), the StreamRegistry for tar staging, or the
+// StatusRegistry to emit live progress/log/error updates to the deploy
+// CLI for the duration of one saga execution.
+type buildSagaDeps struct {
+	builder  *Builder
+	streams  *StreamRegistry
+	statuses *StatusRegistry
+}
+
+// receiveTarIn carries the initial inputs the entry point seeds the saga
+// with. AppName is mostly used for logging and cache writes; the StreamID
+// is the handle that lets us pull bytes out of StreamRegistry.
+type receiveTarIn struct {
+	AppName  string `json:"app_name" saga:"app_name"`
+	StreamID string `json:"stream_id" saga:"stream_id"`
+}
+
+// receiveTarOut publishes the staged source directory so downstream
+// actions can read app.toml, run buildkit against it, etc.
+type receiveTarOut struct {
+	SourceDir string `json:"source_dir" saga:"source_dir"`
+}
+
+// receiveTar stages the incoming tar stream to disk and (best-effort)
+// updates the source code cache so the next delta upload can skip
+// unchanged files. The cache write matches existing BuildFromTar
+// behavior — failure logs a warning rather than failing the build,
+// since cache is a perf optimization, not correctness.
+func receiveTar(ctx context.Context, in receiveTarIn) (receiveTarOut, error) {
+	deps := saga.Get[*buildSagaDeps](ctx)
+	status := deps.statuses.SenderFor(in.StreamID)
+
+	status.SendMessage("Reading application data")
+
+	path, err := deps.streams.Stage(in.StreamID)
+	if err != nil {
+		status.SendError("Error untaring data: %v", err)
+		return receiveTarOut{}, fmt.Errorf("staging tar stream %s: %w", in.StreamID, err)
+	}
+
+	if deps.builder.DataPath != "" {
+		cache := &sourceCache{
+			dataPath: deps.builder.DataPath,
+			log:      deps.builder.Log,
+			locks:    deps.builder.cacheLocks,
+		}
+		if err := cache.saveSourceImage(in.AppName, path); err != nil {
+			deps.builder.Log.Warn("failed to save source code cache", "app", in.AppName, "error", err)
+		}
+	}
+
+	status.SendMessage("Launching builder")
+	return receiveTarOut{SourceDir: path}, nil
+}
+
+func undoReceiveTar(ctx context.Context, in receiveTarIn, _ receiveTarOut) error {
+	deps := saga.Get[*buildSagaDeps](ctx)
+	return deps.streams.Cleanup(in.StreamID)
+}
+
+// loadSource reads the staged tree to produce the inputs every later
+// action needs: the parsed app.toml (if present), the detected/declared
+// BuildStack (with stack detection actually performed when stack=auto so
+// we fail fast before launching buildkit), and the Procfile services.
+//
+// Pure file IO + parsing, no entity writes, so the undo is a no-op.
+// Recovery just re-runs Execute against the same staged dir.
+
+type loadSourceIn struct {
+	AppName   string `json:"app_name" saga:"app_name"`
+	SourceDir string `json:"source_dir" saga:"source_dir"`
+}
+
+type loadSourceOut struct {
+	AppConfig        *appconfig.AppConfig `json:"app_config,omitempty" saga:"app_config"`
+	BuildStack       BuildStack           `json:"build_stack" saga:"build_stack"`
+	ProcfileServices map[string]string    `json:"procfile_services,omitempty" saga:"procfile_services"`
+}
+
+func loadSource(ctx context.Context, in loadSourceIn) (loadSourceOut, error) {
+	deps := saga.Get[*buildSagaDeps](ctx)
+	b := deps.builder
+
+	tr, err := fsutil.NewFS(in.SourceDir)
+	if err != nil {
+		return loadSourceOut{}, fmt.Errorf("opening source dir %s: %w", in.SourceDir, err)
+	}
+
+	ac, err := b.loadAppConfig(tr)
+	if err != nil {
+		return loadSourceOut{}, fmt.Errorf("loading app config: %w", err)
+	}
+
+	stack, err := b.detectBuildStack(in.SourceDir, ac, in.AppName, tr)
+	if err != nil {
+		return loadSourceOut{}, err
+	}
+
+	procfile, err := b.readProcFile(tr)
+	if err != nil {
+		return loadSourceOut{}, fmt.Errorf("reading procfile: %w", err)
+	}
+
+	return loadSourceOut{
+		AppConfig:        ac,
+		BuildStack:       stack,
+		ProcfileServices: procfile,
+	}, nil
+}
+
+func undoLoadSource(_ context.Context, _ loadSourceIn, _ loadSourceOut) error {
+	return nil
+}
+
+// getNextVersion allocates a fresh version id + artifact suffix for the
+// build and (idempotently) creates the App entity if this is the very
+// first deploy. Mirrors the pre-saga Builder.nextVersion semantics:
+// existing App is left alone, current config is loaded for env-var
+// carryover, new ids are generated locally and only persisted by later
+// actions (createConfigVersion / createAppVersion).
+//
+// The undo is a no-op. The generated ids are not durable state worth
+// freeing, and the App entity might already exist (created by a prior
+// deploy) or be needed by other concurrent operations — deleting it on
+// build failure is the wrong instinct.
+
+type getNextVersionIn struct {
+	AppName string `json:"app_name" saga:"app_name"`
+}
+
+type getNextVersionOut struct {
+	AppID          string `json:"app_id" saga:"app_id"`
+	VersionName    string `json:"version_name" saga:"version_name"`
+	ArtifactSuffix string `json:"artifact_suffix" saga:"artifact_suffix"`
+	ImageURL       string `json:"image_url" saga:"image_url"`
+	AdminToken     string `json:"admin_token" saga:"admin_token"`
+	ExistingConfig string `json:"existing_config_json" saga:"existing_config_json"`
+}
+
+func getNextVersion(ctx context.Context, in getNextVersionIn) (getNextVersionOut, error) {
+	deps := saga.Get[*buildSagaDeps](ctx)
+
+	appRec, mrv, existing, art, err := deps.builder.nextVersion(ctx, in.AppName)
+	if err != nil {
+		return getNextVersionOut{}, fmt.Errorf("allocating next version for %s: %w", in.AppName, err)
+	}
+
+	existingJSON, err := marshalConfigSpec(existing)
+	if err != nil {
+		return getNextVersionOut{}, fmt.Errorf("serializing existing config: %w", err)
+	}
+
+	return getNextVersionOut{
+		AppID:          string(appRec.ID),
+		VersionName:    mrv.Version,
+		ArtifactSuffix: art,
+		ImageURL:       mrv.ImageUrl,
+		AdminToken:     mrv.AdminToken,
+		ExistingConfig: existingJSON,
+	}, nil
+}
+
+func undoGetNextVersion(_ context.Context, _ getNextVersionIn, _ getNextVersionOut) error {
+	return nil
+}
+
+// prepareConfig assembles the final ConfigSpec for the new version by
+// merging build outputs, app.toml, Procfile, and existing app config,
+// then runs every blocking validation (services exist, required vars
+// have values, node ports are free, disk references resolve). Pure
+// computation + entity reads — no side effects, no undo needed.
+//
+// Validation failures surface as the saga error and a user-facing
+// status update. The pre-saga path called validateNodePorts and
+// validateDiskConfigs separately; bundling them with the rest in one
+// action keeps the saga DAG simple and matches what the user
+// experiences as one logical "config prep" step.
+
+type prepareConfigIn struct {
+	AppName          string                               `json:"app_name" saga:"app_name"`
+	StreamID         string                               `json:"stream_id" saga:"stream_id"`
+	AppID            string                               `json:"app_id" saga:"app_id"`
+	BuildResult      *BuildResult                         `json:"build_result,omitempty" saga:"build_result,optional"`
+	AppConfig        *appconfig.AppConfig                 `json:"app_config,omitempty" saga:"app_config,optional"`
+	ProcfileServices map[string]string                    `json:"procfile_services,omitempty" saga:"procfile_services,optional"`
+	ExistingConfig   string                               `json:"existing_config_json" saga:"existing_config_json"`
+	CLIEnvVars       []*build_v1alpha.EnvironmentVariable `json:"cli_env_vars,omitempty" saga:"cli_env_vars,optional"`
+}
+
+type prepareConfigOut struct {
+	ConfigSpec string `json:"config_spec_json" saga:"config_spec_json"`
+}
+
+func prepareConfig(ctx context.Context, in prepareConfigIn) (prepareConfigOut, error) {
+	deps := saga.Get[*buildSagaDeps](ctx)
+	b := deps.builder
+	status := deps.statuses.SenderFor(in.StreamID)
+
+	existing, err := unmarshalConfigSpec(in.ExistingConfig)
+	if err != nil {
+		return prepareConfigOut{}, fmt.Errorf("deserializing existing config: %w", err)
+	}
+
+	spec := buildVersionConfig(ConfigInputs{
+		BuildResult:      in.BuildResult,
+		AppConfig:        in.AppConfig,
+		ProcfileServices: in.ProcfileServices,
+		ExistingConfig:   existing,
+		CliEnvVars:       in.CLIEnvVars,
+	})
+
+	if err := validateServicesExist(spec); err != nil {
+		status.SendError("%s. See https://miren.md/services", err)
+		return prepareConfigOut{}, err
+	}
+	if err := validateRequiredVars(spec); err != nil {
+		status.SendError("%s", err)
+		return prepareConfigOut{}, err
+	}
+	if err := validateNodePorts(ctx, b.ec.EAC(), entity.Id(in.AppID), spec); err != nil {
+		status.SendError("Deploy failed: %v", err)
+		return prepareConfigOut{}, err
+	}
+	if err := validateDiskConfigs(ctx, b.ec.EAC(), spec); err != nil {
+		status.SendError("Deploy failed: %v", err)
+		return prepareConfigOut{}, err
+	}
+
+	specJSON, err := json.Marshal(spec)
+	if err != nil {
+		return prepareConfigOut{}, fmt.Errorf("serializing config spec: %w", err)
+	}
+	return prepareConfigOut{ConfigSpec: string(specJSON)}, nil
+}
+
+func undoPrepareConfig(_ context.Context, _ prepareConfigIn, _ prepareConfigOut) error {
+	return nil
+}
+
+// handleEphemeral covers the ephemeral-version-specific bookkeeping:
+// validating the label, parsing the TTL, deleting any existing version
+// with the same label (replace-on-same-label), and enforcing the per-
+// app ephemeral version limit. No-op for non-ephemeral deploys.
+//
+// The undo is intentionally a no-op even though replace-existing
+// deletes versions. Those versions were going to be replaced by the
+// new build, and an aborted build doesn't make the user want them
+// back — they want to retry with new code. Re-creating deleted
+// entities would also race with concurrent reconciliation.
+
+type handleEphemeralIn struct {
+	AppName        string `json:"app_name" saga:"app_name"`
+	StreamID       string `json:"stream_id" saga:"stream_id"`
+	AppID          string `json:"app_id" saga:"app_id"`
+	EphemeralLabel string `json:"ephemeral_label,omitempty" saga:"ephemeral_label,optional"`
+	EphemeralTTL   string `json:"ephemeral_ttl,omitempty" saga:"ephemeral_ttl,optional"`
+}
+
+type handleEphemeralOut struct {
+	ExpiresAt string `json:"ephemeral_expires_at,omitempty" saga:"ephemeral_expires_at"`
+}
+
+func handleEphemeral(ctx context.Context, in handleEphemeralIn) (handleEphemeralOut, error) {
+	if in.EphemeralLabel == "" {
+		return handleEphemeralOut{}, nil
+	}
+
+	deps := saga.Get[*buildSagaDeps](ctx)
+	b := deps.builder
+	status := deps.statuses.SenderFor(in.StreamID)
+
+	if err := ephemeralx.ValidateLabel(in.EphemeralLabel); err != nil {
+		status.SendError("invalid ephemeral label: %v", err)
+		return handleEphemeralOut{}, fmt.Errorf("invalid ephemeral label: %w", err)
+	}
+
+	ttl := in.EphemeralTTL
+	if ttl == "" {
+		ttl = "24h"
+	}
+	ttlDuration, err := time.ParseDuration(ttl)
+	if err != nil {
+		status.SendError("invalid ephemeral TTL %q: %v", ttl, err)
+		return handleEphemeralOut{}, fmt.Errorf("invalid ephemeral TTL %q: %w", ttl, err)
+	}
+	if ttlDuration <= 0 {
+		status.SendError("invalid ephemeral TTL %q: must be greater than 0", ttl)
+		return handleEphemeralOut{}, fmt.Errorf("invalid ephemeral TTL %q: must be greater than 0", ttl)
+	}
+
+	if err := ephemeralx.ReplaceExisting(ctx, b.ec.EAC(), entity.Id(in.AppID), in.EphemeralLabel, b.Log); err != nil {
+		return handleEphemeralOut{}, fmt.Errorf("failed to replace existing ephemeral version %q: %w", in.EphemeralLabel, err)
+	}
+	if err := ephemeralx.EnforceLimit(ctx, b.ec.EAC(), entity.Id(in.AppID), ephemeralx.DefaultMaxEphemeral, b.Log); err != nil {
+		return handleEphemeralOut{}, fmt.Errorf("failed to enforce ephemeral limit: %w", err)
+	}
+
+	expiresAt := time.Now().Add(ttlDuration).Format(time.RFC3339)
+	return handleEphemeralOut{ExpiresAt: expiresAt}, nil
+}
+
+func undoHandleEphemeral(_ context.Context, _ handleEphemeralIn, _ handleEphemeralOut) error {
+	return nil
+}
+
+// createConfigVersion creates the ConfigVersion entity that holds the
+// new app's full ConfigSpec. AppVersion references it by ID, so it
+// must exist before createAppVersion runs. Failures here surface as
+// the saga error; recovery would retry creation with the same name
+// and a deterministic-enough ConfigSpec to be idempotent in practice,
+// though the entity store's create-if-missing semantics carry the
+// guarantee.
+
+type createConfigVersionIn struct {
+	AppID       string `json:"app_id" saga:"app_id"`
+	VersionName string `json:"version_name" saga:"version_name"`
+	ConfigSpec  string `json:"config_spec_json" saga:"config_spec_json"`
+}
+
+type createConfigVersionOut struct {
+	ConfigVersionID string `json:"config_version_id" saga:"config_version_id"`
+}
+
+func createConfigVersion(ctx context.Context, in createConfigVersionIn) (createConfigVersionOut, error) {
+	deps := saga.Get[*buildSagaDeps](ctx)
+	b := deps.builder
+
+	spec, err := unmarshalConfigSpec(in.ConfigSpec)
+	if err != nil {
+		return createConfigVersionOut{}, fmt.Errorf("deserializing config spec: %w", err)
+	}
+
+	cv := &core_v1alpha.ConfigVersion{
+		App:  entity.Id(in.AppID),
+		Spec: spec,
+	}
+	name := in.VersionName + "-cfg"
+	id, err := b.ec.Create(ctx, name, cv)
+	if err != nil {
+		return createConfigVersionOut{}, fmt.Errorf("creating config version %s: %w", name, err)
+	}
+	return createConfigVersionOut{ConfigVersionID: string(id)}, nil
+}
+
+func undoCreateConfigVersion(ctx context.Context, _ createConfigVersionIn, out createConfigVersionOut) error {
+	if out.ConfigVersionID == "" {
+		return nil
+	}
+	deps := saga.Get[*buildSagaDeps](ctx)
+	if err := deps.builder.ec.Delete(ctx, entity.Id(out.ConfigVersionID)); err != nil {
+		return fmt.Errorf("deleting config version %s: %w", out.ConfigVersionID, err)
+	}
+	return nil
+}
+
+// createVersion creates the AppVersion entity that pins together the
+// artifact, image URL, config version, and ephemeral metadata. This is
+// the durable "the build succeeded" record — once it exists, the
+// downstream activate / addon-provisioning steps have something to
+// reference. Failures compensate by deleting it.
+
+type createVersionIn struct {
+	AppID              string `json:"app_id" saga:"app_id"`
+	VersionName        string `json:"version_name" saga:"version_name"`
+	FinalImageURL      string `json:"final_image_url" saga:"final_image_url"`
+	ArtifactID         string `json:"artifact_id" saga:"artifact_id"`
+	AdminToken         string `json:"admin_token" saga:"admin_token"`
+	ConfigVersionID    string `json:"config_version_id" saga:"config_version_id"`
+	EphemeralLabel     string `json:"ephemeral_label,omitempty" saga:"ephemeral_label,optional"`
+	EphemeralTTL       string `json:"ephemeral_ttl,omitempty" saga:"ephemeral_ttl,optional"`
+	EphemeralExpiresAt string `json:"ephemeral_expires_at,omitempty" saga:"ephemeral_expires_at,optional"`
+}
+
+type createVersionOut struct {
+	AppVersionID string `json:"app_version_id" saga:"app_version_id"`
+}
+
+func createVersion(ctx context.Context, in createVersionIn) (createVersionOut, error) {
+	deps := saga.Get[*buildSagaDeps](ctx)
+	b := deps.builder
+
+	av := &core_v1alpha.AppVersion{
+		App:           entity.Id(in.AppID),
+		Version:       in.VersionName,
+		ImageUrl:      in.FinalImageURL,
+		AdminToken:    in.AdminToken,
+		Artifact:      entity.Id(in.ArtifactID),
+		ConfigVersion: entity.Id(in.ConfigVersionID),
+		Config:        core_v1alpha.Config{},
+	}
+	if in.EphemeralLabel != "" {
+		av.EphemeralLabel = in.EphemeralLabel
+		av.EphemeralTtl = in.EphemeralTTL
+		if in.EphemeralExpiresAt != "" {
+			if t, err := time.Parse(time.RFC3339, in.EphemeralExpiresAt); err == nil {
+				av.EphemeralExpiresAt = t
+			}
+		}
+	}
+
+	id, err := b.ec.Create(ctx, in.VersionName, av)
+	if err != nil {
+		return createVersionOut{}, fmt.Errorf("creating app version %s: %w", in.VersionName, err)
+	}
+	return createVersionOut{AppVersionID: string(id)}, nil
+}
+
+func undoCreateVersion(ctx context.Context, _ createVersionIn, out createVersionOut) error {
+	if out.AppVersionID == "" {
+		return nil
+	}
+	deps := saga.Get[*buildSagaDeps](ctx)
+	if err := deps.builder.ec.Delete(ctx, entity.Id(out.AppVersionID)); err != nil {
+		return fmt.Errorf("deleting app version %s: %w", out.AppVersionID, err)
+	}
+	return nil
+}
+
+// provisionAddons calls into the addons client to materialize the
+// addons declared in app.toml. Skipped for ephemeral deploys (which
+// don't get addons) and when there's no app config at all. The undo
+// is a no-op: provisionAddons handles "already attached" gracefully
+// on retry, and removing addons created during a build would surprise
+// users running concurrent ops against the same app.
+
+type provisionAddonsIn struct {
+	AppName        string               `json:"app_name" saga:"app_name"`
+	AppConfig      *appconfig.AppConfig `json:"app_config,omitempty" saga:"app_config,optional"`
+	EphemeralLabel string               `json:"ephemeral_label,omitempty" saga:"ephemeral_label,optional"`
+	// AppVersionID is consumed only to anchor this action after
+	// createVersion in the saga DAG; addons are scoped to the app,
+	// not the version, so we don't actually need the ID at runtime.
+	AppVersionID string `json:"app_version_id" saga:"app_version_id"`
+}
+
+type provisionAddonsOut struct {
+	Done saga.Edge `saga:"addons_provisioned"`
+}
+
+func provisionAddons(ctx context.Context, in provisionAddonsIn) (provisionAddonsOut, error) {
+	if in.EphemeralLabel != "" || in.AppConfig == nil {
+		return provisionAddonsOut{}, nil
+	}
+	deps := saga.Get[*buildSagaDeps](ctx)
+	if deps.builder.addonsClient == nil {
+		return provisionAddonsOut{}, nil
+	}
+	if err := deps.builder.provisionAddons(ctx, in.AppName, in.AppConfig); err != nil {
+		return provisionAddonsOut{}, fmt.Errorf("addon provisioning failed: %w", err)
+	}
+	return provisionAddonsOut{}, nil
+}
+
+func undoProvisionAddons(_ context.Context, _ provisionAddonsIn, _ provisionAddonsOut) error {
+	return nil
+}
+
+// setActiveVersion makes the newly-created AppVersion the app's active
+// one. Skipped for ephemeral deploys (their whole point is to coexist
+// with the active version, not replace it). Records the previous
+// active version so undo can restore it on failure.
+
+type setActiveVersionIn struct {
+	AppName        string    `json:"app_name" saga:"app_name"`
+	AppVersionID   string    `json:"app_version_id" saga:"app_version_id"`
+	EphemeralLabel string    `json:"ephemeral_label,omitempty" saga:"ephemeral_label,optional"`
+	AddonsReady    saga.Edge `saga:"addons_provisioned"`
+}
+
+type setActiveVersionOut struct {
+	PreviousVersionID string `json:"previous_version_id,omitempty" saga:"previous_version_id"`
+	Skipped           bool   `json:"skipped" saga:"set_active_skipped"`
+}
+
+func setActiveVersion(ctx context.Context, in setActiveVersionIn) (setActiveVersionOut, error) {
+	if in.EphemeralLabel != "" {
+		return setActiveVersionOut{Skipped: true}, nil
+	}
+
+	deps := saga.Get[*buildSagaDeps](ctx)
+	b := deps.builder
+
+	app, err := b.appClient.GetByName(ctx, in.AppName)
+	if err != nil {
+		return setActiveVersionOut{}, fmt.Errorf("looking up app %s: %w", in.AppName, err)
+	}
+	previous := string(app.ActiveVersion)
+
+	if err := b.appClient.SetActiveVersion(ctx, in.AppName, in.AppVersionID); err != nil {
+		return setActiveVersionOut{}, fmt.Errorf("setting active version on %s: %w", in.AppName, err)
+	}
+	return setActiveVersionOut{PreviousVersionID: previous}, nil
+}
+
+func undoSetActiveVersion(ctx context.Context, in setActiveVersionIn, out setActiveVersionOut) error {
+	if out.Skipped {
+		return nil
+	}
+	deps := saga.Get[*buildSagaDeps](ctx)
+	if err := deps.builder.appClient.SetActiveVersion(ctx, in.AppName, out.PreviousVersionID); err != nil {
+		return fmt.Errorf("restoring previous active version on %s: %w", in.AppName, err)
+	}
+	return nil
+}
+
+// finalize is the saga's terminal step. It writes the deployment log
+// entry, runs the local-storage-migration check (non-ephemeral only),
+// and tells the StreamRegistry it's safe to remove the staged source.
+// Everything here is best-effort or idempotent; the undo is a no-op
+// because once we got this far the build succeeded — there's nothing
+// to roll back.
+
+type finalizeIn struct {
+	AppName        string    `json:"app_name" saga:"app_name"`
+	StreamID       string    `json:"stream_id" saga:"stream_id"`
+	AppID          string    `json:"app_id" saga:"app_id"`
+	VersionName    string    `json:"version_name" saga:"version_name"`
+	ArtifactID     string    `json:"artifact_id" saga:"artifact_id"`
+	ConfigSpec     string    `json:"config_spec_json" saga:"config_spec_json"`
+	EphemeralLabel string    `json:"ephemeral_label,omitempty" saga:"ephemeral_label,optional"`
+	ActiveReady    saga.Edge `saga:"set_active_skipped"`
+}
+
+type finalizeOut struct{}
+
+func finalize(ctx context.Context, in finalizeIn) (finalizeOut, error) {
+	deps := saga.Get[*buildSagaDeps](ctx)
+	b := deps.builder
+
+	if in.EphemeralLabel == "" {
+		spec, err := unmarshalConfigSpec(in.ConfigSpec)
+		if err == nil {
+			// checkLocalStorageMigration takes a *SendStreamClient; its
+			// signature predates StatusSender. Pass nil for now and
+			// route the migration-warning UX through the sender once
+			// the function grows a StatusSender-shaped overload. Saga
+			// deploys skip that warning until then — accepted as a
+			// temporary regression on the flagged path.
+			b.checkLocalStorageMigration(ctx, entity.Id(in.AppID), spec, nil)
+		}
+	}
+
+	artifactName := strings.TrimPrefix(in.ArtifactID, "artifact/")
+	b.logDeployment(ctx, in.AppName, in.VersionName, artifactName)
+
+	if err := deps.streams.Cleanup(in.StreamID); err != nil {
+		b.Log.Warn("cleanup staged tar", "stream", in.StreamID, "error", err)
+	}
+	return finalizeOut{}, nil
+}
+
+func undoFinalize(_ context.Context, _ finalizeIn, _ finalizeOut) error {
+	return nil
+}
+
+// detectBuildStack assembles the BuildStack the same way buildFromDir
+// does (app.toml.build > Dockerfile.miren > auto) and performs the
+// supported-stack check for auto so the saga can fail fast rather than
+// waste a buildkit launch. Extracted here so the saga action and the
+// pre-saga path share one source of truth.
+func (b *Builder) detectBuildStack(path string, ac *appconfig.AppConfig, name string, _ fsutil.FS) (BuildStack, error) {
+	var stack BuildStack
+	stack.CodeDir = path
+
+	if ac != nil && ac.Build != nil {
+		stack.OnBuild = ac.Build.OnBuild
+		stack.Version = ac.Build.Version
+		stack.AlpineImage = ac.Build.AlpineImage
+
+		if ac.Build.Dockerfile != "" {
+			stack.Stack = "dockerfile"
+			stack.Input = ac.Build.Dockerfile
+			b.Log.Info("using dockerfile from app config", "dockerfile", ac.Build.Dockerfile)
+		}
+	}
+
+	if stack.Stack == "" {
+		// Look on disk rather than through fsutil so test/error paths
+		// don't have to fabricate an fsutil.FS just to peek for a file.
+		if _, err := osStat(path, "Dockerfile.miren"); err == nil {
+			stack.Stack = "dockerfile"
+			stack.Input = "Dockerfile.miren"
+		} else {
+			stack.Stack = "auto"
+		}
+	}
+
+	if stack.Stack == "auto" {
+		detectOpts := stackbuild.BuildOptions{
+			Log:         b.Log,
+			Name:        name,
+			OnBuild:     stack.OnBuild,
+			Version:     stack.Version,
+			AlpineImage: stack.AlpineImage,
+		}
+		if _, err := stackbuild.DetectStack(stack.CodeDir, detectOpts); err != nil {
+			b.Log.Error("stack detection failed", "error", err, "app", name, "codeDir", stack.CodeDir)
+			return stack, fmt.Errorf("no supported stack detected for app %s: %w", name, err)
+		}
+		b.Log.Debug("stack detection successful")
+	}
+
+	return stack, nil
+}
+
+// registerBuildSaga assembles the build-from-tar saga definition with all
+// actions wired into the given registry. Mirrors the registerCreateSandboxSaga
+// shape from controllers/sandbox/create_saga.go so both sagas register the
+// same way at server startup.
+func registerBuildSaga(
+	registry *saga.Registry,
+	builder *Builder,
+	streams *StreamRegistry,
+	statuses *StatusRegistry,
+	log *slog.Logger,
+) error {
+	deps := &buildSagaDeps{
+		builder:  builder,
+		streams:  streams,
+		statuses: statuses,
+	}
+
+	return saga.Define(sagaBuildFromTar).
+		Using(deps).
+		Using(log).
+		Action(actionReceiveTar, receiveTar).Undo(undoReceiveTar).
+		Action(actionLoadSource, loadSource).Undo(undoLoadSource).
+		Action(actionGetNextVer, getNextVersion).Undo(undoGetNextVersion).
+		Action(actionBuildImage, buildImage).Undo(undoBuildImage).
+		Action(actionPrepareConfig, prepareConfig).Undo(undoPrepareConfig).
+		Action(actionHandleEphemera, handleEphemeral).Undo(undoHandleEphemeral).
+		Action(actionCreateConfigVer, createConfigVersion).Undo(undoCreateConfigVersion).
+		Action(actionCreateVersion, createVersion).Undo(undoCreateVersion).
+		Action(actionProvisionAddons, provisionAddons).Undo(undoProvisionAddons).
+		Action(actionSetActiveVer, setActiveVersion).Undo(undoSetActiveVersion).
+		Action(actionFinalize, finalize).Undo(undoFinalize).
+		RegisterTo(registry)
+}
+
+// osStat returns os.Stat for a sub-path under base. Tiny wrapper so the
+// stack detection logic stays readable.
+func osStat(base, name string) (os.FileInfo, error) {
+	return os.Stat(filepath.Join(base, name))
+}
+
+// marshalConfigSpec serializes a ConfigSpec to JSON for transport through
+// the saga's input/output map. Returns "" for the zero value so downstream
+// actions can branch on emptiness without unmarshaling.
+func marshalConfigSpec(spec core_v1alpha.ConfigSpec) (string, error) {
+	// Treat the zero value as empty to keep the saga log compact for
+	// first-deploy cases.
+	zero := core_v1alpha.ConfigSpec{}
+	if isEmptyConfigSpec(spec, zero) {
+		return "", nil
+	}
+	data, err := json.Marshal(spec)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+// unmarshalConfigSpec is the round-trip partner of marshalConfigSpec.
+// Empty string means the caller passed a zero ConfigSpec.
+func unmarshalConfigSpec(s string) (core_v1alpha.ConfigSpec, error) {
+	if s == "" {
+		return core_v1alpha.ConfigSpec{}, nil
+	}
+	var spec core_v1alpha.ConfigSpec
+	if err := json.Unmarshal([]byte(s), &spec); err != nil {
+		return core_v1alpha.ConfigSpec{}, err
+	}
+	return spec, nil
+}
+
+// isEmptyConfigSpec checks whether spec equals zero by JSON shape. Using
+// JSON comparison sidesteps the unexported-field issues reflect.DeepEqual
+// hits with generated types.
+func isEmptyConfigSpec(spec, zero core_v1alpha.ConfigSpec) bool {
+	a, err := json.Marshal(spec)
+	if err != nil {
+		return false
+	}
+	b, err := json.Marshal(zero)
+	if err != nil {
+		return false
+	}
+	return string(a) == string(b)
+}
