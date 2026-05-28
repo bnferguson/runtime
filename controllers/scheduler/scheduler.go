@@ -6,6 +6,7 @@ import (
 	"math/rand"
 
 	"miren.dev/runtime/api/compute/compute_v1alpha"
+	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 )
@@ -92,18 +93,17 @@ func (c *Controller) Reconcile(ctx context.Context, sandbox *compute_v1alpha.San
 	} else {
 		// Stateless sandboxes prefer runner nodes when available
 		runnerNodes := c.filterRunnerNodes(nodes)
-		if len(runnerNodes) > 0 {
-			assignedNode = runnerNodes[rand.Intn(len(runnerNodes))]
-			c.log.Debug("scheduling stateless sandbox to runner",
-				"sandbox", sandbox.ID,
-				"node", assignedNode.ID)
-		} else {
-			// Fall back to any available node (including coordinator)
-			assignedNode = nodes[rand.Intn(len(nodes))]
-			c.log.Debug("scheduling stateless sandbox to available node (no runners)",
-				"sandbox", sandbox.ID,
-				"node", assignedNode.ID)
+		candidates := runnerNodes
+		fallback := "runner"
+		if len(candidates) == 0 {
+			candidates = nodes
+			fallback = "available node (no runners)"
 		}
+
+		assignedNode = c.pickWithAntiAffinity(ctx, meta, candidates)
+		c.log.Debug("scheduling stateless sandbox to "+fallback,
+			"sandbox", sandbox.ID,
+			"node", assignedNode.ID)
 	}
 
 	c.log.Info("assigning sandbox to node",
@@ -155,6 +155,93 @@ func (c *Controller) filterRunnerNodes(nodes []*compute_v1alpha.Node) []*compute
 		}
 	}
 	return runners
+}
+
+// pickWithAntiAffinity picks a node from candidates that minimizes co-location
+// with other replicas in the same pool. Sandboxes labelled `pool: <id>` (the
+// label is set by the sandbox pool manager) are treated as siblings. Among
+// candidates with the fewest active siblings, one is chosen randomly. Sandboxes
+// without a pool label, or when sibling lookup fails, fall back to a uniform
+// random pick — one-off sandboxes don't carry a spread guarantee.
+//
+// "Active" here means a sibling that is already scheduled and is not in a
+// terminal status (STOPPED, DEAD). Terminal siblings have released their slot
+// on the node and shouldn't influence placement.
+func (c *Controller) pickWithAntiAffinity(ctx context.Context, meta *entity.Meta, candidates []*compute_v1alpha.Node) *compute_v1alpha.Node {
+	if len(candidates) == 1 {
+		return candidates[0]
+	}
+
+	var md core_v1alpha.Metadata
+	md.Decode(meta)
+	poolLabel, ok := md.Labels.Get("pool")
+	if !ok || poolLabel == "" {
+		return candidates[rand.Intn(len(candidates))]
+	}
+
+	counts, err := c.countSiblingsPerNode(ctx, poolLabel, meta.Id())
+	if err != nil {
+		c.log.Warn("anti-affinity sibling lookup failed, falling back to random",
+			"pool", poolLabel, "error", err)
+		return candidates[rand.Intn(len(candidates))]
+	}
+
+	minCount := -1
+	var winners []*compute_v1alpha.Node
+	for _, node := range candidates {
+		n := counts[node.ID]
+		if minCount == -1 || n < minCount {
+			minCount = n
+			winners = winners[:0]
+			winners = append(winners, node)
+		} else if n == minCount {
+			winners = append(winners, node)
+		}
+	}
+
+	return winners[rand.Intn(len(winners))]
+}
+
+// countSiblingsPerNode tallies active sandboxes in the same pool by their
+// assigned node. Siblings are sandboxes carrying the same `pool` label, with
+// a Schedule already attached, and not in a terminal status. The sandbox
+// currently being scheduled is excluded from the count.
+func (c *Controller) countSiblingsPerNode(ctx context.Context, poolLabel string, selfID entity.Id) (map[entity.Id]int, error) {
+	results, err := c.eac.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox))
+	if err != nil {
+		return nil, err
+	}
+
+	counts := make(map[entity.Id]int)
+	for _, ent := range results.Values() {
+		if entity.Id(ent.Id()) == selfID {
+			continue
+		}
+
+		e := ent.Entity()
+
+		var md core_v1alpha.Metadata
+		md.Decode(e)
+		if label, ok := md.Labels.Get("pool"); !ok || label != poolLabel {
+			continue
+		}
+
+		var sibling compute_v1alpha.Sandbox
+		sibling.Decode(e)
+		if sibling.Status == compute_v1alpha.STOPPED || sibling.Status == compute_v1alpha.DEAD {
+			continue
+		}
+
+		var schedule compute_v1alpha.Schedule
+		schedule.Decode(e)
+		if schedule.Key.Node == "" {
+			continue
+		}
+
+		counts[schedule.Key.Node]++
+	}
+
+	return counts, nil
 }
 
 // gatherNodes fetches all node entities from the entity store

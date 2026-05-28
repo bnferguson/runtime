@@ -185,6 +185,21 @@ func (m *MockStore) UpdateEntity(ctx context.Context, id Id, entity *Entity, opt
 		return nil, err
 	}
 
+	// Determine which incoming attr IDs should replace existing values
+	// (cardinality=one) vs accumulate alongside them (cardinality=many).
+	// Mirrors EtcdStore.UpdateEntity (store.go:687) so mock-backed tests
+	// observe the same merge semantics production does.
+	replaceIds := make(map[Id]bool)
+	for _, attr := range entity.attrs {
+		schema, err := m.GetAttributeSchema(ctx, attr.ID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get attribute schema: %w", err)
+		}
+		if !schema.AllowMany {
+			replaceIds[attr.ID] = true
+		}
+	}
+
 	m.mu.Lock()
 	e, ok := m.Entities[id]
 	if !ok {
@@ -192,22 +207,16 @@ func (m *MockStore) UpdateEntity(ctx context.Context, id Id, entity *Entity, opt
 		return nil, cond.NotFound("entity", id)
 	}
 
-	// Build combined attribute list
-	combinedAttrs := make([]Attr, 0, len(e.attrs))
-
-	// First, copy over existing attributes that aren't being updated
-	attrMap := make(map[Id]Attr)
-	for _, attr := range entity.attrs {
-		attrMap[attr.ID] = attr
-	}
-
+	// Keep existing attrs except those being replaced (cardinality=one IDs
+	// present in the incoming change). Cardinality=many attrs are preserved
+	// so the new incoming values append to the existing set.
+	combinedAttrs := make([]Attr, 0, len(e.attrs)+len(entity.attrs))
 	for _, existing := range e.attrs {
-		if _, isUpdated := attrMap[existing.ID]; !isUpdated {
+		if !replaceIds[existing.ID] {
 			combinedAttrs = append(combinedAttrs, existing)
 		}
 	}
 
-	// Then add the new/updated attributes
 	combinedAttrs = append(combinedAttrs, entity.attrs...)
 
 	// Create a copy to avoid modifying the original
