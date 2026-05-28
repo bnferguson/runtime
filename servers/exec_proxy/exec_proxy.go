@@ -65,6 +65,7 @@ func (s *Server) Exec(ctx context.Context, req *exec_v1alpha.SandboxExecExec) er
 		}
 
 		found = ret.Entity().Entity()
+		id = found.Id().String()
 
 	case "app":
 		name := args.Value()
