@@ -29,7 +29,7 @@ func ServerInstallDocker(ctx *Context, opts struct {
 	ClusterName  string            `long:"cluster-name" description:"Cluster name for cloud registration"`
 	CloudURL     string            `short:"u" long:"url" description:"Cloud URL for registration" default:"https://miren.cloud"`
 	Tags         map[string]string `short:"t" long:"tag" description:"Tags for the cluster (key:value)"`
-	Labs         []string          `short:"l" long:"labs" description:"Miren Labs features to enable (e.g. adminapi). Prefix with - to disable."`
+	Labs         []string          `short:"l" long:"labs" description:"Miren Labs features to enable (e.g. distributedrunners). Prefix with - to disable."`
 }) error {
 	if opts.ClusterName == "" {
 		opts.ClusterName = opts.Name

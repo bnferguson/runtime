@@ -9,11 +9,6 @@ features:
     description: Schedule jobs across multiple runner nodes
     default: false
 
-  - name: adminapi
-    predicate: AdminAPI
-    description: Enable the admin API for application management functions
-    default: false
-
   - name: sagas
     predicate: Sagas
     description: Use saga-based crash-recoverable workflows for sandbox lifecycle

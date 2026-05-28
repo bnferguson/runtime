@@ -21,13 +21,13 @@ func TestDisableFeatureWithPrefix(t *testing.T) {
 func TestCaseInsensitiveFeatureNames(t *testing.T) {
 	Reset()
 
-	Init(nil, []string{"GlobalRouter", "ADMINAPI"})
+	Init(nil, []string{"GlobalRouter", "DISTRIBUTEDRUNNERS"})
 
 	if !GlobalRouter() {
 		t.Error("GlobalRouter should be enabled (case-insensitive)")
 	}
-	if !AdminAPI() {
-		t.Error("AdminAPI should be enabled (case-insensitive)")
+	if !DistributedRunners() {
+		t.Error("DistributedRunners should be enabled (case-insensitive)")
 	}
 }
 
@@ -73,16 +73,16 @@ func TestAllKeywordEnablesAllFeatures(t *testing.T) {
 func TestAllKeywordWithExclusion(t *testing.T) {
 	Reset()
 
-	Init(nil, []string{"all", "-adminapi"})
+	Init(nil, []string{"all", "-distributedrunners"})
 
 	for _, name := range AllFeatures() {
-		if name == FeatureAdminAPI {
+		if name == FeatureDistributedRunners {
 			if IsEnabled(name) {
-				t.Error("AdminAPI should be disabled after 'all,-adminapi'")
+				t.Error("DistributedRunners should be disabled after 'all,-distributedrunners'")
 			}
 		} else {
 			if !IsEnabled(name) {
-				t.Errorf("Feature %q should be enabled after 'all,-adminapi'", name)
+				t.Errorf("Feature %q should be enabled after 'all,-distributedrunners'", name)
 			}
 		}
 	}
@@ -91,7 +91,7 @@ func TestAllKeywordWithExclusion(t *testing.T) {
 func TestNegativeAllDisablesAll(t *testing.T) {
 	Reset()
 
-	Init(nil, []string{"globalrouter", "adminapi", "-all"})
+	Init(nil, []string{"globalrouter", "distributedrunners", "-all"})
 
 	for _, name := range AllFeatures() {
 		if IsEnabled(name) {

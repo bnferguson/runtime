@@ -1149,9 +1149,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	c.hs = httpingress.NewServer(ctx, c.Log, ingressConfig, loopback, aa, c.HTTP, c.LogWriter)
 
 	adminServer := admin.NewServer(c.Log, ec, c.hs, c.LogWriter)
-	if labs.AdminAPI() {
-		server.ExposeValue("dev.miren.runtime/admin", admin_v1alpha.AdaptAdmin(adminServer))
-	}
+	server.ExposeValue("dev.miren.runtime/admin", admin_v1alpha.AdaptAdmin(adminServer))
 
 	runnerReg := runnerserver.NewRegistrationServer(runnerserver.RegistrationServerConfig{
 		Log:                    c.Log,

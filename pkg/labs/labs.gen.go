@@ -12,7 +12,6 @@ import (
 const (
 	FeatureGlobalRouter       = "globalrouter"
 	FeatureDistributedRunners = "distributedrunners"
-	FeatureAdminAPI           = "adminapi"
 	FeatureSagas              = "sagas"
 )
 
@@ -21,7 +20,6 @@ func AllFeatures() []string {
 	return []string{
 		FeatureGlobalRouter,
 		FeatureDistributedRunners,
-		FeatureAdminAPI,
 		FeatureSagas,
 	}
 }
@@ -31,7 +29,6 @@ func FeatureDescriptions() map[string]string {
 	return map[string]string{
 		FeatureGlobalRouter:       "Use global NAT traversal router for connectivity",
 		FeatureDistributedRunners: "Schedule jobs across multiple runner nodes",
-		FeatureAdminAPI:           "Enable the admin API for application management functions",
 		FeatureSagas:              "Use saga-based crash-recoverable workflows for sandbox lifecycle",
 	}
 }
@@ -45,7 +42,6 @@ var (
 var featureDefaults = map[string]bool{
 	FeatureGlobalRouter:       false,
 	FeatureDistributedRunners: false,
-	FeatureAdminAPI:           false,
 	FeatureSagas:              false,
 }
 
@@ -144,12 +140,6 @@ func GlobalRouter() bool {
 // Schedule jobs across multiple runner nodes
 func DistributedRunners() bool {
 	return IsEnabled(FeatureDistributedRunners)
-}
-
-// AdminAPI returns whether the adminapi feature is enabled.
-// Enable the admin API for application management functions
-func AdminAPI() bool {
-	return IsEnabled(FeatureAdminAPI)
 }
 
 // Sagas returns whether the sagas feature is enabled.
