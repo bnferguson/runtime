@@ -8,7 +8,7 @@ func addCommands(d *mflags.Dispatcher) {
 	// Server command is now defined in commands.go (renamed from dev)
 
 	// Cloud registration commands
-	d.Dispatch("server register", Infer("server register", "Register this cluster with miren.cloud", Register,
+	d.Dispatch("server register", Infer("server register", "Register this cluster with miren.cloud", RegisterStandalone,
 		WithExample(mflags.Example{
 			Name: "Register with cloud",
 			Body: "miren server register --name my-cluster",

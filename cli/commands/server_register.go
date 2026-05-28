@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -15,6 +16,18 @@ type RegisterOptions struct {
 	CloudURL    string            `short:"u" long:"url" description:"Cloud URL" default:"https://miren.cloud"`
 	Tags        map[string]string `short:"t" long:"tag" description:"Tags for the cluster (key:value)"`
 	OutputDir   string            `short:"o" long:"output" description:"Output directory for registration" default:"/var/lib/miren/server"`
+}
+
+// RegisterStandalone is the CLI entrypoint for `miren server register`. It runs
+// Register and then bounces the local miren.service if one is active, so the
+// user doesn't have to restart manually. The install paths call Register
+// directly because they own the service lifecycle themselves.
+func RegisterStandalone(ctx *Context, opts RegisterOptions) error {
+	if err := Register(ctx, opts); err != nil {
+		return err
+	}
+	restartMirenServiceIfActive(ctx)
+	return nil
 }
 
 // Register handles cluster registration with miren.cloud
@@ -201,9 +214,26 @@ func Register(ctx *Context, opts RegisterOptions) error {
 	}
 	ctx.Info("Configuration saved to: %s", opts.OutputDir)
 
-	ctx.Warn("If you're already running the miren server, you must now restart it to apply the new registration.")
-
 	return nil
+}
+
+// restartMirenServiceIfActive bounces the systemd miren.service so a newly
+// saved registration takes effect, but only when systemd is managing a
+// currently-running server. Other deployment styles (docker, manual, dev) are
+// left alone — install paths run their own lifecycle steps afterward, and
+// nothing the user needs to act on remains.
+func restartMirenServiceIfActive(ctx *Context) {
+	if _, err := exec.LookPath("systemctl"); err != nil {
+		return
+	}
+	if err := exec.Command("systemctl", "is-active", "--quiet", "miren.service").Run(); err != nil {
+		return
+	}
+	if err := exec.Command("systemctl", "restart", "miren.service").Run(); err != nil {
+		ctx.Warn("Failed to restart miren.service: %v. Restart manually to apply the new registration.", err)
+		return
+	}
+	ctx.Info("Restarted miren.service to apply the new registration.")
 }
 
 // RegisterStatus displays the current registration status
