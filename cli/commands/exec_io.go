@@ -41,7 +41,9 @@ func setupExecIO(ctx *Context, opt *exec_v1alpha.ShellOptions) (
 		opt.SetWinSize(ws)
 	}
 
-	stdinCon.SetRaw()
+	if err := stdinCon.SetRaw(); err != nil {
+		ctx.Log.Error("failed to set raw mode on stdin", "error", err)
+	}
 
 	winCh := make(chan os.Signal, 1)
 	signal.Notify(winCh, unix.SIGWINCH)
