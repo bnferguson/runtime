@@ -11,6 +11,11 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *main*
 
+---
+
+## v0.9.0
+*2026-05-28*
+
 **Breaking Changes**
 - **`auth provider add` reshaped into per-type subcommands** - The asymmetric pair of `auth provider add NAME --provider-url ...` (OIDC) and the separate `auth provider add-password NAME ...` is gone, replaced by a single shape: `auth provider add oidc|github|password NAME [flags]`. Migration: prepend `oidc` to existing OIDC commands, and replace `add-password` with `add password` (with a space). The CLI now exposes three types directly instead of an "oidc with optional connector" indirection. ([#817](https://github.com/mirendev/runtime/pull/817))
 
