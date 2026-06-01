@@ -29,10 +29,11 @@ import (
 
 // Controller provisions and manages TLS certificates for http_route entities using DNS-01 ACME challenges
 type Controller struct {
-	Log         *slog.Logger
-	dataPath    string
-	email       string
-	dnsProvider string
+	Log              *slog.Logger
+	dataPath         string
+	email            string
+	dnsProvider      string
+	clusterHostnames []string
 
 	client     *lego.Client
 	user       *legoUser
@@ -68,13 +69,14 @@ func (u *legoUser) GetPrivateKey() crypto.PrivateKey {
 }
 
 // NewController creates a new certificate controller
-func NewController(log *slog.Logger, dataPath string, email string, dnsProvider string) *Controller {
+func NewController(log *slog.Logger, dataPath string, email string, dnsProvider string, clusterHostnames []string) *Controller {
 	return &Controller{
-		Log:         log.With("module", "certificate-controller"),
-		dataPath:    dataPath,
-		email:       email,
-		dnsProvider: dnsProvider,
-		certCache:   make(map[string]*cachedCert),
+		Log:              log.With("module", "certificate-controller"),
+		dataPath:         dataPath,
+		email:            email,
+		dnsProvider:      dnsProvider,
+		clusterHostnames: clusterHostnames,
+		certCache:        make(map[string]*cachedCert),
 	}
 }
 
@@ -142,11 +144,31 @@ func (c *Controller) initializeLego(ctx context.Context) error {
 	// Load existing certificates from disk into cache
 	if err := c.loadExistingCerts(certsDir); err != nil {
 		c.Log.Warn("failed to load existing certificates", "error", err)
-		// Don't fail initialization if we can't load existing certs
+	}
+
+	if len(c.clusterHostnames) > 0 {
+		go c.provisionClusterHostnames(ctx)
 	}
 
 	c.Log.Info("ACME DNS challenge client initialized")
 	return nil
+}
+
+func (c *Controller) provisionClusterHostnames(ctx context.Context) {
+	for _, hostname := range c.clusterHostnames {
+		if ctx.Err() != nil {
+			return
+		}
+		hostname = strings.TrimSpace(hostname)
+		if hostname == "" {
+			continue
+		}
+		if err := c.provisionCertificate(ctx, hostname); err != nil {
+			c.Log.Warn("failed to provision cluster hostname certificate (will provision inline on first TLS handshake)", "hostname", hostname, "error", err)
+		} else {
+			c.Log.Info("cluster hostname certificate provisioned", "hostname", hostname)
+		}
+	}
 }
 
 // loadExistingCerts scans the certs directory and loads all existing certificates into cache

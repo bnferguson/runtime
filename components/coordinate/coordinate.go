@@ -996,11 +996,17 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	)
 	c.cm.AddController(nodeHealthRC)
 
+	// Collect cluster-level hostnames for TLS cert provisioning (e.g., cloud-provisioned DNS).
+	var clusterHostnames []string
+	if c.CloudAuth.DNSHostname != "" {
+		clusterHostnames = append(clusterHostnames, c.CloudAuth.DNSHostname)
+	}
+
 	// Add certificate controller — DNS-01 when a DNS provider is configured,
 	// otherwise HTTP-01 via autocert for eager cert provisioning on route set.
 	if c.AcmeDNSProvider != "" {
 		c.Log.Info("enabling ACME DNS challenge certificate controller", "provider", c.AcmeDNSProvider)
-		dnsController := certctrl.NewController(c.Log, c.DataPath, c.AcmeEmail, c.AcmeDNSProvider)
+		dnsController := certctrl.NewController(c.Log, c.DataPath, c.AcmeEmail, c.AcmeDNSProvider, clusterHostnames)
 		if err := dnsController.Init(ctx); err != nil {
 			c.Log.Error("failed to initialize certificate controller", "error", err)
 			return err
@@ -1020,11 +1026,12 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	} else {
 		c.Log.Info("enabling ACME HTTP-01 certificate controller (autocert)")
 		autocertController := certctrl.NewAutocertController(certctrl.AutocertControllerOpts{
-			Log:       c.Log,
-			EAC:       eac,
-			DataPath:  c.DataPath,
-			Email:     c.AcmeEmail,
-			PublicIPs: c.PublicIPs,
+			Log:              c.Log,
+			EAC:              eac,
+			DataPath:         c.DataPath,
+			Email:            c.AcmeEmail,
+			PublicIPs:        c.PublicIPs,
+			ClusterHostnames: clusterHostnames,
 		})
 		if err := autocertController.Init(ctx); err != nil {
 			c.Log.Error("failed to initialize autocert controller", "error", err)
