@@ -37,6 +37,7 @@ import (
 	"miren.dev/runtime/pkg/imagerefs"
 	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/netutil"
+	"miren.dev/runtime/pkg/workloadidentity"
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
@@ -82,6 +83,7 @@ type SandboxControllerDeps struct {
 	StatusMon      *observability.StatusMonitor
 	Resolver       netresolve.Resolver
 	Metrics        *Metrics
+	WorkloadIssuer *workloadidentity.Issuer
 }
 
 type SandboxController struct {
@@ -106,8 +108,11 @@ type SandboxController struct {
 
 	StatusMon *observability.StatusMonitor
 
-	Resolver netresolve.Resolver
-	Metrics  *Metrics
+	Resolver       netresolve.Resolver
+	Metrics        *Metrics
+	WorkloadIssuer *workloadidentity.Issuer
+
+	tokenRefresher *tokenRefresher
 
 	topCtx context.Context
 	cancel func()
@@ -182,6 +187,7 @@ func NewSandboxController(cfg SandboxControllerDeps) (*SandboxController, error)
 		StatusMon:      cfg.StatusMon,
 		Resolver:       cfg.Resolver,
 		Metrics:        cfg.Metrics,
+		WorkloadIssuer: cfg.WorkloadIssuer,
 	}, nil
 }
 
@@ -503,6 +509,12 @@ func (c *SandboxController) Init(ctx context.Context) error {
 		Config:    DefaultImageGCConfig(),
 	}
 	c.imageWatchdog.Start(c.topCtx)
+
+	// Start workload identity token refresh loop
+	if c.WorkloadIssuer != nil {
+		c.tokenRefresher = newTokenRefresher()
+		go c.runTokenRefresh(c.topCtx)
+	}
 
 	return nil
 }
@@ -2054,6 +2066,30 @@ func (c *SandboxController) buildSubContainerSpec(
 		})
 	}
 
+	// Inject workload identity token
+	if c.WorkloadIssuer != nil {
+		appName := c.resolveAppName(ctx, sb)
+		token, tokenErr := c.WorkloadIssuer.IssueToken(appName, sb.ID.String())
+		if tokenErr != nil {
+			c.Log.Warn("failed to generate workload identity token", "sandbox", sb.ID, "error", tokenErr)
+		} else {
+			tokenPath := c.sandboxPath(sb, "identity-token")
+			if writeErr := os.WriteFile(tokenPath, []byte(token), 0444); writeErr != nil {
+				c.Log.Warn("failed to write workload identity token", "sandbox", sb.ID, "error", writeErr)
+			} else {
+				mounts = append(mounts, specs.Mount{
+					Destination: "/var/run/miren/identity-token",
+					Type:        "bind",
+					Source:      tokenPath,
+					Options:     []string{"rbind", "ro"},
+				})
+				if c.tokenRefresher != nil {
+					c.tokenRefresher.register(sb.ID.String(), tokenPath, appName)
+				}
+			}
+		}
+	}
+
 	// Extract instance number from metadata labels and inject MIREN_INSTANCE_NUM
 	envVars := co.Env
 	var md core_v1alpha.Metadata
@@ -2062,6 +2098,13 @@ func (c *SandboxController) buildSubContainerSpec(
 	if instanceStr, ok := md.Labels.Get("instance"); ok {
 		envVars = append([]string{fmt.Sprintf("MIREN_INSTANCE_NUM=%s", instanceStr)}, envVars...)
 		c.Log.Debug("injected instance number into container env", "sandbox_id", sb.ID, "container", co.Name, "instance", instanceStr)
+	}
+
+	if c.WorkloadIssuer != nil {
+		envVars = append(envVars,
+			"MIREN_IDENTITY_TOKEN_PATH=/var/run/miren/identity-token",
+			fmt.Sprintf("MIREN_OIDC_ISSUER_URL=%s", c.WorkloadIssuer.IssuerURL()),
+		)
 	}
 
 	specOpts := []oci.SpecOpts{
@@ -2349,6 +2392,9 @@ cleanup:
 
 func (c *SandboxController) Delete(ctx context.Context, id entity.Id, sb *compute.Sandbox) error {
 	c.Log.Debug("delete callback received, cleaning up sandbox", "id", id)
+	if c.tokenRefresher != nil {
+		c.tokenRefresher.unregister(id.String())
+	}
 	if sb != nil {
 		c.UnconfigureFirewall(sb)
 	}
@@ -2627,4 +2673,31 @@ func (c *SandboxController) Periodic(ctx context.Context, timeHorizon time.Durat
 	}
 
 	return nil
+}
+
+func (c *SandboxController) resolveAppName(ctx context.Context, sb *compute.Sandbox) string {
+	if sb.Spec.Version == "" {
+		return ""
+	}
+
+	versionResp, err := c.EAC.Get(ctx, sb.Spec.Version.String())
+	if err != nil {
+		return ""
+	}
+
+	var version core_v1alpha.AppVersion
+	version.Decode(versionResp.Entity().Entity())
+
+	if version.App == "" {
+		return ""
+	}
+
+	appResp, err := c.EAC.Get(ctx, version.App.String())
+	if err != nil {
+		return ""
+	}
+
+	var appMeta core_v1alpha.Metadata
+	appMeta.Decode(appResp.Entity().Entity())
+	return appMeta.Name
 }

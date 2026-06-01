@@ -39,6 +39,7 @@ import (
 	"miren.dev/runtime/pkg/oidc"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/waf"
+	"miren.dev/runtime/pkg/workloadidentity"
 )
 
 // idleTimeoutConn wraps a net.Conn and sets a read deadline before each
@@ -73,6 +74,7 @@ const (
 type IngressConfig struct {
 	RequestTimeout time.Duration
 	DataPath       string
+	WorkloadIssuer *workloadidentity.Issuer
 }
 
 type Server struct {
@@ -106,6 +108,8 @@ type Server struct {
 
 	connectorMu       sync.RWMutex
 	connectorHandlers map[string]*connectorHandler
+
+	workloadIssuer *workloadidentity.Issuer
 }
 
 type appUsage struct {
@@ -170,6 +174,7 @@ func NewServer(
 		wafProfileCache:    make(map[entity.Id]*wafProfileEntry),
 		passwordHandlers:   make(map[string]*passwordHandler),
 		connectorHandlers:  make(map[string]*connectorHandler),
+		workloadIssuer:     config.WorkloadIssuer,
 	}
 
 	if httpMetrics == nil {
@@ -431,6 +436,16 @@ func (h *Server) handleRequest(w http.ResponseWriter, req *http.Request) {
 		))
 	defer span.End()
 	req = req.WithContext(ctx)
+
+	// Handle OIDC discovery endpoints for workload identity verification
+	if req.URL.Path == "/.well-known/openid-configuration" {
+		h.handleOIDCDiscovery(w, req)
+		return
+	}
+	if req.URL.Path == "/.well-known/jwks" {
+		h.handleJWKS(w, req)
+		return
+	}
 
 	// Handle Miren server health check endpoint before routing
 	// Using .well-known per RFC 8615 to avoid collision with app routes
