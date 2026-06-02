@@ -249,20 +249,28 @@ func BenchmarkSandboxLogs(b *testing.B) {
 	}
 }
 
-func TestParseStructuredJSON(t *testing.T) {
+func TestScanJSON(t *testing.T) {
+	newScanner := func() *SandboxLogs {
+		return NewSandboxLogs(
+			slog.New(slog.NewTextHandler(os.Stderr, nil)),
+			"test", map[string]string{}, &mockLogWriter{},
+		)
+	}
+
 	t.Run("valid JSON with msg", func(t *testing.T) {
-		body, extra, stream, ok := parseStructuredJSON(`{"time":"2026-01-01T00:00:00Z","level":"INFO","msg":"hello","key":"val"}`)
+		sl := newScanner()
+		body, stream, ok := sl.scanJSON(`{"time":"2026-01-01T00:00:00Z","level":"INFO","msg":"hello","key":"val"}`)
 		if !ok {
 			t.Fatal("expected ok=true")
 		}
 		if body != "hello" {
 			t.Errorf("body = %q, want %q", body, "hello")
 		}
-		if extra["key"] != "val" {
-			t.Errorf("extra[key] = %q, want %q", extra["key"], "val")
+		if sl.extra["key"] != "val" {
+			t.Errorf("extra[key] = %q, want %q", sl.extra["key"], "val")
 		}
 		for _, skip := range []string{"time", "level", "msg"} {
-			if _, exists := extra[skip]; exists {
+			if _, exists := sl.extra[skip]; exists {
 				t.Errorf("field %q should be stripped", skip)
 			}
 		}
@@ -272,7 +280,8 @@ func TestParseStructuredJSON(t *testing.T) {
 	})
 
 	t.Run("valid JSON with message field", func(t *testing.T) {
-		body, _, _, ok := parseStructuredJSON(`{"time":"2026-01-01T00:00:00Z","level":"INFO","message":"hello"}`)
+		sl := newScanner()
+		body, _, ok := sl.scanJSON(`{"time":"2026-01-01T00:00:00Z","level":"INFO","message":"hello"}`)
 		if !ok {
 			t.Fatal("expected ok=true")
 		}
@@ -282,7 +291,8 @@ func TestParseStructuredJSON(t *testing.T) {
 	})
 
 	t.Run("ERROR level sets stderr stream", func(t *testing.T) {
-		_, _, stream, ok := parseStructuredJSON(`{"level":"ERROR","msg":"fail"}`)
+		sl := newScanner()
+		_, stream, ok := sl.scanJSON(`{"level":"ERROR","msg":"fail"}`)
 		if !ok {
 			t.Fatal("expected ok=true")
 		}
@@ -292,7 +302,8 @@ func TestParseStructuredJSON(t *testing.T) {
 	})
 
 	t.Run("WARN level sets stderr stream", func(t *testing.T) {
-		_, _, stream, ok := parseStructuredJSON(`{"level":"WARN","msg":"warning"}`)
+		sl := newScanner()
+		_, stream, ok := sl.scanJSON(`{"level":"WARN","msg":"warning"}`)
 		if !ok {
 			t.Fatal("expected ok=true")
 		}
@@ -302,29 +313,61 @@ func TestParseStructuredJSON(t *testing.T) {
 	})
 
 	t.Run("non-JSON returns false", func(t *testing.T) {
-		_, _, _, ok := parseStructuredJSON("plain text")
+		sl := newScanner()
+		_, _, ok := sl.scanJSON("plain text")
 		if ok {
 			t.Error("expected ok=false for plain text")
 		}
 	})
 
 	t.Run("JSON without msg field returns false", func(t *testing.T) {
-		_, _, _, ok := parseStructuredJSON(`{"key":"value","other":"data"}`)
+		sl := newScanner()
+		_, _, ok := sl.scanJSON(`{"key":"value","other":"data"}`)
 		if ok {
 			t.Error("expected ok=false for JSON without msg")
 		}
 	})
 
 	t.Run("non-string values are formatted", func(t *testing.T) {
-		_, extra, _, ok := parseStructuredJSON(`{"msg":"hi","count":42,"flag":true}`)
+		sl := newScanner()
+		_, _, ok := sl.scanJSON(`{"msg":"hi","count":42,"flag":true}`)
 		if !ok {
 			t.Fatal("expected ok=true")
 		}
-		if extra["count"] != "42" {
-			t.Errorf("extra[count] = %q, want %q", extra["count"], "42")
+		if sl.extra["count"] != "42" {
+			t.Errorf("extra[count] = %q, want %q", sl.extra["count"], "42")
 		}
-		if extra["flag"] != "true" {
-			t.Errorf("extra[flag] = %q, want %q", extra["flag"], "true")
+		if sl.extra["flag"] != "true" {
+			t.Errorf("extra[flag] = %q, want %q", sl.extra["flag"], "true")
+		}
+	})
+
+	t.Run("nested objects are skipped", func(t *testing.T) {
+		sl := newScanner()
+		body, _, ok := sl.scanJSON(`{"msg":"hi","nested":{"a":1},"after":"yes"}`)
+		if !ok {
+			t.Fatal("expected ok=true")
+		}
+		if body != "hi" {
+			t.Errorf("body = %q, want %q", body, "hi")
+		}
+		if _, exists := sl.extra["nested"]; exists {
+			t.Error("nested objects should be skipped")
+		}
+		if sl.extra["after"] != "yes" {
+			t.Errorf("extra[after] = %q, want %q", sl.extra["after"], "yes")
+		}
+	})
+
+	t.Run("reuses extra map across calls", func(t *testing.T) {
+		sl := newScanner()
+		sl.scanJSON(`{"msg":"first","aaa":"1"}`)
+		sl.scanJSON(`{"msg":"second","bbb":"2"}`)
+		if _, exists := sl.extra["aaa"]; exists {
+			t.Error("extra from first call should be cleared")
+		}
+		if sl.extra["bbb"] != "2" {
+			t.Errorf("extra[bbb] = %q, want %q", sl.extra["bbb"], "2")
 		}
 	})
 }
@@ -346,17 +389,17 @@ func TestProcessLineJSON(t *testing.T) {
 	if entry.Body != "processing step" {
 		t.Errorf("body = %q, want %q", entry.Body, "processing step")
 	}
-	if entry.Attributes["component"] != "provisioner" {
-		t.Errorf("attrs[component] = %q, want %q", entry.Attributes["component"], "provisioner")
+	if entry.Extra["component"] != "provisioner" {
+		t.Errorf("extra[component] = %q, want %q", entry.Extra["component"], "provisioner")
 	}
-	if entry.Attributes["cluster_id"] != "ZA8" {
-		t.Errorf("attrs[cluster_id] = %q, want %q", entry.Attributes["cluster_id"], "ZA8")
+	if entry.Extra["cluster_id"] != "ZA8" {
+		t.Errorf("extra[cluster_id] = %q, want %q", entry.Extra["cluster_id"], "ZA8")
 	}
 	if entry.Attributes["miren.sandbox"] != "sandbox/test-abc" {
 		t.Errorf("base attrs should be preserved: attrs[miren.sandbox] = %q", entry.Attributes["miren.sandbox"])
 	}
-	if _, hasTime := entry.Attributes["time"]; hasTime {
-		t.Error("time field should be stripped from attributes")
+	if _, hasTime := entry.Extra["time"]; hasTime {
+		t.Error("time field should be stripped from extra")
 	}
 }
 

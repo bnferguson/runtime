@@ -47,6 +47,7 @@ type LogEntry struct {
 	Stream     LogStream
 	TraceID    string
 	Attributes map[string]string
+	Extra      map[string]string
 	Body       string
 }
 
@@ -100,6 +101,12 @@ func (l *PersistentLogWriter) WriteEntry(entity string, le LogEntry) error {
 	// Add attributes as top-level fields, but never overwrite reserved fields
 	// that control log routing and identity.
 	for k, v := range le.Attributes {
+		if isReservedLogField(k) {
+			continue
+		}
+		logData[k] = v
+	}
+	for k, v := range le.Extra {
 		if isReservedLogField(k) {
 			continue
 		}

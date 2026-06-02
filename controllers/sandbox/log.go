@@ -3,9 +3,9 @@ package sandbox
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,6 +18,7 @@ type SandboxLogs struct {
 	log    *slog.Logger
 	entity string
 	attrs  map[string]string
+	extra  map[string]string
 	buf    bytes.Buffer
 	stream observability.LogStream
 	lw     observability.LogWriter
@@ -33,6 +34,7 @@ func NewSandboxLogs(
 		log:    log,
 		entity: entity,
 		attrs:  attrs,
+		extra:  make(map[string]string),
 		stream: observability.Stdout,
 		lw:     lw,
 	}
@@ -59,13 +61,6 @@ func (s *SandboxLogs) Write(p []byte) (n int, err error) {
 	}
 
 	return
-}
-
-var jsonLogSkipFields = map[string]bool{
-	"time":    true,
-	"level":   true,
-	"msg":     true,
-	"message": true,
 }
 
 var jsonLevelToStream = map[string]observability.LogStream{
@@ -95,20 +90,14 @@ func (s *SandboxLogs) processLine(line string) {
 		traceId = matches[1]
 	}
 
-	attrs := s.attrs
-	if body, extra, lvlStream, ok := parseStructuredJSON(line); ok {
-		extra["user.orig_msg"] = line
+	var extra map[string]string
+	if body, lvlStream, ok := s.scanJSON(line); ok {
+		s.extra["user.orig_msg"] = line
 		line = body
 		if lvlStream != "" {
 			stream = lvlStream
 		}
-		attrs = make(map[string]string)
-		for k, v := range s.attrs {
-			attrs[k] = v
-		}
-		for k, v := range extra {
-			attrs[k] = v
-		}
+		extra = s.extra
 	}
 
 	err := s.lw.WriteEntry(s.entity, observability.LogEntry{
@@ -116,57 +105,114 @@ func (s *SandboxLogs) processLine(line string) {
 		Stream:     stream,
 		Body:       line,
 		TraceID:    traceId,
-		Attributes: attrs,
+		Attributes: s.attrs,
+		Extra:      extra,
 	})
 	if err != nil {
 		s.log.Error("failed to write log entry", "error", err, "line", line)
 	}
 }
 
-// parseStructuredJSON detects structured JSON log lines and extracts fields.
-// Returns the message body, extra attributes, an optional stream override, and whether parsing succeeded.
-func parseStructuredJSON(line string) (string, map[string]string, observability.LogStream, bool) {
+// scanJSON uses the json tokenizer to extract structured fields from a JSON log
+// line directly into s.extra, avoiding a full unmarshal. Returns the message,
+// an optional stream override, and whether parsing succeeded.
+func (s *SandboxLogs) scanJSON(line string) (string, observability.LogStream, bool) {
 	if len(line) == 0 || line[0] != '{' {
-		return "", nil, "", false
+		return "", "", false
 	}
 
-	var fields map[string]any
-	if err := json.Unmarshal([]byte(line), &fields); err != nil {
-		return "", nil, "", false
+	dec := json.NewDecoder(strings.NewReader(line))
+
+	// Expect opening brace
+	t, err := dec.Token()
+	if err != nil || t != json.Delim('{') {
+		return "", "", false
 	}
 
-	msg, _ := fields["msg"].(string)
-	if msg == "" {
-		msg, _ = fields["message"].(string)
-	}
-	if msg == "" {
-		return "", nil, "", false
-	}
+	clear(s.extra)
 
+	var msg string
 	var stream observability.LogStream
-	if level, ok := fields["level"].(string); ok {
-		stream = jsonLevelToStream[level]
-	}
 
-	extra := make(map[string]string, len(fields))
-	for k, v := range fields {
-		if jsonLogSkipFields[k] {
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return "", "", false
+		}
+		key, ok := keyTok.(string)
+		if !ok {
+			return "", "", false
+		}
+
+		valTok, err := dec.Token()
+		if err != nil {
+			return "", "", false
+		}
+
+		// If value is a nested object or array, skip it
+		if delim, ok := valTok.(json.Delim); ok {
+			if !skipNestedJSON(dec, delim) {
+				return "", "", false
+			}
 			continue
 		}
-		switch val := v.(type) {
-		case string:
-			extra[k] = val
+
+		switch key {
+		case "msg", "message":
+			if v, ok := valTok.(string); ok {
+				msg = v
+			}
+		case "level":
+			if v, ok := valTok.(string); ok {
+				stream = jsonLevelToStream[v]
+			}
+		case "time":
+			// skip
 		default:
-			extra[k] = fmt.Sprintf("%v", v)
+			switch v := valTok.(type) {
+			case string:
+				s.extra[key] = v
+			case float64:
+				s.extra[key] = strconv.FormatFloat(v, 'f', -1, 64)
+			case bool:
+				s.extra[key] = strconv.FormatBool(v)
+			case nil:
+				// skip nulls
+			}
 		}
 	}
 
-	return msg, extra, stream, true
+	if msg == "" {
+		return "", "", false
+	}
+
+	return msg, stream, true
+}
+
+// skipNestedJSON consumes a balanced JSON object or array from the decoder.
+func skipNestedJSON(dec *json.Decoder, open json.Delim) bool {
+	depth := 1
+	for depth > 0 {
+		t, err := dec.Token()
+		if err != nil {
+			return false
+		}
+		if d, ok := t.(json.Delim); ok {
+			switch d {
+			case '{', '[':
+				depth++
+			case '}', ']':
+				depth--
+			}
+		}
+	}
+	return true
 }
 
 func (s *SandboxLogs) Stderr() *SandboxLogs {
 	x := *s
 	x.stream = observability.Stderr
+	x.extra = make(map[string]string)
 
 	return &x
 }
