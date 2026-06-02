@@ -1326,15 +1326,17 @@ func (l *Launcher) ensureServiceForPorts(ctx context.Context, app *core_v1alpha.
 		}
 	}
 
-	// Filter: only act on services with at least one non-HTTP port
-	hasNonHTTP := false
+	// A Service entity is needed when the service has non-HTTP ports (for
+	// cluster-IP load balancing) or when any port declares a NodePort (so the
+	// service controller can install nftables DNAT rules on every node).
+	needsService := false
 	for _, p := range ports {
-		if p.Type != "http" {
-			hasNonHTTP = true
+		if p.Type != "http" || p.NodePort != 0 {
+			needsService = true
 			break
 		}
 	}
-	if !hasNonHTTP {
+	if !needsService {
 		return "", nil
 	}
 

@@ -468,13 +468,6 @@ func TestSandbox(t *testing.T) {
 			resp.Body.Close()
 			return resp.StatusCode == http.StatusOK
 		}, 10*time.Second, 200*time.Millisecond, "HTTP server should become reachable")
-
-		resp, err := hc.Get("http://127.0.0.1:31001")
-		r.NoError(err)
-
-		defer resp.Body.Close()
-
-		r.Equal(http.StatusOK, resp.StatusCode)
 	})
 
 	t.Run("sets up host paths as volumes", func(t *testing.T) {
