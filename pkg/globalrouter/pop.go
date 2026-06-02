@@ -58,11 +58,12 @@ func NewPOPManager(clusterXID string, ingress *httpingress.Server, log *slog.Log
 // exist.
 func (m *POPManager) HandleConnectionRequest(ctx context.Context, req ConnectionRequest) error {
 	m.mu.Lock()
-	_, exists := m.conns[req.POPXID]
-	if exists {
-		m.mu.Unlock()
-		m.log.Debug("POP connection already exists", "pop_xid", req.POPXID)
-		return nil
+	existing, replacing := m.conns[req.POPXID]
+	if replacing {
+		// Cloud sent a new connection request for a POPXID we already
+		// have. The POP was likely recreated (new VM, same hostname).
+		// Cancel the old connection so servePOP exits, then replace it.
+		existing.cancel()
 	}
 
 	connCtx, cancel := context.WithCancel(context.Background())
@@ -72,6 +73,10 @@ func (m *POPManager) HandleConnectionRequest(ctx context.Context, req Connection
 	}
 	m.conns[req.POPXID] = pc
 	m.mu.Unlock()
+
+	if replacing {
+		m.log.Info("replacing stale POP connection", "pop_xid", req.POPXID)
+	}
 
 	m.log.Info("establishing connection to POP",
 		"pop_xid", req.POPXID,
@@ -90,7 +95,9 @@ func (m *POPManager) HandleConnectionRequest(ctx context.Context, req Connection
 func (m *POPManager) servePOP(ctx context.Context, pc *popConnection, cr ConnectionRequest) {
 	defer func() {
 		m.mu.Lock()
-		delete(m.conns, pc.popXID)
+		if m.conns[pc.popXID] == pc {
+			delete(m.conns, pc.popXID)
+		}
 		m.mu.Unlock()
 		m.log.Info("POP connection closed", "pop_xid", pc.popXID)
 	}()
