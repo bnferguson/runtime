@@ -437,7 +437,7 @@ func (e *EntityServer) WatchIndex(ctx context.Context, req *entityserver_v1alpha
 
 	send := args.Values()
 
-	ch, err := e.Store.WatchIndex(ctx, args.Index())
+	ch, err := e.Store.WatchIndex(ctx, args.Index(), args.FromRevision())
 	if err != nil {
 		return fmt.Errorf("failed to watch index: %w", err)
 	}
@@ -453,10 +453,38 @@ func (e *EntityServer) WatchIndex(ctx context.Context, req *entityserver_v1alpha
 
 			// Check if the watch was canceled or had an error
 			if watchevent.Canceled {
+				// A compacted start revision is recoverable: tell the client to
+				// re-list and resume from a fresh snapshot rather than erroring.
+				if watchevent.CompactRevision > 0 {
+					var op entityserver_v1alpha.EntityOp
+					op.SetOperation(int64(entityserver_v1alpha.EntityOperationCompacted))
+					op.SetRevision(watchevent.CompactRevision)
+					if _, err := send.Send(ctx, &op); err != nil {
+						if !errors.Is(err, context.Canceled) && !errors.Is(err, cond.ErrClosed{}) {
+							e.Log.Error("failed to send compacted signal", "error", err)
+						}
+					}
+					return nil
+				}
 				if err := watchevent.Err(); err != nil {
 					return fmt.Errorf("watch canceled with error: %w", err)
 				}
 				return fmt.Errorf("watch canceled")
+			}
+
+			// Progress notifications carry no events; forward the observed revision
+			// as a watermark so the client can advance its resume cursor while idle.
+			if len(watchevent.Events) == 0 {
+				var op entityserver_v1alpha.EntityOp
+				op.SetOperation(int64(entityserver_v1alpha.EntityOperationProgress))
+				op.SetRevision(watchevent.Header.Revision)
+				if _, err := send.Send(ctx, &op); err != nil {
+					if !errors.Is(err, context.Canceled) && !errors.Is(err, cond.ErrClosed{}) {
+						e.Log.Error("failed to send progress watermark", "error", err)
+					}
+					return nil
+				}
+				continue
 			}
 
 			for _, event := range watchevent.Events {
@@ -480,6 +508,9 @@ func (e *EntityServer) WatchIndex(ctx context.Context, req *entityserver_v1alpha
 
 				var op entityserver_v1alpha.EntityOp
 				op.SetOperation(int64(eventType))
+				// ModRevision is the revision of this change for both puts and
+				// deletes; the client uses it to advance its resume cursor.
+				op.SetRevision(event.Kv.ModRevision)
 
 				if read {
 					op.SetEntityId(string(event.Kv.Value))
@@ -547,8 +578,9 @@ func (e *EntityServer) List(ctx context.Context, req *entityserver_v1alpha.Entit
 	}
 
 	var (
-		ids []entity.Id
-		err error
+		ids     []entity.Id
+		listRev int64
+		err     error
 	)
 
 	index := args.Index()
@@ -563,7 +595,7 @@ func (e *EntityServer) List(ctx context.Context, req *entityserver_v1alpha.Entit
 
 		ids, err = e.Store.ListSessionEntities(ctx, data)
 	} else {
-		ids, err = e.Store.ListIndex(ctx, args.Index())
+		ids, listRev, err = e.Store.ListIndexRevision(ctx, args.Index())
 	}
 
 	if err != nil {
@@ -596,6 +628,7 @@ func (e *EntityServer) List(ctx context.Context, req *entityserver_v1alpha.Entit
 	}
 
 	req.Results().SetValues(ret)
+	req.Results().SetRevision(listRev)
 
 	return nil
 }

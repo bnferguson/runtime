@@ -28,6 +28,10 @@ type MockStore struct {
 	// Index watchers - maps index key (attr.CAS()) to list of channels to notify
 	indexWatchersMu sync.RWMutex
 	indexWatchers   map[string][]chan clientv3.WatchResponse
+
+	// WatchFromRevs records the fromRev argument of every WatchIndex call, in
+	// order, so tests can assert resume behavior.
+	WatchFromRevs []int64
 }
 
 var _ Store = &MockStore{}
@@ -313,7 +317,19 @@ func (m *MockStore) DeleteEntity(ctx context.Context, id Id) error {
 	return nil
 }
 
-func (m *MockStore) WatchIndex(ctx context.Context, attr Attr) (clientv3.WatchChan, error) {
+// WatchFromRevsCopy returns a snapshot of the fromRev arguments seen by
+// WatchIndex, for tests asserting resume behavior.
+func (m *MockStore) WatchFromRevsCopy() []int64 {
+	m.indexWatchersMu.Lock()
+	defer m.indexWatchersMu.Unlock()
+	return append([]int64(nil), m.WatchFromRevs...)
+}
+
+func (m *MockStore) WatchIndex(ctx context.Context, attr Attr, fromRev int64) (clientv3.WatchChan, error) {
+	m.indexWatchersMu.Lock()
+	m.WatchFromRevs = append(m.WatchFromRevs, fromRev)
+	m.indexWatchersMu.Unlock()
+
 	if m.OnWatchIndex != nil {
 		return m.OnWatchIndex(ctx, attr)
 	}
@@ -495,6 +511,27 @@ func (m *MockStore) ListIndex(ctx context.Context, attr Attr) ([]Id, error) {
 	}
 
 	return ids, nil
+}
+
+// ListIndexRevision returns the matching ids along with a revision. The mock
+// uses the highest entity revision currently in the store as a monotonic proxy
+// for the cluster revision, which is sufficient for resume-cursor tests.
+func (m *MockStore) ListIndexRevision(ctx context.Context, attr Attr) ([]Id, int64, error) {
+	ids, err := m.ListIndex(ctx, attr)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	m.mu.RLock()
+	var rev int64
+	for _, e := range m.Entities {
+		if r := e.GetRevision(); r > rev {
+			rev = r
+		}
+	}
+	m.mu.RUnlock()
+
+	return ids, rev, nil
 }
 
 func (m *MockStore) ListCollection(ctx context.Context, collection string) ([]Id, error) {

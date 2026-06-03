@@ -1156,7 +1156,7 @@ func (a *localActivator) watchSandboxes(ctx context.Context) {
 
 		a.log.Info("starting sandbox discovery watch")
 
-		_, err := a.eac.WatchIndex(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox), stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
+		_, err := a.eac.WatchIndex(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox), 0, stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
 			if op.IsDelete() {
 				// Entity was deleted - clean up from tracking
 				// The ID should still be available in the operation even without the entity
@@ -1924,7 +1924,7 @@ func (a *localActivator) watchPools(ctx context.Context) {
 
 		a.log.Info("starting pool watch")
 
-		_, err := a.eac.WatchIndex(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool), stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
+		_, err := a.eac.WatchIndex(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool), 0, stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
 			if op.IsDelete() {
 				// Pool was deleted - clean up all related cache entries
 				if op.HasEntityId() {

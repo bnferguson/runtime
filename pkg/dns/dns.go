@@ -451,7 +451,7 @@ func (s *Server) watchSandboxes(ctx context.Context) {
 		}
 
 		index := entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox)
-		_, err := s.entityClient.WatchIndex(ctx, index, stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
+		_, err := s.entityClient.WatchIndex(ctx, index, 0, stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
 			if op == nil {
 				return nil
 			}

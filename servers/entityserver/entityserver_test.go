@@ -216,7 +216,7 @@ func TestEntityServer_WatchIndex(t *testing.T) {
 
 	// Start watch in background
 	go func() {
-		_, err := sc.WatchIndex(ctx, index, stream.Callback(func(op *v1alpha.EntityOp) error {
+		_, err := sc.WatchIndex(ctx, index, 0, stream.Callback(func(op *v1alpha.EntityOp) error {
 			r.NotNil(op)
 			r.Equal(int64(v1alpha.EntityOperationCreate), op.Operation())
 			r.True(op.HasEntity())
@@ -364,7 +364,7 @@ func TestEntityServer_WatchIndex_DeleteIncludesEntity(t *testing.T) {
 
 	// Start watch in background
 	go func() {
-		_, err := sc.WatchIndex(ctx, index, stream.Callback(func(op *v1alpha.EntityOp) error {
+		_, err := sc.WatchIndex(ctx, index, 0, stream.Callback(func(op *v1alpha.EntityOp) error {
 			if op.Operation() == int64(v1alpha.EntityOperationDelete) {
 				deleteReceived <- op
 			}
@@ -499,7 +499,7 @@ func TestEntityServer_WatchIndex_DeleteIncludesEntity_Etcd(t *testing.T) {
 	watchDone := make(chan error, 1)
 
 	go func() {
-		_, err := sc.WatchIndex(ctx, index, stream.Callback(func(op *v1alpha.EntityOp) error {
+		_, err := sc.WatchIndex(ctx, index, 0, stream.Callback(func(op *v1alpha.EntityOp) error {
 			if op.Operation() == int64(v1alpha.EntityOperationDelete) {
 				deleteReceived <- op
 			}
