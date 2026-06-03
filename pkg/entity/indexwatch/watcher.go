@@ -296,11 +296,16 @@ func (w *Watcher) run(ctx context.Context) {
 			backoff = w.opts.MinBackoff
 			continue
 		}
+		// A transient error or a clean stream end both drop us here; back off
+		// before resuming either way so an unexpected run of clean ends can't
+		// become a tight reconnect loop.
 		if err != nil {
 			w.log.Error("watch disconnected, will resume", "error", err, "cursor", w.cursor, "backoff", backoff)
-			if !w.sleep(ctx, &backoff) {
-				return
-			}
+		} else {
+			w.log.Info("watch ended cleanly, will resume", "cursor", w.cursor, "backoff", backoff)
+		}
+		if !w.sleep(ctx, &backoff) {
+			return
 		}
 	}
 }
