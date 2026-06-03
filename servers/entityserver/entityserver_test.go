@@ -9,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.etcd.io/etcd/api/v3/etcdserverpb"
+	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	v1alpha "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/entity"
@@ -772,4 +774,154 @@ func TestEntityServer_List_NestedIndexCleanup(t *testing.T) {
 	results = resp.Values()
 	assert.Len(t, results, 1, "Should find only one entity after deletion")
 	assert.Equal(t, entity2.Id().String(), results[0].Id(), "Remaining entity should be entity2")
+}
+
+// watchIndexServer wires an EntityAccessClient to an in-process EntityServer
+// whose store delivers raw watch responses on the returned channel, so tests can
+// drive progress notifications, the initial Created response, and compactions
+// directly.
+func watchIndexServer(t *testing.T) (*entity.MockStore, v1alpha.EntityAccessClient, chan clientv3.WatchResponse) {
+	t.Helper()
+	store := entity.NewMockStore()
+	watchCh := make(chan clientv3.WatchResponse, 8)
+	store.OnWatchIndex = func(ctx context.Context, attr entity.Attr) (clientv3.WatchChan, error) {
+		return watchCh, nil
+	}
+	server := &EntityServer{Log: slog.Default(), Store: store}
+	sc := v1alpha.EntityAccessClient{
+		Client: rpc.LocalClient(v1alpha.AdaptEntityAccess(server)),
+	}
+	return store, sc, watchCh
+}
+
+func putResponse(id string, rev int64) clientv3.WatchResponse {
+	return clientv3.WatchResponse{Events: []*clientv3.Event{{
+		Type: clientv3.EventTypePut,
+		Kv: &mvccpb.KeyValue{
+			Key:            []byte("k/" + id),
+			Value:          []byte(id),
+			CreateRevision: rev,
+			ModRevision:    rev,
+		},
+	}}}
+}
+
+// TestEntityServer_WatchIndex_LegacyClientIgnoresProgress proves a from-now
+// (from_revision==0) client never receives a Progress op, even though the server
+// now sets WithProgressNotify on the underlying watch. Legacy consumers predate
+// the Progress op type and dereference op.Entity() for any non-delete op, so
+// forwarding a watermark to them is a crash (this is bug 1a).
+func TestEntityServer_WatchIndex_LegacyClientIgnoresProgress(t *testing.T) {
+	r := require.New(t)
+
+	store, sc, watchCh := watchIndexServer(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	index := entity.Keyword(entity.Ident, "test/index")
+
+	// The entity must exist so the server can read it when the put arrives.
+	_, err := store.CreateEntity(ctx, entity.New(entity.Ref(entity.DBId, "widget-1"), index))
+	r.NoError(err)
+
+	gotOps := make(chan *v1alpha.EntityOp, 16)
+	go func() {
+		_, _ = sc.WatchIndex(ctx, index, 0, stream.Callback(func(op *v1alpha.EntityOp) error {
+			gotOps <- op
+			return nil
+		}))
+	}()
+
+	// An idle progress watermark followed by a real change. The legacy client
+	// must see only the change.
+	watchCh <- clientv3.WatchResponse{Header: etcdserverpb.ResponseHeader{Revision: 50}}
+	watchCh <- putResponse("widget-1", 60)
+
+	select {
+	case op := <-gotOps:
+		r.Equal(int64(v1alpha.EntityOperationCreate), op.Operation(),
+			"legacy client should receive the create, not a progress watermark")
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for op")
+	}
+}
+
+// TestEntityServer_WatchIndex_ProgressForwardedWhenResuming documents the
+// intended positive behavior the fix must preserve: a client resuming from a
+// revision (from_revision>0) does receive progress watermarks so it can advance
+// its cursor while idle.
+func TestEntityServer_WatchIndex_ProgressForwardedWhenResuming(t *testing.T) {
+	r := require.New(t)
+
+	_, sc, watchCh := watchIndexServer(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	index := entity.Keyword(entity.Ident, "test/index")
+
+	gotOps := make(chan *v1alpha.EntityOp, 16)
+	go func() {
+		_, _ = sc.WatchIndex(ctx, index, 5, stream.Callback(func(op *v1alpha.EntityOp) error {
+			gotOps <- op
+			return nil
+		}))
+	}()
+
+	watchCh <- clientv3.WatchResponse{Header: etcdserverpb.ResponseHeader{Revision: 50}}
+
+	select {
+	case op := <-gotOps:
+		r.Equal(int64(v1alpha.EntityOperationProgress), op.Operation(),
+			"resuming client should receive the progress watermark")
+		r.Equal(int64(50), op.Revision())
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for op")
+	}
+}
+
+// TestEntityServer_WatchIndex_CreatedResponseNotProgress proves the initial
+// etcd Created response (empty events, Created=true) is NOT forwarded as a
+// progress watermark. Its header revision is the current store revision, but it
+// arrives BEFORE the historical backlog replays — forwarding it would advance a
+// resuming client's cursor past events it has not yet seen, re-opening the very
+// gap this abstraction closes (bug 1b). etcd's own IsProgressNotify() excludes
+// Created for exactly this reason.
+func TestEntityServer_WatchIndex_CreatedResponseNotProgress(t *testing.T) {
+	r := require.New(t)
+
+	store, sc, watchCh := watchIndexServer(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	index := entity.Keyword(entity.Ident, "test/index")
+
+	_, err := store.CreateEntity(ctx, entity.New(entity.Ref(entity.DBId, "widget-1"), index))
+	r.NoError(err)
+
+	gotOps := make(chan *v1alpha.EntityOp, 16)
+	go func() {
+		// A resuming client (from_revision>0) is the one that would be harmed by a
+		// spurious progress watermark, so assert against it directly.
+		_, _ = sc.WatchIndex(ctx, index, 5, stream.Callback(func(op *v1alpha.EntityOp) error {
+			gotOps <- op
+			return nil
+		}))
+	}()
+
+	// The Created confirmation carries the current revision but no backlog yet.
+	watchCh <- clientv3.WatchResponse{Created: true, Header: etcdserverpb.ResponseHeader{Revision: 100}}
+	// Then the first replayed change.
+	watchCh <- putResponse("widget-1", 6)
+
+	select {
+	case op := <-gotOps:
+		r.Equal(int64(v1alpha.EntityOperationCreate), op.Operation(),
+			"Created response must not be forwarded as a progress watermark")
+		r.Equal(int64(6), op.Revision())
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for op")
+	}
 }

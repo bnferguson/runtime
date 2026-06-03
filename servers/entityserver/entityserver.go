@@ -437,7 +437,14 @@ func (e *EntityServer) WatchIndex(ctx context.Context, req *entityserver_v1alpha
 
 	send := args.Values()
 
-	ch, err := e.Store.WatchIndex(ctx, args.Index(), args.FromRevision())
+	// Progress watermarks and compaction signals are only meaningful to a client
+	// that is resuming from a revision. A from-now client (fromRev==0) predates
+	// these op types and can never fall behind the compaction point, so we never
+	// forward them to it — preserving backward-compatible behavior for callers
+	// that aren't revision-aware (e.g. the legacy activator/controller watches).
+	fromRev := args.FromRevision()
+
+	ch, err := e.Store.WatchIndex(ctx, args.Index(), fromRev)
 	if err != nil {
 		return fmt.Errorf("failed to watch index: %w", err)
 	}
@@ -453,9 +460,11 @@ func (e *EntityServer) WatchIndex(ctx context.Context, req *entityserver_v1alpha
 
 			// Check if the watch was canceled or had an error
 			if watchevent.Canceled {
-				// A compacted start revision is recoverable: tell the client to
-				// re-list and resume from a fresh snapshot rather than erroring.
-				if watchevent.CompactRevision > 0 {
+				// A compacted start revision is recoverable for a resuming client:
+				// tell it to re-list and resume from a fresh snapshot rather than
+				// erroring. A from-now client can never fall behind the compaction
+				// point, so fall through to the legacy error path for it.
+				if watchevent.CompactRevision > 0 && fromRev > 0 {
 					var op entityserver_v1alpha.EntityOp
 					op.SetOperation(int64(entityserver_v1alpha.EntityOperationCompacted))
 					op.SetRevision(watchevent.CompactRevision)
@@ -473,16 +482,22 @@ func (e *EntityServer) WatchIndex(ctx context.Context, req *entityserver_v1alpha
 			}
 
 			// Progress notifications carry no events; forward the observed revision
-			// as a watermark so the client can advance its resume cursor while idle.
-			if len(watchevent.Events) == 0 {
-				var op entityserver_v1alpha.EntityOp
-				op.SetOperation(int64(entityserver_v1alpha.EntityOperationProgress))
-				op.SetRevision(watchevent.Header.Revision)
-				if _, err := send.Send(ctx, &op); err != nil {
-					if !errors.Is(err, context.Canceled) && !errors.Is(err, cond.ErrClosed{}) {
-						e.Log.Error("failed to send progress watermark", "error", err)
+			// as a watermark so a resuming client can advance its cursor while idle.
+			// IsProgressNotify deliberately excludes etcd's initial Created
+			// confirmation: that response reports the current revision but arrives
+			// before the historical backlog replays, so forwarding it would advance
+			// the cursor past events the client hasn't seen yet.
+			if watchevent.IsProgressNotify() {
+				if fromRev > 0 {
+					var op entityserver_v1alpha.EntityOp
+					op.SetOperation(int64(entityserver_v1alpha.EntityOperationProgress))
+					op.SetRevision(watchevent.Header.Revision)
+					if _, err := send.Send(ctx, &op); err != nil {
+						if !errors.Is(err, context.Canceled) && !errors.Is(err, cond.ErrClosed{}) {
+							e.Log.Error("failed to send progress watermark", "error", err)
+						}
+						return nil
 					}
-					return nil
 				}
 				continue
 			}

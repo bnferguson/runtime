@@ -330,6 +330,50 @@ func TestWatcher_ProgressAdvancesCursor(t *testing.T) {
 	r.Equal([]int64{1, 51}, store.WatchFromRevsCopy(), "resume should start at progress revision + 1")
 }
 
+// TestWatcher_CreatedResponseDoesNotAdvanceCursor verifies that etcd's initial
+// Created confirmation (empty events, Created=true) does NOT advance the resume
+// cursor. The Created header carries the current store revision but arrives
+// before the historical backlog replays; advancing the cursor to it and then
+// disconnecting would skip the un-replayed backlog on resume, re-opening the gap
+// the watcher exists to prevent (bug 1b).
+func TestWatcher_CreatedResponseDoesNotAdvanceCursor(t *testing.T) {
+	r := require.New(t)
+
+	store := entity.NewMockStore()
+	chans := gatedWatch(store)
+	sc := newTestClient(store)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	w := indexwatch.New(sc, testIndex(), fastOpts())
+	r.NoError(w.Start(ctx))
+	defer w.Stop()
+
+	// Empty initial snapshot at revision 0 → first watch resumes from 1.
+	r.Equal(indexwatch.EventSync, recv(t, w.Updates(), 5*time.Second).Type)
+
+	ch1 := nextChan(t, chans, 5*time.Second)
+	// The Created confirmation reports the current revision (100) but no backlog.
+	ch1 <- clientv3.WatchResponse{Created: true, Header: etcdserverpb.ResponseHeader{Revision: 100}}
+	// Disconnect before any real event arrives.
+	close(ch1)
+
+	// Resume must start from cursor+1 = 1 (unchanged), NOT 101. If the Created
+	// response had advanced the cursor to 100, events 1..100 would be lost.
+	ch2 := nextChan(t, chans, 5*time.Second)
+	_, err := store.CreateEntity(ctx, makeEntity("Z"))
+	r.NoError(err)
+	ch2 <- putEvent("Z", 60, true)
+
+	ev := recv(t, w.Updates(), 5*time.Second)
+	r.Equal(indexwatch.EventAdded, ev.Type)
+	r.Equal(entity.Id("Z"), ev.Id)
+
+	r.Equal([]int64{1, 1}, store.WatchFromRevsCopy(),
+		"Created response must not advance the cursor; resume should still start at 1")
+}
+
 // TestWatcher_BlockingBackpressure verifies a slow consumer never loses live
 // events with a buffer of 1: the watcher blocks rather than dropping.
 func TestWatcher_BlockingBackpressure(t *testing.T) {
