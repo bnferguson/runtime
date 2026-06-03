@@ -122,6 +122,7 @@ func (s *SandboxLogs) scanJSON(line string) (string, observability.LogStream, bo
 	}
 
 	dec := json.NewDecoder(strings.NewReader(line))
+	dec.UseNumber()
 
 	// Expect opening brace
 	t, err := dec.Token()
@@ -172,14 +173,28 @@ func (s *SandboxLogs) scanJSON(line string) (string, observability.LogStream, bo
 			switch v := valTok.(type) {
 			case string:
 				s.extra[key] = v
-			case float64:
-				s.extra[key] = strconv.FormatFloat(v, 'f', -1, 64)
+			case json.Number:
+				s.extra[key] = v.String()
 			case bool:
 				s.extra[key] = strconv.FormatBool(v)
 			case nil:
 				// skip nulls
 			}
 		}
+	}
+
+	// Consume closing brace
+	closeTok, err := dec.Token()
+	if err != nil || closeTok != json.Delim('}') {
+		return "", "", false
+	}
+
+	// Reject if there's trailing content after the JSON object
+	if dec.More() {
+		return "", "", false
+	}
+	if _, err := dec.Token(); err == nil {
+		return "", "", false
 	}
 
 	if msg == "" {

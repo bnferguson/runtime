@@ -728,12 +728,15 @@ func TestLogTarget_QueryWithoutFilter(t *testing.T) {
 	query := target.Query()
 	require.Contains(t, query, "sandbox:")
 
-	// With a filter, the query should be longer
+	// With a filter, the query should include both sandbox selector and filter
 	targetWithFilter := observability.LogTarget{
 		SandboxID: "sandbox/test",
 		Filter:    "error",
 	}
-	require.Contains(t, targetWithFilter.Query(), "error")
+	filteredQuery := targetWithFilter.Query()
+	require.Contains(t, filteredQuery, "sandbox:")
+	require.Contains(t, filteredQuery, "sandbox/test")
+	require.Contains(t, filteredQuery, "error")
 }
 
 func TestStreamLogChunks_InvalidFilterRegex(t *testing.T) {

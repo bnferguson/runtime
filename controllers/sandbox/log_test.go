@@ -342,6 +342,20 @@ func TestScanJSON(t *testing.T) {
 		}
 	})
 
+	t.Run("large numbers preserve original literal", func(t *testing.T) {
+		sl := newScanner()
+		_, _, ok := sl.scanJSON(`{"msg":"hi","big":1000000,"id":9007199254740993}`)
+		if !ok {
+			t.Fatal("expected ok=true")
+		}
+		if sl.extra["big"] != "1000000" {
+			t.Errorf("extra[big] = %q, want %q", sl.extra["big"], "1000000")
+		}
+		if sl.extra["id"] != "9007199254740993" {
+			t.Errorf("extra[id] = %q, want %q", sl.extra["id"], "9007199254740993")
+		}
+	})
+
 	t.Run("nested objects are skipped", func(t *testing.T) {
 		sl := newScanner()
 		body, _, ok := sl.scanJSON(`{"msg":"hi","nested":{"a":1},"after":"yes"}`)
@@ -356,6 +370,14 @@ func TestScanJSON(t *testing.T) {
 		}
 		if sl.extra["after"] != "yes" {
 			t.Errorf("extra[after] = %q, want %q", sl.extra["after"], "yes")
+		}
+	})
+
+	t.Run("rejects trailing content after JSON object", func(t *testing.T) {
+		sl := newScanner()
+		_, _, ok := sl.scanJSON(`{"msg":"ok"} trailing`)
+		if ok {
+			t.Error("expected ok=false for JSON with trailing content")
 		}
 	})
 
