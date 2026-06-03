@@ -94,6 +94,7 @@ func (m *POPManager) HandleConnectionRequest(ctx context.Context, req Connection
 //  3. Serve incoming HTTP/3 requests on connection 2
 func (m *POPManager) servePOP(ctx context.Context, pc *popConnection, cr ConnectionRequest) {
 	defer func() {
+		pc.cancel()
 		m.mu.Lock()
 		if m.conns[pc.popXID] == pc {
 			delete(m.conns, pc.popXID)
