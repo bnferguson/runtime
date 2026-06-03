@@ -292,22 +292,10 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 		return a.waitForSandbox(ctx, ver, service, false)
 	}
 
-	// Ephemeral pools must never scale beyond 1 instance — preview deploys
-	// are short-lived and are meant for inspection, not traffic. If the cached
-	// pool is ephemeral, wait for the existing sandbox instead of incrementing.
-	a.mu.RLock()
-	state, statePresent := a.pools[key]
-	isEphemeral := statePresent && !state.inProgress && state.pool != nil && state.pool.Ephemeral
-	a.mu.RUnlock()
-	if isEphemeral {
-		a.log.Info("ephemeral pool — not scaling, waiting for capacity",
-			"app", ver.App,
-			"version", ver.Version,
-			"service", service)
-		return a.waitForSandbox(ctx, ver, service, false)
-	}
-
-	// No RUNNING or PENDING sandboxes - need to scale up via pool
+	// No RUNNING or PENDING sandboxes - need to scale up via pool.
+	// Ephemeral preview deploys are capped at one instance by EphemeralStrategy
+	// (MaxInstances=1), so requestPoolCapacity won't scale them past their single
+	// sandbox — it returns the at-cap pool and the caller waits for it.
 	a.log.Info("no available sandboxes, requesting capacity from pool",
 		"app", ver.App,
 		"version", ver.Version,
@@ -553,6 +541,46 @@ func (a *localActivator) waitForSandbox(ctx context.Context, ver *core_v1alpha.A
 	}
 }
 
+// registerVersionPoolLocked records the version->pool mapping and ensures an
+// (initially empty) poolSandboxes entry exists for the pool. The caller must
+// hold a.mu for writing.
+//
+// It is idempotent: existing entries are left untouched, since the watcher and
+// recovery own the contents of poolSandboxes[*].sandboxes. It deliberately does
+// not touch a.pools — each caller sets that with its own entity revision.
+//
+// This consolidates the bookkeeping that requestPoolCapacity must do whenever it
+// resolves a pool for a version. Without it, the on-demand creation path (used by
+// ephemeral versions, which the DeploymentLauncher never pre-creates a pool for)
+// would seed a.pools but not a.versions, leaving the version untracked until the
+// watcher happened to discover a sandbox — so AcquireLease would report
+// "tracked: false" and never hand out a lease (MIR-1198).
+func (a *localActivator) registerVersionPoolLocked(
+	key verKey,
+	ver *core_v1alpha.AppVersion,
+	pool *compute_v1alpha.SandboxPool,
+	service string,
+	strategy concurrency.ConcurrencyStrategy,
+) {
+	if _, exists := a.versions[key]; !exists {
+		a.versions[key] = &versionPoolRef{
+			ver:      ver,
+			poolID:   pool.ID,
+			service:  service,
+			strategy: strategy,
+		}
+	}
+
+	if _, ok := a.poolSandboxes[pool.ID]; !ok {
+		a.poolSandboxes[pool.ID] = &poolSandboxes{
+			pool:      pool,
+			sandboxes: []*sandbox{},
+			service:   service,
+			strategy:  strategy,
+		}
+	}
+}
+
 // requestPoolCapacity finds the SandboxPool created by DeploymentLauncher and increments DesiredInstances.
 // It uses retry logic with exponential backoff to handle the race where Activator receives
 // a request before DeploymentLauncher has finished creating the pool.
@@ -602,23 +630,22 @@ func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1al
 				continue
 			}
 
+			// state.pool is now a real (non-sentinel) cached pool. Ensure the
+			// version->pool mapping exists before we increment and return: a pool
+			// created on-demand seeds a.pools but not a.versions, so without this
+			// a cached ephemeral pool would stay untracked and AcquireLease would
+			// never resolve its sandbox (MIR-1198). Seeding here also self-heals
+			// pools created before this fix shipped, on the next lease request.
+			a.mu.Lock()
+			a.registerVersionPoolLocked(key, ver, state.pool, service, strategy)
+			a.mu.Unlock()
+
 			// Check if pool is in crash cooldown before attempting to increment
 			if !state.pool.CooldownUntil.IsZero() && time.Now().Before(state.pool.CooldownUntil) {
 				return state.pool, fmt.Errorf("%w: application in crash cooldown until %s (consecutive crashes: %d)",
 					ErrSandboxDiedEarly,
 					state.pool.CooldownUntil.Format(time.RFC3339),
 					state.pool.ConsecutiveCrashCount)
-			}
-
-			// Ephemeral pools never scale beyond 1 instance. AcquireLease should
-			// already short-circuit this path, but guard here as well so any
-			// future caller can't accidentally scale a preview deploy.
-			if state.pool.Ephemeral && state.pool.DesiredInstances >= 1 {
-				a.log.Debug("ephemeral pool — refusing to increment capacity",
-					"pool", state.pool.ID,
-					"service", service,
-					"desired_instances", state.pool.DesiredInstances)
-				return state.pool, nil
 			}
 
 			// Update existing pool - increment DesiredInstances with optimistic concurrency control
@@ -871,21 +898,7 @@ func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1al
 				inProgress: false,
 			}
 
-			a.versions[key] = &versionPoolRef{
-				ver:      ver,
-				poolID:   poolID,
-				service:  service,
-				strategy: strategy,
-			}
-
-			if _, ok := a.poolSandboxes[poolID]; !ok {
-				a.poolSandboxes[poolID] = &poolSandboxes{
-					pool:      foundPool,
-					sandboxes: []*sandbox{},
-					service:   service,
-					strategy:  strategy,
-				}
-			}
+			a.registerVersionPoolLocked(key, ver, foundPool, service, strategy)
 
 			// If the pool is already at its strategy's cap, there's nothing
 			// to patch (e.g. ephemeral pools seed at DesiredInstances=1 with
@@ -1008,6 +1021,7 @@ func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1al
 					pool:     foundPool.pool,
 					revision: foundPool.revision,
 				}
+				a.registerVersionPoolLocked(key, ver, foundPool.pool, service, strategy)
 			}
 			a.mu.Unlock()
 			close(sentinel.done)
@@ -1142,10 +1156,62 @@ func (a *localActivator) Invalidations() <-chan SandboxInvalidation {
 	return a.invalidationCh
 }
 
+// resyncFromStore re-reads pools and sandboxes from the entity store and adopts
+// any that the in-memory caches are missing. WatchIndex only streams new ops from
+// the current revision — it does not replay existing entities on (re)connect — so a
+// watch reconnect (compaction, leader change, network blip) silently drops every
+// event during the gap. Without a re-sync those changes are lost until the process
+// restarts, which is how an ephemeral version ends up permanently untracked even
+// though a healthy sandbox exists for it (MIR-1198). recoverPools and
+// recoverSandboxes are additive (create-only / dedupe by sandbox ID) and lock per
+// item, so this is safe to run repeatedly against live state and from either watch.
+//
+// Both watchSandboxes and watchPools call this on their own reconnect, so a single
+// etcd blip (which usually trips both watches at once) runs the reconcile twice,
+// roughly concurrently. That's intentional: the redundant pass is idempotent and
+// bounded, and accepting it is cheaper than adding cross-goroutine debounce state
+// to coordinate the two watchers.
+func (a *localActivator) resyncFromStore(ctx context.Context) {
+	a.log.Info("re-syncing activator state from store after watch reconnect")
+	if err := a.recoverPools(ctx); err != nil {
+		a.log.Error("failed to re-sync pools after watch reconnect", "error", err)
+	}
+	if err := a.recoverSandboxes(ctx); err != nil {
+		a.log.Error("failed to re-sync sandboxes after watch reconnect", "error", err)
+	}
+
+	// Recovery adopts sandboxes by appending to poolSandboxes directly, bypassing
+	// the per-sandbox notify the watcher does, so wake parked waiters to re-check
+	// rather than making them wait out the 60s fallback ticker.
+	a.wakeAllWaiters()
+}
+
+// wakeAllWaiters signals every parked waitForSandbox goroutine to re-check its
+// pool. resyncFromStore calls this after a reconnect reconcile: recoverSandboxes
+// adopts sandboxes by appending to poolSandboxes directly, bypassing the
+// per-sandbox notify the watcher does (see watchSandboxes), so without this an
+// already-parked waiter wouldn't see an adopted sandbox until the 60s fallback
+// ticker — and would log a misleading "channel notification may have failed" when
+// it finally woke. A spurious wake is harmless: the waiter re-scans and re-parks
+// if its sandbox still isn't there.
+func (a *localActivator) wakeAllWaiters() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, chans := range a.newSandboxChans {
+		for _, ch := range chans {
+			select {
+			case ch <- struct{}{}:
+			default:
+			}
+		}
+	}
+}
+
 func (a *localActivator) watchSandboxes(ctx context.Context) {
 	// Watch for sandbox changes: update status AND discover new RUNNING sandboxes
 	// This is the single source of sandbox discovery for the activator
 	// Retry loop to handle transient failures
+	firstWatch := true
 	for {
 		select {
 		case <-ctx.Done():
@@ -1153,6 +1219,13 @@ func (a *localActivator) watchSandboxes(ctx context.Context) {
 			return
 		default:
 		}
+
+		// NewLocalActivator already ran the initial recovery, so only re-sync on
+		// reconnects (see resyncFromStore for why this is necessary).
+		if !firstWatch {
+			a.resyncFromStore(ctx)
+		}
+		firstWatch = false
 
 		a.log.Info("starting sandbox discovery watch")
 
@@ -1636,12 +1709,27 @@ func (a *localActivator) recoverPools(ctx context.Context) error {
 
 		a.mu.Lock()
 
-		// Cache pool state (for sentinel pattern in requestPoolCapacity)
+		// Cache pool state (for sentinel pattern in requestPoolCapacity).
+		// Create-only: at startup the map is empty so this seeds every pool, but
+		// when recoverPools runs again as a live re-sync (watch reconnect) we must
+		// not clobber an in-progress creation sentinel or a freshly-patched
+		// revision held by a concurrent requestPoolCapacity. watchPools keeps
+		// existing entries' DesiredInstances fresh; here we only fill gaps.
+		//
+		// Deliberately we do NOT refresh an already-cached entry here, even though
+		// the missed-event window is exactly when its DesiredInstances/revision
+		// could have gone stale. A refresh is unsafe: this re-sync's store read can
+		// itself be older than an in-memory revision a concurrent requestPoolCapacity
+		// just patched, so overwriting could move the cache backward. The stale case
+		// self-heals instead — the next increment hits a revision conflict on Patch,
+		// clears the entry, and re-reads (see the ErrConflict path above).
 		key := verKey{versionID.String(), pool.Service}
-		a.pools[key] = &poolState{
-			pool:       &pool,
-			revision:   ent.Revision(),
-			inProgress: false,
+		if _, ok := a.pools[key]; !ok {
+			a.pools[key] = &poolState{
+				pool:       &pool,
+				revision:   ent.Revision(),
+				inProgress: false,
+			}
 		}
 
 		// Initialize empty poolSandboxes entry (sandboxes will be added by recoverSandboxes)
@@ -1914,6 +2002,7 @@ func (a *localActivator) removePoolFromTracking(poolID entity.Id) {
 // watchPools watches for pool entity changes and keeps the in-memory cache in sync.
 // Handles deletions (cleanup stale entries) and updates (refresh DesiredInstances, etc.).
 func (a *localActivator) watchPools(ctx context.Context) {
+	firstWatch := true
 	for {
 		select {
 		case <-ctx.Done():
@@ -1921,6 +2010,14 @@ func (a *localActivator) watchPools(ctx context.Context) {
 			return
 		default:
 		}
+
+		// Like watchSandboxes, the pool watch streams only new ops from the current
+		// revision, so re-sync from the store on reconnect to recover pool/version
+		// mappings missed while the watch was down (see resyncFromStore).
+		if !firstWatch {
+			a.resyncFromStore(ctx)
+		}
+		firstWatch = false
 
 		a.log.Info("starting pool watch")
 
