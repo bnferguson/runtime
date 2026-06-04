@@ -396,6 +396,15 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 					}
 				}
 			}
+
+			// Re-register with token refresher so tokens keep getting renewed
+			if c.tokenRefresher != nil {
+				appName := c.resolveAppName(ctx, &sb)
+				tokenPath := c.sandboxPath(&sb, "identity-token")
+				c.tokenRefresher.register(sb.ID.String(), tokenPath, appName)
+				c.Log.Debug("re-registered sandbox for token refresh",
+					"sandbox_id", sb.ID, "app", appName)
+			}
 		}
 	}
 
@@ -474,6 +483,13 @@ func (c *SandboxController) Init(ctx context.Context) error {
 		return err
 	}
 
+	// Initialize token refresh state before reconcile so surviving sandboxes
+	// can be re-registered during boot reconciliation.
+	if c.WorkloadIssuer != nil {
+		c.tokenRefresher = newTokenRefresher()
+		c.tokenSecrets = newTokenSecretRegistry()
+	}
+
 	// Reconcile sandboxes after containerd restart
 	// This must happen after bridge setup but before starting normal operations
 	err = c.reconcileSandboxesOnBoot(ctx)
@@ -512,9 +528,8 @@ func (c *SandboxController) Init(ctx context.Context) error {
 	c.imageWatchdog.Start(c.topCtx)
 
 	// Start workload identity token refresh loop and token request server
+	// (tokenRefresher and tokenSecrets were created earlier, before reconcile)
 	if c.WorkloadIssuer != nil {
-		c.tokenRefresher = newTokenRefresher()
-		c.tokenSecrets = newTokenSecretRegistry()
 		go c.runTokenRefresh(c.topCtx)
 		go c.startTokenServer(c.topCtx)
 	}
