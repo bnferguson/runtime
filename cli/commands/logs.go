@@ -29,7 +29,7 @@ func buildFilterWithService(userFilter, service string) string {
 	if service == "" {
 		return userFilter
 	}
-	serviceFilter := fmt.Sprintf("service:%q", service)
+	serviceFilter := fmt.Sprintf("(service:%q OR miren.service:%q)", service, service)
 	if userFilter == "" {
 		return serviceFilter
 	}
@@ -313,13 +313,19 @@ func printLogEntryJSON(ctx *Context, l *app_v1alpha.LogEntry) {
 
 func printLogEntry(ctx *Context, l *app_v1alpha.LogEntry) {
 	prefix := ""
-	if l.HasSource() && l.Source() != "" {
+	if l.HasAttributes() {
+		if shortID, ok := l.Attributes()["miren.short_id"]; ok && shortID != "" {
+			prefix = "[" + shortID + "] "
+		}
+	}
+	if prefix == "" && l.HasSource() && l.Source() != "" {
 		source := l.Source()
 		if len(source) > 12 {
 			source = source[:3] + "…" + source[len(source)-8:]
 		}
 		prefix = "[" + source + "] "
 	}
+
 	attrs := ""
 	if l.HasAttributes() {
 		attrs = formatAttributes(l.Attributes())
@@ -332,13 +338,23 @@ func printLogEntry(ctx *Context, l *app_v1alpha.LogEntry) {
 		attrs)
 }
 
+var hiddenAttributes = map[string]bool{
+	"source": true,
+}
+
 func formatAttributes(m map[string]string) string {
 	if len(m) == 0 {
 		return ""
 	}
 	keys := make([]string, 0, len(m))
 	for k := range m {
+		if hiddenAttributes[k] || strings.HasPrefix(k, "miren.") {
+			continue
+		}
 		keys = append(keys, k)
+	}
+	if len(keys) == 0 {
+		return ""
 	}
 	slices.Sort(keys)
 

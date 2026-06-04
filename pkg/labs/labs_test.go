@@ -73,16 +73,16 @@ func TestAllKeywordEnablesAllFeatures(t *testing.T) {
 func TestAllKeywordWithExclusion(t *testing.T) {
 	Reset()
 
-	Init(nil, []string{"all", "-addons"})
+	Init(nil, []string{"all", "-adminapi"})
 
 	for _, name := range AllFeatures() {
-		if name == FeatureAddons {
+		if name == FeatureAdminAPI {
 			if IsEnabled(name) {
-				t.Error("Addons should be disabled after 'all,-addons'")
+				t.Error("AdminAPI should be disabled after 'all,-adminapi'")
 			}
 		} else {
 			if !IsEnabled(name) {
-				t.Errorf("Feature %q should be enabled after 'all,-addons'", name)
+				t.Errorf("Feature %q should be enabled after 'all,-adminapi'", name)
 			}
 		}
 	}

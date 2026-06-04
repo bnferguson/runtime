@@ -13,7 +13,6 @@ const (
 	FeatureGlobalRouter       = "globalrouter"
 	FeatureDistributedRunners = "distributedrunners"
 	FeatureAdminAPI           = "adminapi"
-	FeatureAddons             = "addons"
 	FeatureSagas              = "sagas"
 )
 
@@ -23,7 +22,6 @@ func AllFeatures() []string {
 		FeatureGlobalRouter,
 		FeatureDistributedRunners,
 		FeatureAdminAPI,
-		FeatureAddons,
 		FeatureSagas,
 	}
 }
@@ -34,7 +32,6 @@ func FeatureDescriptions() map[string]string {
 		FeatureGlobalRouter:       "Use global NAT traversal router for connectivity",
 		FeatureDistributedRunners: "Schedule jobs across multiple runner nodes",
 		FeatureAdminAPI:           "Enable the admin API for application management functions",
-		FeatureAddons:             "Enable the addon system for managed backing services",
 		FeatureSagas:              "Use saga-based crash-recoverable workflows for sandbox lifecycle",
 	}
 }
@@ -49,7 +46,6 @@ var featureDefaults = map[string]bool{
 	FeatureGlobalRouter:       false,
 	FeatureDistributedRunners: false,
 	FeatureAdminAPI:           false,
-	FeatureAddons:             true,
 	FeatureSagas:              false,
 }
 
@@ -154,12 +150,6 @@ func DistributedRunners() bool {
 // Enable the admin API for application management functions
 func AdminAPI() bool {
 	return IsEnabled(FeatureAdminAPI)
-}
-
-// Addons returns whether the addons feature is enabled.
-// Enable the addon system for managed backing services
-func Addons() bool {
-	return IsEnabled(FeatureAddons)
 }
 
 // Sagas returns whether the sagas feature is enabled.

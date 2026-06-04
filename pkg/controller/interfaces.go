@@ -17,6 +17,7 @@ type EntityAccessClient interface {
 	List(ctx context.Context, index entity.Attr) (*entityserver_v1alpha.EntityAccessClientListResults, error)
 
 	// WatchIndex watches for changes to entities matching the given index
-	// and sends updates through the provided sender
-	WatchIndex(ctx context.Context, index entity.Attr, sender stream.SendStream[*entityserver_v1alpha.EntityOp]) error
+	// and sends updates through the provided sender. fromRevision starts the
+	// watch at a specific etcd revision (0 means "from now").
+	WatchIndex(ctx context.Context, index entity.Attr, fromRevision int64, sender stream.SendStream[*entityserver_v1alpha.EntityOp]) error
 }

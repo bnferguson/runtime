@@ -8,10 +8,6 @@ description: "List available addons"
 
 List available addons
 
-:::note
-This command requires the `addons` [labs feature](/labs) to be enabled.
-:::
-
 ## Usage
 
 ```bash

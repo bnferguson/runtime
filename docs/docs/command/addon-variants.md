@@ -8,10 +8,6 @@ description: "Show variants for an addon"
 
 Show variants for an addon
 
-:::note
-This command requires the `addons` [labs feature](/labs) to be enabled.
-:::
-
 ## Usage
 
 ```bash

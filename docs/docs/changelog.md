@@ -13,6 +13,16 @@ All notable changes to Miren Runtime will be documented in this file.
 
 ---
 
+## v0.9.1
+*2026-06-04*
+
+**Bug Fixes**
+- **New services could come up without a network address** - If the cluster hit a brief internal hiccup (etcd compaction, a leader change, or a network blip), a service created right around that moment could be left without an IP and stay unreachable until the server was restarted. If you've seen a freshly deployed service that never became reachable for no obvious reason, this was a likely cause. ([#841](https://github.com/mirendev/runtime/pull/841))
+- **Ephemeral preview deploys would stop responding until a server restart** - A preview (ephemeral) deploy would work at first, then stop responding to requests, and never serve again until the miren server itself was restarted. That situation is now fixed; these deploys keep serving and recover on their own. ([#837](https://github.com/mirendev/runtime/pull/837))
+- **NodePort services accumulated duplicate firewall rules** - NodePort services piled up duplicate iptables rules over time, and HTTP services that declared a `node_port` didn't always get one. Both are fixed, and existing duplicate rules are cleaned up automatically as sandboxes recycle. ([#840](https://github.com/mirendev/runtime/pull/840))
+
+---
+
 ## v0.9.0
 *2026-05-28*
 

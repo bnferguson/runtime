@@ -418,53 +418,46 @@ miren deploy --analyze
 		}),
 	))
 
-	// Addon commands (gated behind labs flag)
-	if labs.Addons() {
-		d.Dispatch("addon", Section("addon", "Addon management commands", "", WithSectionGroup(GroupConfiguring)))
-		d.Dispatch("addon list-available", Infer("addon list-available", "List available addons", AddonListAvailable,
-			WithLabsFeature(labs.FeatureAddons),
-			WithExample(mflags.Example{
-				Name: "List available addons",
-				Body: "miren addon list-available",
-			}),
-		))
-		d.Dispatch("addon variants", Infer("addon variants", "Show variants for an addon", AddonVariants,
-			WithLabsFeature(labs.FeatureAddons),
-			WithExample(mflags.Example{
-				Name: "Show variants for PostgreSQL",
-				Body: "miren addon variants miren-postgresql",
-			}),
-		))
-		d.Dispatch("addon create", Infer("addon create", "Attach an addon to an application", AddonCreate,
-			WithLabsFeature(labs.FeatureAddons),
-			WithExample(mflags.Example{
-				Name: "Attach a PostgreSQL addon",
-				Body: "miren addon create miren-postgresql:small",
-			}),
-			WithExample(mflags.Example{
-				Name: "Attach a PostgreSQL addon with a specific version",
-				Body: "miren addon create miren-postgresql:small --version 16",
-			}),
-		))
-		d.Dispatch("addon list", Infer("addon list", "List addons attached to an application", AddonList,
-			WithLabsFeature(labs.FeatureAddons),
-			WithExample(mflags.Example{
-				Name: "List addons for the current app",
-				Body: "miren addon list",
-			}),
-		))
-		d.Dispatch("addon destroy", Infer("addon destroy", "Remove an addon from an application", AddonDestroy,
-			WithLabsFeature(labs.FeatureAddons),
-			WithExample(mflags.Example{
-				Name: "Remove an addon",
-				Body: "miren addon destroy miren-postgresql",
-			}),
-			WithExample(mflags.Example{
-				Name: "Remove without confirmation",
-				Body: "miren addon destroy miren-postgresql --force",
-			}),
-		))
-	}
+	// Addon commands
+	d.Dispatch("addon", Section("addon", "Addon management commands", "", WithSectionGroup(GroupConfiguring)))
+	d.Dispatch("addon list-available", Infer("addon list-available", "List available addons", AddonListAvailable,
+		WithExample(mflags.Example{
+			Name: "List available addons",
+			Body: "miren addon list-available",
+		}),
+	))
+	d.Dispatch("addon variants", Infer("addon variants", "Show variants for an addon", AddonVariants,
+		WithExample(mflags.Example{
+			Name: "Show variants for PostgreSQL",
+			Body: "miren addon variants miren-postgresql",
+		}),
+	))
+	d.Dispatch("addon create", Infer("addon create", "Attach an addon to an application", AddonCreate,
+		WithExample(mflags.Example{
+			Name: "Attach a PostgreSQL addon",
+			Body: "miren addon create miren-postgresql:small",
+		}),
+		WithExample(mflags.Example{
+			Name: "Attach a PostgreSQL addon with a specific version",
+			Body: "miren addon create miren-postgresql:small --version 16",
+		}),
+	))
+	d.Dispatch("addon list", Infer("addon list", "List addons attached to an application", AddonList,
+		WithExample(mflags.Example{
+			Name: "List addons for the current app",
+			Body: "miren addon list",
+		}),
+	))
+	d.Dispatch("addon destroy", Infer("addon destroy", "Remove an addon from an application", AddonDestroy,
+		WithExample(mflags.Example{
+			Name: "Remove an addon",
+			Body: "miren addon destroy miren-postgresql",
+		}),
+		WithExample(mflags.Example{
+			Name: "Remove without confirmation",
+			Body: "miren addon destroy miren-postgresql --force",
+		}),
+	))
 
 	// Route commands
 	d.Dispatch("route", Infer("route", "List all HTTP routes", Route,
