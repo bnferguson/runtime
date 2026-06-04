@@ -43,6 +43,7 @@ import (
 	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/saga"
+	"miren.dev/runtime/pkg/workloadidentity"
 	"miren.dev/runtime/servers/exec"
 	"miren.dev/runtime/version"
 )
@@ -107,6 +108,9 @@ type RunnerDeps struct {
 	EtcdTLSCertFile string // Client certificate file path
 	EtcdTLSKeyFile  string // Client private key file path
 	EtcdTLSCAFile   string // CA certificate file path
+
+	// WorkloadIssuer signs workload identity tokens for sandbox containers
+	WorkloadIssuer *workloadidentity.Issuer
 }
 
 const (
@@ -608,6 +612,7 @@ func (r *Runner) SetupControllers(
 		StatusMon:      r.deps.StatusMon,
 		Resolver:       r.deps.Resolver,
 		Metrics:        r.deps.SandboxMetrics,
+		WorkloadIssuer: r.deps.WorkloadIssuer,
 	}
 
 	var sbc sandbox.SandboxLifecycle

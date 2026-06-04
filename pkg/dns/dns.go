@@ -30,6 +30,7 @@ type Server struct {
 
 	mu              sync.RWMutex
 	ipToApp         map[string]string              // source IP → app name
+	ipToSandbox     map[string]string              // source IP → sandbox entity ID
 	ipToService     map[string]string              // IP → service name (for PTR lookups)
 	appServiceToIPs map[string]map[string][]string // app name → service name → []IPs
 	entityToIP      map[string]string              // entity ID → IP address
@@ -63,6 +64,7 @@ func New(addr string, entityClient *entityserver_v1alpha.EntityAccessClient, log
 		entityClient:    entityClient,
 		log:             log.With("module", "dns"),
 		ipToApp:         make(map[string]string),
+		ipToSandbox:     make(map[string]string),
 		ipToService:     make(map[string]string),
 		appServiceToIPs: make(map[string]map[string][]string),
 		entityToIP:      make(map[string]string),
@@ -579,12 +581,50 @@ func (s *Server) handleSandboxUpdate(ctx context.Context, sb *compute_v1alpha.Sa
 		"app-id", appVer.App.String(),
 	)
 
-	s.addSandboxMapping(sb.ID.String(), ipAddr, appName, service)
+	s.AddSandboxMapping(sb.ID.String(), ipAddr, appName, service)
 }
 
-// addSandboxMapping registers a sandbox's IP address for DNS resolution.
-// This is the core mapping logic, separated for testability.
-func (s *Server) addSandboxMapping(sandboxID, ipAddr, appName, service string) {
+// NewTestServer creates a minimal Server for testing without binding to a port.
+func NewTestServer() *Server {
+	return &Server{
+		log:             slog.Default(),
+		ipToApp:         make(map[string]string),
+		ipToSandbox:     make(map[string]string),
+		ipToService:     make(map[string]string),
+		appServiceToIPs: make(map[string]map[string][]string),
+		entityToIP:      make(map[string]string),
+	}
+}
+
+// LookupSandboxByIP returns the sandbox entity ID and app name for a given IP.
+// On a cache miss, falls back to an entity store lookup to handle watcher lag.
+func (s *Server) LookupSandboxByIP(ip string) (sandboxID, appName string, ok bool) {
+	s.mu.RLock()
+	sandboxID, ok = s.ipToSandbox[ip]
+	if ok {
+		appName = s.ipToApp[ip]
+		s.mu.RUnlock()
+		return sandboxID, appName, true
+	}
+	s.mu.RUnlock()
+
+	// Cache miss — try resolving via entity store (populates the maps on success)
+	if !s.resolveUnknownIP(ip) {
+		return "", "", false
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	sandboxID, ok = s.ipToSandbox[ip]
+	if !ok {
+		return "", "", false
+	}
+	appName = s.ipToApp[ip]
+	return sandboxID, appName, true
+}
+
+// AddSandboxMapping registers a sandbox's IP address for DNS resolution.
+func (s *Server) AddSandboxMapping(sandboxID, ipAddr, appName, service string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.addSandboxMappingLocked(sandboxID, ipAddr, appName, service)
@@ -594,8 +634,9 @@ func (s *Server) addSandboxMappingLocked(sandboxID, ipAddr, appName, service str
 	// Track entity ID -> IP mapping for DELETE operations
 	s.entityToIP[sandboxID] = ipAddr
 
-	// Update ipToApp mapping
+	// Update ipToApp and ipToSandbox mappings
 	s.ipToApp[ipAddr] = appName
+	s.ipToSandbox[ipAddr] = sandboxID
 
 	// Update ipToService mapping for PTR queries
 	s.ipToService[ipAddr] = service
@@ -694,7 +735,7 @@ func (s *Server) resolveUnknownIP(sourceIP string) bool {
 		var appMD core_v1alpha.Metadata
 		appMD.Decode(appResp.Entity().Entity())
 
-		s.addSandboxMapping(sb.ID.String(), ipAddr, appMD.Name, service)
+		s.AddSandboxMapping(sb.ID.String(), ipAddr, appMD.Name, service)
 		s.log.Info("resolved unknown IP to sandbox via entity lookup", "ip", sourceIP, "sandbox", sb.ID, "app", appMD.Name, "service", service)
 		return true
 	}
@@ -747,8 +788,9 @@ func (s *Server) handleSandboxDeleteByID(entityID string) {
 		return // Inconsistent state, but continue
 	}
 
-	// Remove from ipToApp
+	// Remove from ipToApp, ipToSandbox
 	delete(s.ipToApp, ipAddr)
+	delete(s.ipToSandbox, ipAddr)
 
 	// Remove from ipToService
 	delete(s.ipToService, ipAddr)

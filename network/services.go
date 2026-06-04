@@ -17,7 +17,7 @@ type ServiceManager struct {
 	Log *slog.Logger
 	EAC *entityserver_v1alpha.EntityAccessClient
 
-	mu      sync.Mutex
+	mu      sync.RWMutex
 	bridges map[string]*BridgeServices
 	ctx     context.Context
 }
@@ -131,4 +131,34 @@ func (sm *ServiceManager) ShutdownAll() error {
 	}
 
 	return lastErr
+}
+
+// AddTestDNSServer adds a DNS server to the ServiceManager for testing.
+// The setup function is called with the server to populate test data.
+func (sm *ServiceManager) AddTestDNSServer(t interface{ Helper() }, setup func(*dns.Server)) {
+	t.Helper()
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	s := dns.NewTestServer()
+	setup(s)
+	if sm.bridges["test"] == nil {
+		sm.bridges["test"] = &BridgeServices{}
+	}
+	sm.bridges["test"].dns = append(sm.bridges["test"].dns, s)
+}
+
+// LookupSandboxByIP searches across all bridge DNS servers for a sandbox matching the given IP.
+func (sm *ServiceManager) LookupSandboxByIP(ip string) (sandboxID, appName string, ok bool) {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	for _, bs := range sm.bridges {
+		for _, server := range bs.dns {
+			if sandboxID, appName, ok = server.LookupSandboxByIP(ip); ok {
+				return sandboxID, appName, true
+			}
+		}
+	}
+	return "", "", false
 }

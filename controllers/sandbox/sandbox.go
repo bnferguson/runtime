@@ -37,6 +37,7 @@ import (
 	"miren.dev/runtime/pkg/imagerefs"
 	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/netutil"
+	"miren.dev/runtime/pkg/workloadidentity"
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
@@ -82,6 +83,7 @@ type SandboxControllerDeps struct {
 	StatusMon      *observability.StatusMonitor
 	Resolver       netresolve.Resolver
 	Metrics        *Metrics
+	WorkloadIssuer *workloadidentity.Issuer
 }
 
 type SandboxController struct {
@@ -106,8 +108,12 @@ type SandboxController struct {
 
 	StatusMon *observability.StatusMonitor
 
-	Resolver netresolve.Resolver
-	Metrics  *Metrics
+	Resolver       netresolve.Resolver
+	Metrics        *Metrics
+	WorkloadIssuer *workloadidentity.Issuer
+
+	tokenRefresher *tokenRefresher
+	tokenSecrets   *tokenSecretRegistry
 
 	topCtx context.Context
 	cancel func()
@@ -182,6 +188,7 @@ func NewSandboxController(cfg SandboxControllerDeps) (*SandboxController, error)
 		StatusMon:      cfg.StatusMon,
 		Resolver:       cfg.Resolver,
 		Metrics:        cfg.Metrics,
+		WorkloadIssuer: cfg.WorkloadIssuer,
 	}, nil
 }
 
@@ -389,6 +396,15 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 					}
 				}
 			}
+
+			// Re-register with token refresher so tokens keep getting renewed
+			if c.tokenRefresher != nil {
+				appName := c.resolveAppName(ctx, &sb)
+				tokenPath := c.sandboxPath(&sb, "identity-token")
+				c.tokenRefresher.register(sb.ID.String(), tokenPath, appName)
+				c.Log.Debug("re-registered sandbox for token refresh",
+					"sandbox_id", sb.ID, "app", appName)
+			}
 		}
 	}
 
@@ -467,6 +483,13 @@ func (c *SandboxController) Init(ctx context.Context) error {
 		return err
 	}
 
+	// Initialize token refresh state before reconcile so surviving sandboxes
+	// can be re-registered during boot reconciliation.
+	if c.WorkloadIssuer != nil {
+		c.tokenRefresher = newTokenRefresher()
+		c.tokenSecrets = newTokenSecretRegistry()
+	}
+
 	// Reconcile sandboxes after containerd restart
 	// This must happen after bridge setup but before starting normal operations
 	err = c.reconcileSandboxesOnBoot(ctx)
@@ -503,6 +526,13 @@ func (c *SandboxController) Init(ctx context.Context) error {
 		Config:    DefaultImageGCConfig(),
 	}
 	c.imageWatchdog.Start(c.topCtx)
+
+	// Start workload identity token refresh loop and token request server
+	// (tokenRefresher and tokenSecrets were created earlier, before reconcile)
+	if c.WorkloadIssuer != nil {
+		go c.runTokenRefresh(c.topCtx)
+		go c.startTokenServer(c.topCtx)
+	}
 
 	return nil
 }
@@ -2054,6 +2084,30 @@ func (c *SandboxController) buildSubContainerSpec(
 		})
 	}
 
+	// Inject workload identity token
+	if c.WorkloadIssuer != nil {
+		appName := c.resolveAppName(ctx, sb)
+		token, tokenErr := c.WorkloadIssuer.IssueToken(appName, sb.ID.String())
+		if tokenErr != nil {
+			c.Log.Warn("failed to generate workload identity token", "sandbox", sb.ID, "error", tokenErr)
+		} else {
+			tokenPath := c.sandboxPath(sb, "identity-token")
+			if writeErr := atomicWriteFile(tokenPath, []byte(token), 0644); writeErr != nil {
+				c.Log.Warn("failed to write workload identity token", "sandbox", sb.ID, "error", writeErr)
+			} else {
+				mounts = append(mounts, specs.Mount{
+					Destination: "/var/run/miren/identity-token",
+					Type:        "bind",
+					Source:      tokenPath,
+					Options:     []string{"rbind", "ro"},
+				})
+				if c.tokenRefresher != nil {
+					c.tokenRefresher.register(sb.ID.String(), tokenPath, appName)
+				}
+			}
+		}
+	}
+
 	// Extract instance number from metadata labels and inject MIREN_INSTANCE_NUM
 	envVars := co.Env
 	var md core_v1alpha.Metadata
@@ -2062,6 +2116,23 @@ func (c *SandboxController) buildSubContainerSpec(
 	if instanceStr, ok := md.Labels.Get("instance"); ok {
 		envVars = append([]string{fmt.Sprintf("MIREN_INSTANCE_NUM=%s", instanceStr)}, envVars...)
 		c.Log.Debug("injected instance number into container env", "sandbox_id", sb.ID, "container", co.Name, "instance", instanceStr)
+	}
+
+	if c.WorkloadIssuer != nil {
+		envVars = append(envVars,
+			"MIREN_IDENTITY_TOKEN_PATH=/var/run/miren/identity-token",
+			fmt.Sprintf("MIREN_OIDC_ISSUER_URL=%s", c.WorkloadIssuer.IssuerURL()),
+			fmt.Sprintf("MIREN_IDENTITY_TOKEN_URL=http://%s:%d/v1/token", c.Subnet.Router().Addr(), tokenServerPort),
+		)
+		if c.tokenSecrets != nil && len(ep.Addresses) > 0 {
+			secret, secretErr := generateTokenSecret()
+			if secretErr != nil {
+				c.Log.Warn("failed to generate token request secret", "sandbox", sb.ID, "error", secretErr)
+			} else {
+				c.tokenSecrets.register(ep.Addresses[0].Addr().String(), sb.ID.String(), secret)
+				envVars = append(envVars, fmt.Sprintf("MIREN_IDENTITY_TOKEN_SECRET=%s", secret))
+			}
+		}
 	}
 
 	specOpts := []oci.SpecOpts{
@@ -2349,6 +2420,12 @@ cleanup:
 
 func (c *SandboxController) Delete(ctx context.Context, id entity.Id, sb *compute.Sandbox) error {
 	c.Log.Debug("delete callback received, cleaning up sandbox", "id", id)
+	if c.tokenRefresher != nil {
+		c.tokenRefresher.unregister(id.String())
+	}
+	if c.tokenSecrets != nil {
+		c.tokenSecrets.unregister(id.String())
+	}
 	if sb != nil {
 		c.UnconfigureFirewall(sb)
 	}
@@ -2627,4 +2704,31 @@ func (c *SandboxController) Periodic(ctx context.Context, timeHorizon time.Durat
 	}
 
 	return nil
+}
+
+func (c *SandboxController) resolveAppName(ctx context.Context, sb *compute.Sandbox) string {
+	if sb.Spec.Version == "" {
+		return ""
+	}
+
+	versionResp, err := c.EAC.Get(ctx, sb.Spec.Version.String())
+	if err != nil {
+		return ""
+	}
+
+	var version core_v1alpha.AppVersion
+	version.Decode(versionResp.Entity().Entity())
+
+	if version.App == "" {
+		return ""
+	}
+
+	appResp, err := c.EAC.Get(ctx, version.App.String())
+	if err != nil {
+		return ""
+	}
+
+	var appMeta core_v1alpha.Metadata
+	appMeta.Decode(appResp.Entity().Entity())
+	return appMeta.Name
 }

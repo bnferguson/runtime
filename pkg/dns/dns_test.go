@@ -22,6 +22,7 @@ func newTestServer(t *testing.T) *Server {
 	return &Server{
 		log:             log,
 		ipToApp:         make(map[string]string),
+		ipToSandbox:     make(map[string]string),
 		ipToService:     make(map[string]string),
 		appServiceToIPs: make(map[string]map[string][]string),
 		entityToIP:      make(map[string]string),
@@ -47,10 +48,10 @@ func TestIPReuseBetweenSandboxes(t *testing.T) {
 	)
 
 	// Old sandbox (now STOPPED) was registered at IP
-	s.addSandboxMapping(oldSandboxID, sharedIP, appName, serviceName)
+	s.AddSandboxMapping(oldSandboxID, sharedIP, appName, serviceName)
 
 	// New sandbox (RUNNING) gets the same IP after cooldown
-	s.addSandboxMapping(newSandboxID, sharedIP, appName, serviceName)
+	s.AddSandboxMapping(newSandboxID, sharedIP, appName, serviceName)
 
 	// Old sandbox entity is finally deleted (1 hour cleanup delay)
 	s.handleSandboxDeleteByID(oldSandboxID)
@@ -73,7 +74,7 @@ func TestDeleteSandboxCleansUpWhenNoReuse(t *testing.T) {
 		sandboxID = "sandbox/testapp-web-123"
 	)
 
-	s.addSandboxMapping(sandboxID, ip, appName, service)
+	s.AddSandboxMapping(sandboxID, ip, appName, service)
 	assert.Equal(t, appName, s.lookupAppForIP(ip))
 
 	s.handleSandboxDeleteByID(sandboxID)
@@ -96,8 +97,8 @@ func TestDeleteSandboxWithDifferentIPs(t *testing.T) {
 		sandbox2ID = "sandbox/testapp-web-2"
 	)
 
-	s.addSandboxMapping(sandbox1ID, ip1, appName, service)
-	s.addSandboxMapping(sandbox2ID, ip2, appName, service)
+	s.AddSandboxMapping(sandbox1ID, ip1, appName, service)
+	s.AddSandboxMapping(sandbox2ID, ip2, appName, service)
 
 	s.handleSandboxDeleteByID(sandbox1ID)
 
@@ -122,7 +123,7 @@ func TestSandboxStatusTransitionRemovesFromDNS(t *testing.T) {
 	)
 
 	// Simulate a sandbox that was previously RUNNING and tracked
-	s.addSandboxMapping(sandboxID, ip, appName, service)
+	s.AddSandboxMapping(sandboxID, ip, appName, service)
 	assert.Equal(t, appName, s.lookupAppForIP(ip), "sandbox should be tracked initially")
 
 	// Sandbox transitions to STOPPED (e.g., process exited)
@@ -159,7 +160,7 @@ func TestSandboxDeadStatusRemovesFromDNS(t *testing.T) {
 		sandboxID = "sandbox/testapp-api-dead-test"
 	)
 
-	s.addSandboxMapping(sandboxID, ip, appName, service)
+	s.AddSandboxMapping(sandboxID, ip, appName, service)
 	assert.Equal(t, appName, s.lookupAppForIP(ip))
 
 	// Sandbox marked as DEAD (e.g., health check failed)
@@ -234,6 +235,7 @@ func TestResolveUnknownIPFindsAndRegistersSandbox(t *testing.T) {
 		log:             log,
 		entityClient:    inmem.EAC,
 		ipToApp:         make(map[string]string),
+		ipToSandbox:     make(map[string]string),
 		ipToService:     make(map[string]string),
 		appServiceToIPs: make(map[string]map[string][]string),
 		entityToIP:      make(map[string]string),
@@ -286,6 +288,7 @@ func TestResolveUnknownIPNoMatchingIP(t *testing.T) {
 		log:             log,
 		entityClient:    inmem.EAC,
 		ipToApp:         make(map[string]string),
+		ipToSandbox:     make(map[string]string),
 		ipToService:     make(map[string]string),
 		appServiceToIPs: make(map[string]map[string][]string),
 		entityToIP:      make(map[string]string),

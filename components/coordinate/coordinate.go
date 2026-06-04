@@ -67,6 +67,7 @@ import (
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/saga"
 	"miren.dev/runtime/pkg/sysstats"
+	"miren.dev/runtime/pkg/workloadidentity"
 	"miren.dev/runtime/servers/admin"
 	"miren.dev/runtime/servers/app"
 	"miren.dev/runtime/servers/build"
@@ -129,6 +130,9 @@ type CoordinatorConfig struct {
 
 	// HTTPRequestTimeout is the timeout for HTTP requests to app sandboxes
 	HTTPRequestTimeout time.Duration
+
+	// WorkloadIssuer signs workload identity tokens for sandbox containers
+	WorkloadIssuer *workloadidentity.Issuer
 }
 
 // CloudAuthConfig contains cloud authentication settings
@@ -1133,6 +1137,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	ingressConfig := httpingress.IngressConfig{
 		RequestTimeout: c.HTTPRequestTimeout,
 		DataPath:       c.DataPath,
+		WorkloadIssuer: c.WorkloadIssuer,
 	}
 	c.hs = httpingress.NewServer(ctx, c.Log, ingressConfig, loopback, aa, c.HTTP, c.LogWriter)
 
