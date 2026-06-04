@@ -1218,7 +1218,7 @@ func TestSandbox(t *testing.T) {
 
 		// Now test the reattach function directly by calling it
 		// This simulates what happens during controller restart
-		err = co1.reattachLogs(ctx, &tco, containerID, "logger")
+		err = co1.reattachLogs(ctx, &tco, containerID, "logger", "")
 		r.NoError(err, "should be able to reattach logs to running container")
 
 		// Verify task stays running after reattach and logs are collected.

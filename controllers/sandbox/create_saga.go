@@ -221,7 +221,7 @@ func bootTask(ctx context.Context, in bootTaskIn) (bootTaskOut, error) {
 	deps := saga.Get[*createSandboxDeps](ctx)
 	log := saga.Get[*slog.Logger](ctx)
 
-	sb, _, err := deps.entities.GetSandbox(ctx, in.SandboxID)
+	sb, meta, err := deps.entities.GetSandbox(ctx, in.SandboxID)
 	if err != nil {
 		return bootTaskOut{}, fmt.Errorf("fetching sandbox: %w", err)
 	}
@@ -236,7 +236,7 @@ func bootTask(ctx context.Context, in bootTaskIn) (bootTaskOut, error) {
 		return bootTaskOut{}, fmt.Errorf("loading container: %w", err)
 	}
 
-	task, err := deps.runtime.BootInitialTask(ctx, sb, ep, container)
+	task, err := deps.runtime.BootInitialTask(ctx, sb, ep, container, meta.ShortId())
 	if err != nil {
 		return bootTaskOut{}, fmt.Errorf("booting task: %w", err)
 	}
@@ -326,7 +326,7 @@ func bootContainers(ctx context.Context, in bootContainersIn) (bootContainersOut
 		// failures happen before any container produces output, so the
 		// log stream would otherwise be empty and the reason would only
 		// be visible in journalctl on the node.
-		deps.obs.LogSandboxEvent(sb,
+		deps.obs.LogSandboxEvent(sb, meta.ShortId(),
 			fmt.Sprintf("volume configuration failed: %v", err))
 		return bootContainersOut{}, fmt.Errorf("configuring volumes: %w", err)
 	}
@@ -391,9 +391,9 @@ func addMetrics(ctx context.Context, in addMetricsIn) (addMetricsOut, error) {
 		le = sb.ID.String()
 	}
 
-	attrs := map[string]string{"sandbox": sb.ID.String()}
+	attrs := map[string]string{"miren.sandbox": sb.ID.String()}
 	if sb.Spec.Version != "" {
-		attrs["version"] = sb.Spec.Version.String()
+		attrs["miren.version"] = sb.Spec.Version.String()
 	}
 	for _, lbl := range sb.Spec.LogAttribute {
 		attrs[lbl.Key] = lbl.Value

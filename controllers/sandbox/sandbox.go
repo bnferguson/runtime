@@ -310,9 +310,11 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 		}
 		runningCount++
 
+		shortID := entityShortID(e.Entity())
+
 		// Reattach logs to pause container
 		pauseID := pauseContainerId(sb.ID)
-		if err := c.reattachLogs(ctx, &sb, pauseID, ""); err != nil {
+		if err := c.reattachLogs(ctx, &sb, pauseID, "", shortID); err != nil {
 			c.Log.Warn("failed to reattach logs to pause container",
 				"sandbox_id", sb.ID,
 				"pause_container_id", pauseID,
@@ -336,7 +338,7 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 			containerID := fmt.Sprintf("%s-%s", containerPrefix(sb.ID), container.Name)
 
 			// Reattach logs for this subcontainer
-			if err := c.reattachLogs(ctx, &sb, containerID, container.Name); err != nil {
+			if err := c.reattachLogs(ctx, &sb, containerID, container.Name, shortID); err != nil {
 				c.Log.Warn("failed to reattach logs to subcontainer",
 					"sandbox_id", sb.ID,
 					"container_name", container.Name,
@@ -791,7 +793,7 @@ func (c *SandboxController) pauseContainerPID(ctx context.Context, pauseID strin
 // reattachLogs reattaches log consumers to a container's task after controller restart.
 // This is critical to prevent stdout/stderr buffers from filling up and blocking the process.
 // containerName should be empty string for the pause container, or the subcontainer name otherwise.
-func (c *SandboxController) reattachLogs(ctx context.Context, sb *compute.Sandbox, containerID string, containerName string) error {
+func (c *SandboxController) reattachLogs(ctx context.Context, sb *compute.Sandbox, containerID, containerName, shortID string) error {
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
 	container, err := c.CC.LoadContainer(ctx, containerID)
@@ -800,7 +802,7 @@ func (c *SandboxController) reattachLogs(ctx context.Context, sb *compute.Sandbo
 	}
 
 	// Create log consumer for this container
-	sl := c.logConsumer(sb, containerName)
+	sl := c.logConsumer(sb, containerName, shortID)
 
 	// Reattach to the existing task with our log consumer
 	// This drains stdout/stderr and prevents the process from blocking on writes
@@ -1013,7 +1015,7 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 		}
 	}()
 
-	task, err := c.BootInitialTask(ctx, co, ep, container)
+	task, err := c.BootInitialTask(ctx, co, ep, container, meta.ShortId())
 	if err != nil {
 		return err
 	}
@@ -1038,11 +1040,11 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 	}
 
 	attrs := map[string]string{
-		"sandbox": co.ID.String(),
+		"miren.sandbox": co.ID.String(),
 	}
 
 	if co.Spec.Version != "" {
-		attrs["version"] = co.Spec.Version.String()
+		attrs["miren.version"] = co.Spec.Version.String()
 	}
 
 	for _, lbl := range co.Spec.LogAttribute {
@@ -1530,23 +1532,34 @@ func (c *SandboxController) writeResolve(path string, ep *network.EndpointConfig
 // streaming (via logConsumer) and runtime lifecycle events (via
 // EmitSandboxEvent) share this so the two sources appear with the
 // same identity and metadata in the log stream.
-func sandboxLogMeta(sb *compute.Sandbox, container string) (string, map[string]string) {
+func entityShortID(e entity.AttrGetter) string {
+	if attr, ok := e.Get(entity.DBShortId); ok {
+		return attr.Value.String()
+	}
+	return ""
+}
+
+func sandboxLogMeta(sb *compute.Sandbox, container, shortID string) (string, map[string]string) {
 	le := sb.Spec.LogEntity
 	if le == "" {
 		le = sb.ID.String()
 	}
 
 	attrs := map[string]string{
-		"sandbox": sb.ID.String(),
-		"source":  strings.TrimPrefix(sb.ID.String(), "sandbox/"),
+		"miren.sandbox": sb.ID.String(),
+		"source":        strings.TrimPrefix(sb.ID.String(), "sandbox/"),
+	}
+
+	if shortID != "" {
+		attrs["miren.short_id"] = shortID
 	}
 
 	if container != "" {
-		attrs["container"] = container
+		attrs["miren.container"] = container
 	}
 
 	if sb.Spec.Version != "" {
-		attrs["version"] = sb.Spec.Version.String()
+		attrs["miren.version"] = sb.Spec.Version.String()
 	}
 
 	for _, lbl := range sb.Spec.LogAttribute {
@@ -1556,8 +1569,8 @@ func sandboxLogMeta(sb *compute.Sandbox, container string) (string, map[string]s
 	return le, attrs
 }
 
-func (c *SandboxController) logConsumer(sb *compute.Sandbox, container string) *SandboxLogs {
-	le, attrs := sandboxLogMeta(sb, container)
+func (c *SandboxController) logConsumer(sb *compute.Sandbox, container, shortID string) *SandboxLogs {
+	le, attrs := sandboxLogMeta(sb, container, shortID)
 	return NewSandboxLogs(c.Log, le, attrs, c.LogWriter)
 }
 
@@ -1566,8 +1579,8 @@ func (c *SandboxController) logConsumer(sb *compute.Sandbox, container string) *
 // stdio pipeline uses. Events go on the Stderr stream so operators see
 // them in `miren logs sandbox <id>` and can distinguish them from
 // application output via the [miren] prefix.
-func (c *SandboxController) EmitSandboxEvent(sb *compute.Sandbox, line string) {
-	le, attrs := sandboxLogMeta(sb, "")
+func (c *SandboxController) EmitSandboxEvent(sb *compute.Sandbox, shortID, line string) {
+	le, attrs := sandboxLogMeta(sb, "", shortID)
 	err := c.LogWriter.WriteEntry(le, observability.LogEntry{
 		Timestamp:  time.Now(),
 		Stream:     observability.Stderr,
@@ -1585,10 +1598,11 @@ func (c *SandboxController) BootInitialTask(
 	sb *compute.Sandbox,
 	ep *network.EndpointConfig,
 	container containerd.Container,
+	shortID string,
 ) (containerd.Task, error) {
 	c.Log.Info("booting sandbox task")
 
-	sl := c.logConsumer(sb, "")
+	sl := c.logConsumer(sb, "", shortID)
 
 	task, err := container.NewTask(ctx, cio.NewCreator(
 		cio.WithStreams(nil, sl, sl.Stderr())))
@@ -1758,7 +1772,7 @@ func (c *SandboxController) BootContainers(
 
 		cgroups[container.Name] = spec.Linux.CgroupsPath
 
-		sl := c.logConsumer(sb, container.Name)
+		sl := c.logConsumer(sb, container.Name, meta.ShortId())
 
 		// Build cio options based on container spec
 		var cioOpts []cio.Opt

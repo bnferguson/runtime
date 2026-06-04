@@ -112,9 +112,9 @@ func (o *sandboxOps) CleanupContainer(ctx context.Context, cont containerd.Conta
 	o.ctrl.CleanupContainer(ctx, cont)
 }
 
-func (o *sandboxOps) BootInitialTask(ctx context.Context, sb *compute.Sandbox, ep *network.EndpointConfig, container containerd.Container) (containerd.Task, error) {
+func (o *sandboxOps) BootInitialTask(ctx context.Context, sb *compute.Sandbox, ep *network.EndpointConfig, container containerd.Container, shortID string) (containerd.Task, error) {
 	ctx = namespaces.WithNamespace(ctx, o.ctrl.Namespace)
-	return o.ctrl.BootInitialTask(ctx, sb, ep, container)
+	return o.ctrl.BootInitialTask(ctx, sb, ep, container, shortID)
 }
 
 func (o *sandboxOps) ConfigureVolumes(ctx context.Context, sb *compute.Sandbox, meta *entity.Meta) (map[string]string, error) {
@@ -156,6 +156,6 @@ func (o *sandboxOps) UpdateServices(ctx context.Context, co *compute.Sandbox, me
 	return o.ctrl.UpdateServices(ctx, co, meta, ep)
 }
 
-func (o *sandboxOps) LogSandboxEvent(sb *compute.Sandbox, line string) {
-	o.ctrl.EmitSandboxEvent(sb, line)
+func (o *sandboxOps) LogSandboxEvent(sb *compute.Sandbox, shortID, line string) {
+	o.ctrl.EmitSandboxEvent(sb, shortID, line)
 }

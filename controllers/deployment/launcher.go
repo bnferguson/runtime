@@ -524,7 +524,7 @@ func (l *Launcher) buildSandboxSpec(
 	sbSpec := &compute_v1alpha.SandboxSpec{
 		Version:      ver.ID,
 		LogEntity:    app.ID.String(),
-		LogAttribute: types.LabelSet("stage", "app-run", "service", serviceName),
+		LogAttribute: types.LabelSet("miren.stage", "app-run", "miren.service", serviceName),
 	}
 
 	startDir := cfgSpec.StartDirectory
