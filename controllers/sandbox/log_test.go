@@ -373,6 +373,23 @@ func TestScanJSON(t *testing.T) {
 		}
 	})
 
+	t.Run("miren. prefixed keys are escaped", func(t *testing.T) {
+		sl := newScanner()
+		_, _, ok := sl.scanJSON(`{"msg":"hi","miren.sandbox":"evil","safe":"ok"}`)
+		if !ok {
+			t.Fatal("expected ok=true")
+		}
+		if _, exists := sl.extra["miren.sandbox"]; exists {
+			t.Error("miren.sandbox should be escaped, not stored directly")
+		}
+		if sl.extra["-miren.sandbox"] != "evil" {
+			t.Errorf("extra[-miren.sandbox] = %q, want %q", sl.extra["-miren.sandbox"], "evil")
+		}
+		if sl.extra["safe"] != "ok" {
+			t.Errorf("extra[safe] = %q, want %q", sl.extra["safe"], "ok")
+		}
+	})
+
 	t.Run("rejects trailing content after JSON object", func(t *testing.T) {
 		sl := newScanner()
 		_, _, ok := sl.scanJSON(`{"msg":"ok"} trailing`)

@@ -170,6 +170,9 @@ func (s *SandboxLogs) scanJSON(line string) (string, observability.LogStream, bo
 		case "time":
 			// skip
 		default:
+			if strings.HasPrefix(key, "miren.") {
+				key = "-" + key
+			}
 			switch v := valTok.(type) {
 			case string:
 				s.extra[key] = v
