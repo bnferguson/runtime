@@ -887,10 +887,6 @@ func specsMatch(spec1, spec2 *compute_v1alpha.SandboxSpec) (string, bool) {
 		return fmt.Sprintf("port wait timeout mismatch: %s vs %s", spec1.PortWaitTimeout, spec2.PortWaitTimeout), false
 	}
 
-	if !labelsEqual(spec1.LogAttribute, spec2.LogAttribute) {
-		return "log attribute mismatch", false
-	}
-
 	// All fields match (excluding version)
 	return "", true
 }
