@@ -452,6 +452,22 @@ func TestScanJSON(t *testing.T) {
 		}
 	})
 
+	t.Run("un-namespaced source key is escaped", func(t *testing.T) {
+		// source is the one internal attribute that isn't under the miren.*
+		// namespace, so it gets the same dash-escape treatment.
+		sl := newScanner()
+		_, _, ok := sl.scanJSON(`{"msg":"hi","source":"evil"}`)
+		if !ok {
+			t.Fatal("expected ok=true")
+		}
+		if _, exists := sl.extra["source"]; exists {
+			t.Error("source should be escaped, not stored directly")
+		}
+		if sl.extra["-source"] != "evil" {
+			t.Errorf("extra[-source] = %q, want %q", sl.extra["-source"], "evil")
+		}
+	})
+
 	t.Run("rejects trailing content after JSON object", func(t *testing.T) {
 		sl := newScanner()
 		_, _, ok := sl.scanJSON(`{"msg":"ok"} trailing`)

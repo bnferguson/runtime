@@ -151,10 +151,11 @@ func (s *SandboxLogs) scanJSON(line string) (string, observability.LogStream, bo
 		case "time":
 			// skip
 		default:
-			// Escape user fields that would collide with internal miren.*
-			// attribution so app logs can't shadow it.
+			// Escape user fields that would collide with internal attribution
+			// so app logs can't shadow it: the miren.* namespace and the lone
+			// un-namespaced "source" key both get a leading dash.
 			k := key.Str
-			if strings.HasPrefix(k, "miren.") {
+			if strings.HasPrefix(k, "miren.") || k == "source" {
 				k = "-" + k
 			}
 			switch value.Type {
