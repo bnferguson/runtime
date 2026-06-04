@@ -15,6 +15,10 @@ import (
 	"miren.dev/runtime/pkg/workloadidentity"
 )
 
+const testSandboxIP = "10.0.0.5"
+const testSandboxID = "sandbox/myapp-web-abc123"
+const testSecret = "test-secret-token-value"
+
 func newTestTokenController(t *testing.T) *SandboxController {
 	t.Helper()
 
@@ -29,27 +33,34 @@ func newTestTokenController(t *testing.T) *SandboxController {
 
 	log := slog.Default()
 
-	// Create a ServiceManager with a DNS server that has our test mapping
 	sm := network.NewServiceManager(log, nil)
 	sm.AddTestDNSServer(t, func(s *dns.Server) {
-		s.AddSandboxMapping("sandbox/myapp-web-abc123", "10.0.0.5", "myapp", "web")
+		s.AddSandboxMapping(testSandboxID, testSandboxIP, "myapp", "web")
 	})
+
+	secrets := newTokenSecretRegistry()
+	secrets.register(testSandboxIP, testSandboxID, testSecret)
 
 	return &SandboxController{
 		Log:            log,
 		NetServ:        sm,
 		WorkloadIssuer: issuer,
+		tokenSecrets:   secrets,
 	}
+}
+
+func authedRequest(method, url string) *http.Request {
+	req := httptest.NewRequest(method, url, nil)
+	req.RemoteAddr = testSandboxIP + ":12345"
+	req.Header.Set("Authorization", "Bearer "+testSecret)
+	return req
 }
 
 func TestTokenServer_DefaultToken(t *testing.T) {
 	c := newTestTokenController(t)
-
-	req := httptest.NewRequest("GET", "/v1/token", nil)
-	req.RemoteAddr = "10.0.0.5:12345"
 	w := httptest.NewRecorder()
 
-	c.handleTokenRequest(w, req)
+	c.handleTokenRequest(w, authedRequest("GET", "/v1/token"))
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
@@ -59,7 +70,6 @@ func TestTokenServer_DefaultToken(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, resp.Value)
 
-	// Parse and verify the token
 	token, err := jwt.ParseWithClaims(resp.Value, &workloadidentity.WorkloadClaims{}, func(tok *jwt.Token) (interface{}, error) {
 		return c.WorkloadIssuer.PublicKey(), nil
 	})
@@ -67,19 +77,16 @@ func TestTokenServer_DefaultToken(t *testing.T) {
 
 	claims := token.Claims.(*workloadidentity.WorkloadClaims)
 	assert.Equal(t, "myapp", claims.App)
-	assert.Equal(t, "sandbox/myapp-web-abc123", claims.SandboxID)
+	assert.Equal(t, testSandboxID, claims.SandboxID)
 	assert.Equal(t, "org-test", claims.OrganizationID)
 	assert.Equal(t, jwt.ClaimStrings{"miren"}, claims.Audience)
 }
 
 func TestTokenServer_CustomAudience(t *testing.T) {
 	c := newTestTokenController(t)
-
-	req := httptest.NewRequest("GET", "/v1/token?audience=sts.amazonaws.com&audience=myapi.example.com", nil)
-	req.RemoteAddr = "10.0.0.5:12345"
 	w := httptest.NewRecorder()
 
-	c.handleTokenRequest(w, req)
+	c.handleTokenRequest(w, authedRequest("GET", "/v1/token?audience=sts.amazonaws.com&audience=myapi.example.com"))
 
 	assert.Equal(t, http.StatusOK, w.Code)
 
@@ -98,12 +105,9 @@ func TestTokenServer_CustomAudience(t *testing.T) {
 
 func TestTokenServer_CustomTTL(t *testing.T) {
 	c := newTestTokenController(t)
-
-	req := httptest.NewRequest("GET", "/v1/token?ttl=300", nil)
-	req.RemoteAddr = "10.0.0.5:12345"
 	w := httptest.NewRecorder()
 
-	c.handleTokenRequest(w, req)
+	c.handleTokenRequest(w, authedRequest("GET", "/v1/token?ttl=300"))
 
 	assert.Equal(t, http.StatusOK, w.Code)
 
@@ -121,43 +125,58 @@ func TestTokenServer_CustomTTL(t *testing.T) {
 	assert.Equal(t, 300.0, ttl.Seconds())
 }
 
-func TestTokenServer_UnknownIP(t *testing.T) {
+func TestTokenServer_MissingAuth(t *testing.T) {
 	c := newTestTokenController(t)
 
 	req := httptest.NewRequest("GET", "/v1/token", nil)
-	req.RemoteAddr = "10.0.0.99:12345"
+	req.RemoteAddr = testSandboxIP + ":12345"
+	w := httptest.NewRecorder()
+
+	c.handleTokenRequest(w, req)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func TestTokenServer_WrongSecret(t *testing.T) {
+	c := newTestTokenController(t)
+
+	req := httptest.NewRequest("GET", "/v1/token", nil)
+	req.RemoteAddr = testSandboxIP + ":12345"
+	req.Header.Set("Authorization", "Bearer wrong-secret")
 	w := httptest.NewRecorder()
 
 	c.handleTokenRequest(w, req)
 
 	assert.Equal(t, http.StatusForbidden, w.Code)
+}
 
-	var resp tokenErrorResponse
-	err := json.Unmarshal(w.Body.Bytes(), &resp)
-	require.NoError(t, err)
-	assert.Equal(t, "unknown source address", resp.Error)
+func TestTokenServer_UnknownIP(t *testing.T) {
+	c := newTestTokenController(t)
+
+	req := httptest.NewRequest("GET", "/v1/token", nil)
+	req.RemoteAddr = "10.0.0.99:12345"
+	req.Header.Set("Authorization", "Bearer "+testSecret)
+	w := httptest.NewRecorder()
+
+	c.handleTokenRequest(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
 }
 
 func TestTokenServer_RejectsPost(t *testing.T) {
 	c := newTestTokenController(t)
-
-	req := httptest.NewRequest("POST", "/v1/token", nil)
-	req.RemoteAddr = "10.0.0.5:12345"
 	w := httptest.NewRecorder()
 
-	c.handleTokenRequest(w, req)
+	c.handleTokenRequest(w, authedRequest("POST", "/v1/token"))
 
 	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
 }
 
 func TestTokenServer_InvalidTTL(t *testing.T) {
 	c := newTestTokenController(t)
-
-	req := httptest.NewRequest("GET", "/v1/token?ttl=notanumber", nil)
-	req.RemoteAddr = "10.0.0.5:12345"
 	w := httptest.NewRecorder()
 
-	c.handleTokenRequest(w, req)
+	c.handleTokenRequest(w, authedRequest("GET", "/v1/token?ttl=notanumber"))
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }

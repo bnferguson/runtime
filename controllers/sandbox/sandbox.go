@@ -113,6 +113,7 @@ type SandboxController struct {
 	WorkloadIssuer *workloadidentity.Issuer
 
 	tokenRefresher *tokenRefresher
+	tokenSecrets   *tokenSecretRegistry
 
 	topCtx context.Context
 	cancel func()
@@ -513,6 +514,7 @@ func (c *SandboxController) Init(ctx context.Context) error {
 	// Start workload identity token refresh loop and token request server
 	if c.WorkloadIssuer != nil {
 		c.tokenRefresher = newTokenRefresher()
+		c.tokenSecrets = newTokenSecretRegistry()
 		go c.runTokenRefresh(c.topCtx)
 		go c.startTokenServer(c.topCtx)
 	}
@@ -2107,6 +2109,15 @@ func (c *SandboxController) buildSubContainerSpec(
 			fmt.Sprintf("MIREN_OIDC_ISSUER_URL=%s", c.WorkloadIssuer.IssuerURL()),
 			fmt.Sprintf("MIREN_IDENTITY_TOKEN_URL=http://%s:%d/v1/token", c.Subnet.Router().Addr(), tokenServerPort),
 		)
+		if c.tokenSecrets != nil && len(ep.Addresses) > 0 {
+			secret, secretErr := generateTokenSecret()
+			if secretErr != nil {
+				c.Log.Warn("failed to generate token request secret", "sandbox", sb.ID, "error", secretErr)
+			} else {
+				c.tokenSecrets.register(ep.Addresses[0].Addr().String(), sb.ID.String(), secret)
+				envVars = append(envVars, fmt.Sprintf("MIREN_IDENTITY_TOKEN_SECRET=%s", secret))
+			}
+		}
 	}
 
 	specOpts := []oci.SpecOpts{
@@ -2396,6 +2407,9 @@ func (c *SandboxController) Delete(ctx context.Context, id entity.Id, sb *comput
 	c.Log.Debug("delete callback received, cleaning up sandbox", "id", id)
 	if c.tokenRefresher != nil {
 		c.tokenRefresher.unregister(id.String())
+	}
+	if c.tokenSecrets != nil {
+		c.tokenSecrets.unregister(id.String())
 	}
 	if sb != nil {
 		c.UnconfigureFirewall(sb)

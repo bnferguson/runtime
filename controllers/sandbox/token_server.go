@@ -2,11 +2,16 @@ package sandbox
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"miren.dev/runtime/pkg/workloadidentity"
@@ -20,6 +25,53 @@ type tokenResponse struct {
 
 type tokenErrorResponse struct {
 	Error string `json:"error"`
+}
+
+type tokenSecretRegistry struct {
+	mu        sync.RWMutex
+	byAddr    map[string]string // IP → secret
+	bySandbox map[string]string // sandboxID → IP (for cleanup)
+}
+
+func newTokenSecretRegistry() *tokenSecretRegistry {
+	return &tokenSecretRegistry{
+		byAddr:    make(map[string]string),
+		bySandbox: make(map[string]string),
+	}
+}
+
+func (r *tokenSecretRegistry) register(ip, sandboxID, secret string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.byAddr[ip] = secret
+	r.bySandbox[sandboxID] = ip
+}
+
+func (r *tokenSecretRegistry) unregister(sandboxID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if ip, ok := r.bySandbox[sandboxID]; ok {
+		delete(r.byAddr, ip)
+		delete(r.bySandbox, sandboxID)
+	}
+}
+
+func (r *tokenSecretRegistry) verify(ip, secret string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	expected, ok := r.byAddr[ip]
+	if !ok {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(expected), []byte(secret)) == 1
+}
+
+func generateTokenSecret() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
 func (c *SandboxController) startTokenServer(ctx context.Context) {
@@ -63,6 +115,18 @@ func (c *SandboxController) handleTokenRequest(w http.ResponseWriter, r *http.Re
 	remoteHost, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		writeTokenError(w, http.StatusBadRequest, "invalid remote address")
+		return
+	}
+
+	authHeader := r.Header.Get("Authorization")
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		writeTokenError(w, http.StatusUnauthorized, "missing or invalid Authorization header")
+		return
+	}
+	bearerToken := strings.TrimPrefix(authHeader, "Bearer ")
+
+	if c.tokenSecrets == nil || !c.tokenSecrets.verify(remoteHost, bearerToken) {
+		writeTokenError(w, http.StatusForbidden, "invalid token")
 		return
 	}
 
