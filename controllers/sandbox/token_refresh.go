@@ -80,7 +80,11 @@ func (c *SandboxController) refreshTokens() {
 			c.Log.Warn("failed to refresh workload identity token", "sandbox", e.sandboxID, "error", err)
 			continue
 		}
-		if err := atomicWriteFile(e.filePath, []byte(token), 0644); err != nil {
+		// Write in-place (not atomic rename) because the file is bind-mounted
+		// into containers. Rename would create a new inode and the container
+		// would keep reading the stale old token. The brief window of partial
+		// content is acceptable for a few-hundred-byte JWT.
+		if err := os.WriteFile(e.filePath, []byte(token), 0644); err != nil {
 			c.Log.Warn("failed to write refreshed workload identity token", "sandbox", e.sandboxID, "error", err)
 		}
 	}

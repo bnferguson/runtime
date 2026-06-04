@@ -1,3 +1,27 @@
+// Package workloadidentity implements OIDC workload identity tokens for
+// sandbox containers, following the GitHub Actions OIDC pattern.
+//
+// # Trust Model
+//
+// Each cluster is its own OIDC issuer with an independent Ed25519 signing key
+// and JWKS endpoint. Miren Cloud is not in the trust path — it only contributes
+// organization_id and cluster_id as claim metadata during registration. This
+// per-cluster model means external verifiers (e.g., AWS IAM OIDC) must
+// configure trust per cluster rather than once for all of Miren. A future
+// central issuer could reduce that to one trust config scoped by claims, but
+// would introduce a single point of compromise for all clusters.
+//
+// # Issuer URL (iss claim)
+//
+// The issuer URL is the cluster's cryptographic identity anchor — it's baked
+// into every token and pinned in external trust configurations. For
+// cloud-registered clusters, this is the provisioned DNS hostname
+// (e.g., https://cluster-abc.miren.systems). For bare-metal clusters without
+// registration, it falls back to cfg.TLS.AdditionalNames[0], meaning the
+// identity anchor is determined by config list order. This fallback is
+// intentionally simple for v1; a more deliberate selection mechanism (e.g.,
+// explicit --issuer-url flag) may be warranted if bare-metal OIDC federation
+// sees adoption.
 package workloadidentity
 
 import (
