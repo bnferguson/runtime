@@ -47,6 +47,7 @@ type LogEntry struct {
 	Stream     LogStream
 	TraceID    string
 	Attributes map[string]string
+	Extra      map[string]string
 	Body       string
 }
 
@@ -100,6 +101,12 @@ func (l *PersistentLogWriter) WriteEntry(entity string, le LogEntry) error {
 	// Add attributes as top-level fields, but never overwrite reserved fields
 	// that control log routing and identity.
 	for k, v := range le.Attributes {
+		if isReservedLogField(k) {
+			continue
+		}
+		logData[k] = v
+	}
+	for k, v := range le.Extra {
 		if isReservedLogField(k) {
 			continue
 		}
@@ -280,8 +287,10 @@ func (l *LogReader) ReadBySandbox(ctx context.Context, sandboxID string, opts ..
 		limit = DefaultLogReadLimit
 	}
 
-	// Build LogsQL query filtering by sandbox attribute
-	query := `sandbox:` + logsQLQuote(sandboxID)
+	// Build LogsQL query filtering by sandbox attribute.
+	// Query both old and new field names for backwards compatibility.
+	quoted := logsQLQuote(sandboxID)
+	query := `(sandbox:` + quoted + ` OR miren.sandbox:` + quoted + `)`
 
 	// Victoria Logs often requires a time range
 	startTime := o.From
@@ -303,7 +312,8 @@ type LogTarget struct {
 func (t LogTarget) Query() string {
 	var base string
 	if t.SandboxID != "" {
-		base = `sandbox:` + logsQLQuote(t.SandboxID)
+		quoted := logsQLQuote(t.SandboxID)
+		base = `(sandbox:` + quoted + ` OR miren.sandbox:` + quoted + `)`
 	} else {
 		base = `entity:` + logsQLQuote(t.EntityID)
 	}

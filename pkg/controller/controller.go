@@ -159,7 +159,7 @@ func (c *ReconcileController) Start(top context.Context) error {
 				c.Log.Debug("Attempting to establish watch connection", "index", c.index.ID, "value", c.index.Value)
 			}
 
-			_, err := c.esc.WatchIndex(ctx, c.index, stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
+			_, err := c.esc.WatchIndex(ctx, c.index, 0, stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
 				// Log successful reconnection after retry
 				if retryCount > 0 {
 					c.Log.Info("Watch successfully reconnected", "index", c.index.ID, "value", c.index.Value, "afterAttempts", retryCount)

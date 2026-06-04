@@ -65,6 +65,12 @@ func (b *BatchLogWriter) WriteEntry(entity string, le LogEntry) error {
 		}
 		logData[k] = v
 	}
+	for k, v := range le.Extra {
+		if isReservedLogField(k) {
+			continue
+		}
+		logData[k] = v
+	}
 
 	jsonData, err := json.Marshal(logData)
 	if err != nil {

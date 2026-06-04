@@ -13,11 +13,11 @@ Complete reference for all `miren` CLI commands.
 | Command | Description |
 |---------|-------------|
 | [`miren addon`](/command/addon) | Addon management commands |
-| [`miren addon create`](/command/addon-create) | Attach an addon to an application _(`addons`)_ |
-| [`miren addon destroy`](/command/addon-destroy) | Remove an addon from an application _(`addons`)_ |
-| [`miren addon list`](/command/addon-list) | List addons attached to an application _(`addons`)_ |
-| [`miren addon list-available`](/command/addon-list-available) | List available addons _(`addons`)_ |
-| [`miren addon variants`](/command/addon-variants) | Show variants for an addon _(`addons`)_ |
+| [`miren addon create`](/command/addon-create) | Attach an addon to an application |
+| [`miren addon destroy`](/command/addon-destroy) | Remove an addon from an application |
+| [`miren addon list`](/command/addon-list) | List addons attached to an application |
+| [`miren addon list-available`](/command/addon-list-available) | List available addons |
+| [`miren addon variants`](/command/addon-variants) | Show variants for an addon |
 
 ## admin
 

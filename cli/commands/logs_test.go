@@ -29,7 +29,7 @@ func TestBuildFilterWithService(t *testing.T) {
 			name:       "service only",
 			userFilter: "",
 			service:    "web",
-			want:       `service:"web"`,
+			want:       `(service:"web" OR miren.service:"web")`,
 		},
 		{
 			name:       "filter only",
@@ -41,19 +41,19 @@ func TestBuildFilterWithService(t *testing.T) {
 			name:       "service and filter",
 			userFilter: "error",
 			service:    "web",
-			want:       `service:"web" error`,
+			want:       `(service:"web" OR miren.service:"web") error`,
 		},
 		{
 			name:       "service with complex filter",
 			userFilter: `error -debug /timeout/`,
 			service:    "worker",
-			want:       `service:"worker" error -debug /timeout/`,
+			want:       `(service:"worker" OR miren.service:"worker") error -debug /timeout/`,
 		},
 		{
 			name:       "service with spaces needs quoting",
 			userFilter: "",
 			service:    "my service",
-			want:       `service:"my service"`,
+			want:       `(service:"my service" OR miren.service:"my service")`,
 		},
 	}
 
@@ -214,6 +214,129 @@ func TestPrintLogEntryJSON(t *testing.T) {
 			if err := json.Unmarshal([]byte(line), &obj); err != nil {
 				t.Errorf("line %d is not valid JSON: %v", i, err)
 			}
+		}
+	})
+}
+
+func TestPrintLogEntry(t *testing.T) {
+	ts := time.Date(2026, 3, 13, 16, 30, 0, 0, time.UTC)
+
+	t.Run("uses short_id for bracket display", func(t *testing.T) {
+		var buf bytes.Buffer
+		ctx := &Context{Context: context.Background(), Stdout: &buf}
+
+		entry := &app_v1alpha.LogEntry{}
+		entry.SetTimestamp(standard.ToTimestamp(ts))
+		entry.SetStream("stdout")
+		entry.SetSource("clusteragent-web-CbZwTC2ATZnrWjt1uPwog")
+		entry.SetLine("hello world")
+		entry.SetAttributes(map[string]string{"miren.short_id": "wog"})
+
+		printLogEntry(ctx, entry)
+
+		got := buf.String()
+		if !strings.Contains(got, "[wog]") {
+			t.Errorf("expected [wog] in output, got: %s", got)
+		}
+		if strings.Contains(got, "miren.short_id=") {
+			t.Errorf("miren.short_id should be hidden from attributes, got: %s", got)
+		}
+	})
+
+	t.Run("falls back to abbreviated source without short_id", func(t *testing.T) {
+		var buf bytes.Buffer
+		ctx := &Context{Context: context.Background(), Stdout: &buf}
+
+		entry := &app_v1alpha.LogEntry{}
+		entry.SetTimestamp(standard.ToTimestamp(ts))
+		entry.SetStream("stdout")
+		entry.SetSource("clusteragent-web-CbZwTC2ATZnrWjt1uPwog")
+		entry.SetLine("hello world")
+
+		printLogEntry(ctx, entry)
+
+		got := buf.String()
+		if !strings.Contains(got, "[clu…jt1uPwog]") {
+			t.Errorf("expected abbreviated source in output, got: %s", got)
+		}
+	})
+
+	t.Run("filters noise attributes", func(t *testing.T) {
+		var buf bytes.Buffer
+		ctx := &Context{Context: context.Background(), Stdout: &buf}
+
+		entry := &app_v1alpha.LogEntry{}
+		entry.SetTimestamp(standard.ToTimestamp(ts))
+		entry.SetStream("stdout")
+		entry.SetLine("hello")
+		entry.SetAttributes(map[string]string{
+			"miren.container": "app",
+			"miren.sandbox":   "sandbox/test-abc123",
+			"miren.service":   "web",
+			"miren.stage":     "app-run",
+			"miren.version":   "app_version/test-v1",
+			"miren.short_id":  "abc",
+			"component":       "scheduler",
+		})
+
+		printLogEntry(ctx, entry)
+
+		got := buf.String()
+		if !strings.Contains(got, "component=scheduler") {
+			t.Errorf("expected component=scheduler in output, got: %s", got)
+		}
+		if strings.Contains(got, "miren.") {
+			t.Errorf("miren.* attributes should be hidden, got: %s", got)
+		}
+	})
+
+	t.Run("plain text lines displayed as-is", func(t *testing.T) {
+		var buf bytes.Buffer
+		ctx := &Context{Context: context.Background(), Stdout: &buf}
+
+		entry := &app_v1alpha.LogEntry{}
+		entry.SetTimestamp(standard.ToTimestamp(ts))
+		entry.SetStream("stdout")
+		entry.SetLine("plain text log message")
+
+		printLogEntry(ctx, entry)
+
+		got := buf.String()
+		if !strings.Contains(got, "plain text log message") {
+			t.Errorf("expected plain text preserved, got: %s", got)
+		}
+	})
+}
+
+func TestFormatAttributes(t *testing.T) {
+	t.Run("filters hidden attributes", func(t *testing.T) {
+		m := map[string]string{
+			"miren.container": "app",
+			"miren.sandbox":   "sandbox/test",
+			"miren.service":   "web",
+			"miren.stage":     "app-run",
+			"miren.version":   "v1",
+			"miren.short_id":  "abc",
+			"source":          "test-id",
+			"component":       "scheduler",
+		}
+		got := formatAttributes(m)
+		if !strings.Contains(got, "component=scheduler") {
+			t.Errorf("expected component=scheduler, got: %q", got)
+		}
+		if strings.Contains(got, "miren.") {
+			t.Errorf("hidden attrs should not appear, got: %q", got)
+		}
+	})
+
+	t.Run("returns empty when all attributes are hidden", func(t *testing.T) {
+		m := map[string]string{
+			"miren.container": "app",
+			"miren.sandbox":   "sandbox/test",
+		}
+		got := formatAttributes(m)
+		if got != "" {
+			t.Errorf("expected empty, got: %q", got)
 		}
 	})
 }

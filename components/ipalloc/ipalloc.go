@@ -16,8 +16,7 @@ import (
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/network/network_v1alpha"
 	"miren.dev/runtime/pkg/entity"
-	"miren.dev/runtime/pkg/multierror"
-	"miren.dev/runtime/pkg/rpc/stream"
+	"miren.dev/runtime/pkg/entity/indexwatch"
 )
 
 type Allocator struct {
@@ -36,32 +35,29 @@ func NewAllocator(log *slog.Logger, subnets []netip.Prefix) *Allocator {
 	}
 }
 
-func (a *Allocator) Refresh(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient) error {
-	res, err := eac.List(ctx, entity.Ref(entity.EntityKind, network_v1alpha.KindService))
-	if err != nil {
-		return err
-	}
-
+// reconcileSnapshot processes a full snapshot of the Service index. It first
+// seeds the allocation table from services that already have IPs (so we never
+// hand out an address that is already in use), then assigns IPs to any service
+// that still lacks them.
+func (a *Allocator) reconcileSnapshot(ctx context.Context, entities []*entity.Entity, eac *entityserver_v1alpha.EntityAccessClient) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	var rerr error
-
-	for _, ent := range res.Values() {
+	for _, ent := range entities {
 		var serv network_v1alpha.Service
-		serv.Decode(ent.Entity())
+		serv.Decode(ent)
 
 		for _, ip := range serv.Ip {
-			addr, err := netip.ParseAddr(ip)
-			if err != nil {
-				rerr = multierror.Append(rerr, err)
-			} else {
-				a.allocations[addr] = ent.Id()
+			if addr, err := netip.ParseAddr(ip); err == nil {
+				a.allocations[addr] = string(ent.Id())
 			}
 		}
 	}
+	a.mu.Unlock()
 
-	return nil
+	for _, ent := range entities {
+		if err := a.assignService(ctx, ent, eac); err != nil {
+			a.log.Error("failed to assign service during sync", "error", err, "service", ent.Id())
+		}
+	}
 }
 
 func (a *Allocator) Allocate(ctx context.Context, id entity.Id) ([]netip.Addr, error) {
@@ -161,29 +157,38 @@ func (a *Allocator) Watch(ctx context.Context, eac *entityserver_v1alpha.EntityA
 
 	index := entity.Ref(entity.EntityKind, network_v1alpha.KindService)
 
-	_, err := eac.WatchIndex(ctx, index, stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
-		if op == nil {
-			return nil
-		}
+	// indexwatch.Watcher owns reconnect-with-backoff and resumes the watch from
+	// its revision cursor, so services created or modified while the watch was
+	// down are never missed — replacing the previous one-shot watch that silently
+	// stopped allocating IPs if the watch ever ended.
+	w := indexwatch.New(eac, index, indexwatch.Options{Logger: a.log})
+	if err := w.Start(ctx); err != nil {
+		return err
+	}
+	defer w.Stop()
 
-		switch op.OperationType() {
-		case entityserver_v1alpha.EntityOperationCreate, entityserver_v1alpha.EntityOperationUpdate:
-			// fine
-		case entityserver_v1alpha.EntityOperationDelete:
-			// Nothing to assign on delete.
-			fallthrough
-		default:
-			return nil
-		}
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case ev, ok := <-w.Updates():
+			if !ok {
+				return nil
+			}
 
-		err := a.assignService(ctx, op.Entity().Entity(), eac)
-		if err != nil {
-			a.log.Error("failed to assign sandbox", "error", err, "sandbox", op.Entity().Id())
+			switch ev.Type {
+			case indexwatch.EventSync:
+				a.reconcileSnapshot(ctx, ev.Entities, eac)
+			case indexwatch.EventAdded, indexwatch.EventUpdated:
+				if ev.Entity == nil {
+					continue
+				}
+				if err := a.assignService(ctx, ev.Entity, eac); err != nil {
+					a.log.Error("failed to assign service", "error", err, "service", ev.Id)
+				}
+			}
 		}
-
-		return nil
-	}))
-	return err
+	}
 }
 
 type service struct {

@@ -14,11 +14,6 @@ features:
     description: Enable the admin API for application management functions
     default: false
 
-  - name: addons
-    predicate: Addons
-    description: Enable the addon system for managed backing services
-    default: true
-
   - name: sagas
     predicate: Sagas
     description: Use saga-based crash-recoverable workflows for sandbox lifecycle

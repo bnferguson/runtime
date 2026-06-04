@@ -83,24 +83,24 @@ func TestVictoriaLogsIntegration(t *testing.T) {
 				body:   "Application started",
 				stream: observability.Stdout,
 				attributes: map[string]string{
-					"sandbox": sandboxID,
-					"phase":   "startup",
+					"miren.sandbox": sandboxID,
+					"phase":         "startup",
 				},
 			},
 			{
 				body:   "Warning: deprecated API used",
 				stream: observability.Stderr,
 				attributes: map[string]string{
-					"sandbox": sandboxID,
-					"phase":   "runtime",
+					"miren.sandbox": sandboxID,
+					"phase":         "runtime",
 				},
 			},
 			{
 				body:   "User action: button clicked",
 				stream: observability.UserOOB,
 				attributes: map[string]string{
-					"sandbox": sandboxID,
-					"user_id": "test-user",
+					"miren.sandbox": sandboxID,
+					"user_id":       "test-user",
 				},
 			},
 		}
@@ -141,7 +141,7 @@ func TestVictoriaLogsIntegration(t *testing.T) {
 		r.Len(sandboxEntries, 3, "should have 3 logs for sandbox")
 
 		for _, entry := range sandboxEntries {
-			r.Equal(sandboxID, entry.Attributes["sandbox"], "should have correct sandbox ID")
+			r.Equal(sandboxID, entry.Attributes["miren.sandbox"], "should have correct sandbox ID")
 		}
 	})
 

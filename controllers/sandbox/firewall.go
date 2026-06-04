@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"strconv"
 
-	"github.com/containernetworking/plugins/pkg/utils/sysctl"
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/network"
 	"miren.dev/runtime/pkg/netutil"
@@ -28,59 +27,8 @@ func (c *SandboxController) configureFirewall(sb *compute.Sandbox, ep *network.E
 }
 
 func (c *SandboxController) configurePort(p compute.SandboxSpecContainerPort, ep *network.EndpointConfig) error {
-	// Configure the firewall to forward traffic on node port to port
-
-	if p.NodePort != 0 {
-
-		c.Log.Info("configuring firewall", "port", p.NodePort, "targetPort", p.Port)
-
-		addr := ep.Addresses[0]
-
-		sysctl.Sysctl("net.ipv4.conf.all.route_localnet", "1")
-
-		exe := exec.Command("iptables",
-			"-t", "nat",
-			"-I", "PREROUTING",
-			"!", "-i", c.Bridge,
-			"-p", "tcp",
-			"-m", "tcp",
-			"--dport", strconv.Itoa(int(p.NodePort)),
-			"-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", addr.Addr(), p.Port),
-		)
-
-		if _, err := exe.CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to configure port %d: %w", p.NodePort, err)
-		}
-
-		exe = exec.Command("iptables",
-			"-t", "nat",
-			"-I", "OUTPUT",
-			"-p", "tcp",
-			"-m", "tcp",
-			"-d", "127.0.0.1",
-			"--dport", strconv.Itoa(int(p.NodePort)),
-			"-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", addr.Addr(), p.Port),
-		)
-
-		if _, err := exe.CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to configure port %d: %w", p.NodePort, err)
-		}
-
-		exe = exec.Command("iptables",
-			"-t", "nat",
-			"-A", "POSTROUTING",
-			"-s", "127.0.0.1",
-			"-p", "tcp",
-			"-d", addr.Addr().String(),
-			"--dport", strconv.Itoa(int(p.Port)),
-			"-j", "MASQUERADE",
-		)
-
-		if _, err := exe.CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to configure port %d: %w", p.NodePort, err)
-		}
-	}
-
+	// NodePort DNAT is handled by the service controller via nftables.
+	// No iptables rules are needed here.
 	return nil
 }
 
@@ -110,42 +58,47 @@ func (c *SandboxController) unconfigurePort(p compute.SandboxSpecContainerPort, 
 
 	c.Log.Info("removing firewall rules", "nodePort", p.NodePort, "targetPort", p.Port, "ip", ip)
 
-	out, err := exec.Command("iptables",
-		"-t", "nat",
-		"-D", "PREROUTING",
-		"!", "-i", c.Bridge,
-		"-p", "tcp",
-		"-m", "tcp",
-		"--dport", strconv.Itoa(int(p.NodePort)),
-		"-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", ip, p.Port),
-	).CombinedOutput()
-	if err != nil {
-		c.Log.Warn("failed to remove PREROUTING rule", "nodePort", p.NodePort, "err", err, "output", string(out))
+	// Loop each delete to remove all duplicate rules accumulated by prior
+	// versions that inserted without deduplication.
+	for {
+		if err := exec.Command("iptables",
+			"-t", "nat",
+			"-D", "PREROUTING",
+			"!", "-i", c.Bridge,
+			"-p", "tcp",
+			"-m", "tcp",
+			"--dport", strconv.Itoa(int(p.NodePort)),
+			"-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", ip, p.Port),
+		).Run(); err != nil {
+			break
+		}
 	}
 
-	out, err = exec.Command("iptables",
-		"-t", "nat",
-		"-D", "OUTPUT",
-		"-p", "tcp",
-		"-m", "tcp",
-		"-d", "127.0.0.1",
-		"--dport", strconv.Itoa(int(p.NodePort)),
-		"-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", ip, p.Port),
-	).CombinedOutput()
-	if err != nil {
-		c.Log.Warn("failed to remove OUTPUT rule", "nodePort", p.NodePort, "err", err, "output", string(out))
+	for {
+		if err := exec.Command("iptables",
+			"-t", "nat",
+			"-D", "OUTPUT",
+			"-p", "tcp",
+			"-m", "tcp",
+			"-d", "127.0.0.1",
+			"--dport", strconv.Itoa(int(p.NodePort)),
+			"-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", ip, p.Port),
+		).Run(); err != nil {
+			break
+		}
 	}
 
-	out, err = exec.Command("iptables",
-		"-t", "nat",
-		"-D", "POSTROUTING",
-		"-s", "127.0.0.1",
-		"-p", "tcp",
-		"-d", ip,
-		"--dport", strconv.Itoa(int(p.Port)),
-		"-j", "MASQUERADE",
-	).CombinedOutput()
-	if err != nil {
-		c.Log.Warn("failed to remove POSTROUTING rule", "nodePort", p.NodePort, "err", err, "output", string(out))
+	for {
+		if err := exec.Command("iptables",
+			"-t", "nat",
+			"-D", "POSTROUTING",
+			"-s", "127.0.0.1",
+			"-p", "tcp",
+			"-d", ip,
+			"--dport", strconv.Itoa(int(p.Port)),
+			"-j", "MASQUERADE",
+		).Run(); err != nil {
+			break
+		}
 	}
 }
