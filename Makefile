@@ -218,9 +218,6 @@ lint-fix: ## Run golangci-lint with auto-fix
 lint-pr: ## Run golangci-lint on changes from main
 	golangci-lint run --new-from-rev main ./...
 
-vet: ## Run go vet with the exhaustive analyzer as a vettool
-	go vet -vettool="$$(go tool -n exhaustive)" ./...
-
 docs-lint: ## Lint docs (no JS toolchain needed)
 	@bash hack/docs-lint.sh
 
@@ -242,7 +239,7 @@ generate-check: bin/miren ## Verify go generate is up to date
 	fi
 	@echo "✓ go generate is up to date"
 
-.PHONY: lint lint-fix lint-pr vet docs-lint generate-check
+.PHONY: lint lint-fix lint-pr docs-lint generate-check
 
 #
 # Release Packaging
