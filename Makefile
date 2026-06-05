@@ -5,8 +5,11 @@
 # Disable telemetry
 export DO_NOT_TRACK=1
 
-# Generate a unique session name based on the project directory
+# Generate a unique session name based on the project directory.
+# Exported so recipes that shell out to hack/dev-exec target the same
+# session, including when ISO_SESSION is overridden from the environment.
 ISO_SESSION ?= dev-$(shell basename "$$(pwd)")
+export ISO_SESSION
 
 # Extract git info on the host for passing to container builds
 # These handle both regular repos and worktrees
