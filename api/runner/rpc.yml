@@ -159,6 +159,33 @@ interfaces:
             type: string
             doc: Error message if removal failed
 
+      - name: RefreshCertificate
+        index: 6
+        public: true  # Authenticated in the handler via the caller's existing runner mTLS cert
+        doc: |
+          Re-issue a runner's server certificate with updated SANs. Used when a
+          runner's listen address changes (e.g. a VM is recreated with a new IP
+          but a persistent disk keeps the old, now-stale certificate). The caller
+          must present its existing CA-signed runner certificate; the new cert
+          preserves that certificate's CommonName.
+        parameters:
+          - name: listen_addr
+            type: string
+            doc: The runner's current listen address whose host should be covered by the new cert
+        results:
+          - name: cert_pem
+            type: bytes
+            doc: Re-issued certificate in PEM format
+          - name: key_pem
+            type: bytes
+            doc: Private key for the re-issued certificate in PEM format
+          - name: ca_pem
+            type: bytes
+            doc: CA certificate in PEM format
+          - name: error
+            type: string
+            doc: Error message if the refresh failed
+
 types:
   - type: InviteInfo
     doc: Information about a runner invite

@@ -4,6 +4,8 @@ package commands
 
 import (
 	"context"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"net"
 	"net/netip"
@@ -16,6 +18,7 @@ import (
 
 	containerd "github.com/containerd/containerd/v2/client"
 	"golang.org/x/sync/errgroup"
+	"miren.dev/runtime/api/runner/runner_v1alpha"
 	"miren.dev/runtime/clientconfig"
 	containerdcomp "miren.dev/runtime/components/containerd"
 	"miren.dev/runtime/components/netresolve"
@@ -23,6 +26,7 @@ import (
 	"miren.dev/runtime/controllers/sandbox"
 	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/observability"
+	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/runnerconfig"
 )
 
@@ -43,6 +47,30 @@ func RunnerStart(ctx *Context, opts struct {
 		"coordinator", cfg.CoordinatorAddress,
 		"etcd_endpoints", cfg.EtcdEndpoints,
 		"network_backend", cfg.NetworkBackend)
+
+	// Determine listen address. If no explicit address is given, discover the
+	// machine's outbound IP (the one that would route to the coordinator) and
+	// advertise that so the coordinator knows how to reach this runner.
+	listenAddr := opts.ListenAddr
+	if listenAddr == "" {
+		port := "8444"
+		ip, err := discoverOutboundIP(cfg.CoordinatorAddress)
+		if err != nil {
+			return fmt.Errorf("could not discover outbound IP for listen address (use --listen to set manually): %w", err)
+		}
+		listenAddr = net.JoinHostPort(ip.String(), port)
+		ctx.Log.Info("discovered listen address", "addr", listenAddr)
+	}
+
+	// The runner's certificate is persisted in the config (often on a disk that
+	// outlives the VM). If the listen address has changed since the cert was
+	// issued, the persisted cert no longer covers our IP and clients (e.g.
+	// sandbox exec) will fail TLS verification. Re-issue the cert before we use
+	// it to serve. Refreshing is fatal when the address isn't covered: serving a
+	// stale cert would leave the runner silently unreachable.
+	if err := ensureRunnerCertificate(ctx, cfg, opts.ConfigPath, listenAddr); err != nil {
+		return err
+	}
 
 	// Create clientconfig from saved certs for RPC authentication
 	clientCfg := clientconfig.NewConfig()
@@ -136,20 +164,6 @@ func RunnerStart(ctx *Context, opts struct {
 
 	// Create errgroup for background tasks
 	eg, egCtx := errgroup.WithContext(sigCtx)
-
-	// Determine listen address. If no explicit address is given, discover the
-	// machine's outbound IP (the one that would route to the coordinator) and
-	// advertise that so the coordinator knows how to reach this runner.
-	listenAddr := opts.ListenAddr
-	if listenAddr == "" {
-		port := "8444"
-		ip, err := discoverOutboundIP(cfg.CoordinatorAddress)
-		if err != nil {
-			return fmt.Errorf("could not discover outbound IP for listen address (use --listen to set manually): %w", err)
-		}
-		listenAddr = net.JoinHostPort(ip.String(), port)
-		ctx.Log.Info("discovered listen address", "addr", listenAddr)
-	}
 
 	// Build runner configuration
 	runnerCfg := runner.RunnerConfig{
@@ -299,4 +313,108 @@ func RunnerStart(ctx *Context, opts struct {
 
 	ctx.Log.Info("runner stopped")
 	return nil
+}
+
+// ensureRunnerCertificate re-issues the runner's server certificate when the
+// current listen address is not covered by the persisted certificate's SANs.
+// This happens when a VM is recreated with a new IP but a persistent disk keeps
+// the old config (cert + runner ID). The refreshed cert is written back to the
+// config so it survives subsequent restarts. A required-but-failed refresh is
+// fatal: serving a stale cert would leave the runner silently unreachable.
+func ensureRunnerCertificate(ctx *Context, cfg *runnerconfig.Config, configPath, listenAddr string) error {
+	if cfg.ClientCert == "" {
+		return nil
+	}
+
+	covered, err := certCoversListenAddr(cfg.ClientCert, listenAddr)
+	if err != nil {
+		return fmt.Errorf("failed to inspect runner certificate: %w", err)
+	}
+	if covered {
+		return nil
+	}
+
+	ctx.Log.Info("runner certificate does not cover listen address; refreshing",
+		"listen_addr", listenAddr)
+
+	cs, err := rpc.NewState(ctx,
+		rpc.WithLogger(ctx.Log),
+		rpc.WithBindAddr("[::]:0"),
+		rpc.WithCertPEMs([]byte(cfg.ClientCert), []byte(cfg.ClientKey)),
+		rpc.WithCertificateVerification([]byte(cfg.CACert)),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create RPC state for certificate refresh: %w", err)
+	}
+	defer cs.Close()
+
+	client, err := cs.Connect(cfg.CoordinatorAddress, rpc.ServiceRunner)
+	if err != nil {
+		return fmt.Errorf("failed to connect to coordinator for certificate refresh: %w", err)
+	}
+	defer client.Close()
+
+	rc := runner_v1alpha.NewRunnerRegistrationClient(client)
+	res, err := rc.RefreshCertificate(ctx, listenAddr)
+	if err != nil {
+		return fmt.Errorf("certificate refresh request failed: %w", err)
+	}
+	if res.Error() != "" {
+		return fmt.Errorf("certificate refresh rejected by coordinator: %s", res.Error())
+	}
+	if len(res.CertPem()) == 0 || len(res.KeyPem()) == 0 {
+		return fmt.Errorf("coordinator returned an empty certificate")
+	}
+
+	cfg.ClientCert = string(res.CertPem())
+	cfg.ClientKey = string(res.KeyPem())
+	if len(res.CaPem()) > 0 {
+		cfg.CACert = string(res.CaPem())
+	}
+
+	if err := cfg.Save(configPath); err != nil {
+		return fmt.Errorf("failed to save refreshed certificate: %w", err)
+	}
+
+	ctx.Log.Info("runner certificate refreshed", "listen_addr", listenAddr)
+	return nil
+}
+
+// certCoversListenAddr reports whether the leaf certificate in certPEM carries a
+// SAN matching the host of listenAddr: an IP SAN for an IP host, or a DNS SAN
+// for a hostname. This mirrors how the coordinator builds the certificate's SANs
+// from the listen address.
+func certCoversListenAddr(certPEM, listenAddr string) (bool, error) {
+	host, _, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		host = listenAddr
+	}
+	if host == "" {
+		return true, nil
+	}
+
+	block, _ := pem.Decode([]byte(certPEM))
+	if block == nil {
+		return false, fmt.Errorf("no PEM block found in certificate")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return false, fmt.Errorf("parsing certificate: %w", err)
+	}
+
+	if ip := net.ParseIP(host); ip != nil {
+		for _, certIP := range cert.IPAddresses {
+			if certIP.Equal(ip) {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+
+	for _, name := range cert.DNSNames {
+		if name == host {
+			return true, nil
+		}
+	}
+	return false, nil
 }

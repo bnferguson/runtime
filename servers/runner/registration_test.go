@@ -6,6 +6,7 @@ import (
 	"encoding/pem"
 	"net"
 	"testing"
+	"time"
 
 	"miren.dev/runtime/api/runner/runner_v1alpha"
 	"miren.dev/runtime/pkg/caauth"
@@ -18,6 +19,8 @@ import (
 type testEnv struct {
 	client *runner_v1alpha.RunnerRegistrationClient
 	store  *entity.MockStore
+	server *RegistrationServer
+	ca     *caauth.Authority
 }
 
 func newTestServer(t *testing.T) (*testEnv, func()) {
@@ -28,6 +31,7 @@ func newTestServer(t *testing.T) (*testEnv, func()) {
 	ca, err := caauth.New(caauth.Options{
 		CommonName:   "test-ca",
 		Organization: "test",
+		ValidFor:     24 * time.Hour,
 	})
 	if err != nil {
 		cleanup()
@@ -44,7 +48,38 @@ func newTestServer(t *testing.T) (*testEnv, func()) {
 	localClient := rpc.LocalClient(runner_v1alpha.AdaptRunnerRegistration(regServer))
 	client := runner_v1alpha.NewRunnerRegistrationClient(localClient)
 
-	return &testEnv{client: client, store: es.Store}, cleanup
+	return &testEnv{client: client, store: es.Store, server: regServer, ca: ca}, cleanup
+}
+
+// issueLeafCert issues a certificate from the given authority and returns the
+// parsed leaf certificate (the first PEM block; IssueCertificate appends the CA
+// cert after it).
+func issueLeafCert(t *testing.T, ca *caauth.Authority, commonName, org string, ip string) *x509.Certificate {
+	t.Helper()
+
+	opts := caauth.Options{
+		CommonName:   commonName,
+		Organization: org,
+		ValidFor:     time.Hour,
+	}
+	if ip != "" {
+		opts.IPs = []net.IP{net.ParseIP(ip)}
+	}
+
+	cc, err := ca.IssueCertificate(opts)
+	if err != nil {
+		t.Fatalf("failed to issue cert: %v", err)
+	}
+
+	block, _ := pem.Decode(cc.CertPEM)
+	if block == nil {
+		t.Fatal("failed to decode issued cert PEM")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatalf("failed to parse issued cert: %v", err)
+	}
+	return cert
 }
 
 // createInviteAndDecode creates a one-time invite and returns the secret.
@@ -467,4 +502,254 @@ func TestRemoveRunnerByRunnerId(t *testing.T) {
 	if len(listResult.Runners()) != 0 {
 		t.Errorf("expected 0 runners, got %d", len(listResult.Runners()))
 	}
+}
+
+func TestBuildRunnerSANs(t *testing.T) {
+	t.Run("IP listen address adds IP SAN", func(t *testing.T) {
+		ips, dnsNames := buildRunnerSANs("10.0.0.7:8444")
+
+		wantIPs := []string{"127.0.0.1", "::1", "10.0.0.7"}
+		for _, want := range wantIPs {
+			if !containsIP(ips, want) {
+				t.Errorf("missing IP SAN %s, got %v", want, ips)
+			}
+		}
+		if !containsStr(dnsNames, "localhost") {
+			t.Errorf("missing DNS SAN localhost, got %v", dnsNames)
+		}
+		if containsStr(dnsNames, "10.0.0.7") {
+			t.Errorf("IP should not appear as a DNS SAN, got %v", dnsNames)
+		}
+	})
+
+	t.Run("hostname listen address adds DNS SAN", func(t *testing.T) {
+		ips, dnsNames := buildRunnerSANs("runner.example.com:8444")
+
+		if !containsStr(dnsNames, "runner.example.com") {
+			t.Errorf("missing DNS SAN runner.example.com, got %v", dnsNames)
+		}
+		if !containsIP(ips, "127.0.0.1") || !containsIP(ips, "::1") {
+			t.Errorf("missing loopback IP SANs, got %v", ips)
+		}
+	})
+
+	t.Run("empty listen address yields only loopback", func(t *testing.T) {
+		ips, dnsNames := buildRunnerSANs("")
+		if len(ips) != 2 {
+			t.Errorf("expected only loopback IPs, got %v", ips)
+		}
+		if len(dnsNames) != 1 || dnsNames[0] != "localhost" {
+			t.Errorf("expected only localhost DNS, got %v", dnsNames)
+		}
+	})
+}
+
+// joinRunner performs a Join and returns the issued leaf certificate and the
+// assigned runner ID, so tests can exercise refresh as a real, registered runner.
+func (e *testEnv) joinRunner(t *testing.T, ctx context.Context, listenAddr, name string) (*x509.Certificate, string) {
+	t.Helper()
+
+	secret := e.createInviteAndDecode(t, ctx)
+	res, err := e.client.Join(ctx, secret, "", listenAddr, "v1", nil, name)
+	if err != nil {
+		t.Fatalf("Join failed: %v", err)
+	}
+	if res.HasError() {
+		t.Fatalf("Join returned error: %s", res.Error())
+	}
+
+	block, _ := pem.Decode(res.CertPem())
+	if block == nil {
+		t.Fatal("failed to decode join cert PEM")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatalf("failed to parse join cert: %v", err)
+	}
+	return cert, res.RunnerId()
+}
+
+func TestReissueRunnerCertificate(t *testing.T) {
+	ctx := context.Background()
+	env, cleanup := newTestServer(t)
+	defer cleanup()
+
+	t.Run("happy path re-issues with new IP and preserves CN", func(t *testing.T) {
+		peer, _ := env.joinRunner(t, ctx, "10.0.0.1:8444", "happy-runner")
+
+		cc, err := env.server.reissueRunnerCertificate(ctx, peer, "10.0.0.2:8444")
+		if err != nil {
+			t.Fatalf("reissueRunnerCertificate failed: %v", err)
+		}
+
+		// The re-issued cert must be signed by the cluster CA.
+		if err := env.ca.VerifyCertificate(cc.CertPEM); err != nil {
+			t.Fatalf("re-issued cert not signed by CA: %v", err)
+		}
+
+		block, _ := pem.Decode(cc.CertPEM)
+		if block == nil {
+			t.Fatal("failed to decode re-issued cert PEM")
+		}
+		newCert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			t.Fatalf("failed to parse re-issued cert: %v", err)
+		}
+
+		if newCert.Subject.CommonName != peer.Subject.CommonName {
+			t.Errorf("CommonName = %q, want preserved %q", newCert.Subject.CommonName, peer.Subject.CommonName)
+		}
+
+		var foundIPs []string
+		for _, ip := range newCert.IPAddresses {
+			foundIPs = append(foundIPs, ip.String())
+		}
+		if !containsIP(newCert.IPAddresses, "10.0.0.2") {
+			t.Errorf("re-issued cert missing new IP SAN 10.0.0.2, got %v", foundIPs)
+		}
+	})
+
+	t.Run("nil peer is rejected", func(t *testing.T) {
+		_, err := env.server.reissueRunnerCertificate(ctx, nil, "10.0.0.2:8444")
+		if err == nil {
+			t.Fatal("expected error for nil peer certificate")
+		}
+	})
+
+	t.Run("cert from another CA is rejected", func(t *testing.T) {
+		otherCA, err := caauth.New(caauth.Options{CommonName: "other-ca", Organization: "other", ValidFor: 24 * time.Hour})
+		if err != nil {
+			t.Fatalf("failed to create other CA: %v", err)
+		}
+		peer := issueLeafCert(t, otherCA, "runner-abc12345", "miren", "10.0.0.1")
+
+		_, err = env.server.reissueRunnerCertificate(ctx, peer, "10.0.0.2:8444")
+		if err == nil {
+			t.Fatal("expected error for cert signed by a different CA")
+		}
+	})
+
+	t.Run("non-runner CN is rejected", func(t *testing.T) {
+		peer := issueLeafCert(t, env.ca, "operator-abc", "miren", "10.0.0.1")
+
+		_, err := env.server.reissueRunnerCertificate(ctx, peer, "10.0.0.2:8444")
+		if err == nil {
+			t.Fatal("expected error for non-runner CommonName")
+		}
+	})
+
+	t.Run("wrong organization is rejected", func(t *testing.T) {
+		peer := issueLeafCert(t, env.ca, "runner-abc12345", "intruder", "10.0.0.1")
+
+		_, err := env.server.reissueRunnerCertificate(ctx, peer, "10.0.0.2:8444")
+		if err == nil {
+			t.Fatal("expected error for cert with wrong organization")
+		}
+	})
+
+	t.Run("unregistered runner cert is rejected", func(t *testing.T) {
+		// A genuine CA-signed runner cert, but no matching Node exists (e.g. the
+		// runner was never registered or has been removed). The identity comes
+		// from the cert, so a caller cannot substitute another runner's ID.
+		peer := issueLeafCert(t, env.ca, "runner-deadbeef", "miren", "10.0.0.1")
+
+		_, err := env.server.reissueRunnerCertificate(ctx, peer, "10.0.0.2:8444")
+		if err == nil {
+			t.Fatal("expected error for a runner cert with no registered node")
+		}
+	})
+
+	t.Run("removed runner cannot refresh", func(t *testing.T) {
+		peer, runnerID := env.joinRunner(t, ctx, "10.0.0.1:8444", "removed-runner")
+
+		// Remove the runner, deleting its Node entity.
+		removeRes, err := env.client.RemoveRunner(ctx, runnerID, false)
+		if err != nil {
+			t.Fatalf("RemoveRunner failed: %v", err)
+		}
+		if removeRes.Error() != "" {
+			t.Fatalf("RemoveRunner returned error: %s", removeRes.Error())
+		}
+
+		// Its certificate is still cryptographically valid, but it is no longer
+		// registered, so refresh must be rejected.
+		_, err = env.server.reissueRunnerCertificate(ctx, peer, "10.0.0.2:8444")
+		if err == nil {
+			t.Fatal("expected error refreshing a removed runner's certificate")
+		}
+	})
+
+	t.Run("ambiguous runner identity is rejected", func(t *testing.T) {
+		// Two runners whose IDs share the same 8-char prefix produce the same
+		// certificate CommonName. Refresh must fail closed rather than guess.
+		secret1 := env.createInviteAndDecode(t, ctx)
+		res1, err := env.client.Join(ctx, secret1, "abcd1234-0000-0000-0000-000000000001", "10.0.0.1:8444", "v1", nil, "amb-1")
+		if err != nil {
+			t.Fatalf("Join 1 failed: %v", err)
+		}
+		if res1.HasError() {
+			t.Fatalf("Join 1 error: %s", res1.Error())
+		}
+
+		secret2 := env.createInviteAndDecode(t, ctx)
+		res2, err := env.client.Join(ctx, secret2, "abcd1234-0000-0000-0000-000000000002", "10.0.0.1:8444", "v1", nil, "amb-2")
+		if err != nil {
+			t.Fatalf("Join 2 failed: %v", err)
+		}
+		if res2.HasError() {
+			t.Fatalf("Join 2 error: %s", res2.Error())
+		}
+
+		block, _ := pem.Decode(res1.CertPem())
+		if block == nil {
+			t.Fatal("failed to decode join cert PEM")
+		}
+		peer, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			t.Fatalf("failed to parse join cert: %v", err)
+		}
+
+		_, err = env.server.reissueRunnerCertificate(ctx, peer, "10.0.0.2:8444")
+		if err == nil {
+			t.Fatal("expected error for ambiguous runner identity")
+		}
+	})
+}
+
+func TestRefreshCertificateRequiresClientCert(t *testing.T) {
+	ctx := context.Background()
+	env, cleanup := newTestServer(t)
+	defer cleanup()
+
+	// The local RPC client does not carry a TLS peer certificate, so the
+	// handler must reject the request rather than minting a cert.
+	res, err := env.client.RefreshCertificate(ctx, "10.0.0.2:8444")
+	if err != nil {
+		t.Fatalf("RefreshCertificate RPC failed: %v", err)
+	}
+	if res.Error() == "" {
+		t.Fatal("expected RefreshCertificate to reject a call without a client certificate")
+	}
+	if len(res.CertPem()) != 0 {
+		t.Error("expected no certificate when the call is rejected")
+	}
+}
+
+func containsIP(ips []net.IP, want string) bool {
+	w := net.ParseIP(want)
+	for _, ip := range ips {
+		if ip.Equal(w) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsStr(ss []string, want string) bool {
+	for _, s := range ss {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }
