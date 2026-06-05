@@ -12,6 +12,7 @@ import (
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/standard"
 	"miren.dev/runtime/pkg/rpc/stream"
+	"miren.dev/runtime/pkg/ui"
 )
 
 // normalizeSandboxID ensures the sandbox ID has the "sandbox/" prefix
@@ -171,7 +172,8 @@ func LogsSystem(ctx *Context, opts struct {
 	}
 	// When no --last and no --follow, ts is nil → server returns last 100 lines
 
-	printer := logPrinter(ctx, opts.IsJSON())
+	printer, flush := logPrinter(ctx, opts.IsJSON(), opts.Follow)
+	defer flush()
 
 	ac := app_v1alpha.LogsClient{Client: cl}
 	callback := stream.Callback(func(chunk *app_v1alpha.LogChunk) error {
@@ -200,10 +202,12 @@ type logDispatchArgs struct {
 // dispatchLogs handles protocol negotiation and dispatches to the appropriate
 // log streaming method based on server capabilities.
 func dispatchLogs(ctx *Context, cl *rpc.NetworkClient, args logDispatchArgs) error {
-	printer := logPrinter(ctx, args.json)
+	printer, flush := logPrinter(ctx, args.json, args.follow)
+	defer flush()
 
 	// For app queries, wrap the printer to skip system logs that may have
-	// leaked into app log storage due to entity field collisions.
+	// leaked into app log storage due to entity field collisions. The wrapper
+	// sits in front of the coalescer so filtered-out lines aren't counted.
 	if args.app != "" {
 		inner := printer
 		printer = func(l *app_v1alpha.LogEntry) {
@@ -268,16 +272,27 @@ var streamTypePrefixes = map[string]string{
 	"user-oob": "U",
 }
 
-// logPrinter returns a function that prints a log entry in either text or JSON format.
-func logPrinter(ctx *Context, jsonOutput bool) func(*app_v1alpha.LogEntry) {
+// logPrinter returns a function that prints a log entry (text or JSON) and a
+// flush function to call once the stream ends. For interactive text follow on a
+// TTY it collapses runs of repeated lines into a live-updated counter line; in
+// every other mode it prints each entry verbatim and flush is a no-op.
+func logPrinter(ctx *Context, jsonOutput, follow bool) (func(*app_v1alpha.LogEntry), func()) {
+	noop := func() {}
+
 	if jsonOutput {
 		return func(l *app_v1alpha.LogEntry) {
 			printLogEntryJSON(ctx, l)
-		}
+		}, noop
 	}
+
+	if follow && ui.IsTTY() {
+		c := newLogCoalescer(ctx)
+		return c.print, c.flush
+	}
+
 	return func(l *app_v1alpha.LogEntry) {
 		printLogEntry(ctx, l)
-	}
+	}, noop
 }
 
 // logEntryJSON is the JSON representation of a log entry.
@@ -311,7 +326,10 @@ func printLogEntryJSON(ctx *Context, l *app_v1alpha.LogEntry) {
 	ctx.Printf("%s\n", data)
 }
 
-func printLogEntry(ctx *Context, l *app_v1alpha.LogEntry) {
+// renderLogEntry returns the full display line (without a trailing newline) and
+// a signature that is identical for entries that differ only by their timestamp.
+// The signature lets callers collapse runs of repeated lines (see logCoalescer).
+func renderLogEntry(l *app_v1alpha.LogEntry) (display, signature string) {
 	prefix := ""
 	if l.HasAttributes() {
 		if shortID, ok := l.Attributes()["miren.short_id"]; ok && shortID != "" {
@@ -330,12 +348,109 @@ func printLogEntry(ctx *Context, l *app_v1alpha.LogEntry) {
 	if l.HasAttributes() {
 		attrs = formatAttributes(l.Attributes())
 	}
-	ctx.Printf("%s %s: %s%s%s\n",
-		streamTypePrefixes[l.Stream()],
+
+	stream := streamTypePrefixes[l.Stream()]
+	display = fmt.Sprintf("%s %s: %s%s%s",
+		stream,
 		standard.FromTimestamp(l.Timestamp()).Format("2006-01-02 15:04:05"),
 		prefix,
 		l.Line(),
 		attrs)
+	// Everything except the timestamp. The NUL separator keeps field boundaries
+	// unambiguous so distinct entries can't collide on a shared signature.
+	signature = stream + "\x00" + prefix + l.Line() + attrs
+	return display, signature
+}
+
+func printLogEntry(ctx *Context, l *app_v1alpha.LogEntry) {
+	display, _ := renderLogEntry(l)
+	ctx.Printf("%s\n", display)
+}
+
+// logCoalescer collapses consecutive log lines that differ only by their
+// timestamp. The first occurrence of a line is printed in full and committed;
+// subsequent identical lines are summarized by a single live-updated line
+// printed beneath it ("[ Repeated Nx over <span> ]") instead of scrolling the
+// terminal.
+//
+// It is only used for interactive --follow on a TTY; piped, JSON, and non-follow
+// output never coalesce so machine consumers see every line verbatim.
+type logCoalescer struct {
+	ctx     *Context
+	sig     string    // signature of the current run
+	count   int       // number of lines seen in the current run
+	firstTS time.Time // timestamp of the first line in the current run
+	live    bool      // a summary line is currently on screen with no trailing newline
+}
+
+func newLogCoalescer(ctx *Context) *logCoalescer {
+	return &logCoalescer{ctx: ctx}
+}
+
+func (c *logCoalescer) print(l *app_v1alpha.LogEntry) {
+	display, signature := renderLogEntry(l)
+	ts := standard.FromTimestamp(l.Timestamp())
+
+	if c.count > 0 && signature == c.sig {
+		c.count++
+		// Redraw the summary line in place beneath the repeated log line.
+		c.ctx.Printf("\r\033[K[ Repeated %dx%s ]", c.count, runSpanSuffix(c.firstTS, ts))
+		c.live = true
+		return
+	}
+
+	// Distinct line: commit any in-progress summary, then print in full.
+	if c.live {
+		c.ctx.Printf("\n")
+	}
+	c.ctx.Printf("%s\n", display)
+	c.sig = signature
+	c.count = 1
+	c.firstTS = ts
+	c.live = false
+}
+
+// runSpanSuffix returns " over <dur>" describing how long a collapsed run has
+// been repeating, or "" when the span is under a second. Timestamps are
+// truncated to the second first so the span matches the difference between the
+// second-resolution timestamps the user actually sees; bursts within one
+// displayed second show no span, keeping the summary clean.
+func runSpanSuffix(first, last time.Time) string {
+	span := last.Truncate(time.Second).Sub(first.Truncate(time.Second))
+	if span < time.Second {
+		return ""
+	}
+	return " over " + formatRunSpan(span)
+}
+
+// formatRunSpan renders a whole-second duration compactly (e.g. "14s", "1m15s",
+// "2h5m"). Input is expected to be pre-rounded to a second.
+func formatRunSpan(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		m := int(d.Minutes())
+		if s := int(d.Seconds()) % 60; s > 0 {
+			return fmt.Sprintf("%dm%ds", m, s)
+		}
+		return fmt.Sprintf("%dm", m)
+	default:
+		h := int(d.Hours())
+		if m := int(d.Minutes()) % 60; m > 0 {
+			return fmt.Sprintf("%dh%dm", h, m)
+		}
+		return fmt.Sprintf("%dh", h)
+	}
+}
+
+// flush commits a dangling summary line with a newline so the final run isn't
+// left without one. Safe to call when nothing is pending.
+func (c *logCoalescer) flush() {
+	if c.live {
+		c.ctx.Printf("\n")
+		c.live = false
+	}
 }
 
 var hiddenAttributes = map[string]bool{
