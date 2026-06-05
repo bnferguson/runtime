@@ -168,6 +168,7 @@ func TestJoinCreatesNodeEntity(t *testing.T) {
 	block, _ := pem.Decode(joinResult.CertPem())
 	if block == nil {
 		t.Fatal("failed to decode cert PEM")
+		return
 	}
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
