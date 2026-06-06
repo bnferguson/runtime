@@ -43,16 +43,17 @@ const (
 // via autocert.Manager. It watches http_route entities and triggers cert provisioning
 // when routes are created, rather than waiting for the first TLS handshake.
 type AutocertController struct {
-	log          *slog.Logger
-	eac          *entityserver_v1alpha.EntityAccessClient
-	mgr          *autocert.Manager
-	dataPath     string
-	email        string
-	fallbackCert tls.Certificate
-	allowedHosts sync.Map      // domain -> struct{}
-	ready        chan struct{} // closed when port-80 ACME challenge server is up
-	publicIPs    func() []net.IP
-	failures     sync.Map // domain -> acmeFailure
+	log              *slog.Logger
+	eac              *entityserver_v1alpha.EntityAccessClient
+	mgr              *autocert.Manager
+	dataPath         string
+	email            string
+	fallbackCert     tls.Certificate
+	allowedHosts     sync.Map      // domain -> struct{}
+	ready            chan struct{} // closed when port-80 ACME challenge server is up
+	publicIPs        func() []net.IP
+	failures         sync.Map // domain -> acmeFailure
+	clusterHostnames map[string]struct{}
 }
 
 // acmeFailure records when an ACME attempt failed and how long to wait before
@@ -72,16 +73,28 @@ type AutocertControllerOpts struct {
 	// PublicIPs, if non-nil, is called before eager provisioning to verify DNS
 	// points to this cluster; when nil the check is skipped.
 	PublicIPs func() []net.IP
+
+	// ClusterHostnames are hostnames that should always have valid TLS
+	// certificates, independent of any HttpRoute entities (e.g., a
+	// cloud-provisioned *.miren.systems address).
+	ClusterHostnames []string
 }
 
 func NewAutocertController(opts AutocertControllerOpts) *AutocertController {
+	pinned := make(map[string]struct{}, len(opts.ClusterHostnames))
+	for _, h := range opts.ClusterHostnames {
+		if h = strings.ToLower(strings.TrimSpace(h)); h != "" {
+			pinned[h] = struct{}{}
+		}
+	}
 	return &AutocertController{
-		log:       opts.Log.With("module", "autocert-controller"),
-		eac:       opts.EAC,
-		dataPath:  opts.DataPath,
-		email:     opts.Email,
-		ready:     make(chan struct{}),
-		publicIPs: opts.PublicIPs,
+		log:              opts.Log.With("module", "autocert-controller"),
+		eac:              opts.EAC,
+		dataPath:         opts.DataPath,
+		email:            opts.Email,
+		ready:            make(chan struct{}),
+		publicIPs:        opts.PublicIPs,
+		clusterHostnames: pinned,
 	}
 }
 
@@ -113,6 +126,17 @@ func (c *AutocertController) Init(ctx context.Context) error {
 	// controller manager starts reconciling routes one by one.
 	if err := c.loadExistingRoutes(ctx); err != nil {
 		c.log.Warn("failed to pre-populate allowed hosts from existing routes", "error", err)
+	}
+
+	// Add cluster-level hostnames (e.g., cloud-provisioned *.miren.systems)
+	// to allowedHosts so TLS handshakes succeed immediately. These are pinned
+	// and never removed by route deletion.
+	for h := range c.clusterHostnames {
+		c.allowedHosts.Store(h, struct{}{})
+	}
+	if len(c.clusterHostnames) > 0 {
+		c.log.Info("added cluster hostnames to allowed hosts", "count", len(c.clusterHostnames))
+		go c.provisionClusterHostnames(ctx)
 	}
 
 	c.log.Info("autocert controller initialized")
@@ -192,8 +216,56 @@ func (c *AutocertController) Reconcile(ctx context.Context, route *ingress_v1alp
 		return ctx.Err()
 	}
 
-	// Build a synthetic ClientHello with realistic parameters so autocert provisions
-	// an ECDSA certificate (what browsers actually prefer), not just RSA.
+	if err := c.eagerProvision(ctx, domain); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// provisionClusterHostnames eagerly provisions TLS certificates for cluster-level
+// hostnames. It waits for the port-80 ACME challenge server before attempting
+// provisioning, matching the pattern used by Reconcile for route-based certs.
+func (c *AutocertController) provisionClusterHostnames(ctx context.Context) {
+	select {
+	case <-c.ready:
+	case <-ctx.Done():
+		return
+	}
+
+	for domain := range c.clusterHostnames {
+		if ctx.Err() != nil {
+			return
+		}
+
+		log := c.log.With("domain", domain, "source", "cluster-hostname")
+
+		if c.publicIPs != nil {
+			if len(c.publicIPs()) == 0 {
+				log.Info("skipping eager cert provisioning: cluster has no public IPs")
+				continue
+			}
+			if !c.dnsPointsToUs(domain) {
+				log.Info("skipping eager cert provisioning: DNS does not point to this cluster")
+				continue
+			}
+		}
+
+		if c.inCooldown(domain) {
+			log.Debug("skipping eager provisioning: domain in failure cooldown")
+			continue
+		}
+
+		if err := c.eagerProvision(ctx, domain); err != nil {
+			return
+		}
+	}
+}
+
+// eagerProvision attempts to provision a TLS certificate for the given domain
+// with a timeout, recording failures for cooldown. Returns a non-nil error only
+// when the context is cancelled.
+func (c *AutocertController) eagerProvision(ctx context.Context, domain string) error {
 	hello := &tls.ClientHelloInfo{
 		ServerName:        domain,
 		SupportedVersions: []uint16{tls.VersionTLS13, tls.VersionTLS12},
@@ -217,8 +289,6 @@ func (c *AutocertController) Reconcile(ctx context.Context, route *ingress_v1alp
 		},
 	}
 
-	// Run with a timeout so we don't block the controller for the Manager's full
-	// 5-minute internal deadline, which also wedges graceful shutdown.
 	type certResult struct {
 		cert *tls.Certificate
 		err  error
@@ -229,15 +299,17 @@ func (c *AutocertController) Reconcile(ctx context.Context, route *ingress_v1alp
 		ch <- certResult{cert, err}
 	}()
 
+	log := c.log.With("domain", domain)
+
 	select {
 	case res := <-ch:
 		if res.err != nil {
 			c.recordFailure(domain, res.err)
 			log.Warn("eager cert provisioning failed (will retry on next TLS handshake)", "error", res.err)
-			return nil
+		} else {
+			c.failures.Delete(domain)
+			log.Info("certificate provisioned successfully")
 		}
-		c.failures.Delete(domain)
-		log.Info("certificate provisioned successfully")
 	case <-time.After(reconcileGetCertTimeout):
 		c.recordFailure(domain, nil)
 		log.Warn("eager cert provisioning timed out", "timeout", reconcileGetCertTimeout)
@@ -263,8 +335,10 @@ func (c *AutocertController) Delete(ctx context.Context, id entity.Id) error {
 			return true // keep iterating, leave domain in set (safe default)
 		}
 		if len(res.Values()) == 0 {
-			c.allowedHosts.Delete(domain)
-			c.log.Debug("removed domain from allowed hosts (no remaining routes)", "domain", domain)
+			if _, pinned := c.clusterHostnames[domain]; !pinned {
+				c.allowedHosts.Delete(domain)
+				c.log.Debug("removed domain from allowed hosts (no remaining routes)", "domain", domain)
+			}
 		}
 		return true
 	})

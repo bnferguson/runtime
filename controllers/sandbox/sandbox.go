@@ -83,7 +83,7 @@ type SandboxControllerDeps struct {
 	StatusMon      *observability.StatusMonitor
 	Resolver       netresolve.Resolver
 	Metrics        *Metrics
-	WorkloadIssuer *workloadidentity.Issuer
+	WorkloadIssuer workloadidentity.TokenIssuer
 }
 
 type SandboxController struct {
@@ -110,7 +110,7 @@ type SandboxController struct {
 
 	Resolver       netresolve.Resolver
 	Metrics        *Metrics
-	WorkloadIssuer *workloadidentity.Issuer
+	WorkloadIssuer workloadidentity.TokenIssuer
 
 	tokenRefresher *tokenRefresher
 	tokenSecrets   *tokenSecretRegistry

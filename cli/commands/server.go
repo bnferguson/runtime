@@ -827,7 +827,13 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		Resolver:        res,
 		SandboxMetrics:  ctx.ServerState.SandboxMetrics,
 		IsCoordinator:   true,
-		WorkloadIssuer:  workloadIssuer,
+	}
+
+	// Assign only when non-nil: storing a typed-nil *Issuer into the
+	// TokenIssuer interface field would make it compare != nil, defeating the
+	// nil guards in the sandbox controller and panicking on first use.
+	if workloadIssuer != nil {
+		deps.WorkloadIssuer = workloadIssuer
 	}
 
 	rc.DataPath = cfg.Server.GetDataPath()
