@@ -35,7 +35,7 @@ func TestResolveCompletions(t *testing.T) {
 	tests := []struct {
 		name    string
 		words   []string
-		want    []string // exact set when wantExact, else subset that must be present
+		want    []string // full expected set when exact is true, else a subset that must be present
 		exact   bool
 		absent  []string
 		wantDir directive

@@ -12,12 +12,6 @@ import (
 	"miren.dev/runtime/clientconfig"
 )
 
-// Shell completion works by callback: the generated scripts (see the
-// CompletionBash/Zsh/Fish handlers) ask the binary what to suggest by invoking
-// the hidden "__complete" command, which cli.Run routes to Complete. Resolving
-// against the live dispatcher means completion always matches the real command
-// tree, including feature-gated commands that are only registered when enabled.
-
 // posKey identifies a positional argument by its command path and zero-based
 // index (e.g. {"route set", 1} is the app name in "route set <host> <app>").
 type posKey struct {
@@ -26,9 +20,9 @@ type posKey struct {
 }
 
 // valueResolver produces candidate values for a positional argument. It returns
-// nil when it has nothing to offer (for example when a server is unreachable);
-// the engine then offers no suggestions for that argument rather than guessing
-// (resource-name positionals never fall back to file names).
+// nil when it has nothing to offer (e.g. an unreachable server); the engine then
+// suggests nothing for that argument rather than guessing. Resource-name
+// positionals never fall back to file names.
 type valueResolver func(ctx *Context) []string
 
 // candidate is a single suggestion. desc is shown by shells that support
@@ -47,9 +41,13 @@ const (
 	dirNoFileComp directive = 4 // results are complete; do not add files
 )
 
-// Complete is the entry point for the hidden "__complete" command. words are the
-// tokens typed after the program name, the last of which is the (possibly empty)
-// word under the cursor. It always succeeds so the shell never sees an error.
+// Complete is the entry point for the hidden "__complete" command that the
+// generated completion scripts (see CompletionBash/Zsh/Fish) call to ask the
+// binary what to suggest. words are the tokens typed after the program name, the
+// last of which is the (possibly empty) word under the cursor. Resolving against
+// the live dispatcher keeps completion in sync with the real command tree,
+// including feature-gated commands only registered when enabled. It always
+// succeeds so the shell never sees an error.
 func Complete(d *mflags.Dispatcher, words []string) int {
 	ctx, cancel := newCompletionContext()
 	defer cancel()
@@ -310,19 +308,19 @@ func printCompletions(w io.Writer, cands []candidate, dir directive) {
 }
 
 // CompletionBash prints a bash completion script for miren.
-func CompletionBash(ctx *Context, _ struct{}) error {
+func CompletionBash(ctx *Context, opts struct{}) error {
 	ctx.Printf("%s", bashCompletionScript)
 	return nil
 }
 
 // CompletionZsh prints a zsh completion script for miren.
-func CompletionZsh(ctx *Context, _ struct{}) error {
+func CompletionZsh(ctx *Context, opts struct{}) error {
 	ctx.Printf("%s", zshCompletionScript)
 	return nil
 }
 
 // CompletionFish prints a fish completion script for miren.
-func CompletionFish(ctx *Context, _ struct{}) error {
+func CompletionFish(ctx *Context, opts struct{}) error {
 	ctx.Printf("%s", fishCompletionScript)
 	return nil
 }
