@@ -2,9 +2,11 @@ package runner
 
 import (
 	"context"
+	"crypto/x509"
 	"fmt"
 	"log/slog"
 	"net"
+	"slices"
 	"strings"
 	"time"
 
@@ -249,22 +251,7 @@ func (s *RegistrationServer) Join(ctx context.Context, req *runner_v1alpha.Runne
 	// so the coordinator can connect to the runner's API by IP.
 	certName := runnerCertName(runnerID)
 
-	ips := []net.IP{
-		net.ParseIP("127.0.0.1"),
-		net.ParseIP("::1"),
-	}
-	dnsNames := []string{"localhost"}
-
-	if listenAddr != "" {
-		host, _, err := net.SplitHostPort(listenAddr)
-		if err == nil && host != "" {
-			if ip := net.ParseIP(host); ip != nil {
-				ips = append(ips, ip)
-			} else if host != "localhost" {
-				dnsNames = append(dnsNames, host)
-			}
-		}
-	}
+	ips, dnsNames := buildRunnerSANs(listenAddr)
 
 	cc, err := s.Authority.IssueCertificate(caauth.Options{
 		CommonName:   certName,
@@ -361,6 +348,132 @@ func (s *RegistrationServer) Join(ctx context.Context, req *runner_v1alpha.Runne
 	}
 
 	return nil
+}
+
+// buildRunnerSANs returns the IP and DNS subject alternative names a runner's
+// server certificate should carry: always loopback (127.0.0.1, ::1, localhost)
+// plus the host from the runner's advertised listen address (an IP becomes an
+// IP SAN, a hostname becomes a DNS SAN).
+func buildRunnerSANs(listenAddr string) ([]net.IP, []string) {
+	ips := []net.IP{
+		net.ParseIP("127.0.0.1"),
+		net.ParseIP("::1"),
+	}
+	dnsNames := []string{"localhost"}
+
+	if listenAddr != "" {
+		host, _, err := net.SplitHostPort(listenAddr)
+		if err == nil && host != "" {
+			if ip := net.ParseIP(host); ip != nil {
+				ips = append(ips, ip)
+			} else if host != "localhost" {
+				dnsNames = append(dnsNames, host)
+			}
+		}
+	}
+
+	return ips, dnsNames
+}
+
+// RefreshCertificate re-issues the calling runner's server certificate with SANs
+// derived from its current listen address. A runner needs this when its listen
+// IP changes but its persisted certificate (e.g. on a disk that outlives the VM)
+// still carries the old IP. The method is public at the RPC layer but authorizes
+// the caller here: the presented client certificate must chain to the cluster CA
+// and be a runner certificate, and the re-issued certificate keeps that
+// certificate's CommonName so a runner can only refresh its own identity.
+func (s *RegistrationServer) RefreshCertificate(ctx context.Context, req *runner_v1alpha.RunnerRegistrationRefreshCertificate) error {
+	args := req.Args()
+	results := req.Results()
+
+	info := rpc.ConnectionInfo(ctx)
+	var peer *x509.Certificate
+	if info != nil {
+		peer = info.PeerCertificate
+	}
+
+	listenAddr := ""
+	if args.HasListenAddr() {
+		listenAddr = args.ListenAddr()
+	}
+
+	cc, err := s.reissueRunnerCertificate(ctx, peer, listenAddr)
+	if err != nil {
+		results.SetError(err.Error())
+		return nil
+	}
+
+	results.SetCertPem(cc.CertPEM)
+	results.SetKeyPem(cc.KeyPEM)
+	results.SetCaPem(cc.CACert)
+
+	return nil
+}
+
+// reissueRunnerCertificate authorizes the caller solely by its presented client
+// certificate and, if valid, issues a fresh runner server certificate with SANs
+// derived from listenAddr. The new certificate keeps the caller's CommonName so
+// a runner can only refresh its own identity. Authorization requires that the
+// presented certificate is a CA-signed runner certificate and that a runner
+// matching its identity is still registered (so a removed runner's still-valid
+// certificate cannot perpetually renew itself). The runner identity is taken
+// from the verified certificate, never from caller-supplied input. The returned
+// error is safe to surface to the caller.
+func (s *RegistrationServer) reissueRunnerCertificate(ctx context.Context, peer *x509.Certificate, listenAddr string) (*caauth.ClientCertificate, error) {
+	if peer == nil {
+		return nil, fmt.Errorf("a client certificate is required to refresh a certificate")
+	}
+
+	if err := s.Authority.VerifyCert(peer); err != nil {
+		s.Log.Warn("RefreshCertificate rejected: peer cert not signed by cluster CA",
+			"error", err, "subject", peer.Subject.String())
+		return nil, fmt.Errorf("client certificate is not trusted")
+	}
+
+	commonName := peer.Subject.CommonName
+	runnerID, ok := strings.CutPrefix(commonName, "runner-")
+	if !ok || runnerID == "" || !slices.Contains(peer.Subject.Organization, "miren") {
+		s.Log.Warn("RefreshCertificate rejected: peer cert is not a runner certificate",
+			"subject", peer.Subject.String())
+		return nil, fmt.Errorf("client certificate is not a runner certificate")
+	}
+
+	// Confirm the runner is still registered. caauth has no revocation, so this
+	// is what prevents a removed runner's still-valid certificate from renewing
+	// itself indefinitely. The runner ID is taken from the verified certificate's
+	// CommonName (which embeds the full ID), so the caller cannot substitute
+	// another runner's identity.
+	node, _, err := s.findNodeByQuery(ctx, runnerID)
+	if err != nil {
+		s.Log.Error("RefreshCertificate failed to verify runner registration",
+			"error", err, "subject", peer.Subject.String())
+		return nil, fmt.Errorf("failed to verify runner registration")
+	}
+	if node == nil {
+		s.Log.Warn("RefreshCertificate rejected: runner is not registered",
+			"subject", peer.Subject.String())
+		return nil, fmt.Errorf("runner is not registered")
+	}
+
+	ips, dnsNames := buildRunnerSANs(listenAddr)
+
+	cc, err := s.Authority.IssueCertificate(caauth.Options{
+		CommonName:   commonName,
+		Organization: "miren",
+		ValidFor:     365 * 24 * time.Hour,
+		IPs:          ips,
+		DNSNames:     dnsNames,
+	})
+	if err != nil {
+		s.Log.Error("Failed to re-issue certificate", "error", err, "common_name", commonName)
+		return nil, fmt.Errorf("failed to issue certificate")
+	}
+
+	s.Log.Info("Re-issued runner certificate",
+		"common_name", commonName,
+		"listen_addr", listenAddr)
+
+	return cc, nil
 }
 
 func (s *RegistrationServer) ListInvites(ctx context.Context, req *runner_v1alpha.RunnerRegistrationListInvites) error {

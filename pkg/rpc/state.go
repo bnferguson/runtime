@@ -431,6 +431,11 @@ type connectionKey struct{}
 
 type CurrentConnectionInfo struct {
 	PeerSubject string
+	// PeerCertificate is the client certificate presented during the mTLS
+	// handshake, if any. The server is configured with tls.RequestClientCert,
+	// which requests but does not verify the cert, so handlers that rely on it
+	// for authorization must verify it (e.g. that it chains to the cluster CA).
+	PeerCertificate *x509.Certificate
 }
 
 func ConnectionInfo(ctx context.Context) *CurrentConnectionInfo {
@@ -440,6 +445,13 @@ func ConnectionInfo(ctx context.Context) *CurrentConnectionInfo {
 	}
 
 	return v.(*CurrentConnectionInfo)
+}
+
+// ContextWithConnectionInfo returns a copy of ctx carrying the given connection
+// info, as observed by ConnectionInfo. The server populates this from the mTLS
+// handshake; tests use it to exercise handlers that authorize on the peer cert.
+func ContextWithConnectionInfo(ctx context.Context, info *CurrentConnectionInfo) context.Context {
+	return context.WithValue(ctx, connectionKey{}, info)
 }
 
 func (s *State) startListener(ctx context.Context, so *stateOptions) error {

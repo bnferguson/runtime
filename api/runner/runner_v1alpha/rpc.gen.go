@@ -1078,6 +1078,89 @@ func (v *RunnerRegistrationIssueWorkloadTokenResults) UnmarshalJSON(data []byte)
 	return json.Unmarshal(data, &v.data)
 }
 
+type runnerRegistrationRefreshCertificateArgsData struct {
+	ListenAddr *string `cbor:"0,keyasint,omitempty" json:"listen_addr,omitempty"`
+}
+
+type RunnerRegistrationRefreshCertificateArgs struct {
+	call rpc.Call
+	data runnerRegistrationRefreshCertificateArgsData
+}
+
+func (v *RunnerRegistrationRefreshCertificateArgs) HasListenAddr() bool {
+	return v.data.ListenAddr != nil
+}
+
+func (v *RunnerRegistrationRefreshCertificateArgs) ListenAddr() string {
+	if v.data.ListenAddr == nil {
+		return ""
+	}
+	return *v.data.ListenAddr
+}
+
+func (v *RunnerRegistrationRefreshCertificateArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationRefreshCertificateArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunnerRegistrationRefreshCertificateArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationRefreshCertificateArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type runnerRegistrationRefreshCertificateResultsData struct {
+	CertPem *[]byte `cbor:"0,keyasint,omitempty" json:"cert_pem,omitempty"`
+	KeyPem  *[]byte `cbor:"1,keyasint,omitempty" json:"key_pem,omitempty"`
+	CaPem   *[]byte `cbor:"2,keyasint,omitempty" json:"ca_pem,omitempty"`
+	Error   *string `cbor:"3,keyasint,omitempty" json:"error,omitempty"`
+}
+
+type RunnerRegistrationRefreshCertificateResults struct {
+	call rpc.Call
+	data runnerRegistrationRefreshCertificateResultsData
+}
+
+func (v *RunnerRegistrationRefreshCertificateResults) SetCertPem(cert_pem []byte) {
+	x := slices.Clone(cert_pem)
+	v.data.CertPem = &x
+}
+
+func (v *RunnerRegistrationRefreshCertificateResults) SetKeyPem(key_pem []byte) {
+	x := slices.Clone(key_pem)
+	v.data.KeyPem = &x
+}
+
+func (v *RunnerRegistrationRefreshCertificateResults) SetCaPem(ca_pem []byte) {
+	x := slices.Clone(ca_pem)
+	v.data.CaPem = &x
+}
+
+func (v *RunnerRegistrationRefreshCertificateResults) SetError(error string) {
+	v.data.Error = &error
+}
+
+func (v *RunnerRegistrationRefreshCertificateResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationRefreshCertificateResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunnerRegistrationRefreshCertificateResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationRefreshCertificateResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type RunnerRegistrationCreateInvite struct {
 	rpc.Call
 	args    RunnerRegistrationCreateInviteArgs
@@ -1286,6 +1369,32 @@ func (t *RunnerRegistrationIssueWorkloadToken) Results() *RunnerRegistrationIssu
 	return results
 }
 
+type RunnerRegistrationRefreshCertificate struct {
+	rpc.Call
+	args    RunnerRegistrationRefreshCertificateArgs
+	results RunnerRegistrationRefreshCertificateResults
+}
+
+func (t *RunnerRegistrationRefreshCertificate) Args() *RunnerRegistrationRefreshCertificateArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *RunnerRegistrationRefreshCertificate) Results() *RunnerRegistrationRefreshCertificateResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type RunnerRegistration interface {
 	CreateInvite(ctx context.Context, state *RunnerRegistrationCreateInvite) error
 	Join(ctx context.Context, state *RunnerRegistrationJoin) error
@@ -1295,6 +1404,7 @@ type RunnerRegistration interface {
 	RemoveRunner(ctx context.Context, state *RunnerRegistrationRemoveRunner) error
 	WorkloadIssuerInfo(ctx context.Context, state *RunnerRegistrationWorkloadIssuerInfo) error
 	IssueWorkloadToken(ctx context.Context, state *RunnerRegistrationIssueWorkloadToken) error
+	RefreshCertificate(ctx context.Context, state *RunnerRegistrationRefreshCertificate) error
 }
 
 type reexportRunnerRegistration struct {
@@ -1330,6 +1440,10 @@ func (reexportRunnerRegistration) WorkloadIssuerInfo(ctx context.Context, state 
 }
 
 func (reexportRunnerRegistration) IssueWorkloadToken(ctx context.Context, state *RunnerRegistrationIssueWorkloadToken) error {
+	panic("not implemented")
+}
+
+func (reexportRunnerRegistration) RefreshCertificate(ctx context.Context, state *RunnerRegistrationRefreshCertificate) error {
 	panic("not implemented")
 }
 
@@ -1409,6 +1523,15 @@ func AdaptRunnerRegistration(t RunnerRegistration) *rpc.Interface {
 			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.IssueWorkloadToken(ctx, &RunnerRegistrationIssueWorkloadToken{Call: call})
+			},
+		},
+		{
+			Name:          "RefreshCertificate",
+			InterfaceName: "RunnerRegistration",
+			Index:         8,
+			Public:        true,
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.RefreshCertificate(ctx, &RunnerRegistrationRefreshCertificate{Call: call})
 			},
 		},
 	}
@@ -1863,4 +1986,67 @@ func (v RunnerRegistrationClient) IssueWorkloadToken(ctx context.Context, sandbo
 	}
 
 	return &RunnerRegistrationClientIssueWorkloadTokenResults{client: v.Client, data: ret}, nil
+}
+
+type RunnerRegistrationClientRefreshCertificateResults struct {
+	client rpc.Client
+	data   runnerRegistrationRefreshCertificateResultsData
+}
+
+func (v *RunnerRegistrationClientRefreshCertificateResults) HasCertPem() bool {
+	return v.data.CertPem != nil
+}
+
+func (v *RunnerRegistrationClientRefreshCertificateResults) CertPem() []byte {
+	if v.data.CertPem == nil {
+		return nil
+	}
+	return *v.data.CertPem
+}
+
+func (v *RunnerRegistrationClientRefreshCertificateResults) HasKeyPem() bool {
+	return v.data.KeyPem != nil
+}
+
+func (v *RunnerRegistrationClientRefreshCertificateResults) KeyPem() []byte {
+	if v.data.KeyPem == nil {
+		return nil
+	}
+	return *v.data.KeyPem
+}
+
+func (v *RunnerRegistrationClientRefreshCertificateResults) HasCaPem() bool {
+	return v.data.CaPem != nil
+}
+
+func (v *RunnerRegistrationClientRefreshCertificateResults) CaPem() []byte {
+	if v.data.CaPem == nil {
+		return nil
+	}
+	return *v.data.CaPem
+}
+
+func (v *RunnerRegistrationClientRefreshCertificateResults) HasError() bool {
+	return v.data.Error != nil
+}
+
+func (v *RunnerRegistrationClientRefreshCertificateResults) Error() string {
+	if v.data.Error == nil {
+		return ""
+	}
+	return *v.data.Error
+}
+
+func (v RunnerRegistrationClient) RefreshCertificate(ctx context.Context, listen_addr string) (*RunnerRegistrationClientRefreshCertificateResults, error) {
+	args := RunnerRegistrationRefreshCertificateArgs{}
+	args.data.ListenAddr = &listen_addr
+
+	var ret runnerRegistrationRefreshCertificateResultsData
+
+	err := v.Call(ctx, "RefreshCertificate", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &RunnerRegistrationClientRefreshCertificateResults{client: v.Client, data: ret}, nil
 }

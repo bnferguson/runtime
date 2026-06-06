@@ -968,8 +968,9 @@ func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
 
 	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
 		call.peer = r.TLS.PeerCertificates[0]
-		ctx = context.WithValue(ctx, connectionKey{}, &CurrentConnectionInfo{
-			PeerSubject: r.TLS.PeerCertificates[0].Subject.String(),
+		ctx = ContextWithConnectionInfo(ctx, &CurrentConnectionInfo{
+			PeerSubject:     r.TLS.PeerCertificates[0].Subject.String(),
+			PeerCertificate: r.TLS.PeerCertificates[0],
 		})
 	}
 
