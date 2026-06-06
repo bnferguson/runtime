@@ -314,8 +314,10 @@ _miren_complete() {
     local cword=$COMP_CWORD
     local -a args=("${COMP_WORDS[@]:1:cword}")
 
+    # Call the binary by the name actually typed (miren, m, a path, ...) so the
+    # same function works for any command this completion is bound to.
     local out
-    out="$(miren __complete "${args[@]}" 2>/dev/null)" || return
+    out="$("${COMP_WORDS[0]}" __complete "${args[@]}" 2>/dev/null)" || return
 
     local directive=0
     local -a comps=()
@@ -347,8 +349,10 @@ _miren() {
     # word under the cursor); a plain quoted range would join them into one.
     args=("${(@)words[2,CURRENT]}")
 
+    # words[1] is the command as typed (miren, m, a path, ...), so the same
+    # function works for any command this completion is bound to.
     local out
-    out="$(miren __complete "${args[@]}" 2>/dev/null)"
+    out="$("${words[1]}" __complete "${args[@]}" 2>/dev/null)"
 
     local -a comps
     local directive=0 line
@@ -386,8 +390,10 @@ function __miren_complete
     end
     set args $args $current
 
+    # $tokens[1] is the command as typed (miren, m, a path, ...), so the same
+    # function works for any command this completion is bound to.
     set -l directive 0
-    for line in (miren __complete $args 2>/dev/null)
+    for line in ($tokens[1] __complete $args 2>/dev/null)
         set -l d (string match -r '^:(.*)' -- $line)
         if test (count $d) -gt 0
             set directive $d[2]
