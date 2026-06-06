@@ -99,11 +99,32 @@ func TestResolveCompletions(t *testing.T) {
 			wantDir: dirNoFileComp,
 		},
 		{
-			name:    "unknown positional falls back to file completion",
+			name:    "positional without resolver suppresses files",
 			words:   []string{"app", "delete", ""},
 			want:    nil,
 			exact:   true,
+			wantDir: dirNoFileComp,
+		},
+		{
+			name:    "command with no further args suppresses files",
+			words:   []string{"cluster", "list", ""},
+			want:    nil,
+			exact:   true,
+			wantDir: dirNoFileComp,
+		},
+		{
+			name:    "path flag value offers files",
+			words:   []string{"deploy", "--options", ""},
+			want:    nil,
+			exact:   true,
 			wantDir: dirDefault,
+		},
+		{
+			name:    "non-path flag value suppresses files",
+			words:   []string{"deploy", "--server-address", ""},
+			want:    nil,
+			exact:   true,
+			wantDir: dirNoFileComp,
 		},
 		{
 			name:    "hidden namespace omitted from top level",

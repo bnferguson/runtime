@@ -131,7 +131,9 @@ func resolveCompletions(d *mflags.Dispatcher, ctx *Context, words []string, reso
 		return filterCandidates(resolve(ctx), cur), dirNoFileComp
 	}
 
-	return nil, dirDefault
+	// Nothing left to complete. miren positionals are names and IDs, never file
+	// paths, so suppress the shell's file fallback instead of offering nonsense.
+	return nil, dirNoFileComp
 }
 
 // walkCommand consumes the typed tokens to find the deepest matching command
@@ -207,8 +209,24 @@ func completeFlagValue(d *mflags.Dispatcher, cmdPath, prevTok, cur string) ([]ca
 		return filterCandidates(cp.Choices(), cur), dirNoFileComp, true
 	}
 
-	// A value is expected but we can't enumerate it; let the shell offer files.
-	return nil, dirDefault, true
+	// A value is expected but we can't enumerate it. Offer files only for flags
+	// that take a path; other values (app names, addresses, ...) have no useful
+	// file fallback, so suppress it.
+	if flagTakesFile(f.Name) {
+		return nil, dirDefault, true
+	}
+	return nil, dirNoFileComp, true
+}
+
+// flagTakesFile reports whether a flag conventionally takes a filesystem path,
+// so the shell should offer file completion for its value.
+func flagTakesFile(name string) bool {
+	switch name {
+	case "file", "files", "config", "options", "input", "output", "path", "dir", "directory":
+		return true
+	default:
+		return false
+	}
 }
 
 func completeChildren(children []mflags.ChildEntry, cur string) []candidate {
