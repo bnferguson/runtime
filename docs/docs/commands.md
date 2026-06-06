@@ -82,6 +82,15 @@ Complete reference for all `miren` CLI commands.
 | [`miren cluster remove`](/command/cluster-remove) | Remove a cluster from the configuration |
 | [`miren cluster switch`](/command/cluster-switch) | Switch to a different cluster |
 
+## completion
+
+| Command | Description |
+|---------|-------------|
+| [`miren completion`](/command/completion) | Generate shell completion scripts |
+| [`miren completion bash`](/command/completion-bash) | Output a bash completion script |
+| [`miren completion fish`](/command/completion-fish) | Output a fish completion script |
+| [`miren completion zsh`](/command/completion-zsh) | Output a zsh completion script |
+
 ## config
 
 | Command | Description |

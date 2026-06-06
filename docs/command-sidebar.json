@@ -90,6 +90,20 @@
   },
   {
     "type": "category",
+    "label": "completion",
+    "collapsed": true,
+    "link": {
+      "type": "doc",
+      "id": "command/completion"
+    },
+    "items": [
+      "command/completion-bash",
+      "command/completion-fish",
+      "command/completion-zsh"
+    ]
+  },
+  {
+    "type": "category",
     "label": "config",
     "collapsed": true,
     "link": {
