@@ -16,6 +16,9 @@ func fakeResolvers() map[posKey]valueResolver {
 	return map[posKey]valueResolver{
 		{"cluster switch", 0}: func(*Context) []string { return []string{"prod", "dev"} },
 		{"cluster remove", 0}: func(*Context) []string { return []string{"prod", "dev"} },
+		// A resolver that opts out (e.g. offline): no suggestions, but still no
+		// file fallback, since this is a named resource not a path.
+		{"app delete", 0}: func(*Context) []string { return nil },
 	}
 }
 
@@ -100,7 +103,7 @@ func TestResolveCompletions(t *testing.T) {
 		},
 		{
 			name:    "positional without resolver suppresses files",
-			words:   []string{"app", "delete", ""},
+			words:   []string{"addon", "destroy", ""},
 			want:    nil,
 			exact:   true,
 			wantDir: dirNoFileComp,
@@ -122,6 +125,13 @@ func TestResolveCompletions(t *testing.T) {
 		{
 			name:    "non-path flag value suppresses files",
 			words:   []string{"deploy", "--server-address", ""},
+			want:    nil,
+			exact:   true,
+			wantDir: dirNoFileComp,
+		},
+		{
+			name:    "opted-out resolver yields nothing and no file fallback",
+			words:   []string{"app", "delete", ""},
 			want:    nil,
 			exact:   true,
 			wantDir: dirNoFileComp,

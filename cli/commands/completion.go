@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"slices"
 	"strings"
@@ -57,16 +58,20 @@ func Complete(d *mflags.Dispatcher, words []string) int {
 	return 0
 }
 
-// newCompletionContext builds a Context for resolvers to use. The static and
-// local resolvers ignore it; the dynamic completion layer extends this to load
-// cluster config and bound the work with a timeout.
+// newCompletionContext builds a Context for resolvers to use. It loads client
+// config so server-backed resolvers can reach the cluster, and bounds the work
+// with a deadline so tab completion never hangs on a slow or unreachable server.
 func newCompletionContext() (*Context, context.CancelFunc) {
-	base, cancel := context.WithCancel(context.Background())
-	return &Context{
+	base, cancel := context.WithTimeout(context.Background(), completionTimeout)
+	ctx := &Context{
 		Context: base,
 		Stdout:  io.Discard,
 		Stderr:  io.Discard,
-	}, cancel
+		Log:     slog.New(slog.DiscardHandler),
+	}
+	ctx.Config.ServerAddress = defaultCompletionServerAddress
+	loadCompletionConfig(ctx)
+	return ctx, cancel
 }
 
 // positionalResolvers maps a command's positional argument to the resolver that
@@ -74,8 +79,28 @@ func newCompletionContext() (*Context, context.CancelFunc) {
 // here; server-backed resolvers are added by the dynamic completion layer.
 func positionalResolvers() map[posKey]valueResolver {
 	return map[posKey]valueResolver{
+		// Local: read from client config, no server round-trip.
 		{"cluster switch", 0}: resolveClusterNames,
 		{"cluster remove", 0}: resolveClusterNames,
+
+		// Server-backed (see completion_dynamic.go). "route set" takes a NEW
+		// host at position 0, so only its app argument is completed.
+		{"app delete", 0}:        resolveAppNames,
+		{"route set", 1}:         resolveAppNames,
+		{"route set-default", 0}: resolveAppNames,
+		{"route show", 0}:        resolveRouteHosts,
+		{"route remove", 0}:      resolveRouteHosts,
+		{"route protect", 0}:     resolveRouteHosts,
+		{"route unprotect", 0}:   resolveRouteHosts,
+		{"route waf", 0}:         resolveRouteHosts,
+		{"sandbox stop", 0}:      resolveSandboxIDs,
+		{"sandbox delete", 0}:    resolveSandboxIDs,
+		{"logs sandbox", 0}:      resolveSandboxIDs,
+
+		{"sandbox-pool set-desired", 0}: resolvePoolIDs,
+		{"addon variants", 0}:           resolveAddonNames,
+		{"runner remove", 0}:            resolveRunnerNodes,
+		{"runner token revoke", 0}:      resolveTokenIDs,
 	}
 }
 
