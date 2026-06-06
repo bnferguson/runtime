@@ -109,12 +109,39 @@ func TestAuthorizeSandboxOwnership_NoIdentityDenied(t *testing.T) {
 	require.Error(t, srv.authorizeSandboxOwnership(context.Background(), authzSandboxID))
 }
 
-func TestAuthorizeSandboxOwnership_UnscheduledDenied(t *testing.T) {
+func TestAuthorizeSandboxOwnership_MissingSandboxDenied(t *testing.T) {
 	srv, cleanup := newOwnershipTestServer(t)
 	defer cleanup()
 
 	ctx := ctxWithCert(runnerCertName(authzRunnerID))
 	require.Error(t, srv.authorizeSandboxOwnership(ctx, "sandbox/does-not-exist"))
+}
+
+func TestAuthorizeSandboxOwnership_UnscheduledDenied(t *testing.T) {
+	ctx := context.Background()
+	es, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	ca, err := caauth.New(caauth.Options{CommonName: "test-ca", Organization: "test"})
+	require.NoError(t, err)
+
+	srv := NewRegistrationServer(RegistrationServerConfig{
+		Log:       testutils.TestLogger(t),
+		Authority: ca,
+		EAC:       es.EAC,
+	})
+
+	// A sandbox that exists but has no scheduling node, exercising the
+	// sch.Key.Node == "" branch rather than the missing-entity path.
+	_, err = es.EAC.Create(ctx, entity.New(
+		entity.DBId, entity.Id("sandbox/unscheduled"),
+		(&compute_v1alpha.Sandbox{}).Encode,
+	).Attrs())
+	require.NoError(t, err)
+
+	authCtx := ctxWithCert(runnerCertName(authzRunnerID))
+	err = srv.authorizeSandboxOwnership(authCtx, "sandbox/unscheduled")
+	require.ErrorContains(t, err, "not scheduled to a node")
 }
 
 func TestRunnerCertNameUsesFullID(t *testing.T) {

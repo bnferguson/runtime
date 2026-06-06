@@ -498,7 +498,7 @@ func (r *Runner) setupRemoteWorkloadIssuer(ctx context.Context, rs *rpc.State) e
 	// the runner with no token issuance until it is restarted.
 	var info *runner_v1alpha.RunnerRegistrationClientWorkloadIssuerInfoResults
 	for attempt := 1; ; attempt++ {
-		info, err = regClient.WorkloadIssuerInfo(ctx)
+		info, err = queryWorkloadIssuerInfo(ctx, regClient)
 		if err == nil {
 			break
 		}
@@ -519,9 +519,18 @@ func (r *Runner) setupRemoteWorkloadIssuer(ctx context.Context, rs *rpc.State) e
 		return nil
 	}
 
-	r.deps.WorkloadIssuer = newRemoteIssuer(ctx, r.Log, regClient, info.IssuerUrl())
+	r.deps.WorkloadIssuer = newRemoteIssuer(ctx, regClient, info.IssuerUrl())
 	r.Log.Info("workload identity issuer enabled via coordinator", "issuer", info.IssuerUrl())
 	return nil
+}
+
+// queryWorkloadIssuerInfo performs a single WorkloadIssuerInfo call bounded by a
+// per-attempt timeout, so a hung coordinator RPC cannot stall runner startup
+// indefinitely and the retry budget is allowed to expire.
+func queryWorkloadIssuerInfo(ctx context.Context, regClient *runner_v1alpha.RunnerRegistrationClient) (*runner_v1alpha.RunnerRegistrationClientWorkloadIssuerInfoResults, error) {
+	ctx, cancel := context.WithTimeout(ctx, remoteTokenTimeout)
+	defer cancel()
+	return regClient.WorkloadIssuerInfo(ctx)
 }
 
 // initializeNetwork sets up the Flannel network for distributed runners.
