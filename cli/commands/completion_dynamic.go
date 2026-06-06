@@ -16,11 +16,6 @@ import (
 	"miren.dev/runtime/pkg/rpc"
 )
 
-// This file is the dynamic completion layer: positional resolvers that fetch
-// their candidate values from the server. They are best-effort by design — tab
-// completion must feel instant, so any error, timeout, or missing config yields
-// no suggestions rather than a delay or a visible failure.
-
 // completionTimeout bounds the server round-trips a single completion may make.
 const completionTimeout = 1500 * time.Millisecond
 
@@ -52,12 +47,13 @@ func loadCompletionConfig(ctx *Context) {
 	}
 }
 
-// completeViaClient runs fn with an RPC client for the given service. It returns
-// nil (no suggestions) when completion is disabled, the server is unreachable,
-// or the deadline fires. The work runs in a goroutine selected against ctx so a
-// hung dial can never block the shell; this relies on ctx carrying a deadline,
-// which newCompletionContext always sets. The short-lived process exits right
-// after printing, so the goroutine is not a meaningful leak.
+// completeViaClient runs fn with an RPC client for the given service. Server-backed
+// completion is best-effort: tab completion must feel instant, so it returns nil
+// (no suggestions) when completion is disabled, the server is unreachable, or the
+// deadline fires. The work runs in a goroutine selected against ctx so a hung dial
+// can never block the shell; this relies on ctx carrying a deadline, which
+// newCompletionContext always sets. The short-lived process exits right after
+// printing, so the goroutine is not a meaningful leak.
 func completeViaClient(ctx *Context, service string, fn func(*rpc.NetworkClient) []string) []string {
 	if os.Getenv(completionNoNetworkEnv) != "" {
 		return nil
