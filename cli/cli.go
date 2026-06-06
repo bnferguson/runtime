@@ -42,6 +42,13 @@ func Run(args []string) int {
 		return 0
 	}
 
+	// Shell completion calls back into the binary via this hidden command. It
+	// runs before alias expansion and Execute so it sees the raw, partially
+	// typed tokens and can resolve them against the live command tree.
+	if len(args) > 1 && args[1] == "__complete" {
+		return commands.Complete(d, args[2:])
+	}
+
 	execArgs, err := expandAlias(d, args[1:])
 	if err != nil {
 		printError(err)

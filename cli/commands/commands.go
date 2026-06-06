@@ -1020,6 +1020,39 @@ Warning: These commands are intended for advanced users and developers. They may
 	d.Dispatch("alias", Section("alias", "CLI alias management", "", WithSectionGroup(GroupClient)))
 	d.Dispatch("alias list", Infer("alias list", "List configured CLI aliases", AliasList))
 
+	// Shell completion commands
+	d.Dispatch("completion", Section("completion", "Generate shell completion scripts", "", WithSectionGroup(GroupClient)))
+	d.Dispatch("completion bash", Infer("completion bash", "Output a bash completion script", CompletionBash,
+		WithExample(mflags.Example{
+			Name: "Load completion in the current shell",
+			Body: "source <(miren completion bash)",
+		}),
+		WithExample(mflags.Example{
+			Name: "Install for all sessions",
+			Body: "miren completion bash > /etc/bash_completion.d/miren",
+		}),
+	))
+	d.Dispatch("completion zsh", Infer("completion zsh", "Output a zsh completion script", CompletionZsh,
+		WithExample(mflags.Example{
+			Name: "Load completion in the current shell",
+			Body: "source <(miren completion zsh)",
+		}),
+		WithExample(mflags.Example{
+			Name: "Install for all sessions",
+			Body: "miren completion zsh > \"${fpath[1]}/_miren\"",
+		}),
+	))
+	d.Dispatch("completion fish", Infer("completion fish", "Output a fish completion script", CompletionFish,
+		WithExample(mflags.Example{
+			Name: "Load completion in the current shell",
+			Body: "miren completion fish | source",
+		}),
+		WithExample(mflags.Example{
+			Name: "Install for all sessions",
+			Body: "miren completion fish > ~/.config/fish/completions/miren.fish",
+		}),
+	))
+
 	// Help command (registered last so it can reference all other commands)
 	d.Dispatch("help", NewHelpCommand(d))
 
