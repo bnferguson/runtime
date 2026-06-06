@@ -22,6 +22,7 @@ import (
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/api/metric/metric_v1alpha"
 	"miren.dev/runtime/api/network/network_v1alpha"
+	"miren.dev/runtime/api/runner/runner_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/components/coordinate"
@@ -109,12 +110,19 @@ type RunnerDeps struct {
 	EtcdTLSKeyFile  string // Client private key file path
 	EtcdTLSCAFile   string // CA certificate file path
 
-	// WorkloadIssuer signs workload identity tokens for sandbox containers
-	WorkloadIssuer *workloadidentity.Issuer
+	// WorkloadIssuer mints workload identity tokens for sandbox containers. On
+	// the coordinator this is the concrete *workloadidentity.Issuer; on a
+	// distributed runner it is a remote issuer that proxies minting to the
+	// coordinator over RPC.
+	WorkloadIssuer workloadidentity.TokenIssuer
 }
 
 const (
 	DefaulWorkers = 3
+
+	// Bounded retry for the coordinator's workload-issuer-info query at startup.
+	issuerInfoMaxAttempts = 3
+	issuerInfoRetryDelay  = 2 * time.Second
 )
 
 type shutdownCloser struct{ s interface{ Shutdown() } }
@@ -431,6 +439,13 @@ func (r *Runner) Start(ctx context.Context, eg ...*errgroup.Group) error {
 
 	ec := entityserver.NewClient(r.Log, eas)
 
+	// Distributed runners mint workload identity tokens via the coordinator,
+	// since they do not hold the cluster signing key. A failure here degrades
+	// to no sandbox tokens rather than blocking runner startup.
+	if err := r.setupRemoteWorkloadIssuer(ctx, rs); err != nil {
+		r.Log.Warn("failed to set up workload identity issuer", "error", err)
+	}
+
 	cm, err := r.SetupControllers(ctx, eas, rs.Server())
 	if err != nil {
 		return err
@@ -458,6 +473,64 @@ func (r *Runner) Start(ctx context.Context, eg ...*errgroup.Group) error {
 	r.Log.Info("Runner running", "id", r.Id)
 
 	return nil
+}
+
+// setupRemoteWorkloadIssuer wires a remote workload identity issuer for
+// distributed runners. Runners do not hold the cluster signing key, so they
+// mint tokens by calling the coordinator's RunnerRegistration service. When the
+// coordinator reports no issuer is configured, token issuance stays disabled
+// (deps.WorkloadIssuer remains nil). The coordinator's embedded runner
+// (r.Config == nil) keeps the concrete issuer it was constructed with.
+func (r *Runner) setupRemoteWorkloadIssuer(ctx context.Context, rs *rpc.State) error {
+	if r.Config == nil || r.deps.WorkloadIssuer != nil {
+		return nil
+	}
+
+	client, err := rs.Client(string(rpc.ServiceRunner))
+	if err != nil {
+		return fmt.Errorf("connecting to coordinator runner service: %w", err)
+	}
+
+	regClient := runner_v1alpha.NewRunnerRegistrationClient(client)
+
+	// Retry transient failures: the entities connection was just established, so
+	// a failure here is usually a brief blip. Giving up immediately would leave
+	// the runner with no token issuance until it is restarted.
+	var info *runner_v1alpha.RunnerRegistrationClientWorkloadIssuerInfoResults
+	for attempt := 1; ; attempt++ {
+		info, err = queryWorkloadIssuerInfo(ctx, regClient)
+		if err == nil {
+			break
+		}
+		if attempt >= issuerInfoMaxAttempts {
+			return fmt.Errorf("querying workload issuer info after %d attempts: %w", attempt, err)
+		}
+		r.Log.Warn("workload issuer info query failed; retrying",
+			"attempt", attempt, "max", issuerInfoMaxAttempts, "error", err)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(issuerInfoRetryDelay):
+		}
+	}
+
+	if !info.Enabled() {
+		r.Log.Info("coordinator has no workload identity issuer; sandbox tokens disabled")
+		return nil
+	}
+
+	r.deps.WorkloadIssuer = newRemoteIssuer(ctx, regClient, info.IssuerUrl())
+	r.Log.Info("workload identity issuer enabled via coordinator", "issuer", info.IssuerUrl())
+	return nil
+}
+
+// queryWorkloadIssuerInfo performs a single WorkloadIssuerInfo call bounded by a
+// per-attempt timeout, so a hung coordinator RPC cannot stall runner startup
+// indefinitely and the retry budget is allowed to expire.
+func queryWorkloadIssuerInfo(ctx context.Context, regClient *runner_v1alpha.RunnerRegistrationClient) (*runner_v1alpha.RunnerRegistrationClientWorkloadIssuerInfoResults, error) {
+	ctx, cancel := context.WithTimeout(ctx, remoteTokenTimeout)
+	defer cancel()
+	return regClient.WorkloadIssuerInfo(ctx)
 }
 
 // initializeNetwork sets up the Flannel network for distributed runners.

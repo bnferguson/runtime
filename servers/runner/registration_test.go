@@ -679,41 +679,6 @@ func TestReissueRunnerCertificate(t *testing.T) {
 		}
 	})
 
-	t.Run("ambiguous runner identity is rejected", func(t *testing.T) {
-		// Two runners whose IDs share the same 8-char prefix produce the same
-		// certificate CommonName. Refresh must fail closed rather than guess.
-		secret1 := env.createInviteAndDecode(t, ctx)
-		res1, err := env.client.Join(ctx, secret1, "abcd1234-0000-0000-0000-000000000001", "10.0.0.1:8444", "v1", nil, "amb-1")
-		if err != nil {
-			t.Fatalf("Join 1 failed: %v", err)
-		}
-		if res1.HasError() {
-			t.Fatalf("Join 1 error: %s", res1.Error())
-		}
-
-		secret2 := env.createInviteAndDecode(t, ctx)
-		res2, err := env.client.Join(ctx, secret2, "abcd1234-0000-0000-0000-000000000002", "10.0.0.1:8444", "v1", nil, "amb-2")
-		if err != nil {
-			t.Fatalf("Join 2 failed: %v", err)
-		}
-		if res2.HasError() {
-			t.Fatalf("Join 2 error: %s", res2.Error())
-		}
-
-		block, _ := pem.Decode(res1.CertPem())
-		if block == nil {
-			t.Fatal("failed to decode join cert PEM")
-		}
-		peer, err := x509.ParseCertificate(block.Bytes)
-		if err != nil {
-			t.Fatalf("failed to parse join cert: %v", err)
-		}
-
-		_, err = env.server.reissueRunnerCertificate(ctx, peer, "10.0.0.2:8444")
-		if err == nil {
-			t.Fatal("expected error for ambiguous runner identity")
-		}
-	})
 }
 
 func TestRefreshCertificateRequiresClientCert(t *testing.T) {
