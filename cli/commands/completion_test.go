@@ -2,6 +2,7 @@ package commands
 
 import (
 	"bytes"
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -220,5 +221,32 @@ func TestPositionalResolversReferenceRealCommands(t *testing.T) {
 		assert.Truef(t, key.index < len(pos),
 			"command %q has %d positionals but resolver targets index %d",
 			key.path, len(pos), key.index)
+	}
+}
+
+// TestResolversRespectNoNetwork verifies that the opt-out short-circuits every
+// server-backed resolver before any RPC client is built, so completion stays
+// local-only and never touches the network when asked not to.
+func TestResolversRespectNoNetwork(t *testing.T) {
+	t.Setenv(completionNoNetworkEnv, "1")
+
+	ctx := &Context{Context: context.Background()}
+	resolvers := []struct {
+		name string
+		fn   valueResolver
+	}{
+		{"apps", resolveAppNames},
+		{"routes", resolveRouteHosts},
+		{"sandboxes", resolveSandboxIDs},
+		{"pools", resolvePoolIDs},
+		{"addons", resolveAddonNames},
+		{"runners", resolveRunnerNodes},
+		{"tokens", resolveTokenIDs},
+	}
+
+	for _, r := range resolvers {
+		t.Run(r.name, func(t *testing.T) {
+			assert.Nil(t, r.fn(ctx))
+		})
 	}
 }

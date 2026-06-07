@@ -8,9 +8,18 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"miren.dev/mflags"
+	"miren.dev/runtime/api/addon/addon_v1alpha"
+	"miren.dev/runtime/api/app/app_v1alpha"
+	"miren.dev/runtime/api/compute"
+	"miren.dev/runtime/api/compute/compute_v1alpha"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/api/ingress"
+	"miren.dev/runtime/api/runner/runner_v1alpha"
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/pkg/rpc"
 )
 
 // posKey identifies a positional argument by its command path and zero-based
@@ -41,6 +50,17 @@ const (
 	dirDefault    directive = 0 // allow the shell's default (file) completion
 	dirNoFileComp directive = 4 // results are complete; do not add files
 )
+
+// completionTimeout bounds the server round-trips a single completion may make.
+const completionTimeout = 1500 * time.Millisecond
+
+// defaultCompletionServerAddress mirrors the GlobalFlags default and is used
+// when no cluster is configured but a local server may still be running.
+const defaultCompletionServerAddress = "127.0.0.1:8443"
+
+// completionNoNetworkEnv disables every server-backed resolver when set, for
+// users who would rather not pay for round-trips while completing.
+const completionNoNetworkEnv = "MIREN_COMPLETION_NO_NETWORK"
 
 // Complete is the entry point for the hidden "__complete" command that the
 // generated completion scripts (see CompletionBash/Zsh/Fish) call to ask the
@@ -74,17 +94,37 @@ func newCompletionContext() (*Context, context.CancelFunc) {
 	return ctx, cancel
 }
 
+// loadCompletionConfig populates the Context with client and cluster config so
+// the server-backed resolvers can reach the cluster. It is best-effort: when
+// nothing is configured the resolvers simply return no suggestions.
+func loadCompletionConfig(ctx *Context) {
+	cfg, err := clientconfig.LoadConfig()
+	if err != nil {
+		return
+	}
+	ctx.ClientConfig = cfg
+
+	name := cfg.ActiveCluster()
+	if name == "" {
+		return
+	}
+	if cluster, err := cfg.GetCluster(name); err == nil {
+		ctx.ClusterConfig = cluster
+		ctx.ClusterName = name
+	}
+}
+
 // positionalResolvers maps a command's positional argument to the resolver that
-// supplies its candidate values. Only values available locally are completed
-// here; server-backed resolvers are added by the dynamic completion layer.
+// supplies its candidate values. Local resolvers read from client config;
+// server-backed ones reach the cluster (see completeViaClient).
 func positionalResolvers() map[posKey]valueResolver {
 	return map[posKey]valueResolver{
 		// Local: read from client config, no server round-trip.
 		{"cluster switch", 0}: resolveClusterNames,
 		{"cluster remove", 0}: resolveClusterNames,
 
-		// Server-backed (see completion_dynamic.go). "route set" takes a NEW
-		// host at position 0, so only its app argument is completed.
+		// Server-backed. "route set" takes a NEW host at position 0, so only its
+		// app argument is completed.
 		{"app delete", 0}:        resolveAppNames,
 		{"route set", 1}:         resolveAppNames,
 		{"route set-default", 0}: resolveAppNames,
@@ -102,16 +142,6 @@ func positionalResolvers() map[posKey]valueResolver {
 		{"runner remove", 0}:            resolveRunnerNodes,
 		{"runner token revoke", 0}:      resolveTokenIDs,
 	}
-}
-
-// resolveClusterNames lists the locally configured cluster names. It reads the
-// client config directly, so completion stays instant with no server round-trip.
-func resolveClusterNames(*Context) []string {
-	cfg, err := clientconfig.LoadConfig()
-	if err != nil {
-		return nil
-	}
-	return cfg.GetClusterNames()
 }
 
 // resolveCompletions returns the suggestions and shell directive for the tokens
@@ -332,123 +362,177 @@ func printCompletions(w io.Writer, cands []candidate, dir directive) {
 	fmt.Fprintf(w, ":%d\n", int(dir))
 }
 
-// CompletionBash prints a bash completion script for miren.
-func CompletionBash(ctx *Context, opts struct{}) error {
-	ctx.Printf("%s", bashCompletionScript)
-	return nil
+// resolveClusterNames lists the locally configured cluster names. It reads the
+// client config directly, so completion stays instant with no server round-trip.
+func resolveClusterNames(*Context) []string {
+	cfg, err := clientconfig.LoadConfig()
+	if err != nil {
+		return nil
+	}
+	return cfg.GetClusterNames()
 }
 
-// CompletionZsh prints a zsh completion script for miren.
-func CompletionZsh(ctx *Context, opts struct{}) error {
-	ctx.Printf("%s", zshCompletionScript)
-	return nil
+// completeViaClient runs fn with an RPC client for the given service. Server-backed
+// completion is best-effort: tab completion must feel instant, so it returns nil
+// (no suggestions) when completion is disabled, the server is unreachable, or the
+// deadline fires. The work runs in a goroutine selected against ctx so a hung dial
+// can never block the shell; this relies on ctx carrying a deadline, which
+// newCompletionContext always sets. The short-lived process exits right after
+// printing, so the goroutine is not a meaningful leak.
+func completeViaClient(ctx *Context, service string, fn func(*rpc.NetworkClient) []string) []string {
+	if os.Getenv(completionNoNetworkEnv) != "" {
+		return nil
+	}
+
+	result := make(chan []string, 1)
+	go func() {
+		client, err := ctx.RPCClient(service)
+		if err != nil {
+			result <- nil
+			return
+		}
+		defer client.Close()
+		result <- fn(client)
+	}()
+
+	select {
+	case <-ctx.Done():
+		return nil
+	case values := <-result:
+		return values
+	}
 }
 
-// CompletionFish prints a fish completion script for miren.
-func CompletionFish(ctx *Context, opts struct{}) error {
-	ctx.Printf("%s", fishCompletionScript)
-	return nil
+func resolveAppNames(ctx *Context) []string {
+	return completeViaClient(ctx, "dev.miren.runtime/app", func(client *rpc.NetworkClient) []string {
+		res, err := app_v1alpha.NewCrudClient(client).List(ctx)
+		if err != nil {
+			return nil
+		}
+		apps := res.Apps()
+		names := make([]string, 0, len(apps))
+		for _, a := range apps {
+			names = append(names, a.Name())
+		}
+		return names
+	})
 }
 
-const bashCompletionScript = `# bash completion for miren
-_miren_complete() {
-    local cword=$COMP_CWORD
-    local -a args=("${COMP_WORDS[@]:1:cword}")
-
-    # Call the binary by the name actually typed (miren, m, a path, ...) so the
-    # same function works for any command this completion is bound to.
-    local out
-    out="$("${COMP_WORDS[0]}" __complete "${args[@]}" 2>/dev/null)" || return
-
-    local directive=0
-    local -a comps=()
-    local line
-    while IFS= read -r line; do
-        case "$line" in
-            :*) directive="${line#:}" ;;
-            *)  comps+=("${line%%$'\t'*}") ;;
-        esac
-    done <<< "$out"
-
-    COMPREPLY=($(compgen -W "${comps[*]}" -- "${COMP_WORDS[cword]}"))
-
-    if (( (directive & 4) == 0 )); then
-        compopt -o default 2>/dev/null
-    fi
-}
-complete -F _miren_complete miren
-`
-
-const zshCompletionScript = `#compdef miren
-
-# Source this script or place it on your fpath to enable completion:
-#   source <(miren completion zsh)
-
-_miren() {
-    local -a args
-    # (@) preserves each word as a separate element (including a trailing empty
-    # word under the cursor); a plain quoted range would join them into one.
-    args=("${(@)words[2,CURRENT]}")
-
-    # words[1] is the command as typed (miren, m, a path, ...), so the same
-    # function works for any command this completion is bound to.
-    local out
-    out="$("${words[1]}" __complete "${args[@]}" 2>/dev/null)"
-
-    local -a comps
-    local directive=0 line
-    while IFS= read -r line; do
-        if [[ "$line" == :* ]]; then
-            directive="${line#:}"
-            continue
-        fi
-        if [[ "$line" == *$'\t'* ]]; then
-            comps+=("${line%%$'\t'*}:${line#*$'\t'}")
-        else
-            comps+=("$line")
-        fi
-    done <<< "$out"
-
-    _describe -V 'miren' comps
-
-    if (( (directive & 4) == 0 )); then
-        _files
-    fi
+func resolveRouteHosts(ctx *Context) []string {
+	return completeViaClient(ctx, "entities", func(client *rpc.NetworkClient) []string {
+		routes, err := ingress.NewClient(ctx.Log, client).List(ctx)
+		if err != nil {
+			return nil
+		}
+		var hosts []string
+		for _, r := range routes {
+			if r.Route.Host != "" { // the default route has no host
+				hosts = append(hosts, r.Route.Host)
+			}
+		}
+		return hosts
+	})
 }
 
-compdef _miren miren
-`
+func resolveSandboxIDs(ctx *Context) []string {
+	return completeViaClient(ctx, "entities", func(client *rpc.NetworkClient) []string {
+		eac := entityserver_v1alpha.NewEntityAccessClient(client)
+		kind, err := eac.LookupKind(ctx, "sandbox")
+		if err != nil {
+			return nil
+		}
+		res, err := eac.List(ctx, kind.Attr())
+		if err != nil {
+			return nil
+		}
+		var ids []string
+		for _, e := range res.Values() {
+			var sandbox compute_v1alpha.Sandbox
+			sandbox.Decode(e.Entity())
+			if compute.SandboxDead(sandbox.Status) {
+				continue
+			}
+			ids = append(ids, sandbox.ID.String())
+		}
+		return ids
+	})
+}
 
-const fishCompletionScript = `# fish completion for miren
-#   miren completion fish | source
+func resolvePoolIDs(ctx *Context) []string {
+	return completeViaClient(ctx, "entities", func(client *rpc.NetworkClient) []string {
+		eac := entityserver_v1alpha.NewEntityAccessClient(client)
+		kind, err := eac.LookupKind(ctx, "sandbox_pool")
+		if err != nil {
+			return nil
+		}
+		res, err := eac.List(ctx, kind.Attr())
+		if err != nil {
+			return nil
+		}
+		var ids []string
+		for _, e := range res.Values() {
+			var pool compute_v1alpha.SandboxPool
+			pool.Decode(e.Entity())
+			ids = append(ids, pool.ID.String())
+		}
+		return ids
+	})
+}
 
-function __miren_complete
-    set -l tokens (commandline -opc)
-    set -l current (commandline -ct)
-    set -l args
-    if test (count $tokens) -gt 1
-        set args $tokens[2..-1]
-    end
-    set args $args $current
+func resolveAddonNames(ctx *Context) []string {
+	return completeViaClient(ctx, "entities", func(client *rpc.NetworkClient) []string {
+		eac := entityserver_v1alpha.NewEntityAccessClient(client)
+		kind, err := eac.LookupKind(ctx, "addon")
+		if err != nil {
+			return nil
+		}
+		res, err := eac.List(ctx, kind.Attr())
+		if err != nil {
+			return nil
+		}
+		var names []string
+		for _, e := range res.Values() {
+			var addon addon_v1alpha.Addon
+			addon.Decode(e.Entity())
+			names = append(names, addon.Name)
+		}
+		return names
+	})
+}
 
-    # $tokens[1] is the command as typed (miren, m, a path, ...), so the same
-    # function works for any command this completion is bound to.
-    set -l directive 0
-    for line in ($tokens[1] __complete $args 2>/dev/null)
-        set -l d (string match -r '^:(.*)' -- $line)
-        if test (count $d) -gt 0
-            set directive $d[2]
-        else
-            echo $line # "value\tdescription"; fish renders the description
-        end
-    end
+func resolveRunnerNodes(ctx *Context) []string {
+	return completeViaClient(ctx, rpc.ServiceRunner, func(client *rpc.NetworkClient) []string {
+		res, err := runner_v1alpha.NewRunnerRegistrationClient(client).ListRunners(ctx)
+		if err != nil {
+			return nil
+		}
+		var names []string
+		for _, r := range res.Runners() {
+			if name := r.Name(); name != "" {
+				names = append(names, name)
+			} else {
+				names = append(names, r.RunnerId())
+			}
+		}
+		return names
+	})
+}
 
-    # Offer files only when the directive permits it (unknown positionals,
-    # path-valued flags); otherwise the suggestions above are the full set.
-    if test "$directive" = 0
-        __fish_complete_path $current
-    end
-end
-
-complete -c miren -f -a '(__miren_complete)'
-`
+func resolveTokenIDs(ctx *Context) []string {
+	return completeViaClient(ctx, rpc.ServiceRunner, func(client *rpc.NetworkClient) []string {
+		res, err := runner_v1alpha.NewRunnerRegistrationClient(client).ListInvites(ctx)
+		if err != nil {
+			return nil
+		}
+		var ids []string
+		for _, inv := range res.Invites() {
+			// Already-revoked or expired tokens can't be revoked again.
+			switch strings.TrimPrefix(inv.Status(), "status.") {
+			case "revoked", "expired":
+				continue
+			}
+			ids = append(ids, inv.Id())
+		}
+		return ids
+	})
+}
