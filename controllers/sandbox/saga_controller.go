@@ -133,6 +133,9 @@ func (s *SagaSandboxController) Create(ctx context.Context, co *compute.Sandbox,
 		}
 
 		return s.createSandboxViaSaga(ctx, co)
+	case compute.NOT_READY:
+		// Transient boot state; nothing to reconcile until it resolves.
+		fallthrough
 	default:
 		s.log.Warn("ignoring sandbox status", "status", co.Status)
 		return nil

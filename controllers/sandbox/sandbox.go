@@ -83,7 +83,7 @@ type SandboxControllerDeps struct {
 	StatusMon      *observability.StatusMonitor
 	Resolver       netresolve.Resolver
 	Metrics        *Metrics
-	WorkloadIssuer *workloadidentity.Issuer
+	WorkloadIssuer workloadidentity.TokenIssuer
 }
 
 type SandboxController struct {
@@ -110,7 +110,7 @@ type SandboxController struct {
 
 	Resolver       netresolve.Resolver
 	Metrics        *Metrics
-	WorkloadIssuer *workloadidentity.Issuer
+	WorkloadIssuer workloadidentity.TokenIssuer
 
 	tokenRefresher *tokenRefresher
 	tokenSecrets   *tokenSecretRegistry
@@ -218,6 +218,8 @@ func (c *SandboxController) SetPortStatus(id string, port observability.BoundPor
 		ports.Ports = slices.DeleteFunc(ports.Ports, func(p observability.BoundPort) bool {
 			return p == port
 		})
+	case observability.PortStatusActive:
+		// Liveness signal only; does not change the bound set.
 	}
 
 	c.portCond.Broadcast()
@@ -721,8 +723,11 @@ func (c *SandboxController) isContainerHealthy(ctx context.Context, containerID 
 		// We don't expect paused sandboxes in normal operation
 		c.Log.Debug("task in paused/pausing state, marking unhealthy", "id", containerID, "status", status.Status)
 		return false
+	case containerd.Unknown:
+		// Unknown status is unhealthy.
+		fallthrough
 	default:
-		// Unknown or any other status is unhealthy
+		// Any other status is unhealthy
 		c.Log.Debug("task in unknown/unhealthy state", "id", containerID, "status", status.Status)
 		return false
 	}
@@ -951,6 +956,9 @@ func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, met
 		}
 
 		return c.createSandbox(ctx, co, meta, false)
+	case compute.NOT_READY:
+		// Transient boot state; nothing to reconcile until it resolves.
+		fallthrough
 	default:
 		c.Log.Warn("ignoring sandbox status", "status", co.Status)
 		return nil

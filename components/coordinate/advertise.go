@@ -295,6 +295,9 @@ func ComputeAdvertise(in AdvertiseInput) ([]AdvertiseCandidate, []string) {
 		case netcheckUnreachable:
 			cand.Included = false
 			cand.Reason = "address family proven unreachable by netcheck"
+		case netcheckNotRun:
+			// No netcheck result yet; keep the candidate.
+			fallthrough
 		default:
 			cand.Included = true
 			cand.Reason = "no netcheck override"

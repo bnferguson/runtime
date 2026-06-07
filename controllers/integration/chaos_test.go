@@ -84,6 +84,9 @@ func (r *chaosReport) collectEntityStats(t *testing.T, ctx context.Context, h *T
 			r.provisionedDisks++
 		case storage.ERROR:
 			r.errorDisks++
+		case storage.PROVISIONING, storage.ATTACHED, storage.DETACHED, storage.DELETING, storage.RESTORING:
+			// Counted together as "other".
+			fallthrough
 		default:
 			r.otherDisks++
 		}
@@ -108,6 +111,9 @@ func (r *chaosReport) collectEntityStats(t *testing.T, ctx context.Context, h *T
 			r.mountedMounts++
 		case storage.DM_DETACHED:
 			r.detachedMounts++
+		case storage.DM_PENDING, storage.DM_ATTACHING, storage.DM_ATTACHED, storage.DM_MOUNTING, storage.DM_UNMOUNTING, storage.DM_DETACHING, storage.DM_ERROR:
+			// Counted together as "other".
+			fallthrough
 		default:
 			r.otherMounts++
 		}

@@ -367,6 +367,9 @@ func (s *PythonStack) Entrypoint() string {
 		return "pipenv run"
 	case pythonPkgUv:
 		return "uv run"
+	case pythonPkgPip:
+		// pip has no run wrapper.
+		fallthrough
 	default:
 		return ""
 	}

@@ -1163,6 +1163,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		NetworkBackend:         c.NetworkBackend,
 		VictoriametricsAddress: c.VictoriametricsAddress,
 		VictorialogsAddress:    c.VictorialogsAddress,
+		WorkloadIssuer:         c.WorkloadIssuer,
 	})
 	server.ExposeValue(rpc.ServiceRunner, runner_v1alpha.AdaptRunnerRegistration(runnerReg))
 

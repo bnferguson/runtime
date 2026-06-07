@@ -447,6 +447,9 @@ func (c *SandboxController) waitForLeaseBound(ctx context.Context, leaseID entit
 				// Still pending, continue waiting
 				continue
 
+			case storage.RELEASED:
+				// Lease released out from under us while waiting to bind.
+				fallthrough
 			default:
 				return "", fmt.Errorf("unexpected disk lease status: %s", lease.Status)
 			}

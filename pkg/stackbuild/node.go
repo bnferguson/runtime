@@ -185,6 +185,9 @@ func (s *NodeStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 			llb.AddMount("/usr/local/share/.cache/yarn", yarnCache, llb.AsPersistentCacheDir("yarn", llb.CacheMountShared)),
 			llb.WithCustomName("[phase] Installing Node.js dependencies with yarn"),
 		).Root()
+	case nodePkgNpm:
+		// npm is also the default when no package manager is detected.
+		fallthrough
 	default:
 		// Create cache mounts
 		npmCache := llb.Scratch().File(

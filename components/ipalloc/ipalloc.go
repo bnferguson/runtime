@@ -186,7 +186,27 @@ func (a *Allocator) Watch(ctx context.Context, eac *entityserver_v1alpha.EntityA
 				if err := a.assignService(ctx, ev.Entity, eac); err != nil {
 					a.log.Error("failed to assign service", "error", err, "service", ev.Id)
 				}
+			case indexwatch.EventDeleted:
+				// Service removed; return its reserved IPs to the pool.
+				a.releaseServiceAllocations(ev.Id)
 			}
+		}
+	}
+}
+
+// releaseServiceAllocations returns every IP reserved for the given service to
+// the pool. The allocation table is otherwise append-only, so without this a
+// deleted service would hold its addresses forever and slowly exhaust the
+// subnet.
+func (a *Allocator) releaseServiceAllocations(id entity.Id) {
+	owner := id.String()
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	for addr, holder := range a.allocations {
+		if holder == owner {
+			delete(a.allocations, addr)
 		}
 	}
 }

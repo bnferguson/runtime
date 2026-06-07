@@ -61,6 +61,8 @@ func (m *MemoryStorage) ListIncomplete(ctx context.Context) ([]*Execution, error
 		switch exec.Status {
 		case StatusPending, StatusRunning, StatusUndoing:
 			result = append(result, exec)
+		case StatusCompleted, StatusFailed:
+			// Terminal states are complete; skip them.
 		}
 	}
 	return result, nil

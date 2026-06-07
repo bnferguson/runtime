@@ -291,12 +291,17 @@ func (ca *Authority) VerifyCertificate(certPEM []byte) error {
 		return fmt.Errorf("parsing certificate: %w", err)
 	}
 
+	return ca.VerifyCert(cert)
+}
+
+// VerifyCert verifies that an already-parsed certificate was signed by this CA.
+func (ca *Authority) VerifyCert(cert *x509.Certificate) error {
 	// Create verification pool with CA cert
 	roots := x509.NewCertPool()
 	roots.AddCert(ca.cert)
 
 	// Verify the certificate
-	_, err = cert.Verify(x509.VerifyOptions{
+	_, err := cert.Verify(x509.VerifyOptions{
 		Roots:       roots,
 		CurrentTime: time.Now(),
 		KeyUsages:   []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},

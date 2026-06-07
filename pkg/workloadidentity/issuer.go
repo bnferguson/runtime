@@ -60,6 +60,18 @@ type Issuer struct {
 	previousKey    *jose.JSONWebKey
 }
 
+// TokenIssuer is the minting surface the sandbox controller depends on. The
+// concrete *Issuer satisfies it directly (the coordinator holds the signing
+// key). Distributed runners have no signing key, so they supply an
+// implementation that proxies minting to the coordinator over RPC.
+type TokenIssuer interface {
+	IssueToken(app, sandboxID string) (string, error)
+	IssueTokenWithOptions(app, sandboxID string, opts TokenOptions) (string, error)
+	IssuerURL() string
+}
+
+var _ TokenIssuer = (*Issuer)(nil)
+
 type WorkloadClaims struct {
 	jwt.RegisteredClaims
 	OrganizationID string `json:"organization_id,omitempty"`

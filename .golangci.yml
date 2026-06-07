@@ -1,10 +1,19 @@
 version: "2"
 
 linters:
+  enable:
+    - exhaustive
+
   disable:
     - errcheck
 
   default: standard
+  settings:
+    exhaustive:
+      # A bare `default:` does not by itself make a switch exhaustive; every
+      # enum member must be listed (use a `//exhaustive:ignore` directive to
+      # opt a specific switch out).
+      default-signifies-exhaustive: false
   exclusions:
     paths:
       - "dataset/"

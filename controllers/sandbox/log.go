@@ -164,8 +164,9 @@ func (s *SandboxLogs) scanJSON(line string) (string, observability.LogStream, bo
 				// Raw preserves the original numeric literal (large integers
 				// included) and renders bools as "true"/"false".
 				s.extra[k] = value.Raw
+			case gjson.Null, gjson.JSON:
+				// Null and nested objects/arrays are skipped.
 			}
-			// gjson.Null and nested objects/arrays (gjson.JSON) are skipped.
 		}
 		return true
 	})
