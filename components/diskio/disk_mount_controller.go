@@ -169,6 +169,9 @@ func (c *DiskMountController) reconcileMountMounted(ctx context.Context, mount *
 	case storage_v1alpha.DM_DETACHED:
 		c.log.Info("mount detached but desired mounted, recovering", "entity_id", entityId)
 		return c.attachAndMount(ctx, mount)
+	case storage_v1alpha.DM_UNMOUNTING, storage_v1alpha.DM_DETACHING:
+		// Tearing down while desired state is mounted; unexpected.
+		fallthrough
 	default:
 		c.log.Warn("unexpected actual state for mounted", "actual_state", mount.ActualState)
 		return nil
@@ -187,6 +190,9 @@ func (c *DiskMountController) reconcileMountUnmounted(ctx context.Context, mount
 		return nil
 	case storage_v1alpha.DM_UNMOUNTING, storage_v1alpha.DM_DETACHING:
 		return nil
+	case storage_v1alpha.DM_PENDING, storage_v1alpha.DM_ATTACHING, storage_v1alpha.DM_ATTACHED, storage_v1alpha.DM_MOUNTING, storage_v1alpha.DM_MOUNTED, storage_v1alpha.DM_ERROR:
+		// Still attached/mounted; tear it down to reach the unmounted state.
+		fallthrough
 	default:
 		return c.unmountAndDetach(ctx, mount)
 	}

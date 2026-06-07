@@ -687,6 +687,8 @@ func (d *Disk) checkFlush(ctx context.Context) error {
 	}
 
 	switch reason {
+	case FlushNo:
+		// Already handled by the early return above; unreachable here.
 	case FlushTime:
 		d.log.Info("flushing segment due to maximum segment lifetime",
 			"age", time.Since(d.curOC.builder.openedAt),

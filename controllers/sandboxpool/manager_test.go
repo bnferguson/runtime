@@ -129,6 +129,8 @@ func TestManagerScaleUpPartial(t *testing.T) {
 			running++
 		case compute_v1alpha.PENDING:
 			pending++
+		case compute_v1alpha.NOT_READY, compute_v1alpha.STOPPED, compute_v1alpha.DEAD:
+			// Not counted in this assertion.
 		}
 	}
 
@@ -564,6 +566,8 @@ func TestManagerScaleDownFixedModeProactive(t *testing.T) {
 			runningCount++
 		case compute_v1alpha.STOPPED:
 			stoppedCount++
+		case compute_v1alpha.PENDING, compute_v1alpha.NOT_READY, compute_v1alpha.DEAD:
+			// Not counted in this assertion.
 		}
 	}
 

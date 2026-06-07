@@ -17,6 +17,7 @@ import (
 func structFingerprint(t reflect.Type) string {
 	var walk func(reflect.Type) string
 	walk = func(t reflect.Type) string {
+		//exhaustive:ignore reflect.Kind has ~27 members; default handles the rest
 		switch t.Kind() {
 		case reflect.Slice, reflect.Array, reflect.Pointer:
 			return t.Kind().String() + "<" + walk(t.Elem()) + ">"

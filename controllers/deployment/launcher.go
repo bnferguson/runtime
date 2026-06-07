@@ -1352,6 +1352,9 @@ func (l *Launcher) ensureServiceForPorts(ctx context.Context, app *core_v1alpha.
 		switch p.Protocol {
 		case core_v1alpha.ConfigSpecServicesPortsUDP:
 			np.Protocol = network_v1alpha.UDP
+		case core_v1alpha.ConfigSpecServicesPortsTCP:
+			// TCP is also the default for an unspecified protocol.
+			fallthrough
 		default:
 			np.Protocol = network_v1alpha.TCP
 		}
@@ -1695,6 +1698,9 @@ func (l *Launcher) hasActiveSandboxForPool(ctx context.Context, poolID entity.Id
 		switch sb.Status {
 		case compute_v1alpha.RUNNING, compute_v1alpha.PENDING, compute_v1alpha.NOT_READY:
 			// Active — may still hold disk resources
+		case compute_v1alpha.STOPPED, compute_v1alpha.DEAD:
+			// Terminal — no longer holds resources.
+			fallthrough
 		default:
 			continue
 		}

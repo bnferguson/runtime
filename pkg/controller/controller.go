@@ -175,6 +175,9 @@ func (c *ReconcileController) Start(top context.Context) error {
 					eventType = EventUpdated
 				case entityserver_v1alpha.EntityOperationDelete:
 					eventType = EventDeleted
+				case entityserver_v1alpha.EntityOperationProgress, entityserver_v1alpha.EntityOperationCompacted:
+					// Not entity mutations; nothing to dispatch.
+					fallthrough
 				default:
 					return nil
 				}

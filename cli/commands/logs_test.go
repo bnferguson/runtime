@@ -308,6 +308,191 @@ func TestPrintLogEntry(t *testing.T) {
 	})
 }
 
+func TestRenderLogEntry(t *testing.T) {
+	mk := func(tsec int, line string) *app_v1alpha.LogEntry {
+		e := &app_v1alpha.LogEntry{}
+		e.SetTimestamp(standard.ToTimestamp(time.Date(2026, 3, 13, 16, 30, tsec, 0, time.UTC)))
+		e.SetStream("stdout")
+		e.SetLine(line)
+		return e
+	}
+
+	t.Run("same content different timestamp shares signature", func(t *testing.T) {
+		_, sig1 := renderLogEntry(mk(11, "ping"))
+		d2, sig2 := renderLogEntry(mk(12, "ping"))
+		d1, _ := renderLogEntry(mk(11, "ping"))
+
+		if sig1 != sig2 {
+			t.Errorf("signatures should match for lines differing only by timestamp: %q vs %q", sig1, sig2)
+		}
+		if d1 == d2 {
+			t.Errorf("displays should differ when timestamps differ, both = %q", d1)
+		}
+	})
+
+	t.Run("different content produces different signature", func(t *testing.T) {
+		_, sig1 := renderLogEntry(mk(11, "ping"))
+		_, sig2 := renderLogEntry(mk(11, "pong"))
+		if sig1 == sig2 {
+			t.Errorf("signatures should differ for different content, both = %q", sig1)
+		}
+	})
+}
+
+func TestLogCoalescer(t *testing.T) {
+	mk := func(tsec int, line string) *app_v1alpha.LogEntry {
+		e := &app_v1alpha.LogEntry{}
+		e.SetTimestamp(standard.ToTimestamp(time.Date(2026, 3, 13, 16, 30, tsec, 0, time.UTC)))
+		e.SetStream("stdout")
+		e.SetLine(line)
+		return e
+	}
+
+	// Construct the coalescer directly with a buffer-backed Context, bypassing
+	// the TTY gate so the collapse logic itself is exercised.
+	newCoalescer := func(buf *bytes.Buffer) *logCoalescer {
+		ctx := &Context{Context: context.Background(), Stdout: buf}
+		return &logCoalescer{ctx: ctx}
+	}
+
+	t.Run("repeated lines collapse to one live counter", func(t *testing.T) {
+		var buf bytes.Buffer
+		c := newCoalescer(&buf)
+		for i := 0; i < 4; i++ {
+			c.print(mk(11+i, "ping"))
+		}
+		c.flush()
+
+		out := buf.String()
+		// timestamps 11..14 → final count 4, span 3s
+		if !strings.Contains(out, "[ Repeated 4x over 3s ]") {
+			t.Errorf("expected summary [ Repeated 4x over 3s ], got: %q", out)
+		}
+		if !strings.Contains(out, "\r") {
+			t.Errorf("expected at least one \\r redraw, got: %q", out)
+		}
+		// First occurrence committed once, then the summary redraws — exactly one
+		// full "ping" line is followed by summary redraws, never four full lines.
+		if strings.Count(out, "\n") != 2 {
+			t.Errorf("expected 2 newlines (first line + flushed summary), got %d: %q", strings.Count(out, "\n"), out)
+		}
+	})
+
+	t.Run("distinct line commits the counter and prints in full", func(t *testing.T) {
+		var buf bytes.Buffer
+		c := newCoalescer(&buf)
+		c.print(mk(11, "ping"))
+		c.print(mk(12, "ping"))
+		c.print(mk(13, "different"))
+		c.flush()
+
+		out := buf.String()
+		if !strings.Contains(out, "[ Repeated 2x over 1s ]") {
+			t.Errorf("expected [ Repeated 2x over 1s ] for the ping run, got: %q", out)
+		}
+		if !strings.Contains(out, "different") {
+			t.Errorf("expected the distinct line printed, got: %q", out)
+		}
+	})
+
+	t.Run("same-second repeats omit the span", func(t *testing.T) {
+		var buf bytes.Buffer
+		c := newCoalescer(&buf)
+		c.print(mk(11, "ping"))
+		c.print(mk(11, "ping"))
+		c.flush()
+
+		out := buf.String()
+		if !strings.Contains(out, "[ Repeated 2x ]") {
+			t.Errorf("expected bare [ Repeated 2x ] with no span, got: %q", out)
+		}
+		if strings.Contains(out, "over") {
+			t.Errorf("did not expect a span for a sub-second run, got: %q", out)
+		}
+	})
+
+	t.Run("single non-repeated line has no summary", func(t *testing.T) {
+		var buf bytes.Buffer
+		c := newCoalescer(&buf)
+		c.print(mk(11, "solo"))
+		c.flush()
+
+		out := buf.String()
+		if strings.Contains(out, "Repeated") {
+			t.Errorf("did not expect a summary for a single line, got: %q", out)
+		}
+		if strings.Contains(out, "\r") {
+			t.Errorf("did not expect a \\r redraw for a single line, got: %q", out)
+		}
+		if !strings.Contains(out, "solo") {
+			t.Errorf("expected the line content, got: %q", out)
+		}
+	})
+}
+
+func TestFormatRunSpan(t *testing.T) {
+	tests := []struct {
+		d    time.Duration
+		want string
+	}{
+		{1 * time.Second, "1s"},
+		{14 * time.Second, "14s"},
+		{59 * time.Second, "59s"},
+		{60 * time.Second, "1m"},
+		{75 * time.Second, "1m15s"},
+		{2 * time.Hour, "2h"},
+		{2*time.Hour + 5*time.Minute, "2h5m"},
+	}
+	for _, tt := range tests {
+		if got := formatRunSpan(tt.d); got != tt.want {
+			t.Errorf("formatRunSpan(%s) = %q, want %q", tt.d, got, tt.want)
+		}
+	}
+}
+
+func TestRunSpanSuffix(t *testing.T) {
+	base := time.Date(2026, 3, 13, 16, 30, 0, 0, time.UTC)
+
+	if got := runSpanSuffix(base, base); got != "" {
+		t.Errorf("zero span should produce no suffix, got %q", got)
+	}
+	if got := runSpanSuffix(base, base.Add(900*time.Millisecond)); got != "" {
+		t.Errorf("sub-second span should produce no suffix, got %q", got)
+	}
+	if got := runSpanSuffix(base, base.Add(14*time.Second)); got != " over 14s" {
+		t.Errorf("expected \" over 14s\", got %q", got)
+	}
+}
+
+func TestLogPrinterNonTTYNeverCoalesces(t *testing.T) {
+	// A bytes.Buffer Stdout is not a TTY, so even with follow=true the plain
+	// printer must be returned — guaranteeing piped output keeps every line.
+	var buf bytes.Buffer
+	ctx := &Context{Context: context.Background(), Stdout: &buf}
+	printer, flush := logPrinter(ctx, false, true)
+
+	ts := time.Date(2026, 3, 13, 16, 30, 0, 0, time.UTC)
+	for i := 0; i < 3; i++ {
+		e := &app_v1alpha.LogEntry{}
+		e.SetTimestamp(standard.ToTimestamp(ts))
+		e.SetStream("stdout")
+		e.SetLine("ping")
+		printer(e)
+	}
+	flush()
+
+	out := buf.String()
+	if strings.Contains(out, "\r") {
+		t.Errorf("non-TTY output must not use \\r redraws, got: %q", out)
+	}
+	if strings.Contains(out, "Repeated") {
+		t.Errorf("non-TTY output must not collapse lines, got: %q", out)
+	}
+	if n := strings.Count(out, "ping"); n != 3 {
+		t.Errorf("expected 3 verbatim ping lines, got %d: %q", n, out)
+	}
+}
+
 func TestFormatAttributes(t *testing.T) {
 	t.Run("filters hidden attributes", func(t *testing.T) {
 		m := map[string]string{

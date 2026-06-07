@@ -357,6 +357,8 @@ func (w *Watcher) watch(ctx context.Context) (resnapshot bool, err error) {
 				w.cursor = op.Revision()
 			}
 			return nil
+		case entityserver_v1alpha.EntityOperationCreate, entityserver_v1alpha.EntityOperationUpdate, entityserver_v1alpha.EntityOperationDelete:
+			// Entity mutations; converted to events by eventFromOp below.
 		}
 
 		ev, ok := w.eventFromOp(op)
@@ -395,6 +397,9 @@ func (w *Watcher) eventFromOp(op *entityserver_v1alpha.EntityOp) (Event, bool) {
 		typ = EventUpdated
 	case entityserver_v1alpha.EntityOperationDelete:
 		typ = EventDeleted
+	case entityserver_v1alpha.EntityOperationProgress, entityserver_v1alpha.EntityOperationCompacted:
+		// Not entity mutations; no deliverable event.
+		fallthrough
 	default:
 		return Event{}, false
 	}

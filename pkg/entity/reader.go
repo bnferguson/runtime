@@ -57,6 +57,7 @@ func readInfo(e AttrGetter, val any) error {
 			continue
 		}
 
+		//exhaustive:ignore reflect.Kind has ~27 members; default handles the rest
 		switch fieldVal.Kind() {
 		case reflect.String:
 			fieldVal.SetString(val.String())

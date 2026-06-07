@@ -72,6 +72,8 @@ func (s *StatusMonitor) SetPortStatus(entity string, port BoundPort, status Port
 		es.boundPorts[port] = struct{}{}
 	case PortStatusUnbound:
 		delete(es.boundPorts, port)
+	case PortStatusActive:
+		// Liveness signal only; does not change the bound set.
 	}
 }
 

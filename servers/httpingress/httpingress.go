@@ -981,6 +981,7 @@ func isProxyConnectionError(err error) bool {
 		var syscallErr *os.SyscallError
 		if errors.As(opErr.Err, &syscallErr) {
 			if errno, ok := syscallErr.Err.(syscall.Errno); ok {
+				//exhaustive:ignore syscall.Errno has ~130 members; default handles the rest
 				switch errno {
 				case syscall.ECONNREFUSED: // connection refused
 					return true

@@ -243,6 +243,9 @@ func (v *Value) setFromTuple(x valueDecodeTuple, decoder unmarshaler) error {
 		}
 
 		v.any = label
+	case KindAny, KindBytes:
+		// No dedicated decoding; use the generic any unmarshal below.
+		fallthrough
 	default:
 		err := decoder.Unmarshal(x.Value, &v.any)
 		if err != nil {
@@ -696,6 +699,9 @@ func (v Value) String() string {
 	case KindInt64, KindUint64, KindFloat64, KindBool, KindString:
 		var buf []byte
 		return string(v.append(buf))
+	case KindAny, KindDuration, KindTime, KindId, KindKeyword, KindArray, KindComponent, KindLabel, KindBytes:
+		// Prefix these kinds with their short name to disambiguate.
+		fallthrough
 	default:
 		var buf []byte
 		return v.Kind().ShortString() + ": " + string(v.append(buf))
@@ -863,9 +869,11 @@ func (v Value) Clone() Value {
 			}
 		}
 		return Value{any: &EntityComponent{attrs: clonedAttrs}}
+	case KindAny, KindBool, KindDuration, KindFloat64, KindInt64, KindString, KindTime, KindUint64, KindId, KindKeyword, KindLabel:
+		// For these types the value is either stored in num or is an
+		// immutable type, so a shallow copy is sufficient.
+		fallthrough
 	default:
-		// For all other types (strings, primitives, time, id, keyword, label),
-		// the value is either stored in num or is an immutable type, so shallow copy is fine
 		return v
 	}
 }
@@ -1039,6 +1047,9 @@ func (v Value) sum(w io.Writer) {
 			v.sum(w)
 			w.Write([]byte{','})
 		}
+	case KindLabel, KindBytes:
+		// Use the generic text representation.
+		fallthrough
 	default:
 		w.Write(v.append(nil))
 	}

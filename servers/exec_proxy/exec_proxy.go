@@ -260,8 +260,10 @@ func (s *Server) waitForSandboxRunning(ctx context.Context, sbID entity.Id) (*en
 		case compute_v1alpha.DEAD, compute_v1alpha.STOPPED:
 			resultCh <- result{err: fmt.Errorf("sandbox failed to start, status: %s", sb.Status)}
 			return true
+		case compute_v1alpha.PENDING, compute_v1alpha.NOT_READY:
+			// Not a terminal state; keep waiting.
+			fallthrough
 		default:
-			// PENDING or NOT_READY - keep waiting
 			s.Log.Debug("sandbox not ready yet", "id", sbID, "status", sb.Status)
 			return false
 		}

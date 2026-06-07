@@ -102,8 +102,10 @@ func (c *CompositeAuthorizer) Authorize(ctx context.Context, identity *rpc.Ident
 		// OIDC callers are restricted to the oidc-deploy role
 		return authorizeOIDC(resource, action)
 
+	case rpc.AuthMethodJWT, rpc.AuthMethodAnonymous, rpc.AuthMethodToken:
+		// Delegate to primary (cloud RBAC).
+		fallthrough
 	default:
-		// JWT and other methods → delegate to primary (cloud RBAC)
 		if c.primary != nil {
 			return c.primary.Authorize(ctx, identity, resource, action)
 		}

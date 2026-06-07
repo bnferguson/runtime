@@ -369,6 +369,9 @@ func (c *DiskVolumeController) reconcileVolumePresent(ctx context.Context, volum
 	case storage_v1alpha.DV_ERROR:
 		c.log.Info("volume in error state, attempting recreation", "entity_id", entityId)
 		return c.createVolume(ctx, volume)
+	case storage_v1alpha.DV_DELETING, storage_v1alpha.DV_DELETED:
+		// Volume is being torn down while desired state is present; unexpected.
+		fallthrough
 	default:
 		c.log.Warn("unexpected actual state for present volume", "actual_state", volume.ActualState)
 		return nil
@@ -394,6 +397,9 @@ func (c *DiskVolumeController) reconcileVolumeAbsent(ctx context.Context, volume
 		return nil
 	case storage_v1alpha.DV_DELETING:
 		return nil
+	case storage_v1alpha.DV_PENDING, storage_v1alpha.DV_CREATING, storage_v1alpha.DV_READY, storage_v1alpha.DV_ERROR:
+		// Volume still exists; delete it to reach the absent state.
+		fallthrough
 	default:
 		return c.deleteVolume(ctx, volume)
 	}

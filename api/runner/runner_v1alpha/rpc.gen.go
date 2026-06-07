@@ -927,6 +927,240 @@ func (v *RunnerRegistrationRemoveRunnerResults) UnmarshalJSON(data []byte) error
 	return json.Unmarshal(data, &v.data)
 }
 
+type runnerRegistrationWorkloadIssuerInfoArgsData struct{}
+
+type RunnerRegistrationWorkloadIssuerInfoArgs struct {
+	call rpc.Call
+	data runnerRegistrationWorkloadIssuerInfoArgsData
+}
+
+func (v *RunnerRegistrationWorkloadIssuerInfoArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationWorkloadIssuerInfoArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunnerRegistrationWorkloadIssuerInfoArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationWorkloadIssuerInfoArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type runnerRegistrationWorkloadIssuerInfoResultsData struct {
+	Enabled   *bool   `cbor:"0,keyasint,omitempty" json:"enabled,omitempty"`
+	IssuerUrl *string `cbor:"1,keyasint,omitempty" json:"issuer_url,omitempty"`
+}
+
+type RunnerRegistrationWorkloadIssuerInfoResults struct {
+	call rpc.Call
+	data runnerRegistrationWorkloadIssuerInfoResultsData
+}
+
+func (v *RunnerRegistrationWorkloadIssuerInfoResults) SetEnabled(enabled bool) {
+	v.data.Enabled = &enabled
+}
+
+func (v *RunnerRegistrationWorkloadIssuerInfoResults) SetIssuerUrl(issuer_url string) {
+	v.data.IssuerUrl = &issuer_url
+}
+
+func (v *RunnerRegistrationWorkloadIssuerInfoResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationWorkloadIssuerInfoResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunnerRegistrationWorkloadIssuerInfoResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationWorkloadIssuerInfoResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type runnerRegistrationIssueWorkloadTokenArgsData struct {
+	SandboxId  *string   `cbor:"0,keyasint,omitempty" json:"sandbox_id,omitempty"`
+	Audience   *[]string `cbor:"1,keyasint,omitempty" json:"audience,omitempty"`
+	TtlSeconds *int64    `cbor:"2,keyasint,omitempty" json:"ttl_seconds,omitempty"`
+}
+
+type RunnerRegistrationIssueWorkloadTokenArgs struct {
+	call rpc.Call
+	data runnerRegistrationIssueWorkloadTokenArgsData
+}
+
+func (v *RunnerRegistrationIssueWorkloadTokenArgs) HasSandboxId() bool {
+	return v.data.SandboxId != nil
+}
+
+func (v *RunnerRegistrationIssueWorkloadTokenArgs) SandboxId() string {
+	if v.data.SandboxId == nil {
+		return ""
+	}
+	return *v.data.SandboxId
+}
+
+func (v *RunnerRegistrationIssueWorkloadTokenArgs) HasAudience() bool {
+	return v.data.Audience != nil
+}
+
+func (v *RunnerRegistrationIssueWorkloadTokenArgs) Audience() []string {
+	if v.data.Audience == nil {
+		return nil
+	}
+	return *v.data.Audience
+}
+
+func (v *RunnerRegistrationIssueWorkloadTokenArgs) HasTtlSeconds() bool {
+	return v.data.TtlSeconds != nil
+}
+
+func (v *RunnerRegistrationIssueWorkloadTokenArgs) TtlSeconds() int64 {
+	if v.data.TtlSeconds == nil {
+		return 0
+	}
+	return *v.data.TtlSeconds
+}
+
+func (v *RunnerRegistrationIssueWorkloadTokenArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationIssueWorkloadTokenArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunnerRegistrationIssueWorkloadTokenArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationIssueWorkloadTokenArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type runnerRegistrationIssueWorkloadTokenResultsData struct {
+	Token *string `cbor:"0,keyasint,omitempty" json:"token,omitempty"`
+	Error *string `cbor:"1,keyasint,omitempty" json:"error,omitempty"`
+}
+
+type RunnerRegistrationIssueWorkloadTokenResults struct {
+	call rpc.Call
+	data runnerRegistrationIssueWorkloadTokenResultsData
+}
+
+func (v *RunnerRegistrationIssueWorkloadTokenResults) SetToken(token string) {
+	v.data.Token = &token
+}
+
+func (v *RunnerRegistrationIssueWorkloadTokenResults) SetError(error string) {
+	v.data.Error = &error
+}
+
+func (v *RunnerRegistrationIssueWorkloadTokenResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationIssueWorkloadTokenResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunnerRegistrationIssueWorkloadTokenResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationIssueWorkloadTokenResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type runnerRegistrationRefreshCertificateArgsData struct {
+	ListenAddr *string `cbor:"0,keyasint,omitempty" json:"listen_addr,omitempty"`
+}
+
+type RunnerRegistrationRefreshCertificateArgs struct {
+	call rpc.Call
+	data runnerRegistrationRefreshCertificateArgsData
+}
+
+func (v *RunnerRegistrationRefreshCertificateArgs) HasListenAddr() bool {
+	return v.data.ListenAddr != nil
+}
+
+func (v *RunnerRegistrationRefreshCertificateArgs) ListenAddr() string {
+	if v.data.ListenAddr == nil {
+		return ""
+	}
+	return *v.data.ListenAddr
+}
+
+func (v *RunnerRegistrationRefreshCertificateArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationRefreshCertificateArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunnerRegistrationRefreshCertificateArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationRefreshCertificateArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type runnerRegistrationRefreshCertificateResultsData struct {
+	CertPem *[]byte `cbor:"0,keyasint,omitempty" json:"cert_pem,omitempty"`
+	KeyPem  *[]byte `cbor:"1,keyasint,omitempty" json:"key_pem,omitempty"`
+	CaPem   *[]byte `cbor:"2,keyasint,omitempty" json:"ca_pem,omitempty"`
+	Error   *string `cbor:"3,keyasint,omitempty" json:"error,omitempty"`
+}
+
+type RunnerRegistrationRefreshCertificateResults struct {
+	call rpc.Call
+	data runnerRegistrationRefreshCertificateResultsData
+}
+
+func (v *RunnerRegistrationRefreshCertificateResults) SetCertPem(cert_pem []byte) {
+	x := slices.Clone(cert_pem)
+	v.data.CertPem = &x
+}
+
+func (v *RunnerRegistrationRefreshCertificateResults) SetKeyPem(key_pem []byte) {
+	x := slices.Clone(key_pem)
+	v.data.KeyPem = &x
+}
+
+func (v *RunnerRegistrationRefreshCertificateResults) SetCaPem(ca_pem []byte) {
+	x := slices.Clone(ca_pem)
+	v.data.CaPem = &x
+}
+
+func (v *RunnerRegistrationRefreshCertificateResults) SetError(error string) {
+	v.data.Error = &error
+}
+
+func (v *RunnerRegistrationRefreshCertificateResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationRefreshCertificateResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunnerRegistrationRefreshCertificateResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationRefreshCertificateResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type RunnerRegistrationCreateInvite struct {
 	rpc.Call
 	args    RunnerRegistrationCreateInviteArgs
@@ -1083,6 +1317,84 @@ func (t *RunnerRegistrationRemoveRunner) Results() *RunnerRegistrationRemoveRunn
 	return results
 }
 
+type RunnerRegistrationWorkloadIssuerInfo struct {
+	rpc.Call
+	args    RunnerRegistrationWorkloadIssuerInfoArgs
+	results RunnerRegistrationWorkloadIssuerInfoResults
+}
+
+func (t *RunnerRegistrationWorkloadIssuerInfo) Args() *RunnerRegistrationWorkloadIssuerInfoArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *RunnerRegistrationWorkloadIssuerInfo) Results() *RunnerRegistrationWorkloadIssuerInfoResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type RunnerRegistrationIssueWorkloadToken struct {
+	rpc.Call
+	args    RunnerRegistrationIssueWorkloadTokenArgs
+	results RunnerRegistrationIssueWorkloadTokenResults
+}
+
+func (t *RunnerRegistrationIssueWorkloadToken) Args() *RunnerRegistrationIssueWorkloadTokenArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *RunnerRegistrationIssueWorkloadToken) Results() *RunnerRegistrationIssueWorkloadTokenResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type RunnerRegistrationRefreshCertificate struct {
+	rpc.Call
+	args    RunnerRegistrationRefreshCertificateArgs
+	results RunnerRegistrationRefreshCertificateResults
+}
+
+func (t *RunnerRegistrationRefreshCertificate) Args() *RunnerRegistrationRefreshCertificateArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *RunnerRegistrationRefreshCertificate) Results() *RunnerRegistrationRefreshCertificateResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type RunnerRegistration interface {
 	CreateInvite(ctx context.Context, state *RunnerRegistrationCreateInvite) error
 	Join(ctx context.Context, state *RunnerRegistrationJoin) error
@@ -1090,6 +1402,9 @@ type RunnerRegistration interface {
 	RevokeInvite(ctx context.Context, state *RunnerRegistrationRevokeInvite) error
 	ListRunners(ctx context.Context, state *RunnerRegistrationListRunners) error
 	RemoveRunner(ctx context.Context, state *RunnerRegistrationRemoveRunner) error
+	WorkloadIssuerInfo(ctx context.Context, state *RunnerRegistrationWorkloadIssuerInfo) error
+	IssueWorkloadToken(ctx context.Context, state *RunnerRegistrationIssueWorkloadToken) error
+	RefreshCertificate(ctx context.Context, state *RunnerRegistrationRefreshCertificate) error
 }
 
 type reexportRunnerRegistration struct {
@@ -1117,6 +1432,18 @@ func (reexportRunnerRegistration) ListRunners(ctx context.Context, state *Runner
 }
 
 func (reexportRunnerRegistration) RemoveRunner(ctx context.Context, state *RunnerRegistrationRemoveRunner) error {
+	panic("not implemented")
+}
+
+func (reexportRunnerRegistration) WorkloadIssuerInfo(ctx context.Context, state *RunnerRegistrationWorkloadIssuerInfo) error {
+	panic("not implemented")
+}
+
+func (reexportRunnerRegistration) IssueWorkloadToken(ctx context.Context, state *RunnerRegistrationIssueWorkloadToken) error {
+	panic("not implemented")
+}
+
+func (reexportRunnerRegistration) RefreshCertificate(ctx context.Context, state *RunnerRegistrationRefreshCertificate) error {
 	panic("not implemented")
 }
 
@@ -1178,6 +1505,33 @@ func AdaptRunnerRegistration(t RunnerRegistration) *rpc.Interface {
 			Public:        false,
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.RemoveRunner(ctx, &RunnerRegistrationRemoveRunner{Call: call})
+			},
+		},
+		{
+			Name:          "WorkloadIssuerInfo",
+			InterfaceName: "RunnerRegistration",
+			Index:         6,
+			Public:        false,
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.WorkloadIssuerInfo(ctx, &RunnerRegistrationWorkloadIssuerInfo{Call: call})
+			},
+		},
+		{
+			Name:          "IssueWorkloadToken",
+			InterfaceName: "RunnerRegistration",
+			Index:         7,
+			Public:        false,
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.IssueWorkloadToken(ctx, &RunnerRegistrationIssueWorkloadToken{Call: call})
+			},
+		},
+		{
+			Name:          "RefreshCertificate",
+			InterfaceName: "RunnerRegistration",
+			Index:         8,
+			Public:        true,
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.RefreshCertificate(ctx, &RunnerRegistrationRefreshCertificate{Call: call})
 			},
 		},
 	}
@@ -1548,4 +1902,151 @@ func (v RunnerRegistrationClient) RemoveRunner(ctx context.Context, query string
 	}
 
 	return &RunnerRegistrationClientRemoveRunnerResults{client: v.Client, data: ret}, nil
+}
+
+type RunnerRegistrationClientWorkloadIssuerInfoResults struct {
+	client rpc.Client
+	data   runnerRegistrationWorkloadIssuerInfoResultsData
+}
+
+func (v *RunnerRegistrationClientWorkloadIssuerInfoResults) HasEnabled() bool {
+	return v.data.Enabled != nil
+}
+
+func (v *RunnerRegistrationClientWorkloadIssuerInfoResults) Enabled() bool {
+	if v.data.Enabled == nil {
+		return false
+	}
+	return *v.data.Enabled
+}
+
+func (v *RunnerRegistrationClientWorkloadIssuerInfoResults) HasIssuerUrl() bool {
+	return v.data.IssuerUrl != nil
+}
+
+func (v *RunnerRegistrationClientWorkloadIssuerInfoResults) IssuerUrl() string {
+	if v.data.IssuerUrl == nil {
+		return ""
+	}
+	return *v.data.IssuerUrl
+}
+
+func (v RunnerRegistrationClient) WorkloadIssuerInfo(ctx context.Context) (*RunnerRegistrationClientWorkloadIssuerInfoResults, error) {
+	args := RunnerRegistrationWorkloadIssuerInfoArgs{}
+
+	var ret runnerRegistrationWorkloadIssuerInfoResultsData
+
+	err := v.Call(ctx, "WorkloadIssuerInfo", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &RunnerRegistrationClientWorkloadIssuerInfoResults{client: v.Client, data: ret}, nil
+}
+
+type RunnerRegistrationClientIssueWorkloadTokenResults struct {
+	client rpc.Client
+	data   runnerRegistrationIssueWorkloadTokenResultsData
+}
+
+func (v *RunnerRegistrationClientIssueWorkloadTokenResults) HasToken() bool {
+	return v.data.Token != nil
+}
+
+func (v *RunnerRegistrationClientIssueWorkloadTokenResults) Token() string {
+	if v.data.Token == nil {
+		return ""
+	}
+	return *v.data.Token
+}
+
+func (v *RunnerRegistrationClientIssueWorkloadTokenResults) HasError() bool {
+	return v.data.Error != nil
+}
+
+func (v *RunnerRegistrationClientIssueWorkloadTokenResults) Error() string {
+	if v.data.Error == nil {
+		return ""
+	}
+	return *v.data.Error
+}
+
+func (v RunnerRegistrationClient) IssueWorkloadToken(ctx context.Context, sandbox_id string, audience []string, ttl_seconds int64) (*RunnerRegistrationClientIssueWorkloadTokenResults, error) {
+	args := RunnerRegistrationIssueWorkloadTokenArgs{}
+	args.data.SandboxId = &sandbox_id
+	x := slices.Clone(audience)
+	args.data.Audience = &x
+	args.data.TtlSeconds = &ttl_seconds
+
+	var ret runnerRegistrationIssueWorkloadTokenResultsData
+
+	err := v.Call(ctx, "IssueWorkloadToken", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &RunnerRegistrationClientIssueWorkloadTokenResults{client: v.Client, data: ret}, nil
+}
+
+type RunnerRegistrationClientRefreshCertificateResults struct {
+	client rpc.Client
+	data   runnerRegistrationRefreshCertificateResultsData
+}
+
+func (v *RunnerRegistrationClientRefreshCertificateResults) HasCertPem() bool {
+	return v.data.CertPem != nil
+}
+
+func (v *RunnerRegistrationClientRefreshCertificateResults) CertPem() []byte {
+	if v.data.CertPem == nil {
+		return nil
+	}
+	return *v.data.CertPem
+}
+
+func (v *RunnerRegistrationClientRefreshCertificateResults) HasKeyPem() bool {
+	return v.data.KeyPem != nil
+}
+
+func (v *RunnerRegistrationClientRefreshCertificateResults) KeyPem() []byte {
+	if v.data.KeyPem == nil {
+		return nil
+	}
+	return *v.data.KeyPem
+}
+
+func (v *RunnerRegistrationClientRefreshCertificateResults) HasCaPem() bool {
+	return v.data.CaPem != nil
+}
+
+func (v *RunnerRegistrationClientRefreshCertificateResults) CaPem() []byte {
+	if v.data.CaPem == nil {
+		return nil
+	}
+	return *v.data.CaPem
+}
+
+func (v *RunnerRegistrationClientRefreshCertificateResults) HasError() bool {
+	return v.data.Error != nil
+}
+
+func (v *RunnerRegistrationClientRefreshCertificateResults) Error() string {
+	if v.data.Error == nil {
+		return ""
+	}
+	return *v.data.Error
+}
+
+func (v RunnerRegistrationClient) RefreshCertificate(ctx context.Context, listen_addr string) (*RunnerRegistrationClientRefreshCertificateResults, error) {
+	args := RunnerRegistrationRefreshCertificateArgs{}
+	args.data.ListenAddr = &listen_addr
+
+	var ret runnerRegistrationRefreshCertificateResultsData
+
+	err := v.Call(ctx, "RefreshCertificate", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &RunnerRegistrationClientRefreshCertificateResults{client: v.Client, data: ret}, nil
 }
