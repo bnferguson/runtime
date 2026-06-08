@@ -200,7 +200,7 @@ func (m *mockContainerRuntime) CleanupContainer(ctx context.Context, cont contai
 	m.cleanupContainerCalls++
 }
 
-func (m *mockContainerRuntime) BootInitialTask(ctx context.Context, sb *compute.Sandbox, ep *network.EndpointConfig, container containerd.Container) (containerd.Task, error) {
+func (m *mockContainerRuntime) BootInitialTask(ctx context.Context, sb *compute.Sandbox, ep *network.EndpointConfig, container containerd.Container, shortID string) (containerd.Task, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.bootInitialTaskCalls++
@@ -299,7 +299,7 @@ func (m *mockObservability) UpdateServices(ctx context.Context, co *compute.Sand
 	return m.updateSvcsErr
 }
 
-func (m *mockObservability) LogSandboxEvent(sb *compute.Sandbox, line string) {
+func (m *mockObservability) LogSandboxEvent(sb *compute.Sandbox, shortID, line string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.loggedEvents = append(m.loggedEvents, line)
@@ -772,8 +772,8 @@ func TestCreateSandboxSaga_MetricsAttributes(t *testing.T) {
 
 	assert.Equal(t, 1, h.obs.addMetricsCalls)
 	assert.Equal(t, "my-app", h.obs.lastLogEntity)
-	assert.Equal(t, h.sandboxID, h.obs.lastAttrs["sandbox"])
-	assert.Equal(t, "v42", h.obs.lastAttrs["version"])
+	assert.Equal(t, h.sandboxID, h.obs.lastAttrs["miren.sandbox"])
+	assert.Equal(t, "v42", h.obs.lastAttrs["miren.version"])
 	assert.Equal(t, "production", h.obs.lastAttrs["env"])
 	assert.Equal(t, "us-east", h.obs.lastAttrs["region"])
 

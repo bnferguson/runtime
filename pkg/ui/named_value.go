@@ -160,6 +160,9 @@ func (n *NamedValueList) styleValue(item NamedValue) string {
 		return n.styles.BoolValue.Render(item.Value)
 	case ValueTypeNull:
 		return n.styles.NullValue.Render(item.Value)
+	case ValueTypeOther:
+		// Other is also the fallback for any unspecified type.
+		fallthrough
 	default:
 		return n.styles.OtherValue.Render(item.Value)
 	}

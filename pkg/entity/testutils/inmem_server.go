@@ -34,8 +34,21 @@ func NewInMemEntityServer(t *testing.T) (*InMemEntityServer, func()) {
 	// Create mock store
 	mockStore := entity.NewMockStore()
 
+	// Seed system schema entities (entity/kind cardinality, etc) so the mock
+	// reports the same AttributeSchema that EtcdStore does. Without this,
+	// MockStore.UpdateEntity treats every attr as cardinality-one and
+	// silently drops existing values on cardinality-many attrs like
+	// entity/kind during patch.
+	err := entity.InitSystemEntities(func(e *entity.Entity) error {
+		mockStore.AddEntity(e.Id(), e)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("failed to init system entities: %v", err)
+	}
+
 	// Apply schema to the store
-	err := schema.Apply(ctx, mockStore)
+	err = schema.Apply(ctx, mockStore)
 	if err != nil {
 		t.Fatalf("failed to apply schema: %v", err)
 	}

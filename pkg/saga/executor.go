@@ -500,6 +500,8 @@ func (e *Executor) Recover(ctx context.Context) error {
 		case StatusUndoing:
 			// Resume undo
 			recoverErrors = append(recoverErrors, e.runUndo(ctx, def, exec))
+		case StatusCompleted, StatusFailed:
+			// Terminal states; nothing to recover.
 		}
 	}
 

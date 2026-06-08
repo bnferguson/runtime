@@ -14,7 +14,7 @@ import (
 	"github.com/miekg/dns"
 	"miren.dev/runtime/api/compute"
 	"miren.dev/runtime/pkg/entity"
-	"miren.dev/runtime/pkg/rpc/stream"
+	"miren.dev/runtime/pkg/entity/indexwatch"
 
 	compute_v1alpha "miren.dev/runtime/api/compute/compute_v1alpha"
 	core_v1alpha "miren.dev/runtime/api/core/core_v1alpha"
@@ -30,6 +30,7 @@ type Server struct {
 
 	mu              sync.RWMutex
 	ipToApp         map[string]string              // source IP → app name
+	ipToSandbox     map[string]string              // source IP → sandbox entity ID
 	ipToService     map[string]string              // IP → service name (for PTR lookups)
 	appServiceToIPs map[string]map[string][]string // app name → service name → []IPs
 	entityToIP      map[string]string              // entity ID → IP address
@@ -37,6 +38,7 @@ type Server struct {
 	watchCtx    context.Context
 	watchCancel context.CancelFunc
 	watchWg     sync.WaitGroup
+	watcher     *indexwatch.Watcher
 }
 
 // New creates a new DNS forwarding server
@@ -62,6 +64,7 @@ func New(addr string, entityClient *entityserver_v1alpha.EntityAccessClient, log
 		entityClient:    entityClient,
 		log:             log.With("module", "dns"),
 		ipToApp:         make(map[string]string),
+		ipToSandbox:     make(map[string]string),
 		ipToService:     make(map[string]string),
 		appServiceToIPs: make(map[string]map[string][]string),
 		entityToIP:      make(map[string]string),
@@ -423,70 +426,89 @@ func (s *Server) handleAppMirenQuery(w dns.ResponseWriter, r *dns.Msg, qname str
 	w.WriteMsg(response)
 }
 
-// Watch starts watching sandbox entities and maintains in-memory DNS mappings
+// Watch starts watching sandbox entities and maintains in-memory DNS mappings.
+// It processes the initial snapshot synchronously so DNS is warm before
+// returning, then consumes live changes in the background.
 func (s *Server) Watch(ctx context.Context) error {
-	// First, recover existing sandboxes to populate initial state
-	if err := s.recoverSandboxes(ctx); err != nil {
-		return fmt.Errorf("failed to recover sandboxes: %w", err)
-	}
-
 	// Create a child context that we can cancel independently
 	s.watchCtx, s.watchCancel = context.WithCancel(ctx)
 
-	// Start watching for sandbox changes
+	index := entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox)
+	s.watcher = indexwatch.New(s.entityClient, index, indexwatch.Options{Logger: s.log})
+	if err := s.watcher.Start(s.watchCtx); err != nil {
+		return err
+	}
+
+	// Process the initial snapshot synchronously (the watcher always delivers an
+	// EventSync first) so DNS mappings are populated before Watch returns.
+	select {
+	case ev, ok := <-s.watcher.Updates():
+		if ok {
+			s.dispatchSandboxEvent(s.watchCtx, ev)
+		}
+	case <-s.watchCtx.Done():
+		return s.watchCtx.Err()
+	}
+
 	s.watchWg.Add(1)
 	go func() {
 		defer s.watchWg.Done()
-		s.watchSandboxes(s.watchCtx)
+		for {
+			select {
+			case <-s.watchCtx.Done():
+				return
+			case ev, ok := <-s.watcher.Updates():
+				if !ok {
+					return
+				}
+				s.dispatchSandboxEvent(s.watchCtx, ev)
+			}
+		}
 	}()
 
 	return nil
 }
 
-func (s *Server) watchSandboxes(ctx context.Context) {
-	for {
-		if ctx.Err() != nil {
-			s.log.Info("sandbox watch stopped due to context cancellation")
+// dispatchSandboxEvent applies a single watcher event to the DNS mappings.
+func (s *Server) dispatchSandboxEvent(ctx context.Context, ev indexwatch.Event) {
+	switch ev.Type {
+	case indexwatch.EventSync:
+		s.reconcileSandboxes(ctx, ev.Entities)
+	case indexwatch.EventAdded, indexwatch.EventUpdated:
+		if ev.Entity == nil {
 			return
 		}
+		var sb compute_v1alpha.Sandbox
+		sb.Decode(ev.Entity)
+		s.handleSandboxUpdate(ctx, &sb, ev.Entity)
+	case indexwatch.EventDeleted:
+		s.handleSandboxDeleteByID(string(ev.Id))
+	}
+}
 
-		index := entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox)
-		_, err := s.entityClient.WatchIndex(ctx, index, stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
-			if op == nil {
-				return nil
-			}
+// reconcileSandboxes processes a full snapshot: it applies every sandbox and
+// then removes any tracked sandbox that is no longer present in the index
+// (deleted while the watch was down).
+func (s *Server) reconcileSandboxes(ctx context.Context, entities []*entity.Entity) {
+	present := make(map[string]struct{}, len(entities))
+	for _, en := range entities {
+		var sb compute_v1alpha.Sandbox
+		sb.Decode(en)
+		present[sb.ID.String()] = struct{}{}
+		s.handleSandboxUpdate(ctx, &sb, en)
+	}
 
-			switch op.OperationType() {
-			case entityserver_v1alpha.EntityOperationCreate, entityserver_v1alpha.EntityOperationUpdate:
-				if op.Entity() == nil {
-					return nil
-				}
-				en := op.Entity().Entity()
-				var sb compute_v1alpha.Sandbox
-				sb.Decode(en)
-				s.handleSandboxUpdate(ctx, &sb, en)
-
-			case entityserver_v1alpha.EntityOperationDelete:
-				// For DELETE, entity data is nil but we have the ID
-				entityID := op.EntityId()
-				s.handleSandboxDeleteByID(entityID)
-			}
-
-			return nil
-		}))
-
-		if err != nil {
-			if ctx.Err() != nil {
-				s.log.Info("sandbox watch stopped due to context cancellation")
-				return
-			}
-			s.log.Error("sandbox watch ended with error, will restart", "error", err)
-			time.Sleep(5 * time.Second)
-			continue
+	s.mu.RLock()
+	var stale []string
+	for id := range s.entityToIP {
+		if _, ok := present[id]; !ok {
+			stale = append(stale, id)
 		}
+	}
+	s.mu.RUnlock()
 
-		s.log.Warn("sandbox watch ended unexpectedly, restarting")
-		time.Sleep(5 * time.Second)
+	for _, id := range stale {
+		s.handleSandboxDeleteByID(id)
 	}
 }
 
@@ -559,12 +581,50 @@ func (s *Server) handleSandboxUpdate(ctx context.Context, sb *compute_v1alpha.Sa
 		"app-id", appVer.App.String(),
 	)
 
-	s.addSandboxMapping(sb.ID.String(), ipAddr, appName, service)
+	s.AddSandboxMapping(sb.ID.String(), ipAddr, appName, service)
 }
 
-// addSandboxMapping registers a sandbox's IP address for DNS resolution.
-// This is the core mapping logic, separated for testability.
-func (s *Server) addSandboxMapping(sandboxID, ipAddr, appName, service string) {
+// NewTestServer creates a minimal Server for testing without binding to a port.
+func NewTestServer() *Server {
+	return &Server{
+		log:             slog.Default(),
+		ipToApp:         make(map[string]string),
+		ipToSandbox:     make(map[string]string),
+		ipToService:     make(map[string]string),
+		appServiceToIPs: make(map[string]map[string][]string),
+		entityToIP:      make(map[string]string),
+	}
+}
+
+// LookupSandboxByIP returns the sandbox entity ID and app name for a given IP.
+// On a cache miss, falls back to an entity store lookup to handle watcher lag.
+func (s *Server) LookupSandboxByIP(ip string) (sandboxID, appName string, ok bool) {
+	s.mu.RLock()
+	sandboxID, ok = s.ipToSandbox[ip]
+	if ok {
+		appName = s.ipToApp[ip]
+		s.mu.RUnlock()
+		return sandboxID, appName, true
+	}
+	s.mu.RUnlock()
+
+	// Cache miss — try resolving via entity store (populates the maps on success)
+	if !s.resolveUnknownIP(ip) {
+		return "", "", false
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	sandboxID, ok = s.ipToSandbox[ip]
+	if !ok {
+		return "", "", false
+	}
+	appName = s.ipToApp[ip]
+	return sandboxID, appName, true
+}
+
+// AddSandboxMapping registers a sandbox's IP address for DNS resolution.
+func (s *Server) AddSandboxMapping(sandboxID, ipAddr, appName, service string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.addSandboxMappingLocked(sandboxID, ipAddr, appName, service)
@@ -574,8 +634,9 @@ func (s *Server) addSandboxMappingLocked(sandboxID, ipAddr, appName, service str
 	// Track entity ID -> IP mapping for DELETE operations
 	s.entityToIP[sandboxID] = ipAddr
 
-	// Update ipToApp mapping
+	// Update ipToApp and ipToSandbox mappings
 	s.ipToApp[ipAddr] = appName
+	s.ipToSandbox[ipAddr] = sandboxID
 
 	// Update ipToService mapping for PTR queries
 	s.ipToService[ipAddr] = service
@@ -674,7 +735,7 @@ func (s *Server) resolveUnknownIP(sourceIP string) bool {
 		var appMD core_v1alpha.Metadata
 		appMD.Decode(appResp.Entity().Entity())
 
-		s.addSandboxMapping(sb.ID.String(), ipAddr, appMD.Name, service)
+		s.AddSandboxMapping(sb.ID.String(), ipAddr, appMD.Name, service)
 		s.log.Info("resolved unknown IP to sandbox via entity lookup", "ip", sourceIP, "sandbox", sb.ID, "app", appMD.Name, "service", service)
 		return true
 	}
@@ -727,8 +788,9 @@ func (s *Server) handleSandboxDeleteByID(entityID string) {
 		return // Inconsistent state, but continue
 	}
 
-	// Remove from ipToApp
+	// Remove from ipToApp, ipToSandbox
 	delete(s.ipToApp, ipAddr)
+	delete(s.ipToSandbox, ipAddr)
 
 	// Remove from ipToService
 	delete(s.ipToService, ipAddr)
@@ -758,33 +820,6 @@ func (s *Server) handleSandboxDeleteByID(entityID string) {
 	}
 }
 
-func (s *Server) recoverSandboxes(ctx context.Context) error {
-	resp, err := s.entityClient.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox))
-	if err != nil {
-		return fmt.Errorf("failed to list sandboxes: %w", err)
-	}
-
-	s.log.Info("recovering sandboxes on startup", "total_sandboxes", len(resp.Values()))
-
-	recoveredCount := 0
-	for _, ent := range resp.Values() {
-		var sb compute_v1alpha.Sandbox
-		sb.Decode(ent.Entity())
-
-		// Only recover PENDING and RUNNING sandboxes
-		if !compute.SandboxActive(sb.Status) {
-			continue
-		}
-
-		// Process the sandbox to add to mappings
-		s.handleSandboxUpdate(ctx, &sb, ent.Entity())
-		recoveredCount++
-	}
-
-	s.log.Info("sandbox recovery complete", "recovered_count", recoveredCount)
-	return nil
-}
-
 // ListenAndServe starts the DNS server
 func (s *Server) ListenAndServe() error {
 	return s.Server.ListenAndServe()
@@ -795,6 +830,10 @@ func (s *Server) Shutdown() error {
 	// Cancel the watch context to stop the watcher goroutine
 	if s.watchCancel != nil {
 		s.watchCancel()
+	}
+
+	if s.watcher != nil {
+		s.watcher.Stop()
 	}
 
 	// Wait for the watcher goroutine to finish

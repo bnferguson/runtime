@@ -420,6 +420,9 @@ func (d *DiskLeaseController) handlePendingLease(ctx context.Context, lease *sto
 			}
 			// Fall through to create a new mount entity
 
+		case storage_v1alpha.DM_PENDING, storage_v1alpha.DM_ATTACHING, storage_v1alpha.DM_ATTACHED, storage_v1alpha.DM_MOUNTING, storage_v1alpha.DM_UNMOUNTING, storage_v1alpha.DM_DETACHING:
+			// Mount lifecycle still in progress; wait for it to settle.
+			fallthrough
 		default:
 			d.Log.Debug("disk_mount still in progress",
 				"lease", leaseId,

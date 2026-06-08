@@ -78,6 +78,9 @@ types:
       - name: entity_id
         type: string
         index: 3
+      - name: revision
+        type: int64
+        index: 4
 
   - type: ParsedFile
     fields:
@@ -196,6 +199,8 @@ interfaces:
         parameters:
           - name: index
             type: entity.Attr
+          - name: from_revision
+            type: int64
           - name: values
             type: stream.SendStream[*EntityOp]
 
@@ -214,6 +219,8 @@ interfaces:
           - name: values
             type: list
             element: Entity
+          - name: revision
+            type: int64
 
       - name: makeAttr
         parameters:

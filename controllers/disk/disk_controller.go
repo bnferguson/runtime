@@ -224,6 +224,9 @@ func (d *DiskController) handleProvisioning(ctx context.Context, disk *storage_v
 				"error", existingVolume.ErrorMessage)
 			return nil
 
+		case storage_v1alpha.DV_PENDING, storage_v1alpha.DV_CREATING, storage_v1alpha.DV_DELETING, storage_v1alpha.DV_DELETED:
+			// Not yet ready; wait for the volume to settle.
+			fallthrough
 		default:
 			d.Log.Debug("disk_volume still provisioning",
 				"disk", disk.ID,
@@ -445,6 +448,9 @@ func diskModeToVolumeMode(mode storage_v1alpha.DiskMode) storage_v1alpha.DiskVol
 	switch mode {
 	case storage_v1alpha.ACCELERATOR:
 		return storage_v1alpha.VM_ACCELERATOR
+	case storage_v1alpha.UNIVERSAL:
+		// Universal is also the default for an unspecified mode.
+		fallthrough
 	default:
 		return storage_v1alpha.VM_UNIVERSAL
 	}

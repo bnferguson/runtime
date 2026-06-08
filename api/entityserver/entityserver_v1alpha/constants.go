@@ -10,6 +10,14 @@ const (
 	EntityOperationUpdate EntityOperation = 2
 	// EntityOperationDelete indicates an entity was deleted
 	EntityOperationDelete EntityOperation = 3
+	// EntityOperationProgress is a watch watermark carrying the latest observed
+	// revision with no entity payload. It lets a client advance its resume cursor
+	// during idle periods (etcd progress notifications).
+	EntityOperationProgress EntityOperation = 4
+	// EntityOperationCompacted signals that the requested watch start revision has
+	// been compacted away. The client must re-list to obtain a fresh snapshot and
+	// resume from the new revision. Revision carries the compaction revision.
+	EntityOperationCompacted EntityOperation = 5
 )
 
 // OperationType returns the typed operation for this EntityOp
@@ -30,4 +38,14 @@ func (v *EntityOp) IsUpdate() bool {
 // IsDelete returns true if this is a delete operation
 func (v *EntityOp) IsDelete() bool {
 	return v.Operation() == int64(EntityOperationDelete)
+}
+
+// IsProgress returns true if this is a watch progress watermark
+func (v *EntityOp) IsProgress() bool {
+	return v.Operation() == int64(EntityOperationProgress)
+}
+
+// IsCompacted returns true if this signals the watch start revision was compacted
+func (v *EntityOp) IsCompacted() bool {
+	return v.Operation() == int64(EntityOperationCompacted)
 }

@@ -159,6 +159,74 @@ interfaces:
             type: string
             doc: Error message if removal failed
 
+      - name: WorkloadIssuerInfo
+        index: 6
+        doc: |
+          Report whether the coordinator has a workload identity issuer
+          configured, and its issuer URL. Distributed runners call this once at
+          startup to decide whether to mint workload identity tokens via the
+          coordinator.
+        results:
+          - name: enabled
+            type: bool
+            doc: Whether a workload identity issuer is configured on the coordinator
+          - name: issuer_url
+            type: string
+            doc: The issuer URL (iss claim anchor) when enabled
+
+      - name: IssueWorkloadToken
+        index: 7
+        doc: |
+          Mint a workload identity token for a sandbox. Distributed runners,
+          which do not hold the cluster signing key, call this to obtain tokens
+          signed by the coordinator. The application identity is derived from the
+          sandbox by the coordinator, not supplied by the caller.
+        parameters:
+          - name: sandbox_id
+            type: string
+            doc: Sandbox ID the token is issued for
+          - name: audience
+            type: list
+            element: string
+            doc: Optional token audiences (defaults to "miren" when empty)
+          - name: ttl_seconds
+            type: int64
+            doc: Optional token TTL in seconds (0 uses the issuer default)
+        results:
+          - name: token
+            type: string
+            doc: The signed workload identity token (JWT)
+          - name: error
+            type: string
+            doc: Error message if issuance failed
+
+      - name: RefreshCertificate
+        index: 8
+        public: true  # Authenticated in the handler via the caller's existing runner mTLS cert
+        doc: |
+          Re-issue a runner's server certificate with updated SANs. Used when a
+          runner's listen address changes (e.g. a VM is recreated with a new IP
+          but a persistent disk keeps the old, now-stale certificate). The caller
+          must present its existing CA-signed runner certificate; the new cert
+          preserves that certificate's CommonName.
+        parameters:
+          - name: listen_addr
+            type: string
+            doc: The runner's current listen address whose host should be covered by the new cert
+        results:
+          - name: cert_pem
+            type: bytes
+            doc: Re-issued certificate in PEM format
+          - name: key_pem
+            type: bytes
+            doc: Private key for the re-issued certificate in PEM format
+          - name: ca_pem
+            type: bytes
+            doc: CA certificate in PEM format
+          - name: error
+            type: string
+            doc: Error message if the refresh failed
+
 types:
   - type: InviteInfo
     doc: Information about a runner invite

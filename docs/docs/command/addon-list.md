@@ -8,10 +8,6 @@ description: "List addons attached to an application"
 
 List addons attached to an application
 
-:::note
-This command requires the `addons` [labs feature](/labs) to be enabled.
-:::
-
 ## Usage
 
 ```bash

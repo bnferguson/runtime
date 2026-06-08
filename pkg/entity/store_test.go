@@ -400,7 +400,7 @@ func TestEtcdStore_UpdateEntity(t *testing.T) {
 
 		r.Equal(addr, sa)
 
-		wc, err := store.WatchIndex(t.Context(), String(Id("test/kind"), "foo"))
+		wc, err := store.WatchIndex(t.Context(), String(Id("test/kind"), "foo"), 0)
 		r.NoError(err)
 
 		r.NoError(store.RevokeSession(t.Context(), sid))
@@ -751,7 +751,7 @@ func TestWatchIndex(t *testing.T) {
 	}
 
 	// Start watching the index before creating any entities
-	watcher, err := store.WatchIndex(ctx, String(attr.Id(), "value1"))
+	watcher, err := store.WatchIndex(ctx, String(attr.Id(), "value1"), 0)
 	if err != nil {
 		t.Fatalf("Failed to create watcher: %v", err)
 	}
@@ -805,7 +805,7 @@ func TestWatchIndex(t *testing.T) {
 	*/
 
 	// Create a new watcher for the new value
-	watcher2, err := store.WatchIndex(ctx, String(attr.Id(), "value2"))
+	watcher2, err := store.WatchIndex(ctx, String(attr.Id(), "value2"), 0)
 	if err != nil {
 		t.Fatalf("Failed to create second watcher: %v", err)
 	}
@@ -839,9 +839,76 @@ func TestWatchIndex(t *testing.T) {
 		t.Fatalf("Failed to create non-indexed schema: %v", err)
 	}
 
-	_, err = store.WatchIndex(ctx, String(nonIndexedSchema.Id(), "value"))
+	_, err = store.WatchIndex(ctx, String(nonIndexedSchema.Id(), "value"), 0)
 	if err == nil {
 		t.Error("Expected error when watching non-indexed attribute")
+	}
+}
+
+func TestListIndexRevision(t *testing.T) {
+	ctx := context.Background()
+	store, _ := setupTestEtcdStore(t)
+
+	attr, err := store.CreateEntity(ctx, New(
+		String(Ident, "test-revindex"),
+		Ref(Type, TypeStr),
+		Bool(Index, true),
+	))
+	require.NoError(t, err)
+
+	_, err = store.CreateEntity(ctx, New(
+		String(attr.Id(), "value1"),
+		String(Ident, "rev-entity-1"),
+	))
+	require.NoError(t, err)
+
+	ids, rev, err := store.ListIndexRevision(ctx, String(attr.Id(), "value1"))
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	require.Greater(t, rev, int64(0), "ListIndexRevision must return the etcd revision")
+}
+
+// TestWatchIndexFromRevision verifies that starting a watch at a prior revision
+// replays changes made after that revision (gap-free resume), and that starting
+// at the current revision does not replay earlier changes.
+func TestWatchIndexFromRevision(t *testing.T) {
+	ctx := context.Background()
+	store, _ := setupTestEtcdStore(t)
+
+	attr, err := store.CreateEntity(ctx, New(
+		String(Ident, "test-resume"),
+		Ref(Type, TypeStr),
+		Bool(Index, true),
+	))
+	require.NoError(t, err)
+
+	idxAttr := String(attr.Id(), "value1")
+
+	// Entity created before the cursor; must NOT be replayed.
+	_, err = store.CreateEntity(ctx, New(idxAttr, String(Ident, "resume-entity-1")))
+	require.NoError(t, err)
+
+	_, rev, err := store.ListIndexRevision(ctx, idxAttr)
+	require.NoError(t, err)
+	require.Greater(t, rev, int64(0))
+
+	// Entity created after the cursor; must be replayed even though it predates
+	// the watch call.
+	entity2, err := store.CreateEntity(ctx, New(idxAttr, String(Ident, "resume-entity-2")))
+	require.NoError(t, err)
+
+	watcher, err := store.WatchIndex(ctx, idxAttr, rev+1)
+	require.NoError(t, err)
+
+	select {
+	case wr := <-watcher:
+		require.NoError(t, wr.Err())
+		require.NotEmpty(t, wr.Events)
+		require.Equal(t, clientv3.EventTypePut, wr.Events[0].Type)
+		require.Equal(t, string(entity2.Id()), string(wr.Events[0].Kv.Value),
+			"resume should replay entity2 (created after the cursor), not entity1")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for replayed event")
 	}
 }
 
@@ -892,7 +959,7 @@ func TestWatchIndex_DBID(t *testing.T) {
 	}
 
 	// Start watching the index before creating any entities
-	watcher, err := store.WatchIndex(ctx, Ref(DBId, "test-entity-1"))
+	watcher, err := store.WatchIndex(ctx, Ref(DBId, "test-entity-1"), 0)
 	if err != nil {
 		t.Fatalf("Failed to create watcher: %v", err)
 	}

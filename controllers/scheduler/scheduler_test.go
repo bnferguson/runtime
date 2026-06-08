@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -489,4 +490,199 @@ func TestIsStatefulDetection(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+// createPreScheduledSandbox creates a sandbox already assigned to a node, used
+// to seed sibling state for spread tests.
+func createPreScheduledSandbox(t *testing.T, ctx context.Context, server *testutils.InMemEntityServer, name, poolID string, nodeID entity.Id, status compute_v1alpha.SandboxStatus) entity.Id {
+	t.Helper()
+
+	sb := &compute_v1alpha.Sandbox{
+		Status: status,
+		Spec: compute_v1alpha.SandboxSpec{
+			Container: []compute_v1alpha.SandboxSpecContainer{
+				{Image: "test:latest"},
+			},
+		},
+	}
+	sbID, err := server.Client.Create(ctx, name, sb,
+		entityserver.WithLabels(types.LabelSet("service", "web", "pool", poolID)))
+	require.NoError(t, err)
+
+	// Patch in the schedule via the entity server so cardinality-aware merge
+	// keeps the sandbox's existing entity/kind alongside the new schedule kind.
+	schedule := compute_v1alpha.Schedule{
+		Key: compute_v1alpha.Key{
+			Kind: compute_v1alpha.KindSandbox,
+			Node: nodeID,
+		},
+	}
+	err = server.Client.Patch(ctx, sbID, 0, schedule.Encode()...)
+	require.NoError(t, err)
+
+	return sbID
+}
+
+// TestSchedulerSpreadsReplicasAcrossRunners is the MIR-1143 regression: with
+// two runners and two siblings in the same pool, both replicas must not pile
+// onto the same node. Repeats enough times to catch the random-collision case
+// that surfaced the bug.
+func TestSchedulerSpreadsReplicasAcrossRunners(t *testing.T) {
+	for trial := 0; trial < 20; trial++ {
+		t.Run(fmt.Sprintf("trial-%d", trial), func(t *testing.T) {
+			ctx := context.Background()
+			log := testutils.TestLogger(t)
+
+			server, cleanup := testutils.NewInMemEntityServer(t)
+			defer cleanup()
+
+			runner1 := createReadyNode(t, ctx, server.Client, "runner-1", &compute_v1alpha.Node{
+				Status:   compute_v1alpha.READY,
+				RunnerId: "550e8400-e29b-41d4-a716-446655440001",
+			})
+			runner2 := createReadyNode(t, ctx, server.Client, "runner-2", &compute_v1alpha.Node{
+				Status:   compute_v1alpha.READY,
+				RunnerId: "550e8400-e29b-41d4-a716-446655440002",
+			})
+
+			scheduler := NewController(log, server.EAC)
+			require.NoError(t, scheduler.Init(ctx))
+
+			poolID := "pool-spread-test"
+
+			placements := make(map[entity.Id]int)
+			for i := 0; i < 2; i++ {
+				sb := &compute_v1alpha.Sandbox{
+					Status: compute_v1alpha.PENDING,
+					Spec: compute_v1alpha.SandboxSpec{
+						Container: []compute_v1alpha.SandboxSpecContainer{
+							{Image: "test:latest"},
+						},
+					},
+				}
+				sbID, err := server.Client.Create(ctx, fmt.Sprintf("sb-%d", i), sb,
+					entityserver.WithLabels(types.LabelSet("service", "web", "pool", poolID)))
+				require.NoError(t, err)
+
+				reconcileSandbox(t, ctx, server, scheduler, sbID)
+
+				resp, err := server.EAC.Get(ctx, sbID.String())
+				require.NoError(t, err)
+				var schedule compute_v1alpha.Schedule
+				schedule.Decode(resp.Entity().Entity())
+				placements[schedule.Key.Node]++
+			}
+
+			assert.Equal(t, 1, placements[runner1], "runner-1 should host exactly one replica")
+			assert.Equal(t, 1, placements[runner2], "runner-2 should host exactly one replica")
+		})
+	}
+}
+
+// TestSchedulerPacksWhenReplicasExceedRunners verifies the soft fallback: with
+// more replicas than runners we don't refuse to schedule, we just pack.
+func TestSchedulerPacksWhenReplicasExceedRunners(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	runner1 := createReadyNode(t, ctx, server.Client, "runner-1", &compute_v1alpha.Node{
+		Status:   compute_v1alpha.READY,
+		RunnerId: "550e8400-e29b-41d4-a716-446655440001",
+	})
+	runner2 := createReadyNode(t, ctx, server.Client, "runner-2", &compute_v1alpha.Node{
+		Status:   compute_v1alpha.READY,
+		RunnerId: "550e8400-e29b-41d4-a716-446655440002",
+	})
+
+	scheduler := NewController(log, server.EAC)
+	require.NoError(t, scheduler.Init(ctx))
+
+	poolID := "pool-pack-test"
+
+	placements := make(map[entity.Id]int)
+	for i := 0; i < 5; i++ {
+		sb := &compute_v1alpha.Sandbox{
+			Status: compute_v1alpha.PENDING,
+			Spec: compute_v1alpha.SandboxSpec{
+				Container: []compute_v1alpha.SandboxSpecContainer{
+					{Image: "test:latest"},
+				},
+			},
+		}
+		sbID, err := server.Client.Create(ctx, fmt.Sprintf("sb-%d", i), sb,
+			entityserver.WithLabels(types.LabelSet("service", "web", "pool", poolID)))
+		require.NoError(t, err)
+
+		reconcileSandbox(t, ctx, server, scheduler, sbID)
+
+		resp, err := server.EAC.Get(ctx, sbID.String())
+		require.NoError(t, err)
+		var schedule compute_v1alpha.Schedule
+		schedule.Decode(resp.Entity().Entity())
+		placements[schedule.Key.Node]++
+	}
+
+	assert.Equal(t, 5, placements[runner1]+placements[runner2], "all replicas should be scheduled")
+	// With 5 replicas over 2 runners the soft-spread keeps each node within 1
+	// of perfect balance (i.e. 3/2 or 2/3 — no 5/0 or 4/1).
+	diff := placements[runner1] - placements[runner2]
+	if diff < 0 {
+		diff = -diff
+	}
+	assert.LessOrEqual(t, diff, 1, "soft spread should balance within 1: got %d/%d",
+		placements[runner1], placements[runner2])
+}
+
+// TestSchedulerSpreadIgnoresTerminalSiblings ensures STOPPED and DEAD siblings
+// don't influence placement — they're not actually consuming the node.
+func TestSchedulerSpreadIgnoresTerminalSiblings(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	runner1 := createReadyNode(t, ctx, server.Client, "runner-1", &compute_v1alpha.Node{
+		Status:   compute_v1alpha.READY,
+		RunnerId: "550e8400-e29b-41d4-a716-446655440001",
+	})
+	runner2 := createReadyNode(t, ctx, server.Client, "runner-2", &compute_v1alpha.Node{
+		Status:   compute_v1alpha.READY,
+		RunnerId: "550e8400-e29b-41d4-a716-446655440002",
+	})
+
+	poolID := "pool-terminal-test"
+
+	// runner-1 has a STOPPED sibling (should be ignored).
+	// runner-2 has a RUNNING sibling (should count).
+	// A fresh replica should land on runner-1 because it has 0 active siblings.
+	createPreScheduledSandbox(t, ctx, server, "stopped-sb", poolID, runner1, compute_v1alpha.STOPPED)
+	createPreScheduledSandbox(t, ctx, server, "running-sb", poolID, runner2, compute_v1alpha.RUNNING)
+
+	scheduler := NewController(log, server.EAC)
+	require.NoError(t, scheduler.Init(ctx))
+
+	sb := &compute_v1alpha.Sandbox{
+		Status: compute_v1alpha.PENDING,
+		Spec: compute_v1alpha.SandboxSpec{
+			Container: []compute_v1alpha.SandboxSpecContainer{
+				{Image: "test:latest"},
+			},
+		},
+	}
+	sbID, err := server.Client.Create(ctx, "fresh-sb", sb,
+		entityserver.WithLabels(types.LabelSet("service", "web", "pool", poolID)))
+	require.NoError(t, err)
+
+	reconcileSandbox(t, ctx, server, scheduler, sbID)
+
+	resp, err := server.EAC.Get(ctx, sbID.String())
+	require.NoError(t, err)
+	var schedule compute_v1alpha.Schedule
+	schedule.Decode(resp.Entity().Entity())
+	assert.Equal(t, runner1, schedule.Key.Node,
+		"fresh replica should prefer runner-1 (0 active siblings) over runner-2 (1 active sibling)")
 }

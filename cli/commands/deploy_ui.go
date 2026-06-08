@@ -232,6 +232,7 @@ func (m *deployInfo) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		//exhaustive:ignore tea.KeyType has ~90 members; default handles the rest
 		switch msg.Type {
 		case tea.KeyCtrlC:
 			m.interrupted = true

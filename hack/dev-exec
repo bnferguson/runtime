@@ -8,8 +8,9 @@
 #   ./hack/dev-exec --root bash hack/dev-server start  # Run as root
 #
 # This script executes commands in the persistent dev container created by
-# `make dev`. The session name is automatically derived from the current
-# directory, ensuring each worktree has its own isolated dev environment.
+# `make dev`. The session name comes from ISO_SESSION when set (matching the
+# Makefile's `ISO_SESSION ?=` override), falling back to one derived from the
+# current directory, so each worktree gets its own isolated dev environment.
 
 set -e
 
@@ -30,8 +31,11 @@ if [ ! -d ".iso" ]; then
   exit 1
 fi
 
-# Generate session name based on current directory
-SESSION="dev-$(basename "$(pwd)")"
+# Respect an ISO_SESSION override, falling back to the directory-derived name.
+# Without this, `ISO_SESSION=... make dev` and dev-exec disagree about which
+# container to target — and basename collisions (e.g. two checkouts both named
+# "runtime") silently cross-wire dev environments anyway.
+SESSION="${ISO_SESSION:-dev-$(basename "$(pwd)")}"
 
 # Check if the dev environment is running by checking iso status output
 STATUS_OUTPUT=$(ISO_SESSION="$SESSION" iso status --session "$SESSION" 2>&1)

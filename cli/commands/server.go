@@ -51,6 +51,7 @@ import (
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/serverconfig"
 	"miren.dev/runtime/pkg/units"
+	"miren.dev/runtime/pkg/workloadidentity"
 	"miren.dev/runtime/version"
 )
 
@@ -573,6 +574,30 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		ctx.Log.Info("no cluster registration found")
 	}
 
+	// Initialize workload identity issuer for sandbox OIDC tokens
+	var workloadIssuer *workloadidentity.Issuer
+	{
+		var issuerURL string
+		if cloudAuthConfig.DNSHostname != "" {
+			issuerURL = "https://" + cloudAuthConfig.DNSHostname
+		} else if len(cfg.TLS.AdditionalNames) > 0 {
+			issuerURL = "https://" + cfg.TLS.AdditionalNames[0]
+		}
+		if issuerURL != "" {
+			workloadIssuer, err = workloadidentity.NewIssuer(workloadidentity.IssuerConfig{
+				DataPath:       cfg.Server.GetDataPath(),
+				IssuerURL:      issuerURL,
+				OrganizationID: cloudAuthConfig.Tags["organization_id"],
+				ClusterID:      cloudAuthConfig.ClusterID,
+			})
+			if err != nil {
+				ctx.Log.Warn("failed to initialize workload identity issuer", "error", err)
+			} else {
+				ctx.Log.Info("workload identity issuer initialized", "issuer", issuerURL)
+			}
+		}
+	}
+
 	// Auto-enable OTel tracing when the standard OTLP endpoint env var is set.
 	// Placed after registration loading so we can identify the cluster in traces.
 	if os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != "" {
@@ -633,6 +658,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		HTTPRequestTimeout:     cfg.Server.HTTPRequestTimeoutDuration(),
 		VictoriametricsAddress: ctx.ServerState.VictoriametricsAddress,
 		VictorialogsAddress:    ctx.ServerState.VictorialogsAddress,
+		WorkloadIssuer:         workloadIssuer,
 	}
 
 	// Pass etcd TLS config when distributed runners is enabled
@@ -801,6 +827,13 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		Resolver:        res,
 		SandboxMetrics:  ctx.ServerState.SandboxMetrics,
 		IsCoordinator:   true,
+	}
+
+	// Assign only when non-nil: storing a typed-nil *Issuer into the
+	// TokenIssuer interface field would make it compare != nil, defeating the
+	// nil guards in the sandbox controller and panicking on first use.
+	if workloadIssuer != nil {
+		deps.WorkloadIssuer = workloadIssuer
 	}
 
 	rc.DataPath = cfg.Server.GetDataPath()

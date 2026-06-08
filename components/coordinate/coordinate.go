@@ -67,6 +67,7 @@ import (
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/saga"
 	"miren.dev/runtime/pkg/sysstats"
+	"miren.dev/runtime/pkg/workloadidentity"
 	"miren.dev/runtime/servers/admin"
 	"miren.dev/runtime/servers/app"
 	"miren.dev/runtime/servers/build"
@@ -129,6 +130,9 @@ type CoordinatorConfig struct {
 
 	// HTTPRequestTimeout is the timeout for HTTP requests to app sandboxes
 	HTTPRequestTimeout time.Duration
+
+	// WorkloadIssuer signs workload identity tokens for sandbox containers
+	WorkloadIssuer *workloadidentity.Issuer
 }
 
 // CloudAuthConfig contains cloud authentication settings
@@ -933,19 +937,17 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	)
 	c.cm.AddController(launcherController)
 
-	if labs.Addons() {
-		// Watch AddonAssociation changes to re-trigger launcher when addons become ready
-		addonLauncherController := controller.NewReconcileController(
-			"deploymentlauncher-addons",
-			c.Log,
-			entity.Ref(entity.EntityKind, addon_v1alpha.KindAddonAssociation),
-			eac,
-			launcher.AddonAssociationHandler(),
-			0, // No resync — driven entirely by watch events
-			1,
-		)
-		c.cm.AddController(addonLauncherController)
-	}
+	// Watch AddonAssociation changes to re-trigger launcher when addons become ready
+	addonLauncherController := controller.NewReconcileController(
+		"deploymentlauncher-addons",
+		c.Log,
+		entity.Ref(entity.EntityKind, addon_v1alpha.KindAddonAssociation),
+		eac,
+		launcher.AddonAssociationHandler(),
+		0, // No resync — driven entirely by watch events
+		1,
+	)
+	c.cm.AddController(addonLauncherController)
 
 	// Add sandbox pool controller (reconciles pool desired_instances to actual sandboxes)
 	poolController := controller.NewReconcileController(
@@ -996,11 +998,17 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	)
 	c.cm.AddController(nodeHealthRC)
 
+	// Collect cluster-level hostnames for TLS cert provisioning (e.g., cloud-provisioned DNS).
+	var clusterHostnames []string
+	if c.CloudAuth.DNSHostname != "" {
+		clusterHostnames = append(clusterHostnames, c.CloudAuth.DNSHostname)
+	}
+
 	// Add certificate controller — DNS-01 when a DNS provider is configured,
 	// otherwise HTTP-01 via autocert for eager cert provisioning on route set.
 	if c.AcmeDNSProvider != "" {
 		c.Log.Info("enabling ACME DNS challenge certificate controller", "provider", c.AcmeDNSProvider)
-		dnsController := certctrl.NewController(c.Log, c.DataPath, c.AcmeEmail, c.AcmeDNSProvider)
+		dnsController := certctrl.NewController(c.Log, c.DataPath, c.AcmeEmail, c.AcmeDNSProvider, clusterHostnames)
 		if err := dnsController.Init(ctx); err != nil {
 			c.Log.Error("failed to initialize certificate controller", "error", err)
 			return err
@@ -1020,11 +1028,12 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	} else {
 		c.Log.Info("enabling ACME HTTP-01 certificate controller (autocert)")
 		autocertController := certctrl.NewAutocertController(certctrl.AutocertControllerOpts{
-			Log:       c.Log,
-			EAC:       eac,
-			DataPath:  c.DataPath,
-			Email:     c.AcmeEmail,
-			PublicIPs: c.PublicIPs,
+			Log:              c.Log,
+			EAC:              eac,
+			DataPath:         c.DataPath,
+			Email:            c.AcmeEmail,
+			PublicIPs:        c.PublicIPs,
+			ClusterHostnames: clusterHostnames,
 		})
 		if err := autocertController.Init(ctx); err != nil {
 			c.Log.Error("failed to initialize autocert controller", "error", err)
@@ -1045,28 +1054,26 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		c.cm.AddController(certRC)
 	}
 
-	if labs.Addons() {
-		// Add addon controller (reconciles addon associations for provisioning/deprovisioning)
-		addonController := addonctrl.NewController(c.Log, ec, eac, addonRegistry)
-		if err := addonController.Init(ctx); err != nil {
-			c.Log.Error("failed to initialize addon controller", "error", err)
-			return err
-		}
-
-		addonReconciler := controller.NewReconcileController(
-			"addon",
-			c.Log,
-			entity.Ref(entity.EntityKind, addon_v1alpha.KindAddonAssociation),
-			eac,
-			controller.AdaptReconcileController[addon_v1alpha.AddonAssociation](addonController),
-			time.Minute,
-			// Multiple workers so a long-running provisioning saga for one
-			// association does not block reconciliation of others. Same-entity
-			// concurrency is already prevented by ReconcileController.inFlight.
-			4,
-		)
-		c.cm.AddController(addonReconciler)
+	// Add addon controller (reconciles addon associations for provisioning/deprovisioning)
+	addonController := addonctrl.NewController(c.Log, ec, eac, addonRegistry)
+	if err := addonController.Init(ctx); err != nil {
+		c.Log.Error("failed to initialize addon controller", "error", err)
+		return err
 	}
+
+	addonReconciler := controller.NewReconcileController(
+		"addon",
+		c.Log,
+		entity.Ref(entity.EntityKind, addon_v1alpha.KindAddonAssociation),
+		eac,
+		controller.AdaptReconcileController[addon_v1alpha.AddonAssociation](addonController),
+		time.Minute,
+		// Multiple workers so a long-running provisioning saga for one
+		// association does not block reconciliation of others. Same-entity
+		// concurrency is already prevented by ReconcileController.inFlight.
+		4,
+	)
+	c.cm.AddController(addonReconciler)
 
 	// Start the controller manager
 	if err := c.cm.Start(ctx); err != nil {
@@ -1097,18 +1104,15 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	server.ExposeValue("dev.miren.runtime/app", app_v1alpha.AdaptCrud(ai))
 	server.ExposeValue("dev.miren.runtime/app-status", app_v1alpha.AdaptAppStatus(ai))
 
-	var addonsClient *app_v1alpha.AddonsClient
-	if labs.Addons() {
-		addonsServer := app.NewAddonsServer(c.Log, ec, addonRegistry, addon.NewRegistryImageChecker())
-		server.ExposeValue("dev.miren.runtime/addons", app_v1alpha.AdaptAddons(addonsServer))
+	addonsServer := app.NewAddonsServer(c.Log, ec, addonRegistry, addon.NewRegistryImageChecker())
+	server.ExposeValue("dev.miren.runtime/addons", app_v1alpha.AdaptAddons(addonsServer))
 
-		addonsLoopback, err := rs.Connect(rs.LoopbackAddr(), "dev.miren.runtime/addons")
-		if err != nil {
-			c.Log.Error("failed to connect to addons RPC service", "error", err)
-			return err
-		}
-		addonsClient = app_v1alpha.NewAddonsClient(addonsLoopback)
+	addonsLoopback, err := rs.Connect(rs.LoopbackAddr(), "dev.miren.runtime/addons")
+	if err != nil {
+		c.Log.Error("failed to connect to addons RPC service", "error", err)
+		return err
 	}
+	addonsClient := app_v1alpha.NewAddonsClient(addonsLoopback)
 
 	// Create app client for the builder
 	appClient := appclient.NewClient(c.Log, loopback)
@@ -1140,6 +1144,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	ingressConfig := httpingress.IngressConfig{
 		RequestTimeout: c.HTTPRequestTimeout,
 		DataPath:       c.DataPath,
+		WorkloadIssuer: c.WorkloadIssuer,
 	}
 	c.hs = httpingress.NewServer(ctx, c.Log, ingressConfig, loopback, aa, c.HTTP, c.LogWriter)
 
@@ -1158,6 +1163,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		NetworkBackend:         c.NetworkBackend,
 		VictoriametricsAddress: c.VictoriametricsAddress,
 		VictorialogsAddress:    c.VictorialogsAddress,
+		WorkloadIssuer:         c.WorkloadIssuer,
 	})
 	server.ExposeValue(rpc.ServiceRunner, runner_v1alpha.AdaptRunnerRegistration(runnerReg))
 

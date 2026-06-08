@@ -2,9 +2,11 @@ package runner
 
 import (
 	"context"
+	"crypto/x509"
 	"fmt"
 	"log/slog"
 	"net"
+	"slices"
 	"strings"
 	"time"
 
@@ -20,7 +22,9 @@ import (
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/joincode"
+	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/standard"
+	"miren.dev/runtime/pkg/workloadidentity"
 )
 
 const (
@@ -42,6 +46,11 @@ type RegistrationServerConfig struct {
 	// Observability endpoints provided to runners at join time
 	VictoriametricsAddress string
 	VictorialogsAddress    string
+
+	// WorkloadIssuer mints workload identity tokens. Distributed runners, which
+	// do not hold the cluster signing key, request tokens from the coordinator
+	// through this server. May be nil when no issuer is configured.
+	WorkloadIssuer *workloadidentity.Issuer
 }
 
 type RegistrationServer struct {
@@ -240,28 +249,9 @@ func (s *RegistrationServer) Join(ctx context.Context, req *runner_v1alpha.Runne
 
 	// Now that invite is claimed, issue the certificate with proper SANs
 	// so the coordinator can connect to the runner's API by IP.
-	runnerIDPrefix := runnerID
-	if len(runnerIDPrefix) > 8 {
-		runnerIDPrefix = runnerIDPrefix[:8]
-	}
-	certName := fmt.Sprintf("runner-%s", runnerIDPrefix)
+	certName := runnerCertName(runnerID)
 
-	ips := []net.IP{
-		net.ParseIP("127.0.0.1"),
-		net.ParseIP("::1"),
-	}
-	dnsNames := []string{"localhost"}
-
-	if listenAddr != "" {
-		host, _, err := net.SplitHostPort(listenAddr)
-		if err == nil && host != "" {
-			if ip := net.ParseIP(host); ip != nil {
-				ips = append(ips, ip)
-			} else if host != "localhost" {
-				dnsNames = append(dnsNames, host)
-			}
-		}
-	}
+	ips, dnsNames := buildRunnerSANs(listenAddr)
 
 	cc, err := s.Authority.IssueCertificate(caauth.Options{
 		CommonName:   certName,
@@ -358,6 +348,132 @@ func (s *RegistrationServer) Join(ctx context.Context, req *runner_v1alpha.Runne
 	}
 
 	return nil
+}
+
+// buildRunnerSANs returns the IP and DNS subject alternative names a runner's
+// server certificate should carry: always loopback (127.0.0.1, ::1, localhost)
+// plus the host from the runner's advertised listen address (an IP becomes an
+// IP SAN, a hostname becomes a DNS SAN).
+func buildRunnerSANs(listenAddr string) ([]net.IP, []string) {
+	ips := []net.IP{
+		net.ParseIP("127.0.0.1"),
+		net.ParseIP("::1"),
+	}
+	dnsNames := []string{"localhost"}
+
+	if listenAddr != "" {
+		host, _, err := net.SplitHostPort(listenAddr)
+		if err == nil && host != "" {
+			if ip := net.ParseIP(host); ip != nil {
+				ips = append(ips, ip)
+			} else if host != "localhost" {
+				dnsNames = append(dnsNames, host)
+			}
+		}
+	}
+
+	return ips, dnsNames
+}
+
+// RefreshCertificate re-issues the calling runner's server certificate with SANs
+// derived from its current listen address. A runner needs this when its listen
+// IP changes but its persisted certificate (e.g. on a disk that outlives the VM)
+// still carries the old IP. The method is public at the RPC layer but authorizes
+// the caller here: the presented client certificate must chain to the cluster CA
+// and be a runner certificate, and the re-issued certificate keeps that
+// certificate's CommonName so a runner can only refresh its own identity.
+func (s *RegistrationServer) RefreshCertificate(ctx context.Context, req *runner_v1alpha.RunnerRegistrationRefreshCertificate) error {
+	args := req.Args()
+	results := req.Results()
+
+	info := rpc.ConnectionInfo(ctx)
+	var peer *x509.Certificate
+	if info != nil {
+		peer = info.PeerCertificate
+	}
+
+	listenAddr := ""
+	if args.HasListenAddr() {
+		listenAddr = args.ListenAddr()
+	}
+
+	cc, err := s.reissueRunnerCertificate(ctx, peer, listenAddr)
+	if err != nil {
+		results.SetError(err.Error())
+		return nil
+	}
+
+	results.SetCertPem(cc.CertPEM)
+	results.SetKeyPem(cc.KeyPEM)
+	results.SetCaPem(cc.CACert)
+
+	return nil
+}
+
+// reissueRunnerCertificate authorizes the caller solely by its presented client
+// certificate and, if valid, issues a fresh runner server certificate with SANs
+// derived from listenAddr. The new certificate keeps the caller's CommonName so
+// a runner can only refresh its own identity. Authorization requires that the
+// presented certificate is a CA-signed runner certificate and that a runner
+// matching its identity is still registered (so a removed runner's still-valid
+// certificate cannot perpetually renew itself). The runner identity is taken
+// from the verified certificate, never from caller-supplied input. The returned
+// error is safe to surface to the caller.
+func (s *RegistrationServer) reissueRunnerCertificate(ctx context.Context, peer *x509.Certificate, listenAddr string) (*caauth.ClientCertificate, error) {
+	if peer == nil {
+		return nil, fmt.Errorf("a client certificate is required to refresh a certificate")
+	}
+
+	if err := s.Authority.VerifyCert(peer); err != nil {
+		s.Log.Warn("RefreshCertificate rejected: peer cert not signed by cluster CA",
+			"error", err, "subject", peer.Subject.String())
+		return nil, fmt.Errorf("client certificate is not trusted")
+	}
+
+	commonName := peer.Subject.CommonName
+	runnerID, ok := strings.CutPrefix(commonName, "runner-")
+	if !ok || runnerID == "" || !slices.Contains(peer.Subject.Organization, "miren") {
+		s.Log.Warn("RefreshCertificate rejected: peer cert is not a runner certificate",
+			"subject", peer.Subject.String())
+		return nil, fmt.Errorf("client certificate is not a runner certificate")
+	}
+
+	// Confirm the runner is still registered. caauth has no revocation, so this
+	// is what prevents a removed runner's still-valid certificate from renewing
+	// itself indefinitely. The runner ID is taken from the verified certificate's
+	// CommonName (which embeds the full ID), so the caller cannot substitute
+	// another runner's identity.
+	node, _, err := s.findNodeByQuery(ctx, runnerID)
+	if err != nil {
+		s.Log.Error("RefreshCertificate failed to verify runner registration",
+			"error", err, "subject", peer.Subject.String())
+		return nil, fmt.Errorf("failed to verify runner registration")
+	}
+	if node == nil {
+		s.Log.Warn("RefreshCertificate rejected: runner is not registered",
+			"subject", peer.Subject.String())
+		return nil, fmt.Errorf("runner is not registered")
+	}
+
+	ips, dnsNames := buildRunnerSANs(listenAddr)
+
+	cc, err := s.Authority.IssueCertificate(caauth.Options{
+		CommonName:   commonName,
+		Organization: "miren",
+		ValidFor:     365 * 24 * time.Hour,
+		IPs:          ips,
+		DNSNames:     dnsNames,
+	})
+	if err != nil {
+		s.Log.Error("Failed to re-issue certificate", "error", err, "common_name", commonName)
+		return nil, fmt.Errorf("failed to issue certificate")
+	}
+
+	s.Log.Info("Re-issued runner certificate",
+		"common_name", commonName,
+		"listen_addr", listenAddr)
+
+	return cc, nil
 }
 
 func (s *RegistrationServer) ListInvites(ctx context.Context, req *runner_v1alpha.RunnerRegistrationListInvites) error {
@@ -602,6 +718,175 @@ func (s *RegistrationServer) RemoveRunner(ctx context.Context, req *runner_v1alp
 	results.SetRunnerId(node.RunnerId)
 	results.SetRemovedResources(removedResources)
 	return nil
+}
+
+// WorkloadIssuerInfo reports whether the coordinator has a workload identity
+// issuer configured and, if so, its issuer URL. Distributed runners call this
+// once at startup to decide whether to mint workload identity tokens via the
+// coordinator.
+func (s *RegistrationServer) WorkloadIssuerInfo(ctx context.Context, req *runner_v1alpha.RunnerRegistrationWorkloadIssuerInfo) error {
+	results := req.Results()
+
+	if s.WorkloadIssuer == nil {
+		results.SetEnabled(false)
+		return nil
+	}
+
+	results.SetEnabled(true)
+	results.SetIssuerUrl(s.WorkloadIssuer.IssuerURL())
+	return nil
+}
+
+// IssueWorkloadToken mints a workload identity token for a sandbox on behalf of
+// a distributed runner, which does not hold the cluster signing key. The caller
+// is an mTLS-authenticated runner.
+func (s *RegistrationServer) IssueWorkloadToken(ctx context.Context, req *runner_v1alpha.RunnerRegistrationIssueWorkloadToken) error {
+	args := req.Args()
+	results := req.Results()
+
+	if s.WorkloadIssuer == nil {
+		results.SetError("workload identity issuer is not configured")
+		return nil
+	}
+
+	if !args.HasSandboxId() || args.SandboxId() == "" {
+		results.SetError("sandbox_id is required")
+		return nil
+	}
+	sandboxID := args.SandboxId()
+
+	// A runner may only mint tokens for sandboxes scheduled to it. This prevents
+	// a compromised or buggy runner from obtaining identities for workloads
+	// running on other runners.
+	if err := s.authorizeSandboxOwnership(ctx, sandboxID); err != nil {
+		s.Log.Warn("workload token request denied", "sandbox", sandboxID, "error", err)
+		results.SetError("not authorized to issue a token for this sandbox")
+		return nil
+	}
+
+	// Derive the app identity from the sandbox itself rather than trusting the
+	// caller. The app is part of the token subject that external verifiers
+	// federate on, so a runner must not be able to forge it.
+	appName := s.resolveSandboxApp(ctx, sandboxID)
+
+	opts := workloadidentity.TokenOptions{}
+	if args.HasAudience() {
+		opts.Audience = args.Audience()
+	}
+	if args.HasTtlSeconds() && args.TtlSeconds() > 0 {
+		opts.TTL = time.Duration(args.TtlSeconds()) * time.Second
+	}
+
+	token, err := s.WorkloadIssuer.IssueTokenWithOptions(appName, sandboxID, opts)
+	if err != nil {
+		s.Log.Error("failed to issue workload identity token",
+			"sandbox", sandboxID, "app", appName, "error", err)
+		results.SetError("failed to issue token")
+		return nil
+	}
+
+	results.SetToken(token)
+	return nil
+}
+
+// runnerCertName is the client-certificate CommonName issued to a runner during
+// Join. It embeds the full runner ID so the coordinator can attribute an mTLS
+// connection back to a specific runner and authorize per-runner actions.
+//
+// The full ID (rather than a prefix) is required for authorization: a runner
+// chooses its own runner ID at Join, so a short prefix would let a malicious
+// runner pick an ID whose prefix collides with a victim's cert name and mint
+// tokens for the victim's sandboxes. A runner ID is a UUID, so "runner-" plus
+// the ID stays within the certificate CommonName length limit.
+func runnerCertName(runnerID string) string {
+	return fmt.Sprintf("runner-%s", runnerID)
+}
+
+// authorizeSandboxOwnership verifies the authenticated caller is the runner the
+// given sandbox is scheduled to. Callers authenticate with the mTLS client
+// certificate issued during Join, whose CommonName maps back to the runner via
+// runnerCertName. When authentication is disabled (anonymous), there is nothing
+// to verify against and the check is skipped.
+func (s *RegistrationServer) authorizeSandboxOwnership(ctx context.Context, sandboxID string) error {
+	identity := rpc.IdentityFromContext(ctx)
+	if identity == nil {
+		return fmt.Errorf("no caller identity")
+	}
+	if identity.Method == rpc.AuthMethodAnonymous {
+		// Authentication is disabled on this coordinator; ownership cannot be
+		// established, so don't block issuance.
+		return nil
+	}
+	if identity.Method != rpc.AuthMethodCert {
+		return fmt.Errorf("caller must authenticate with a runner certificate, got %q", identity.Method)
+	}
+
+	sbResp, err := s.EAC.Get(ctx, sandboxID)
+	if err != nil {
+		return fmt.Errorf("looking up sandbox %s: %w", sandboxID, err)
+	}
+
+	var sch compute_v1alpha.Schedule
+	sch.Decode(sbResp.Entity().Entity())
+	if sch.Key.Node == "" {
+		return fmt.Errorf("sandbox %s is not scheduled to a node", sandboxID)
+	}
+
+	nodeResp, err := s.EAC.Get(ctx, string(sch.Key.Node))
+	if err != nil {
+		return fmt.Errorf("looking up node %s: %w", sch.Key.Node, err)
+	}
+
+	var node compute_v1alpha.Node
+	node.Decode(nodeResp.Entity().Entity())
+	if node.RunnerId == "" {
+		return fmt.Errorf("node %s has no runner id", sch.Key.Node)
+	}
+
+	if expected := runnerCertName(node.RunnerId); identity.Subject != expected {
+		return fmt.Errorf("caller %q is not the owner of sandbox %s (owned by %q)",
+			identity.Subject, sandboxID, expected)
+	}
+
+	return nil
+}
+
+// resolveSandboxApp derives the application name for a sandbox from the entity
+// store (sandbox -> app version -> app metadata name), mirroring the sandbox
+// controller's local resolution. The app name is part of the workload identity
+// token subject, so it must be derived server-side rather than trusted from the
+// calling runner. Returns "" when the app cannot be resolved.
+func (s *RegistrationServer) resolveSandboxApp(ctx context.Context, sandboxID string) string {
+	sbResp, err := s.EAC.Get(ctx, sandboxID)
+	if err != nil {
+		return ""
+	}
+
+	var sb compute_v1alpha.Sandbox
+	sb.Decode(sbResp.Entity().Entity())
+	if sb.Spec.Version == "" {
+		return ""
+	}
+
+	versionResp, err := s.EAC.Get(ctx, sb.Spec.Version.String())
+	if err != nil {
+		return ""
+	}
+
+	var version core_v1alpha.AppVersion
+	version.Decode(versionResp.Entity().Entity())
+	if version.App == "" {
+		return ""
+	}
+
+	appResp, err := s.EAC.Get(ctx, version.App.String())
+	if err != nil {
+		return ""
+	}
+
+	var appMeta core_v1alpha.Metadata
+	appMeta.Decode(appResp.Entity().Entity())
+	return appMeta.Name
 }
 
 // findNodeByQuery looks up a node entity by name, runner ID, entity ID, or short ID prefix.

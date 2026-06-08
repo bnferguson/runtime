@@ -8,10 +8,6 @@ description: "Remove an addon from an application"
 
 Remove an addon from an application
 
-:::note
-This command requires the `addons` [labs feature](/labs) to be enabled.
-:::
-
 ## Usage
 
 ```bash

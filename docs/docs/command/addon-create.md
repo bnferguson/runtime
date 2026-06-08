@@ -8,10 +8,6 @@ description: "Attach an addon to an application"
 
 Attach an addon to an application
 
-:::note
-This command requires the `addons` [labs feature](/labs) to be enabled.
-:::
-
 ## Usage
 
 ```bash

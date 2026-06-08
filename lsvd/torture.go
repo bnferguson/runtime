@@ -371,6 +371,8 @@ func (g *TortureGenerator) Next() TortureOperation {
 	case TortureOpZero:
 		op.Extent = g.nextExtent(true)
 		g.lastWrite = op.Extent
+	case TortureOpSync, TortureOpCloseReopen:
+		// Whole-disk operations; no extent or data to populate.
 	}
 
 	return op

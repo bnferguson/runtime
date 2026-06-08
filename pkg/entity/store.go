@@ -41,8 +41,11 @@ type Store interface {
 	PatchEntity(ctx context.Context, entity *Entity, opts ...EntityOption) (*Entity, error)
 	EnsureEntity(ctx context.Context, entity *Entity, opts ...EntityOption) (*Entity, bool, error)
 	DeleteEntity(ctx context.Context, id Id) error
-	WatchIndex(ctx context.Context, attr Attr) (clientv3.WatchChan, error)
+	WatchIndex(ctx context.Context, attr Attr, fromRev int64) (clientv3.WatchChan, error)
 	ListIndex(ctx context.Context, attr Attr) ([]Id, error)
+	// ListIndexRevision is like ListIndex but also returns the etcd revision the
+	// listing was read at, so a caller can resume a watch from that point.
+	ListIndexRevision(ctx context.Context, attr Attr) ([]Id, int64, error)
 	ListCollection(ctx context.Context, collection string) ([]Id, error)
 
 	CreateSession(ctx context.Context, ttl int64) ([]byte, error)
@@ -1436,35 +1439,43 @@ func (s *EtcdStore) deleteFromCollection(entity *Entity, collection string) erro
 }
 
 func (s *EtcdStore) ListIndex(ctx context.Context, attr Attr) ([]Id, error) {
+	ids, _, err := s.ListIndexRevision(ctx, attr)
+	return ids, err
+}
+
+// ListIndexRevision lists the ids matching attr and returns the etcd revision the
+// listing was read at. The revision lets a caller resume a watch from that point
+// (gap-free) instead of re-reconciling on every reconnect.
+func (s *EtcdStore) ListIndexRevision(ctx context.Context, attr Attr) ([]Id, int64, error) {
 	if attr.ID == DBId {
 		if attr.Value.Kind() != KindId {
-			return nil, cond.ValidationFailure("attribute", "invalid value type for ID")
+			return nil, 0, cond.ValidationFailure("attribute", "invalid value type for ID")
 		}
 
 		id := attr.Value.Id()
 
 		gr, err := s.client.Get(ctx, s.buildKey(id), clientv3.WithCountOnly())
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 
 		if gr.Count == 0 {
-			return nil, nil
+			return nil, gr.Header.Revision, nil
 		}
 
-		return []Id{attr.Value.Id()}, nil
+		return []Id{id}, gr.Header.Revision, nil
 	}
 
 	schema, err := s.GetAttributeSchema(ctx, attr.ID)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	if !schema.Index {
-		return nil, fmt.Errorf("attribute %s is not indexed", attr.ID)
+		return nil, 0, fmt.Errorf("attribute %s is not indexed", attr.ID)
 	}
 
-	return s.ListCollection(ctx, attr.CAS())
+	return s.listCollectionRevision(ctx, attr.CAS())
 }
 
 func (s *EtcdStore) IndexPrefix(ctx context.Context, attr Attr) (string, error) {
@@ -1480,7 +1491,7 @@ func (s *EtcdStore) IndexPrefix(ctx context.Context, attr Attr) (string, error) 
 	return s.CollectionPrefix(ctx, attr.CAS())
 }
 
-func (s *EtcdStore) WatchIndex(ctx context.Context, attr Attr) (clientv3.WatchChan, error) {
+func (s *EtcdStore) WatchIndex(ctx context.Context, attr Attr, fromRev int64) (clientv3.WatchChan, error) {
 	if attr.ID == DBId {
 		if attr.Value.Kind() != KindId {
 			return nil, cond.ValidationFailure("attribute", "invalid value type for ID")
@@ -1488,7 +1499,11 @@ func (s *EtcdStore) WatchIndex(ctx context.Context, attr Attr) (clientv3.WatchCh
 
 		id := attr.Value.Id()
 		key := s.buildKey(id)
-		wc := s.client.Watch(ctx, key)
+		var wopts []clientv3.OpOption
+		if fromRev > 0 {
+			wopts = append(wopts, clientv3.WithRev(fromRev))
+		}
+		wc := s.client.Watch(ctx, key, wopts...)
 
 		ret := make(chan clientv3.WatchResponse, 1)
 
@@ -1537,19 +1552,31 @@ func (s *EtcdStore) WatchIndex(ctx context.Context, attr Attr) (clientv3.WatchCh
 		return nil, err
 	}
 
-	return s.client.Watch(ctx, prefix, clientv3.WithPrefix(), clientv3.WithPrevKV()), nil
+	// WithProgressNotify keeps the resume cursor fresh during idle periods;
+	// WithRev resumes the event stream from a prior revision (gap-free) when set.
+	opts := []clientv3.OpOption{clientv3.WithPrefix(), clientv3.WithPrevKV(), clientv3.WithProgressNotify()}
+	if fromRev > 0 {
+		opts = append(opts, clientv3.WithRev(fromRev))
+	}
+
+	return s.client.Watch(ctx, prefix, opts...), nil
 }
 
 var tr = strings.NewReplacer("/", "_", ":", "_")
 
 func (s *EtcdStore) ListCollection(ctx context.Context, collection string) ([]Id, error) {
+	ids, _, err := s.listCollectionRevision(ctx, collection)
+	return ids, err
+}
+
+func (s *EtcdStore) listCollectionRevision(ctx context.Context, collection string) ([]Id, int64, error) {
 	colKey := tr.Replace(collection)
 
 	prefix := fmt.Sprintf("%s/collections/%s/", s.prefix, colKey)
 
 	resp, err := s.client.Get(ctx, prefix, clientv3.WithPrefix())
 	if err != nil {
-		return nil, fmt.Errorf("failed to list entities from etcd: %w", err)
+		return nil, 0, fmt.Errorf("failed to list entities from etcd: %w", err)
 	}
 
 	seen := make(map[Id]struct{})
@@ -1564,7 +1591,7 @@ func (s *EtcdStore) ListCollection(ctx context.Context, collection string) ([]Id
 		entities = append(entities, id)
 	}
 
-	return entities, nil
+	return entities, resp.Header.Revision, nil
 }
 
 func (s *EtcdStore) CollectionPrefix(ctx context.Context, collection string) (string, error) {

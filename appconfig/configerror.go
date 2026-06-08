@@ -270,6 +270,12 @@ func walkAST(p *tomlast.Parser, parts []string, depth int) int {
 				shape := p.Shape(keyNode.Raw)
 				return shape.Start.Line
 			}
+
+		case tomlast.Invalid, tomlast.Comment, tomlast.Key, tomlast.Array,
+			tomlast.InlineTable, tomlast.String, tomlast.Bool, tomlast.Float,
+			tomlast.Integer, tomlast.LocalDate, tomlast.LocalTime,
+			tomlast.LocalDateTime, tomlast.DateTime:
+			// Not top-level expressions; keep scanning.
 		}
 	}
 

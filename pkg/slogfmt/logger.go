@@ -727,6 +727,9 @@ func appendTextValue(s *handleState, v slog.Value) error {
 			return nil
 		}
 		s.appendString(fmt.Sprintf("%+v", v.Any()))
+	case slog.KindBool, slog.KindDuration, slog.KindFloat64, slog.KindInt64, slog.KindUint64, slog.KindGroup, slog.KindLogValuer:
+		// Defer to the generic value formatter.
+		fallthrough
 	default:
 		*s.buf = appendValue(v, *s.buf)
 	}

@@ -308,8 +308,9 @@ func (s *ServiceController) applyGC(ctx context.Context, target *targetState, ac
 			if !target.chains.Contains(chain) {
 				orphanLeaves = append(orphanLeaves, chain)
 			}
+		case chainKindStatic, chainKindUnknown:
+			// Leave alone.
 		}
-		// chainKindStatic and chainKindUnknown: leave alone.
 	}
 	orphanParentCount := len(orphanNodePorts) + len(orphanServices)
 

@@ -311,6 +311,7 @@ type entityOpData struct {
 	Previous  *int64  `cbor:"1,keyasint,omitempty" json:"previous,omitempty"`
 	Operation *int64  `cbor:"2,keyasint,omitempty" json:"operation,omitempty"`
 	EntityId  *string `cbor:"3,keyasint,omitempty" json:"entity_id,omitempty"`
+	Revision  *int64  `cbor:"4,keyasint,omitempty" json:"revision,omitempty"`
 }
 
 type EntityOp struct {
@@ -372,6 +373,21 @@ func (v *EntityOp) EntityId() string {
 
 func (v *EntityOp) SetEntityId(entity_id string) {
 	v.data.EntityId = &entity_id
+}
+
+func (v *EntityOp) HasRevision() bool {
+	return v.data.Revision != nil
+}
+
+func (v *EntityOp) Revision() int64 {
+	if v.data.Revision == nil {
+		return 0
+	}
+	return *v.data.Revision
+}
+
+func (v *EntityOp) SetRevision(revision int64) {
+	v.data.Revision = &revision
 }
 
 func (v *EntityOp) MarshalCBOR() ([]byte, error) {
@@ -1198,8 +1214,9 @@ func (v *EntityAccessDeleteResults) UnmarshalJSON(data []byte) error {
 }
 
 type entityAccessWatchIndexArgsData struct {
-	Index  *entity.Attr    `cbor:"0,keyasint,omitempty" json:"index,omitempty"`
-	Values *rpc.Capability `cbor:"1,keyasint,omitempty" json:"values,omitempty"`
+	Index        *entity.Attr    `cbor:"0,keyasint,omitempty" json:"index,omitempty"`
+	FromRevision *int64          `cbor:"1,keyasint,omitempty" json:"from_revision,omitempty"`
+	Values       *rpc.Capability `cbor:"2,keyasint,omitempty" json:"values,omitempty"`
 }
 
 type EntityAccessWatchIndexArgs struct {
@@ -1213,6 +1230,17 @@ func (v *EntityAccessWatchIndexArgs) HasIndex() bool {
 
 func (v *EntityAccessWatchIndexArgs) Index() entity.Attr {
 	return *v.data.Index
+}
+
+func (v *EntityAccessWatchIndexArgs) HasFromRevision() bool {
+	return v.data.FromRevision != nil
+}
+
+func (v *EntityAccessWatchIndexArgs) FromRevision() int64 {
+	if v.data.FromRevision == nil {
+		return 0
+	}
+	return *v.data.FromRevision
 }
 
 func (v *EntityAccessWatchIndexArgs) HasValues() bool {
@@ -1370,7 +1398,8 @@ func (v *EntityAccessListArgs) UnmarshalJSON(data []byte) error {
 }
 
 type entityAccessListResultsData struct {
-	Values *[]*Entity `cbor:"0,keyasint,omitempty" json:"values,omitempty"`
+	Values   *[]*Entity `cbor:"0,keyasint,omitempty" json:"values,omitempty"`
+	Revision *int64     `cbor:"1,keyasint,omitempty" json:"revision,omitempty"`
 }
 
 type EntityAccessListResults struct {
@@ -1381,6 +1410,10 @@ type EntityAccessListResults struct {
 func (v *EntityAccessListResults) SetValues(values []*Entity) {
 	x := slices.Clone(values)
 	v.data.Values = &x
+}
+
+func (v *EntityAccessListResults) SetRevision(revision int64) {
+	v.data.Revision = &revision
 }
 
 func (v *EntityAccessListResults) MarshalCBOR() ([]byte, error) {
@@ -3152,10 +3185,11 @@ type EntityAccessClientWatchIndexResults struct {
 	data   entityAccessWatchIndexResultsData
 }
 
-func (v EntityAccessClient) WatchIndex(ctx context.Context, index entity.Attr, values stream.SendStream[*EntityOp]) (*EntityAccessClientWatchIndexResults, error) {
+func (v EntityAccessClient) WatchIndex(ctx context.Context, index entity.Attr, from_revision int64, values stream.SendStream[*EntityOp]) (*EntityAccessClientWatchIndexResults, error) {
 	args := EntityAccessWatchIndexArgs{}
 	caps := map[rpc.OID]*rpc.InlineCapability{}
 	args.data.Index = &index
+	args.data.FromRevision = &from_revision
 	{
 		ic, oid, c := v.NewInlineCapability(stream.AdaptSendStream[*EntityOp](values), values)
 		args.data.Values = c
@@ -3211,6 +3245,17 @@ func (v *EntityAccessClientListResults) Values() []*Entity {
 		return nil
 	}
 	return *v.data.Values
+}
+
+func (v *EntityAccessClientListResults) HasRevision() bool {
+	return v.data.Revision != nil
+}
+
+func (v *EntityAccessClientListResults) Revision() int64 {
+	if v.data.Revision == nil {
+		return 0
+	}
+	return *v.data.Revision
 }
 
 func (v EntityAccessClient) List(ctx context.Context, index entity.Attr) (*EntityAccessClientListResults, error) {
