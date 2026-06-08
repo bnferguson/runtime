@@ -74,6 +74,7 @@ func issueLeafCert(t *testing.T, ca *caauth.Authority, commonName, org string, i
 	block, _ := pem.Decode(cc.CertPEM)
 	if block == nil {
 		t.Fatal("failed to decode issued cert PEM")
+		return nil
 	}
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
@@ -562,6 +563,7 @@ func (e *testEnv) joinRunner(t *testing.T, ctx context.Context, listenAddr, name
 	block, _ := pem.Decode(res.CertPem())
 	if block == nil {
 		t.Fatal("failed to decode join cert PEM")
+		return nil, ""
 	}
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
@@ -591,6 +593,7 @@ func TestReissueRunnerCertificate(t *testing.T) {
 		block, _ := pem.Decode(cc.CertPEM)
 		if block == nil {
 			t.Fatal("failed to decode re-issued cert PEM")
+			return
 		}
 		newCert, err := x509.ParseCertificate(block.Bytes)
 		if err != nil {
