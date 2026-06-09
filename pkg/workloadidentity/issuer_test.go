@@ -1,8 +1,13 @@
 package workloadidentity
 
 import (
+	"crypto"
 	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"os"
 	"path/filepath"
 	"testing"
@@ -27,7 +32,7 @@ func TestNewIssuer_GeneratesKey(t *testing.T) {
 	require.NotNil(t, iss)
 
 	assert.Equal(t, "https://example.miren.cloud", iss.IssuerURL())
-	assert.NotEmpty(t, iss.kid)
+	assert.NotEmpty(t, iss.primary.kid)
 
 	// Key file should exist
 	keyPath := filepath.Join(dir, "server", "workload-identity.key")
@@ -51,8 +56,8 @@ func TestNewIssuer_LoadsExistingKey(t *testing.T) {
 	require.NoError(t, err)
 
 	// Same key should produce same kid
-	assert.Equal(t, iss1.kid, iss2.kid)
-	assert.Equal(t, iss1.publicKey, iss2.publicKey)
+	assert.Equal(t, iss1.primary.kid, iss2.primary.kid)
+	assert.Equal(t, iss1.primary.public, iss2.primary.public)
 }
 
 func TestIssueToken(t *testing.T) {
@@ -72,9 +77,9 @@ func TestIssueToken(t *testing.T) {
 
 	// Parse and verify the token
 	token, err := jwt.ParseWithClaims(tokenStr, &WorkloadClaims{}, func(tok *jwt.Token) (interface{}, error) {
-		assert.Equal(t, jwt.SigningMethodEdDSA, tok.Method)
-		assert.Equal(t, iss.kid, tok.Header["kid"])
-		return iss.publicKey, nil
+		assert.Equal(t, jwt.SigningMethodRS256, tok.Method)
+		assert.Equal(t, iss.primary.kid, tok.Header["kid"])
+		return iss.primary.public, nil
 	})
 	require.NoError(t, err)
 	require.True(t, token.Valid)
@@ -104,7 +109,7 @@ func TestIssueToken_NoOrg(t *testing.T) {
 	require.NoError(t, err)
 
 	token, err := jwt.ParseWithClaims(tokenStr, &WorkloadClaims{}, func(tok *jwt.Token) (interface{}, error) {
-		return iss.publicKey, nil
+		return iss.primary.public, nil
 	})
 	require.NoError(t, err)
 
@@ -127,7 +132,7 @@ func TestIssueToken_NoApp(t *testing.T) {
 	require.NoError(t, err)
 
 	token, err := jwt.ParseWithClaims(tokenStr, &WorkloadClaims{}, func(tok *jwt.Token) (interface{}, error) {
-		return iss.publicKey, nil
+		return iss.primary.public, nil
 	})
 	require.NoError(t, err)
 
@@ -152,7 +157,7 @@ func TestDiscoveryDocument(t *testing.T) {
 
 	assert.Equal(t, "https://example.miren.cloud", parsed["issuer"])
 	assert.Equal(t, "https://example.miren.cloud/.well-known/miren/jwks", parsed["jwks_uri"])
-	assert.Contains(t, parsed["id_token_signing_alg_values_supported"], "EdDSA")
+	assert.Contains(t, parsed["id_token_signing_alg_values_supported"], "RS256")
 }
 
 func TestJWKSDocument(t *testing.T) {
@@ -172,14 +177,14 @@ func TestJWKSDocument(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, jwks.Keys, 1)
-	assert.Equal(t, iss.kid, jwks.Keys[0].KeyID)
-	assert.Equal(t, "EdDSA", jwks.Keys[0].Algorithm)
+	assert.Equal(t, iss.primary.kid, jwks.Keys[0].KeyID)
+	assert.Equal(t, "RS256", jwks.Keys[0].Algorithm)
 	assert.Equal(t, "sig", jwks.Keys[0].Use)
 
 	// The key should be usable to verify tokens
-	pubKey, ok := jwks.Keys[0].Key.(ed25519.PublicKey)
+	pubKey, ok := jwks.Keys[0].Key.(*rsa.PublicKey)
 	require.True(t, ok)
-	assert.Equal(t, iss.publicKey, pubKey)
+	assert.Equal(t, iss.primary.public, pubKey)
 }
 
 func TestJWKSDocument_WithPreviousKey(t *testing.T) {
@@ -191,7 +196,7 @@ func TestJWKSDocument_WithPreviousKey(t *testing.T) {
 		IssuerURL: "https://example.miren.cloud",
 	})
 	require.NoError(t, err)
-	oldKID := iss1.kid
+	oldKID := iss1.primary.kid
 
 	// Simulate key rotation: move current key to .prev
 	keyPath := filepath.Join(dir, "server", "workload-identity.key")
@@ -204,8 +209,8 @@ func TestJWKSDocument_WithPreviousKey(t *testing.T) {
 		IssuerURL: "https://example.miren.cloud",
 	})
 	require.NoError(t, err)
-	assert.NotEqual(t, oldKID, iss2.kid)
-	require.NotNil(t, iss2.previousKey)
+	assert.NotEqual(t, oldKID, iss2.primary.kid)
+	require.NotEmpty(t, iss2.advertised)
 
 	// JWKS should contain both keys
 	data, err := iss2.JWKSDocument()
@@ -216,7 +221,7 @@ func TestJWKSDocument_WithPreviousKey(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, jwks.Keys, 2)
-	assert.Equal(t, iss2.kid, jwks.Keys[0].KeyID)
+	assert.Equal(t, iss2.primary.kid, jwks.Keys[0].KeyID)
 	assert.Equal(t, oldKID, jwks.Keys[1].KeyID)
 
 	// Token signed by the new key should be verifiable via JWKS
@@ -259,7 +264,7 @@ func TestIssueTokenWithOptions_CustomAudience(t *testing.T) {
 	require.NoError(t, err)
 
 	token, err := jwt.ParseWithClaims(tokenStr, &WorkloadClaims{}, func(tok *jwt.Token) (interface{}, error) {
-		return iss.publicKey, nil
+		return iss.primary.public, nil
 	})
 	require.NoError(t, err)
 
@@ -282,7 +287,7 @@ func TestIssueTokenWithOptions_CustomTTL(t *testing.T) {
 	require.NoError(t, err)
 
 	token, err := jwt.ParseWithClaims(tokenStr, &WorkloadClaims{}, func(tok *jwt.Token) (interface{}, error) {
-		return iss.publicKey, nil
+		return iss.primary.public, nil
 	})
 	require.NoError(t, err)
 
@@ -308,7 +313,7 @@ func TestIssueTokenWithOptions_TTLClamping(t *testing.T) {
 	require.NoError(t, err)
 
 	token, err := jwt.ParseWithClaims(tokenStr, &WorkloadClaims{}, func(tok *jwt.Token) (interface{}, error) {
-		return iss.publicKey, nil
+		return iss.primary.public, nil
 	})
 	require.NoError(t, err)
 
@@ -324,7 +329,7 @@ func TestIssueTokenWithOptions_TTLClamping(t *testing.T) {
 	require.NoError(t, err)
 
 	token2, err := jwt.ParseWithClaims(tokenStr2, &WorkloadClaims{}, func(tok *jwt.Token) (interface{}, error) {
-		return iss.publicKey, nil
+		return iss.primary.public, nil
 	})
 	require.NoError(t, err)
 
@@ -350,4 +355,219 @@ func TestBuildSubject(t *testing.T) {
 			assert.Equal(t, tt.expected, buildSubject(tt.org, tt.app, tt.sandbox))
 		})
 	}
+}
+
+// writeLegacyEdDSAKey writes a PKCS#8 PEM Ed25519 private key to keyPath,
+// emulating a cluster provisioned before the RS256 default. Returns the public
+// key for assertions.
+func writeLegacyEdDSAKey(t *testing.T, keyPath string) ed25519.PublicKey {
+	t.Helper()
+
+	pub, priv, err := ed25519.GenerateKey(nil)
+	require.NoError(t, err)
+
+	der, err := x509.MarshalPKCS8PrivateKey(priv)
+	require.NoError(t, err)
+	pemData := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+
+	require.NoError(t, os.MkdirAll(filepath.Dir(keyPath), 0700))
+	require.NoError(t, os.WriteFile(keyPath, pemData, 0600))
+
+	return pub
+}
+
+func TestNewIssuer_MigratesLegacyEdDSAKey(t *testing.T) {
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "server", "workload-identity.key")
+	edPub := writeLegacyEdDSAKey(t, keyPath)
+	edKID := computeKID(edPub)
+
+	iss, err := NewIssuer(IssuerConfig{
+		DataPath:  dir,
+		IssuerURL: "https://example.miren.cloud",
+	})
+	require.NoError(t, err)
+
+	// Active signing key is now RS256, not the legacy EdDSA key.
+	assert.Equal(t, "RS256", iss.primary.alg)
+	_, ok := iss.primary.public.(*rsa.PublicKey)
+	require.True(t, ok)
+	assert.NotEqual(t, edKID, iss.primary.kid)
+
+	// The legacy EdDSA key was demoted to the .prev slot.
+	_, err = os.Stat(keyPath + ".prev")
+	require.NoError(t, err)
+
+	// Newly minted tokens are signed with RS256.
+	tokenStr, err := iss.IssueToken("myapp", "sandbox-1")
+	require.NoError(t, err)
+	parsed, _, err := jwt.NewParser().ParseUnverified(tokenStr, &WorkloadClaims{})
+	require.NoError(t, err)
+	assert.Equal(t, "RS256", parsed.Header["alg"])
+	assert.Equal(t, iss.primary.kid, parsed.Header["kid"])
+
+	// JWKS advertises both the active RS256 key and the legacy EdDSA key, the
+	// latter keeping its original kid so already-issued tokens still verify.
+	data, err := iss.JWKSDocument()
+	require.NoError(t, err)
+	var jwks jose.JSONWebKeySet
+	require.NoError(t, json.Unmarshal(data, &jwks))
+	require.Len(t, jwks.Keys, 2)
+
+	assert.Equal(t, iss.primary.kid, jwks.Keys[0].KeyID)
+	assert.Equal(t, "RS256", jwks.Keys[0].Algorithm)
+
+	assert.Equal(t, edKID, jwks.Keys[1].KeyID)
+	assert.Equal(t, "EdDSA", jwks.Keys[1].Algorithm)
+	advPub, ok := jwks.Keys[1].Key.(ed25519.PublicKey)
+	require.True(t, ok)
+	assert.Equal(t, edPub, advPub)
+
+	// Discovery advertises both algorithms, RS256 first.
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal(iss.DiscoveryDocument(), &doc))
+	assert.Equal(t, []any{"RS256", "EdDSA"}, doc["id_token_signing_alg_values_supported"])
+
+	// The freshly minted token verifies under the active RS256 JWK.
+	_, err = jwt.Parse(tokenStr, func(tok *jwt.Token) (interface{}, error) {
+		return jwks.Key(tok.Header["kid"].(string))[0].Key, nil
+	})
+	require.NoError(t, err)
+}
+
+// writeKeyFile generates a signing key of the given algorithm ("RS256" or
+// "EdDSA"), writes it as PKCS#8 PEM to path, and returns its kid.
+func writeKeyFile(t *testing.T, path, alg string) string {
+	t.Helper()
+
+	var priv crypto.Signer
+	switch alg {
+	case "RS256":
+		k, err := rsa.GenerateKey(rand.Reader, 2048)
+		require.NoError(t, err)
+		priv = k
+	case "EdDSA":
+		_, k, err := ed25519.GenerateKey(rand.Reader)
+		require.NoError(t, err)
+		priv = k
+	default:
+		t.Fatalf("unsupported alg %q", alg)
+	}
+
+	der, err := x509.MarshalPKCS8PrivateKey(priv)
+	require.NoError(t, err)
+	pemData := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0700))
+	require.NoError(t, os.WriteFile(path, pemData, 0600))
+
+	return computeKID(priv.Public())
+}
+
+func TestNewIssuer_LoadsDirectoryKeys(t *testing.T) {
+	dir := t.TempDir()
+	keysDir := filepath.Join(dir, "server", "workload-identity.d")
+	edKID := writeKeyFile(t, filepath.Join(keysDir, "extra-eddsa.key"), "EdDSA")
+	rsaKID := writeKeyFile(t, filepath.Join(keysDir, "extra-rsa.key"), "RS256")
+
+	iss, err := NewIssuer(IssuerConfig{
+		DataPath:  dir,
+		IssuerURL: "https://example.miren.cloud",
+	})
+	require.NoError(t, err)
+
+	// Primary was auto-generated as RS256; the two directory keys are live.
+	assert.Equal(t, "RS256", iss.primary.alg)
+	require.Len(t, iss.keys, 3)
+
+	// JWKS publishes all three live keys, keyed by kid.
+	data, err := iss.JWKSDocument()
+	require.NoError(t, err)
+	var jwks jose.JSONWebKeySet
+	require.NoError(t, json.Unmarshal(data, &jwks))
+	require.Len(t, jwks.Keys, 3)
+	require.NotEmpty(t, jwks.Key(iss.primary.kid))
+	require.NotEmpty(t, jwks.Key(edKID))
+	require.NotEmpty(t, jwks.Key(rsaKID))
+
+	// Discovery lists both algorithms.
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal(iss.DiscoveryDocument(), &doc))
+	assert.ElementsMatch(t, []any{"RS256", "EdDSA"}, doc["id_token_signing_alg_values_supported"])
+
+	// Signing still uses the primary key only.
+	tokenStr, err := iss.IssueToken("myapp", "sb-1")
+	require.NoError(t, err)
+	parsed, _, err := jwt.NewParser().ParseUnverified(tokenStr, &WorkloadClaims{})
+	require.NoError(t, err)
+	assert.Equal(t, "RS256", parsed.Header["alg"])
+	assert.Equal(t, iss.primary.kid, parsed.Header["kid"])
+
+	// The token verifies under the primary JWK from JWKS.
+	_, err = jwt.Parse(tokenStr, func(tok *jwt.Token) (interface{}, error) {
+		return jwks.Key(tok.Header["kid"].(string))[0].Key, nil
+	})
+	require.NoError(t, err)
+}
+
+func TestNewIssuer_SkipsUnparseableDirectoryKey(t *testing.T) {
+	dir := t.TempDir()
+	keysDir := filepath.Join(dir, "server", "workload-identity.d")
+	require.NoError(t, os.MkdirAll(keysDir, 0700))
+	require.NoError(t, os.WriteFile(filepath.Join(keysDir, "garbage.key"), []byte("not a pem key"), 0600))
+	goodKID := writeKeyFile(t, filepath.Join(keysDir, "good.key"), "EdDSA")
+
+	iss, err := NewIssuer(IssuerConfig{
+		DataPath:  dir,
+		IssuerURL: "https://example.miren.cloud",
+	})
+	require.NoError(t, err)
+
+	// Primary + the one good directory key; the garbage file is skipped.
+	require.Len(t, iss.keys, 2)
+
+	data, err := iss.JWKSDocument()
+	require.NoError(t, err)
+	var jwks jose.JSONWebKeySet
+	require.NoError(t, json.Unmarshal(data, &jwks))
+	require.Len(t, jwks.Keys, 2)
+	require.NotEmpty(t, jwks.Key(iss.primary.kid))
+	require.NotEmpty(t, jwks.Key(goodKID))
+}
+
+func TestNewIssuer_MigrationRefusesToClobberPrev(t *testing.T) {
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "server", "workload-identity.key")
+	writeLegacyEdDSAKey(t, keyPath)
+	// A pre-existing .prev (e.g. from a prior manual rotation) must not be
+	// silently overwritten by the EdDSA→RS256 migration.
+	require.NoError(t, os.WriteFile(keyPath+".prev", []byte("existing prev key"), 0600))
+
+	_, err := NewIssuer(IssuerConfig{
+		DataPath:  dir,
+		IssuerURL: "https://example.miren.cloud",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "already exists")
+
+	// The legacy primary and the existing .prev are left untouched.
+	assert.FileExists(t, keyPath)
+	prevData, readErr := os.ReadFile(keyPath + ".prev")
+	require.NoError(t, readErr)
+	assert.Equal(t, "existing prev key", string(prevData))
+}
+
+func TestNewIssuer_FailsOnBrokenPrev(t *testing.T) {
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "server", "workload-identity.key")
+	require.NoError(t, os.MkdirAll(filepath.Dir(keyPath), 0700))
+	// A present-but-unparseable .prev must fail startup, not be silently dropped.
+	require.NoError(t, os.WriteFile(keyPath+".prev", []byte("not a pem key"), 0600))
+
+	_, err := NewIssuer(IssuerConfig{
+		DataPath:  dir,
+		IssuerURL: "https://example.miren.cloud",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "previous signing key")
 }

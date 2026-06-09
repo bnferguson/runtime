@@ -71,6 +71,7 @@ func TestTokenServer_DefaultToken(t *testing.T) {
 	require.NotEmpty(t, resp.Value)
 
 	token, err := jwt.ParseWithClaims(resp.Value, &workloadidentity.WorkloadClaims{}, func(tok *jwt.Token) (interface{}, error) {
+		assert.Equal(t, "RS256", tok.Method.Alg())
 		return c.WorkloadIssuer.(*workloadidentity.Issuer).PublicKey(), nil
 	})
 	require.NoError(t, err)
@@ -95,6 +96,7 @@ func TestTokenServer_CustomAudience(t *testing.T) {
 	require.NoError(t, err)
 
 	token, err := jwt.ParseWithClaims(resp.Value, &workloadidentity.WorkloadClaims{}, func(tok *jwt.Token) (interface{}, error) {
+		assert.Equal(t, "RS256", tok.Method.Alg())
 		return c.WorkloadIssuer.(*workloadidentity.Issuer).PublicKey(), nil
 	}, jwt.WithAudience("sts.amazonaws.com"))
 	require.NoError(t, err)
@@ -116,6 +118,7 @@ func TestTokenServer_CustomTTL(t *testing.T) {
 	require.NoError(t, err)
 
 	token, err := jwt.ParseWithClaims(resp.Value, &workloadidentity.WorkloadClaims{}, func(tok *jwt.Token) (interface{}, error) {
+		assert.Equal(t, "RS256", tok.Method.Alg())
 		return c.WorkloadIssuer.(*workloadidentity.Issuer).PublicKey(), nil
 	})
 	require.NoError(t, err)
