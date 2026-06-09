@@ -29,7 +29,6 @@ import (
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/idgen"
-	"miren.dev/runtime/pkg/labs"
 )
 
 var launcherTracer = otel.Tracer("miren.dev/runtime/deployment/launcher")
@@ -672,7 +671,7 @@ func (l *Launcher) buildSandboxSpec(
 	if portEnvValue > 0 {
 		appCont.Env = append(appCont.Env, fmt.Sprintf("PORT=%d", portEnvValue))
 	}
-	if labs.AdminAPI() && ver.AdminToken != "" {
+	if ver.AdminToken != "" {
 		appCont.Env = append(appCont.Env, "ADMIN_TOKEN="+ver.AdminToken)
 	}
 

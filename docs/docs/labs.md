@@ -26,16 +26,16 @@ Labs features are controlled via the `--labs` flag or `MIREN_LABS` environment v
 <CliCommand context="server">
 ```miren
 # Enable a single labs feature
-miren server --labs adminapi
+miren server --labs distributedrunners
 
 # Enable multiple features
-miren server --labs adminapi --labs distributedrunners
+miren server --labs distributedrunners --labs globalrouter
 
 # Via environment variable
-MIREN_LABS=adminapi miren server
+MIREN_LABS=distributedrunners miren server
 
 # Multiple features via environment variable (comma-separated)
-MIREN_LABS=adminapi,distributedrunners miren server
+MIREN_LABS=distributedrunners,globalrouter miren server
 ```
 </CliCommand>
 

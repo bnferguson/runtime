@@ -21,7 +21,7 @@ miren server docker install [flags]
 - `--host-network` — Use host networking (ignores port mappings)
 - `--http-port` — HTTP port mapping (default: `80`)
 - `--image, -i` — Docker image to use (default: `oci.miren.cloud/miren:latest`)
-- `--labs, -l` — Miren Labs features to enable (e.g. adminapi). Prefix with - to disable.
+- `--labs, -l` — Miren Labs features to enable (e.g. distributedrunners). Prefix with - to disable.
 - `--name, -n` — Container name
 - `--url, -u` — Cloud URL for registration (default: `https://miren.cloud`)
 - `--without-cloud` — Skip cloud registration setup
