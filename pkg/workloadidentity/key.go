@@ -53,7 +53,11 @@ func loadSigningKeyFromPEM(data string) (*signingKey, error) {
 	priv, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 	if err != nil {
 		// Fall back to a raw Ed25519 seed for parity with legacy keys written
-		// by cloudauth.LoadKeyPairFromPEM.
+		// by cloudauth.LoadKeyPairFromPEM. Those keys store the 32-byte raw
+		// Ed25519 seed directly (not DER-encoded), so a block this exact length
+		// only occurs for that legacy format — the length check is an
+		// unambiguous discriminant here and won't misfire on PKCS#8 keys (which
+		// fail to parse only on genuinely malformed input).
 		if len(block.Bytes) == ed25519.SeedSize {
 			priv = ed25519.NewKeyFromSeed(block.Bytes)
 		} else {
@@ -84,6 +88,11 @@ func newSigningKey(priv crypto.Signer) (*signingKey, error) {
 		method = jwt.SigningMethodRS256
 	case "EdDSA":
 		method = jwt.SigningMethodEdDSA
+	default:
+		// Unreachable today (algName only returns RS256/EdDSA/""), but guards
+		// against a future algName value leaving method nil, which would panic
+		// in token.SignedString.
+		return nil, fmt.Errorf("no JWT signing method for alg %q", alg)
 	}
 
 	return &signingKey{

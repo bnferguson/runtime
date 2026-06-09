@@ -534,3 +534,40 @@ func TestNewIssuer_SkipsUnparseableDirectoryKey(t *testing.T) {
 	require.NotEmpty(t, jwks.Key(iss.primary.kid))
 	require.NotEmpty(t, jwks.Key(goodKID))
 }
+
+func TestNewIssuer_MigrationRefusesToClobberPrev(t *testing.T) {
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "server", "workload-identity.key")
+	writeLegacyEdDSAKey(t, keyPath)
+	// A pre-existing .prev (e.g. from a prior manual rotation) must not be
+	// silently overwritten by the EdDSA→RS256 migration.
+	require.NoError(t, os.WriteFile(keyPath+".prev", []byte("existing prev key"), 0600))
+
+	_, err := NewIssuer(IssuerConfig{
+		DataPath:  dir,
+		IssuerURL: "https://example.miren.cloud",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "already exists")
+
+	// The legacy primary and the existing .prev are left untouched.
+	assert.FileExists(t, keyPath)
+	prevData, readErr := os.ReadFile(keyPath + ".prev")
+	require.NoError(t, readErr)
+	assert.Equal(t, "existing prev key", string(prevData))
+}
+
+func TestNewIssuer_FailsOnBrokenPrev(t *testing.T) {
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "server", "workload-identity.key")
+	require.NoError(t, os.MkdirAll(filepath.Dir(keyPath), 0700))
+	// A present-but-unparseable .prev must fail startup, not be silently dropped.
+	require.NoError(t, os.WriteFile(keyPath+".prev", []byte("not a pem key"), 0600))
+
+	_, err := NewIssuer(IssuerConfig{
+		DataPath:  dir,
+		IssuerURL: "https://example.miren.cloud",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "previous signing key")
+}

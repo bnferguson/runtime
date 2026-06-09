@@ -29,7 +29,9 @@ package workloadidentity
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/url"
 	"os"
@@ -106,12 +108,22 @@ func NewIssuer(cfg IssuerConfig) (*Issuer, error) {
 	// the operator moves workload-identity.key → workload-identity.key.prev
 	// and restarts. The EdDSA→RS256 migration in loadOrGenerateKey uses the same
 	// .prev slot. The old key is published (verify-only) in JWKS so tokens signed
-	// by it remain verifiable until they expire.
+	// by it remain verifiable until they expire. A present-but-broken .prev is a
+	// startup failure: silently dropping it would break verification overlap for
+	// already-issued tokens with no operator signal.
 	prevPath := keyPath + ".prev"
-	if prevData, err := os.ReadFile(prevPath); err == nil {
-		if prevKP, err := loadSigningKeyFromPEM(string(prevData)); err == nil {
-			iss.advertised = append(iss.advertised, jwkForPublic(prevKP.public, prevKP.kid))
+	prevData, err := os.ReadFile(prevPath)
+	switch {
+	case err == nil:
+		prevKP, err := loadSigningKeyFromPEM(string(prevData))
+		if err != nil {
+			return nil, fmt.Errorf("loading previous signing key %s: %w", prevPath, err)
 		}
+		iss.advertised = append(iss.advertised, jwkForPublic(prevKP.public, prevKP.kid))
+	case errors.Is(err, fs.ErrNotExist):
+		// No previous key; nothing to advertise.
+	default:
+		return nil, fmt.Errorf("reading previous signing key %s: %w", prevPath, err)
 	}
 
 	// Load additional live keys from the workload-identity.d directory (a sibling
@@ -132,7 +144,7 @@ func NewIssuer(cfg IssuerConfig) (*Issuer, error) {
 func loadLiveKeysDir(dir string) []*signingKey {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		if !os.IsNotExist(err) {
+		if !errors.Is(err, fs.ErrNotExist) {
 			slog.Warn("reading workload identity keys directory", "dir", dir, "error", err)
 		}
 		return nil
@@ -303,7 +315,18 @@ func loadOrGenerateKey(keyPath string) (*signingKey, error) {
 		// advertised in JWKS for verification. Demote it into the .prev slot
 		// (picked up by the rotation-overlap loading in NewIssuer) and generate a
 		// fresh RS256 key as the active signing key.
-		if err := os.Rename(keyPath, keyPath+".prev"); err != nil {
+		//
+		// Refuse to overwrite an existing .prev: os.Rename clobbers silently on
+		// most filesystems, which would discard a key still needed to verify
+		// in-flight tokens (e.g. from a prior manual rotation). Require the
+		// operator to clear it first.
+		prevPath := keyPath + ".prev"
+		if _, statErr := os.Stat(prevPath); statErr == nil {
+			return nil, fmt.Errorf("demoting legacy EdDSA key: %s already exists; remove it manually before migrating", prevPath)
+		} else if !errors.Is(statErr, fs.ErrNotExist) {
+			return nil, fmt.Errorf("checking for existing previous key %s: %w", prevPath, statErr)
+		}
+		if err := os.Rename(keyPath, prevPath); err != nil {
 			return nil, fmt.Errorf("demoting legacy EdDSA key: %w", err)
 		}
 		slog.Info("migrated workload identity signing key from EdDSA to RS256; old key retained in JWKS for verification",
@@ -311,7 +334,7 @@ func loadOrGenerateKey(keyPath string) (*signingKey, error) {
 		return generateAndWriteKey(keyPath)
 	}
 
-	if !os.IsNotExist(err) {
+	if !errors.Is(err, fs.ErrNotExist) {
 		return nil, fmt.Errorf("reading key file: %w", err)
 	}
 
