@@ -79,12 +79,14 @@ func authMiddleware(token string, next http.Handler) http.Handler {
 
 #### Network reachability and `X-Miren-Access`
 
-Miren's admin proxy talks to your app over its **internal** httpingress path, never via the public route. The proxy sets one header you can rely on:
+Miren's admin proxy talks to your app over its **internal** HTTP ingress path, never via the public route. Any public request to `/.well-known/miren/admin` is rejected with `404 Not Found` by the ingress before it can reach your app, so in practice your handler only ever sees requests carrying the `X-Miren-Access: internal` header.
+
+For reference, the two values the runtime uses are:
 
 - `X-Miren-Access: internal` — request originated from `miren admin` and was routed through Miren's internal admin path.
 - `X-Miren-Access: public` — request arrived through the public ingress. Miren overwrites any client-supplied value here before forwarding, so the header cannot be spoofed by external callers.
 
-For the most defensive setup, be sure to check `X-Miren-Access: internal` as well as the bearer token.
+The bearer token is the primary guard; checking for `X-Miren-Access: internal` is a defense-in-depth signal in case the well-known path is ever exposed through a custom route.
 
 ### Auditing
 
