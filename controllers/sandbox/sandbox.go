@@ -399,13 +399,39 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 				}
 			}
 
-			// Re-register with token refresher so tokens keep getting renewed
+			// Re-register with token refresher so tokens keep getting renewed. Only
+			// sandboxes that actually use workload identity have an identity-token file;
+			// skip the rest so the refresh loop doesn't spew write errors for sandboxes
+			// that predate workload identity.
 			if c.tokenRefresher != nil {
-				appName := c.resolveAppName(ctx, &sb)
 				tokenPath := c.sandboxPath(&sb, "identity-token")
-				c.tokenRefresher.register(sb.ID.String(), tokenPath, appName)
-				c.Log.Debug("re-registered sandbox for token refresh",
-					"sandbox_id", sb.ID, "app", appName)
+				if _, err := os.Stat(tokenPath); err == nil {
+					appName := c.resolveAppName(ctx, &sb)
+					c.tokenRefresher.register(sb.ID.String(), tokenPath, appName)
+					c.Log.Debug("re-registered sandbox for token refresh",
+						"sandbox_id", sb.ID, "app", appName)
+				}
+			}
+
+			// Re-register the token-request secret so the still-running sandbox keeps
+			// authenticating to the token server. The in-memory registry starts empty
+			// after a restart; without this the sandbox's token requests 403 forever
+			// until it is restarted (MIR-1235).
+			if c.tokenSecrets != nil {
+				secretPath := c.sandboxPath(&sb, tokenSecretFilename)
+				secret, ok, err := loadTokenSecret(secretPath)
+				switch {
+				case err != nil:
+					c.Log.Warn("failed to load persisted token secret during boot reconciliation",
+						"sandbox_id", sb.ID, "error", err)
+				case !ok:
+					c.Log.Debug("no persisted token secret for surviving sandbox; cannot re-register",
+						"sandbox_id", sb.ID)
+				default:
+					c.tokenSecrets.register(sb.ID.String(), secret)
+					c.Log.Debug("re-registered token secret for surviving sandbox",
+						"sandbox_id", sb.ID)
+				}
 			}
 		}
 	}
@@ -2137,8 +2163,16 @@ func (c *SandboxController) buildSubContainerSpec(
 			if secretErr != nil {
 				c.Log.Warn("failed to generate token request secret", "sandbox", sb.ID, "error", secretErr)
 			} else {
-				c.tokenSecrets.register(ep.Addresses[0].Addr().String(), sb.ID.String(), secret)
+				c.tokenSecrets.register(sb.ID.String(), secret)
 				envVars = append(envVars, fmt.Sprintf("MIREN_IDENTITY_TOKEN_SECRET=%s", secret))
+
+				// Persist the secret host-side so it can be re-registered after a
+				// controller/token-server restart. Without this the running sandbox's
+				// token requests 403 forever once the in-memory registry is lost.
+				secretPath := c.sandboxPath(sb, tokenSecretFilename)
+				if writeErr := writeTokenSecret(secretPath, secret); writeErr != nil {
+					c.Log.Warn("failed to persist token request secret", "sandbox", sb.ID, "error", writeErr)
+				}
 			}
 		}
 	}
@@ -2433,6 +2467,13 @@ func (c *SandboxController) Delete(ctx context.Context, id entity.Id, sb *comput
 	}
 	if c.tokenSecrets != nil {
 		c.tokenSecrets.unregister(id.String())
+		// Best-effort removal of the persisted secret. StopSandbox also wipes the whole
+		// sandbox dir, but removing the sensitive secret here ensures it doesn't linger
+		// if StopSandbox errors out before reaching its dir cleanup.
+		secretPath := filepath.Join(c.Tempdir, "containerd", id.PathSafe(), tokenSecretFilename)
+		if err := os.Remove(secretPath); err != nil && !os.IsNotExist(err) {
+			c.Log.Warn("failed to remove persisted token secret", "sandbox", id, "error", err)
+		}
 	}
 	if sb != nil {
 		c.UnconfigureFirewall(sb)

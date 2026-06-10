@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,6 +20,11 @@ import (
 
 const tokenServerPort = 7123
 
+// tokenSecretFilename is the host-side file (under the sandbox's data dir) where a
+// sandbox's token-request secret is persisted so it can be re-registered with the
+// in-memory tokenSecretRegistry after a controller/token-server restart.
+const tokenSecretFilename = "token-secret"
+
 type tokenResponse struct {
 	Value string `json:"value"`
 }
@@ -27,39 +33,37 @@ type tokenErrorResponse struct {
 	Error string `json:"error"`
 }
 
+// tokenSecretRegistry maps a sandbox's identity to its token-request secret. Keying by
+// sandbox identity (rather than raw source IP) means a recycled pod IP can never match a
+// stale secret left behind by a previous sandbox: the caller's identity is resolved from
+// the IP via the authoritative netdb lookup, and the secret is checked against that.
 type tokenSecretRegistry struct {
 	mu        sync.RWMutex
-	byAddr    map[string]string // IP → secret
-	bySandbox map[string]string // sandboxID → IP (for cleanup)
+	bySandbox map[string]string // sandboxID → secret
 }
 
 func newTokenSecretRegistry() *tokenSecretRegistry {
 	return &tokenSecretRegistry{
-		byAddr:    make(map[string]string),
 		bySandbox: make(map[string]string),
 	}
 }
 
-func (r *tokenSecretRegistry) register(ip, sandboxID, secret string) {
+func (r *tokenSecretRegistry) register(sandboxID, secret string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.byAddr[ip] = secret
-	r.bySandbox[sandboxID] = ip
+	r.bySandbox[sandboxID] = secret
 }
 
 func (r *tokenSecretRegistry) unregister(sandboxID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if ip, ok := r.bySandbox[sandboxID]; ok {
-		delete(r.byAddr, ip)
-		delete(r.bySandbox, sandboxID)
-	}
+	delete(r.bySandbox, sandboxID)
 }
 
-func (r *tokenSecretRegistry) verify(ip, secret string) bool {
+func (r *tokenSecretRegistry) verify(sandboxID, secret string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	expected, ok := r.byAddr[ip]
+	expected, ok := r.bySandbox[sandboxID]
 	if !ok {
 		return false
 	}
@@ -72,6 +76,28 @@ func generateTokenSecret() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// writeTokenSecret persists a sandbox's token-request secret host-side at 0600. It is
+// never bind-mounted into the container (the container receives the secret via the
+// MIREN_IDENTITY_TOKEN_SECRET env var); persisting it lets the controller re-register
+// the same secret after a restart so the still-running sandbox keeps authenticating.
+func writeTokenSecret(path, secret string) error {
+	return atomicWriteFile(path, []byte(secret), 0600)
+}
+
+// loadTokenSecret reads a persisted token-request secret. It returns ok=false (with a nil
+// error) when no secret file exists — e.g. a sandbox started before secret persistence was
+// added — so callers can skip re-registration without treating absence as a failure.
+func loadTokenSecret(path string) (secret string, ok bool, err error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return string(data), true, nil
 }
 
 func (c *SandboxController) startTokenServer(ctx context.Context) {
@@ -125,14 +151,14 @@ func (c *SandboxController) handleTokenRequest(w http.ResponseWriter, r *http.Re
 	}
 	bearerToken := strings.TrimPrefix(authHeader, "Bearer ")
 
-	if c.tokenSecrets == nil || !c.tokenSecrets.verify(remoteHost, bearerToken) {
-		writeTokenError(w, http.StatusForbidden, "invalid token")
-		return
-	}
-
 	sandboxID, appName, ok := c.NetServ.LookupSandboxByIP(remoteHost)
 	if !ok {
 		writeTokenError(w, http.StatusForbidden, "unknown source address")
+		return
+	}
+
+	if c.tokenSecrets == nil || !c.tokenSecrets.verify(sandboxID, bearerToken) {
+		writeTokenError(w, http.StatusForbidden, "invalid token")
 		return
 	}
 

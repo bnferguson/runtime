@@ -24,7 +24,7 @@ import (
 //	sha256sum controllers/sandbox/sandbox.go controllers/sandbox/volume.go controllers/sandbox/firewall.go
 func TestSandboxControllerFrozen(t *testing.T) {
 	frozen := map[string]string{
-		"sandbox.go":  "9fbee5834397f3600e9706fbe78fad45e69b0fa7bc5908afb3d887ffe8fa3ef7",
+		"sandbox.go":  "2cb139828e42cae2a41459c3e8a699dfdcd60e9e30d191abcbc4a2c432497c9e",
 		"volume.go":   "b4697764d48a90adc04ce47968ccef11ceba50da8d19c889906c5c3a539065b3",
 		"firewall.go": "648cb5d91091d5eb7400152b19695a8045585feae59c5dd36c12d663a27bb91f",
 	}

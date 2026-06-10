@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -39,7 +41,7 @@ func newTestTokenController(t *testing.T) *SandboxController {
 	})
 
 	secrets := newTokenSecretRegistry()
-	secrets.register(testSandboxIP, testSandboxID, testSecret)
+	secrets.register(testSandboxID, testSecret)
 
 	return &SandboxController{
 		Log:            log,
@@ -182,4 +184,73 @@ func TestTokenServer_InvalidTTL(t *testing.T) {
 	c.handleTokenRequest(w, authedRequest("GET", "/v1/token?ttl=notanumber"))
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// TestTokenSecretRegistry_KeyedBySandboxIdentity pins the property behind keying the
+// registry by sandbox identity rather than raw IP: a secret is bound to one sandbox and
+// cannot authenticate a different sandbox (e.g. one that later reused a recycled pod IP).
+func TestTokenSecretRegistry_KeyedBySandboxIdentity(t *testing.T) {
+	r := newTokenSecretRegistry()
+	r.register("sandbox/old", "secret-old")
+
+	assert.True(t, r.verify("sandbox/old", "secret-old"))
+	assert.False(t, r.verify("sandbox/new", "secret-old"))
+
+	r.unregister("sandbox/old")
+	assert.False(t, r.verify("sandbox/old", "secret-old"))
+}
+
+func TestWriteLoadTokenSecret_RoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), tokenSecretFilename)
+
+	secret, err := generateTokenSecret()
+	require.NoError(t, err)
+
+	require.NoError(t, writeTokenSecret(path, secret))
+
+	got, ok, err := loadTokenSecret(path)
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, secret, got)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
+}
+
+func TestLoadTokenSecret_Missing(t *testing.T) {
+	got, ok, err := loadTokenSecret(filepath.Join(t.TempDir(), tokenSecretFilename))
+
+	require.NoError(t, err)
+	assert.False(t, ok)
+	assert.Empty(t, got)
+}
+
+// TestTokenServer_RecoversSecretAfterRestart reproduces MIR-1235: a still-running sandbox
+// 403s after the controller/token-server restarts and the in-memory registry is lost, then
+// recovers once the persisted secret is reloaded and re-registered for the sandbox —
+// without restarting the sandbox.
+func TestTokenServer_RecoversSecretAfterRestart(t *testing.T) {
+	c := newTestTokenController(t)
+
+	// Simulate a controller/token-server restart: the registry is recreated empty.
+	c.tokenSecrets = newTokenSecretRegistry()
+
+	w := httptest.NewRecorder()
+	c.handleTokenRequest(w, authedRequest("GET", "/v1/token"))
+	require.Equal(t, http.StatusForbidden, w.Code)
+
+	// On start the secret was persisted host-side; boot reconcile reloads it and
+	// re-registers it under the sandbox identity.
+	path := filepath.Join(t.TempDir(), tokenSecretFilename)
+	require.NoError(t, writeTokenSecret(path, testSecret))
+
+	secret, ok, err := loadTokenSecret(path)
+	require.NoError(t, err)
+	require.True(t, ok)
+	c.tokenSecrets.register(testSandboxID, secret)
+
+	w = httptest.NewRecorder()
+	c.handleTokenRequest(w, authedRequest("GET", "/v1/token"))
+	assert.Equal(t, http.StatusOK, w.Code)
 }
