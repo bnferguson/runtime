@@ -13,6 +13,27 @@ All notable changes to Miren Runtime will be documented in this file.
 
 ---
 
+## v0.10.0
+*2026-06-09*
+
+**Features**
+- **Workload identity tokens for sandboxes** - Every sandbox now receives a signed OIDC workload identity token (GitHub Actions-style) at `/var/run/miren/identity-token`, with `MIREN_IDENTITY_TOKEN_PATH`, `MIREN_OIDC_ISSUER_URL`, and `MIREN_IDENTITY_TOKEN_URL` injected into the environment. Your cluster publishes standard `/.well-known/openid-configuration` and JWKS endpoints, so external systems like AWS STS can verify tokens and federate access — no long-lived cloud credentials baked into your app. Tokens default to RS256 (universally supported by federation verifiers), auto-refresh on a background loop, and an on-demand endpoint lets a sandbox request tokens with a custom audience or TTL. Works on both embedded and distributed runners. ([#834](https://github.com/mirendev/runtime/pull/834), [#846](https://github.com/mirendev/runtime/pull/846), [#852](https://github.com/mirendev/runtime/pull/852))
+- **Admin API is now GA** - The admin API graduates out of Miren Labs and is always on — no more `--labs adminapi` flag needed. Expose and call admin methods on your app over JSON-RPC; see the [admin interface docs](https://miren.md/admin-interface) for the security model, auditing, and per-language examples. ([#832](https://github.com/mirendev/runtime/pull/832))
+- **Automatic TLS for cloud-provisioned cluster hostnames** - When a cluster has a cloud-provisioned `*.miren.systems` hostname, Miren now provisions a real ACME certificate for it on startup instead of serving the self-signed fallback. The hostname is pinned in the allowed-hosts set so route deletions can't strip its cert. ([#836](https://github.com/mirendev/runtime/pull/836))
+
+**Improvements**
+- **Cleaner `miren logs` output** - Structured JSON log lines from your app are now parsed at ingress: the message becomes the log body, `time`/`level` noise is stripped, and your own fields are promoted to first-class attributes. Internal bookkeeping is namespaced under `miren.*` and hidden from text output, and log brackets show the real short ID (e.g. `[CBZ]`) instead of a truncated entity key. Existing `--service` / `sandbox` filters keep working against both old and new entries. ([#838](https://github.com/mirendev/runtime/pull/838))
+- **`logs -f` collapses repeated lines** - When following logs, consecutive lines that differ only by their timestamp (e.g. a once-a-second health ping) now collapse into a single live-updated `[ Repeated 14x over 14s ]` summary instead of burying new output. Only engages for interactive text follow — JSON, piped, and non-follow output stay verbatim, so `grep` and machine consumers are unaffected. ([#845](https://github.com/mirendev/runtime/pull/845))
+
+**Bug Fixes**
+- **Fixed TLS failures reaching recreated distributed runners** - `miren app run` and `miren sandbox exec` against a distributed runner could fail with `certificate is valid for ... not <ip>` after the runner VM was recreated with a new internal IP but a persisted certificate. Runners now detect a stale certificate on start and re-issue it from the coordinator, self-healing on the next restart. ([#848](https://github.com/mirendev/runtime/pull/848))
+
+**Documentation**
+- Expanded the [admin interface](https://miren.md/admin-interface) page with the full security model, auditing behavior, JSON-RPC shape, and CLI usage. ([#831](https://github.com/mirendev/runtime/pull/831))
+- Expanded the [terminology](https://miren.md/terminology) page from 12 to 35 canonical definitions. ([#850](https://github.com/mirendev/runtime/pull/850))
+
+---
+
 ## v0.9.1
 *2026-06-04*
 
