@@ -218,6 +218,16 @@ func TestWriteLoadTokenSecret_RoundTrip(t *testing.T) {
 	assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
 }
 
+func TestLoadTokenSecret_TrimsTrailingNewline(t *testing.T) {
+	path := filepath.Join(t.TempDir(), tokenSecretFilename)
+	require.NoError(t, os.WriteFile(path, []byte("deadbeef\n"), 0600))
+
+	got, ok, err := loadTokenSecret(path)
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, "deadbeef", got)
+}
+
 func TestLoadTokenSecret_Missing(t *testing.T) {
 	got, ok, err := loadTokenSecret(filepath.Join(t.TempDir(), tokenSecretFilename))
 
@@ -241,7 +251,9 @@ func TestTokenServer_RecoversSecretAfterRestart(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, w.Code)
 
 	// On start the secret was persisted host-side; boot reconcile reloads it and
-	// re-registers it under the sandbox identity.
+	// re-registers it under the sandbox identity. We use a plain t.TempDir() rather
+	// than c.sandboxPath(&sb, tokenSecretFilename) because this test exercises the
+	// load+register handoff in isolation; sandboxPath construction is covered elsewhere.
 	path := filepath.Join(t.TempDir(), tokenSecretFilename)
 	require.NoError(t, writeTokenSecret(path, testSecret))
 

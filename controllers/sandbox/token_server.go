@@ -97,7 +97,9 @@ func loadTokenSecret(path string) (secret string, ok bool, err error) {
 		}
 		return "", false, err
 	}
-	return string(data), true, nil
+	// Tolerate a trailing newline so a secret written by a text editor or
+	// fmt.Fprintln still matches the in-process env value.
+	return strings.TrimRight(string(data), "\r\n"), true, nil
 }
 
 func (c *SandboxController) startTokenServer(ctx context.Context) {
