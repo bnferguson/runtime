@@ -51,8 +51,8 @@ Prefer these environment variables over hardcoding paths or URLs — the token-s
 The simplest way to use workload identity is to read the file:
 
 ```bash
-cat "$MIREN_IDENTITY_TOKEN_PATH"
-# eyJhbGciOiJSUzI1NiIsImtpZCI6...
+$ cat "$MIREN_IDENTITY_TOKEN_PATH"
+eyJhbGciOiJSUzI1NiIsImtpZCI6...
 ```
 
 - It's a standard signed JWT, mounted **read-only**.
@@ -65,7 +65,7 @@ Because the file is refreshed in place, **read it fresh each time you need it** 
 For tokens with a specific audience or a custom lifetime, call the on-demand token server. It's a small HTTP endpoint reachable from inside the sandbox at `MIREN_IDENTITY_TOKEN_URL`.
 
 ```bash
-curl -H "Authorization: Bearer $MIREN_IDENTITY_TOKEN_SECRET" \
+$ curl -H "Authorization: Bearer $MIREN_IDENTITY_TOKEN_SECRET" \
   "$MIREN_IDENTITY_TOKEN_URL?audience=sts.amazonaws.com&ttl=900"
 ```
 
@@ -80,7 +80,7 @@ Response:
 - Method: `GET` only (other methods return `405`).
 - Auth: `Authorization: Bearer $MIREN_IDENTITY_TOKEN_SECRET`. The secret is unique per sandbox.
 - Query parameters (both optional):
-  - `audience` — the intended recipient(s) of the token. Repeat the parameter for multiple audiences. Defaults to the cluster issuer if omitted.
+  - `audience` — the intended recipient(s) of the token. Repeat the parameter for multiple audiences. Defaults to `miren` if omitted.
   - `ttl` — token lifetime in seconds. Default `3600` (1 hour), minimum `60`, maximum `86400` (24 hours).
 
 **Errors**
@@ -101,7 +101,7 @@ Each token is a JWT carrying the standard registered claims plus a few Miren-spe
 | --- | --- |
 | `iss` | Issuer — your cluster's OIDC URL (same as `MIREN_OIDC_ISSUER_URL`) |
 | `sub` | Subject — a structured identity string (see below) |
-| `aud` | Audience — who the token is for (defaults to the issuer, or what you requested) |
+| `aud` | Audience — who the token is for (defaults to `miren`, or what you requested) |
 | `exp`, `iat`, `nbf` | Expiry, issued-at, and not-before timestamps |
 | `jti` | Unique token ID |
 | `organization_id` | Your organization (for cloud-registered clusters) |
