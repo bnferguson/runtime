@@ -49,6 +49,7 @@ const sidebars: SidebarsConfig = {
         'firewall',
         'waf',
         'route-protect',
+        'workload-identity',
       ],
     },
     {
