@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/netip"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -267,6 +268,91 @@ func TestNetDB(t *testing.T) {
 		r.NoError(err)
 
 		r.Equal("rt1", iface3)
+	})
+
+	t.Run("ReservedAddrs returns only currently reserved addresses", func(t *testing.T) {
+		r := require.New(t)
+
+		n, err := New(filepath.Join(t.TempDir(), "net.db"))
+		r.NoError(err)
+
+		subnet, err := n.Subnet("172.16.8.0/24")
+		r.NoError(err)
+
+		ip1, err := subnet.Reserve()
+		r.NoError(err)
+		ip2, err := subnet.Reserve()
+		r.NoError(err)
+		ip3, err := subnet.Reserve()
+		r.NoError(err)
+
+		// Release the middle one; it should drop out of the reserved set.
+		r.NoError(subnet.Release(ip2))
+
+		reserved, err := subnet.ReservedAddrs()
+		r.NoError(err)
+
+		got := make(map[string]bool)
+		for _, a := range reserved {
+			got[a.String()] = true
+		}
+		r.True(got[ip1.Addr().String()])
+		r.False(got[ip2.Addr().String()], "released address must not be reported as reserved")
+		r.True(got[ip3.Addr().String()])
+		r.Len(reserved, 2)
+	})
+
+	t.Run("concurrent Reserve never hands out a duplicate address", func(t *testing.T) {
+		r := require.New(t)
+
+		n, err := New(filepath.Join(t.TempDir(), "net.db"))
+		r.NoError(err)
+
+		// Each goroutine fetches its own Subnet handle from the same NetDB —
+		// Subnet returns a fresh struct (and mutex) per call, so this exercises
+		// the SQLite-level uniqueness guarantee, not just the per-handle mutex.
+		const workers = 32
+
+		var (
+			mu   sync.Mutex
+			seen = make(map[string]bool)
+			dup  string
+			wg   sync.WaitGroup
+		)
+
+		wg.Add(workers)
+		for i := 0; i < workers; i++ {
+			go func() {
+				defer wg.Done()
+
+				subnet, err := n.Subnet("172.16.8.0/24")
+				if err != nil {
+					return
+				}
+				// Retry past transient SQLite busy errors; the property under
+				// test is uniqueness of successful reservations, not liveness.
+				var ip netip.Prefix
+				for attempt := 0; attempt < 100; attempt++ {
+					ip, err = subnet.Reserve()
+					if err == nil {
+						break
+					}
+				}
+				if err != nil {
+					return
+				}
+
+				mu.Lock()
+				if seen[ip.Addr().String()] {
+					dup = ip.Addr().String()
+				}
+				seen[ip.Addr().String()] = true
+				mu.Unlock()
+			}()
+		}
+		wg.Wait()
+
+		r.Empty(dup, "the same address was reserved by two workers")
 	})
 
 	t.Run("persists and retrieves leased subnet", func(t *testing.T) {

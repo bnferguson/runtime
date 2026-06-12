@@ -131,6 +131,7 @@ type SandboxController struct {
 
 	watchdog      *ContainerWatchdog
 	imageWatchdog *ImageWatchdog
+	ipReconciler  *IPReconciler
 
 	// writeTracker tracks entity write revisions to skip self-generated watch events
 	writeTracker controller.WriteTracker
@@ -555,6 +556,21 @@ func (c *SandboxController) Init(ctx context.Context) error {
 	}
 	c.imageWatchdog.Start(c.topCtx)
 
+	// Initialize and start the IP reconciler, which keeps netdb lease bookkeeping
+	// in agreement with the addresses actually live on the bridge (MIR-1238). Its
+	// initial run also re-reserves the IPs of containers that survived a restart.
+	if c.Subnet != nil {
+		c.ipReconciler = &IPReconciler{
+			Log:    c.Log.With("module", "ip-reconciler"),
+			Subnet: c.Subnet,
+			LiveIPs: func(ctx context.Context) (map[netip.Addr]bool, error) {
+				return c.liveBridgeIPs(ctx)
+			},
+			CheckInterval: 5 * time.Minute,
+		}
+		c.ipReconciler.Start(c.topCtx)
+	}
+
 	// Start workload identity token refresh loop and token request server
 	// (tokenRefresher and tokenSecrets were created earlier, before reconcile)
 	if c.WorkloadIssuer != nil {
@@ -590,6 +606,10 @@ func (c *SandboxController) Close() error {
 
 	if c.imageWatchdog != nil {
 		c.imageWatchdog.Stop()
+	}
+
+	if c.ipReconciler != nil {
+		c.ipReconciler.Stop()
 	}
 
 	c.running.Wait()
@@ -1350,7 +1370,9 @@ func (c *SandboxController) AllocateNetwork(
 		}
 
 	} else {
-		ep, err = network.AllocateOnBridge(c.Bridge, c.Subnet)
+		ep, err = network.AllocateOnBridge(c.Log, c.Bridge, c.Subnet, func() (map[netip.Addr]bool, error) {
+			return c.liveBridgeIPs(ctx)
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -1364,6 +1386,43 @@ func (c *SandboxController) AllocateNetwork(
 	c.Log.Debug("allocated network endpoint", "bridge", c.Bridge, "addresses", ep.Addresses)
 
 	return ep, nil
+}
+
+// liveBridgeIPs returns the set of bridge IP addresses currently assigned to
+// running sandbox containers, read from their containerd labels. It is the
+// authoritative in-use set used by AllocateOnBridge to avoid handing out an
+// address that netdb's lease bookkeeping has lost track of but a live sandbox is
+// still using (MIR-1238). The labels are the same source the watchdog trusts and
+// require no netns entry.
+func (c *SandboxController) liveBridgeIPs(ctx context.Context) (map[netip.Addr]bool, error) {
+	ctx = namespaces.WithNamespace(ctx, c.Namespace)
+
+	containerList, err := c.CC.Containers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list containers: %w", err)
+	}
+
+	live := make(map[netip.Addr]bool)
+	for _, cont := range containerList {
+		labels, err := cont.Labels(ctx)
+		if err != nil {
+			c.Log.Warn("failed to read container labels while enumerating live IPs", "id", cont.ID(), "error", err)
+			continue
+		}
+		for label, value := range labels {
+			if !strings.HasPrefix(label, "runtime.computer/ip") {
+				continue
+			}
+			addr, err := netip.ParseAddr(value)
+			if err != nil {
+				c.Log.Warn("failed to parse IP from container label", "id", cont.ID(), "label", label, "value", value, "error", err)
+				continue
+			}
+			live[addr] = true
+		}
+	}
+
+	return live, nil
 }
 
 func (c *SandboxController) setupHosts(sb *compute.Sandbox, name string, ep *network.EndpointConfig) error {

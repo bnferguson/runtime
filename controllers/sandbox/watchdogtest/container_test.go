@@ -312,6 +312,51 @@ func TestContainerWatchdog(t *testing.T) {
 		r.NoError(err, "recently DEAD sandbox container should NOT be removed due to grace period")
 	})
 
+	t.Run("keeps a running sandbox missing from the node index", func(t *testing.T) {
+		r := require.New(t)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		ctx = namespaces.WithNamespace(ctx, ns)
+
+		// A RUNNING sandbox WITHOUT a schedule key for this node, so the
+		// node-scoped list the watchdog builds its valid set from will not
+		// return it — simulating a lagging or incomplete index. The direct
+		// per-ID entity re-fetch must still recognize it as live and keep its
+		// container, rather than orphaning it and releasing its IP (MIR-1238).
+		sbID := entity.Id(idgen.GenNS("sb"))
+		sb := &compute.Sandbox{ID: sbID, Status: compute.RUNNING}
+
+		var rpcE entityserver_v1alpha.Entity
+		rpcE.SetId(sbID.String())
+		rpcE.SetAttrs(entity.New(entity.DBId, sbID, sb.Encode).Attrs())
+		_, err := eac.Put(ctx, &rpcE)
+		r.NoError(err)
+
+		containerID := sandbox.PauseContainerID(sbID)
+		container, err := createTestContainer(ctx, cc, containerID, map[string]string{
+			sandbox.SandboxEntityLabel: sbID.String(),
+		})
+		r.NoError(err)
+		defer testutils.ClearContainer(ctx, container)
+
+		watchdog := &sandbox.ContainerWatchdog{
+			Log:       slog.Default(),
+			CC:        cc,
+			EAC:       eac,
+			Namespace: ns,
+			NodeId:    testNodeId,
+		}
+
+		result, err := watchdog.CleanupOrphanedContainers(ctx)
+		r.NoError(err)
+		r.Empty(result.DeletedContainers, "a running sandbox missing from the node index must not be removed")
+
+		_, err = cc.LoadContainer(ctx, containerID)
+		r.NoError(err, "container for an index-missed running sandbox must be kept")
+	})
+
 	t.Run("starts and stops gracefully", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()

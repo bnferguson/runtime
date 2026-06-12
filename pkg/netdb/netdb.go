@@ -416,6 +416,37 @@ func (s *Subnet) ReserveSpecificAddr(addr netip.Addr) error {
 	return err
 }
 
+// ReservedAddrs returns all currently reserved addresses within this subnet.
+func (s *Subnet) ReservedAddrs() ([]netip.Addr, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	rows, err := s.db.Query("SELECT ip FROM ips WHERE reserved = 1 AND subnet = ?", s.net.String())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var addrs []netip.Addr
+	for rows.Next() {
+		var ipStr string
+		if err := rows.Scan(&ipStr); err != nil {
+			return nil, err
+		}
+		addr, err := netip.ParseAddr(ipStr)
+		if err != nil {
+			// Skip rows that can't be parsed rather than failing the whole scan.
+			continue
+		}
+		addrs = append(addrs, addr)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return addrs, nil
+}
+
 func (s *Subnet) Release(prefix netip.Prefix) error {
 	return s.ReleaseAddr(prefix.Addr())
 }

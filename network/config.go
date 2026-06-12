@@ -2,6 +2,7 @@ package network
 
 import (
 	"fmt"
+	"log/slog"
 	"net/netip"
 
 	"github.com/vishvananda/netlink"
@@ -81,7 +82,45 @@ type BridgeConfig struct {
 	PromiscMode bool
 }
 
-func AllocateOnBridge(name string, subnet *netdb.Subnet) (*EndpointConfig, error) {
+// InUseFunc returns the set of IP addresses currently live on the bridge,
+// determined independently of the netdb bookkeeping (e.g. from running
+// containers). It lets AllocateOnBridge detect and skip an address that netdb
+// believes is free but that a running sandbox is actually using — a bookkeeping
+// divergence that would otherwise produce a duplicate assignment (MIR-1238).
+type InUseFunc func() (map[netip.Addr]bool, error)
+
+// allocBridgeMaxAttempts bounds how many live-but-unreserved addresses
+// AllocateOnBridge will skip past before giving up.
+const allocBridgeMaxAttempts = 32
+
+// reserveConflictFree reserves an address from the subnet that is not already
+// live on the bridge. netdb believes every address it hands out is free, but its
+// bookkeeping can diverge from reality (MIR-1238); when Reserve returns an
+// address that live shows in use, that reservation is simply retained (Reserve
+// already marked it reserved, so it is quarantined and won't be handed out
+// again) and the next address is tried.
+func reserveConflictFree(log *slog.Logger, bridge string, subnet *netdb.Subnet, live map[netip.Addr]bool) (netip.Prefix, error) {
+	for attempt := 0; ; attempt++ {
+		ep, err := subnet.Reserve()
+		if err != nil {
+			return netip.Prefix{}, err
+		}
+
+		if live == nil || !live[ep.Addr()] {
+			return ep, nil
+		}
+
+		log.Error("netdb allocated an address already live on the bridge; quarantining and retrying",
+			"bridge", bridge, "addr", ep.Addr())
+
+		if attempt+1 >= allocBridgeMaxAttempts {
+			return netip.Prefix{}, fmt.Errorf("no conflict-free address available on bridge %s after %d attempts",
+				bridge, allocBridgeMaxAttempts)
+		}
+	}
+}
+
+func AllocateOnBridge(log *slog.Logger, name string, subnet *netdb.Subnet, inUse InUseFunc) (*EndpointConfig, error) {
 	if name == "" {
 		return nil, fmt.Errorf("bridge name must be provided")
 	}
@@ -93,7 +132,19 @@ func AllocateOnBridge(name string, subnet *netdb.Subnet) (*EndpointConfig, error
 
 	bridge := subnet.Router()
 
-	ep, err := subnet.Reserve()
+	var live map[netip.Addr]bool
+	if inUse != nil {
+		live, err = inUse()
+		if err != nil {
+			// A failure to enumerate live addresses must not block allocation;
+			// fall back to netdb-only behavior (the prior contract).
+			log.Warn("failed to enumerate in-use bridge addresses; allocating without conflict check",
+				"bridge", name, "error", err)
+			live = nil
+		}
+	}
+
+	ep, err := reserveConflictFree(log, name, subnet, live)
 	if err != nil {
 		return nil, err
 	}
