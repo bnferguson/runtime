@@ -107,7 +107,7 @@ When the version value contains `:`, Miren uses it as the complete image referen
 
 When an addon is provisioned, Miren injects connection credentials as environment variables into your app. These are available to all services in the app. Variables marked sensitive are redacted in `miren env list` output.
 
-### PostgreSQL (`miren-postgresql`)
+### PostgreSQL
 
 | Variable | Description | Example |
 |----------|-------------|---------|
@@ -120,7 +120,7 @@ When an addon is provisioned, Miren injects connection credentials as environmen
 
 Most frameworks and ORMs connect automatically using `DATABASE_URL`.
 
-### MySQL (`miren-mysql`)
+### MySQL
 
 | Variable | Description | Example |
 |----------|-------------|---------|
@@ -131,7 +131,7 @@ Most frameworks and ORMs connect automatically using `DATABASE_URL`.
 | `MYSQL_PASSWORD` | Database password (sensitive) | — |
 | `MYSQL_DATABASE` | Database name | `myapp` |
 
-### Valkey (`miren-valkey`)
+### Valkey
 
 Valkey is wire-compatible with Redis, so Miren injects both `VALKEY_*` and `REDIS_*` variables pointing at the same server. Use whichever your client library expects.
 
@@ -142,7 +142,7 @@ Valkey is wire-compatible with Redis, so Miren injects both `VALKEY_*` and `REDI
 | `VALKEY_PORT` / `REDIS_PORT` | Server port | `6379` |
 | `VALKEY_PASSWORD` / `REDIS_PASSWORD` | Password (sensitive) | — |
 
-### RabbitMQ (`miren-rabbitmq`)
+### RabbitMQ
 
 | Variable | Description | Example |
 |----------|-------------|---------|
@@ -153,7 +153,7 @@ Valkey is wire-compatible with Redis, so Miren injects both `VALKEY_*` and `REDI
 | `RABBITMQ_PASSWORD` | Broker password (sensitive) | — |
 | `RABBITMQ_VHOST` | Virtual host | `/` |
 
-### Memcached (`miren-memcache`)
+### Memcached
 
 | Variable | Description | Example |
 |----------|-------------|---------|
