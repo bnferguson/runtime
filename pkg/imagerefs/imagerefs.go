@@ -42,8 +42,15 @@ func GetPythonImage(version string) string {
 	return "oci.miren.cloud/python:" + version + "-slim"
 }
 
-// GetRubyImage returns a Ruby image reference with the specified version
+// GetRubyImage returns a Ruby image reference with the specified version.
+// The version is truncated to major.minor (e.g., "3.3.7" becomes "3.3") since
+// the registry only mirrors major.minor Ruby tags.
 func GetRubyImage(version string) string {
+	// Truncate to major.minor only
+	parts := strings.SplitN(version, ".", 3)
+	if len(parts) >= 2 {
+		version = parts[0] + "." + parts[1]
+	}
 	return "oci.miren.cloud/ruby:" + version + "-slim"
 }
 

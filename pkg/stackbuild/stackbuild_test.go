@@ -692,6 +692,77 @@ func TestGoVersionDetection(t *testing.T) {
 	}
 }
 
+func TestRubyVersionDetection(t *testing.T) {
+	// Test parseRubyVersion across its sources: .ruby-version takes precedence
+	// over the Gemfile's inline ruby directive.
+	testCases := []struct {
+		name            string
+		rubyVersion     string // contents of .ruby-version, "" to skip the file
+		gemfileContent  string
+		expectedVersion string
+	}{
+		{
+			name:            "ruby-version file",
+			rubyVersion:     "3.3.0\n",
+			gemfileContent:  "source 'https://rubygems.org'\n",
+			expectedVersion: "3.3.0",
+		},
+		{
+			name:            "ruby-version file with ruby- prefix",
+			rubyVersion:     "ruby-3.4.1\n",
+			gemfileContent:  "source 'https://rubygems.org'\n",
+			expectedVersion: "3.4.1",
+		},
+		{
+			name:            "gemfile inline directive",
+			gemfileContent:  "source 'https://rubygems.org'\nruby \"3.3\"\n",
+			expectedVersion: "3.3",
+		},
+		{
+			name:            "gemfile file directive falls back to ruby-version",
+			rubyVersion:     "3.4.2\n",
+			gemfileContent:  "source 'https://rubygems.org'\nruby file: \".ruby-version\"\n",
+			expectedVersion: "3.4.2",
+		},
+		{
+			name:            "ruby-version wins over gemfile directive",
+			rubyVersion:     "3.4.0\n",
+			gemfileContent:  "source 'https://rubygems.org'\nruby \"3.3\"\n",
+			expectedVersion: "3.4.0",
+		},
+		{
+			name:            "blank ruby-version falls back to gemfile",
+			rubyVersion:     "   \n",
+			gemfileContent:  "source 'https://rubygems.org'\nruby \"3.3\"\n",
+			expectedVersion: "3.3",
+		},
+		{
+			name:            "no version source",
+			gemfileContent:  "source 'https://rubygems.org'\n",
+			expectedVersion: "",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "Gemfile"), []byte(tc.gemfileContent), 0644))
+			if tc.rubyVersion != "" {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, ".ruby-version"), []byte(tc.rubyVersion), 0644))
+			}
+
+			stack := &RubyStack{
+				MetaStack: MetaStack{
+					dir: dir,
+				},
+			}
+
+			version := stack.parseRubyVersion()
+			require.Equal(t, tc.expectedVersion, version)
+		})
+	}
+}
+
 func TestRust(t *testing.T) {
 	if !checkDocker() {
 		t.Skip("Docker not available")

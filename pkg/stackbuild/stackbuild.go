@@ -308,8 +308,19 @@ func (h *highlevelBuilder) bundleInstall(cur, mnt llb.State) llb.State {
 	// in rather than using h.Access to mount them in read only.
 
 	origin := time.Date(2021, time.January, 1, 0, 0, 0, 0, time.UTC)
+	// Stage Gemfile* and .ruby-version (matched via wildcard so a missing file
+	// is not an error). A Gemfile that does `ruby file: ".ruby-version"` reads
+	// the file during bundle install, before copyApp brings in the full context.
 	cur = cur.File(
 		llb.Copy(mnt, "Gemfile*", "/app/", &llb.CopyInfo{
+			CopyDirContentsOnly: true,
+			CreateDestPath:      true,
+			FollowSymlinks:      true,
+			AllowWildcard:       true,
+			AllowEmptyWildcard:  true,
+			CreatedTime:         &origin,
+		})).File(
+		llb.Copy(mnt, ".ruby-version*", "/app/", &llb.CopyInfo{
 			CopyDirContentsOnly: true,
 			CreateDestPath:      true,
 			FollowSymlinks:      true,

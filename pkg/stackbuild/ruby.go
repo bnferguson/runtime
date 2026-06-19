@@ -98,9 +98,21 @@ type RubyStack struct {
 	hasPumaConfig bool
 	hasRakefile   bool
 
+	// Detected Ruby version (from .ruby-version or the Gemfile ruby directive)
+	rubyVersion string
+
 	// Detected environment variable requirements
 	requiredEnvVars []EnvVarRequirement
 }
+
+// gemfileRubyDirective matches an inline ruby version in the Gemfile, e.g.
+//
+//	ruby "3.3.0"
+//	ruby '3.3'
+//
+// The `ruby file: ".ruby-version"` form is intentionally not matched here; it
+// points back at .ruby-version, which parseRubyVersion reads first.
+var gemfileRubyDirective = regexp.MustCompile(`(?m)^\s*ruby\s+['"]([0-9]+\.[0-9]+(?:\.[0-9]+)?)['"]`)
 
 func (s *RubyStack) BaseDistro() string {
 	return "debian"
@@ -154,6 +166,11 @@ func (s *RubyStack) Init(opts BuildOptions) {
 
 	s.hasRakefile = s.hasFile("Rakefile")
 
+	s.rubyVersion = s.parseRubyVersion()
+	if s.rubyVersion != "" {
+		s.Event("config", "ruby-version", "Ruby version "+s.rubyVersion+" detected")
+	}
+
 	// Detect required environment variables
 	s.requiredEnvVars = s.detectEnvVars()
 	for _, ev := range s.requiredEnvVars {
@@ -189,6 +206,29 @@ func (s *RubyStack) Gemfile() ([]byte, []byte, error) {
 	return gemfileContent, gemfileLockContent, nil
 }
 
+// parseRubyVersion detects the desired Ruby version, preferring an explicit
+// .ruby-version file over an inline `ruby "x.y"` directive in the Gemfile. The
+// Gemfile's `ruby file: ".ruby-version"` form resolves through .ruby-version,
+// so reading that file first covers both. Returns "" when nothing is found.
+func (s *RubyStack) parseRubyVersion() string {
+	if content, err := s.readFile(".ruby-version"); err == nil {
+		if v := strings.TrimSpace(string(content)); v != "" {
+			// .ruby-version may carry a "ruby-" prefix (e.g. "ruby-3.3.0").
+			return strings.TrimPrefix(v, "ruby-")
+		}
+	}
+
+	gemfile, _, err := s.Gemfile()
+	if err != nil {
+		return ""
+	}
+	if m := gemfileRubyDirective.FindSubmatch(gemfile); m != nil {
+		return string(m[1])
+	}
+
+	return ""
+}
+
 func (s *RubyStack) detectGem(gem string) bool {
 	data, lock, err := s.Gemfile()
 	if err != nil {
@@ -213,9 +253,11 @@ func (s *RubyStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 
 	mr := imagemetaresolver.Default()
 
-	version := "3.2"
+	version := "3.4"
 	if opts.Version != "" {
 		version = opts.Version
+	} else if s.rubyVersion != "" {
+		version = s.rubyVersion
 	}
 	base := llb.Image(imagerefs.GetRubyImage(version), llb.WithMetaResolver(mr))
 
