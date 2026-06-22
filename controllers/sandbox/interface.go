@@ -53,6 +53,12 @@ type SandboxContainerRuntime interface {
 	ReleaseDiskLeases(ctx context.Context, sandboxID entity.Id) error
 	UnconfigureFirewall(sb *compute.Sandbox)
 	WaitForPort(ctx context.Context, id string, port int, timeout time.Duration) error
+	// DiagnoseListening reports which ports a container is actually listening
+	// on, split into routable (reachable from the host) and loopback-only sets.
+	// Used on the port-wait timeout path to detect an app that bound a port
+	// other than the one Miren configured. ok is false when the container is no
+	// longer monitored and its pid is unknown.
+	DiagnoseListening(id string) (routable []int, loopback []int, ok bool)
 }
 
 // SandboxObservability provides metrics and service management.

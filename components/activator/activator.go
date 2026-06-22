@@ -73,6 +73,19 @@ func extractHTTPPort(spec *compute_v1alpha.SandboxSpec) (int64, bool) {
 	return 0, false
 }
 
+// routePort returns the port the activator should route to. When an app bound a
+// port other than the one Miren configured, the sandbox controller records the
+// observed port as a bound_port on the entity; that observation wins so traffic
+// reaches where the app is actually listening. bound_port is written only on
+// divergence and holds a single entry, so the first one is the route target.
+// Otherwise we fall back to configuredPort (the caller's spec-derived default).
+func routePort(boundPorts []compute_v1alpha.BoundPort, configuredPort int64) int64 {
+	if len(boundPorts) > 0 && boundPorts[0].Port > 0 {
+		return boundPorts[0].Port
+	}
+	return configuredPort
+}
+
 type Lease struct {
 	ver     *core_v1alpha.AppVersion
 	sandbox *compute_v1alpha.Sandbox
@@ -1273,6 +1286,7 @@ func (a *localActivator) watchSandboxes(ctx context.Context) {
 					if !found {
 						port = 3000 // Default fallback
 					}
+					port = routePort(sb.BoundPort, port)
 
 					if addr, err := netutil.BuildHTTPURL(sb.Network[0].Address, port); err == nil {
 						newURL = addr
@@ -1415,6 +1429,7 @@ func (a *localActivator) watchSandboxes(ctx context.Context) {
 						break
 					}
 				}
+				port = routePort(sb.BoundPort, port)
 
 				var err error
 				addr, err = netutil.BuildHTTPURL(sb.Network[0].Address, port)
@@ -1590,6 +1605,7 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 		if !found {
 			port = 3000 // Default fallback
 		}
+		port = routePort(sb.BoundPort, port)
 
 		// Build HTTP URL from address and port
 		if len(sb.Network) == 0 {

@@ -103,6 +103,12 @@ port = 8000
 
 Miren sets `PORT=8000` and routes traffic there.
 
+:::tip Binding the wrong port
+The most common deploy snag when porting an existing app is a hardcoded port that ignores `$PORT`. If your app listens on, say, `:8080` while Miren expects `:3000`, Miren now notices the mismatch: when the configured port never comes up but the app is clearly listening somewhere else, it routes to the port the app actually bound and logs a note on the sandbox (`miren logs sandbox <id>`) telling you which port that was. It's a safety net, not a substitute for config — set `port` (or read `$PORT`) so the expected and actual ports line up.
+
+Two things still trip this up. If your app binds to `127.0.0.1` instead of `0.0.0.0`, Miren can't reach it from outside the container no matter the port, so bind to all interfaces. And if the app opens several ports and none of them is the configured one, Miren won't guess which to route to — it fails with a message naming the candidates so you can pick the right one in `app.toml`.
+:::
+
 ## Non-HTTP Services (TCP/UDP)
 
 To expose services that don't speak HTTP — an IRC server, a game server, a custom protocol — use the `ports` array in `.miren/app.toml` with a `node_port` to make the port reachable from outside the cluster.

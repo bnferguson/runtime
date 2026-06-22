@@ -3,11 +3,14 @@ package sandbox
 import (
 	"bufio"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/netip"
 	"os"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +28,10 @@ type PortMonitor struct {
 	wg     sync.WaitGroup
 	ctx    context.Context
 	cancel context.CancelFunc
+
+	// listPorts enumerates the routable and loopback-only listening ports in a
+	// pid's netns. Defaults to listeningPortsForPID; overridable in tests.
+	listPorts func(pid int) (routable []int, loopback []int)
 }
 
 type monitorTask struct {
@@ -39,11 +46,12 @@ type monitorTask struct {
 func NewPortMonitor(log *slog.Logger, ports observability.PortTracker) *PortMonitor {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &PortMonitor{
-		log:    log.With("module", "port-monitor"),
-		ports:  ports,
-		tasks:  make(map[string]*monitorTask),
-		ctx:    ctx,
-		cancel: cancel,
+		log:       log.With("module", "port-monitor"),
+		ports:     ports,
+		tasks:     make(map[string]*monitorTask),
+		ctx:       ctx,
+		cancel:    cancel,
+		listPorts: listeningPortsForPID,
 	}
 }
 
@@ -92,6 +100,28 @@ func (pm *PortMonitor) Close() error {
 	pm.cancel()
 	pm.wg.Wait()
 	return nil
+}
+
+// DiagnoseListening reports the ports a container is listening on inside its
+// netns, split into routable (reachable from the host) and loopback-only sets.
+// ok is false when the container is not being monitored (its pid is unknown).
+// It is used on the port-wait timeout path: when the configured port never
+// bound, this reveals what the app actually listened on so we can route to it
+// or explain the failure.
+func (pm *PortMonitor) DiagnoseListening(containerID string) (routable []int, loopback []int, ok bool) {
+	pm.mu.Lock()
+	task, exists := pm.tasks[containerID]
+	pm.mu.Unlock()
+	if !exists {
+		return nil, nil, false
+	}
+
+	listPorts := pm.listPorts
+	if listPorts == nil {
+		listPorts = listeningPortsForPID
+	}
+	routable, loopback = listPorts(task.pid)
+	return routable, loopback, true
 }
 
 func (pm *PortMonitor) resolveIP(ip string) netip.Addr {
@@ -239,4 +269,120 @@ func portListening(path string, port int) bool {
 	}
 
 	return false
+}
+
+// listenSocket is a single socket observed in LISTEN state inside a netns.
+type listenSocket struct {
+	addr netip.Addr // bind address; unspecified (0.0.0.0/::) means "all interfaces"
+	port int
+}
+
+// listListeningPorts parses a /proc/net/tcp{,6} file and returns every entry in
+// LISTEN state (0A) with its bind address and port. Unlike portListening, which
+// answers "is this one port listening?", this enumerates whatever the process
+// actually bound so we can detect an app that ignored $PORT.
+func listListeningPorts(path string) []listenSocket {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	var out []listenSocket
+
+	scanner := bufio.NewScanner(f)
+	// Skip header line
+	if !scanner.Scan() {
+		return nil
+	}
+
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 4 {
+			continue
+		}
+
+		// State 0A = LISTEN
+		if fields[3] != "0A" {
+			continue
+		}
+
+		localAddr := fields[1]
+		idx := strings.LastIndex(localAddr, ":")
+		if idx < 0 {
+			continue
+		}
+
+		port, err := strconv.ParseInt(localAddr[idx+1:], 16, 32)
+		if err != nil {
+			continue
+		}
+
+		addr, _ := parseHexAddr(localAddr[:idx])
+		out = append(out, listenSocket{addr: addr, port: int(port)})
+	}
+
+	return out
+}
+
+// parseHexAddr decodes the hex local address from /proc/net/tcp{,6}. The bytes
+// are stored little-endian within each 32-bit word, so an IPv4 "0100007F" is
+// 127.0.0.1. Returns ok=false if the hex doesn't decode to a v4 or v6 address.
+func parseHexAddr(hexAddr string) (netip.Addr, bool) {
+	b, err := hex.DecodeString(hexAddr)
+	if err != nil {
+		return netip.Addr{}, false
+	}
+
+	switch len(b) {
+	case 4:
+		var a [4]byte
+		a[0], a[1], a[2], a[3] = b[3], b[2], b[1], b[0]
+		return netip.AddrFrom4(a), true
+	case 16:
+		var a [16]byte
+		for w := range 4 {
+			a[w*4+0] = b[w*4+3]
+			a[w*4+1] = b[w*4+2]
+			a[w*4+2] = b[w*4+1]
+			a[w*4+3] = b[w*4+0]
+		}
+		return netip.AddrFrom16(a), true
+	}
+
+	return netip.Addr{}, false
+}
+
+// listeningPortsForPID enumerates all LISTEN sockets in the network namespace
+// of pid, splitting them into routable ports (bound on a non-loopback address,
+// reachable from the host) and loopback-only ports (127.0.0.0/8, ::1). A port
+// that listens on any routable address is reported as routable even if it also
+// has a loopback socket. Results are de-duplicated and sorted.
+func listeningPortsForPID(pid int) (routable []int, loopback []int) {
+	seenRoutable := map[int]bool{}
+	seenLoopback := map[int]bool{}
+
+	for _, proto := range []string{"tcp", "tcp6"} {
+		path := fmt.Sprintf("/proc/%d/net/%s", pid, proto)
+		for _, s := range listListeningPorts(path) {
+			if s.addr.IsValid() && s.addr.IsLoopback() {
+				seenLoopback[s.port] = true
+			} else {
+				seenRoutable[s.port] = true
+			}
+		}
+	}
+
+	for p := range seenRoutable {
+		routable = append(routable, p)
+	}
+	for p := range seenLoopback {
+		if !seenRoutable[p] {
+			loopback = append(loopback, p)
+		}
+	}
+
+	sort.Ints(routable)
+	sort.Ints(loopback)
+	return routable, loopback
 }

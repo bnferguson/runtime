@@ -275,6 +275,17 @@ func (c *SandboxController) WaitForPort(ctx context.Context, id string, port int
 	}
 }
 
+// diagnoseListening reports the ports a container is actually listening on,
+// split into routable and loopback-only sets. Returns ok=false when the port
+// monitor is unavailable or the container's pid is unknown. Shared by the
+// legacy create flow and the saga ops wrapper.
+func (c *SandboxController) diagnoseListening(id string) (routable []int, loopback []int, ok bool) {
+	if c.portMonitor == nil {
+		return nil, nil, false
+	}
+	return c.portMonitor.DiagnoseListening(id)
+}
+
 // mapLegacyProtocol converts legacy PortProtocol values to SandboxSpecContainerPortProtocol
 func mapLegacyProtocol(legacy compute.PortProtocol) compute.SandboxSpecContainerPortProtocol {
 	switch legacy {
@@ -841,6 +852,21 @@ func (c *SandboxController) checkNetworkHealth(ctx context.Context, sb *compute.
 		}
 	}
 
+	// An app that ignored $PORT and bound a different port has that port
+	// recorded as an observed bound_port (and we route to it). Treat that port
+	// as health-relevant too, or the periodic check would kill a sandbox that is
+	// running fine on the port we're actually sending traffic to.
+	for _, bp := range sb.BoundPort {
+		port := int(bp.Port)
+		if checkPort(pid, port) {
+			c.Log.Debug("network health check passed on observed bound port",
+				"sandbox_id", sb.ID, "port", port)
+			return true
+		}
+		c.Log.Debug("network health check found no listener for observed bound port",
+			"sandbox_id", sb.ID, "port", port)
+	}
+
 	return false
 }
 
@@ -1158,15 +1184,51 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 	c.Log.Info("sandbox started", "id", co.ID, "namespace", c.Namespace)
 
 	// Wait for ports to verify network connectivity before marking RUNNING.
-	// Fail-hard: if ports never bind, fail the sandbox so pool can retry.
+	// Fail-hard: if ports never bind, fail the sandbox so pool can retry. An app
+	// that ignored $PORT and bound a different port is detected here and routed
+	// to its actual port instead of being killed.
 	// Default 15s; spec.PortWaitTimeout overrides for slow-cold-init images.
 	portTimeout := resolvePortWaitTimeout(co.Spec.PortWaitTimeout)
+	var remapped bool
 	for _, wp := range waitPorts {
 		c.Log.Info("waiting for ports to be bound", "id", cid, "port", wp.Port, "timeout", portTimeout)
-		if err := c.WaitForPort(ctx, wp.ID, wp.Port, portTimeout); err != nil {
-			return fmt.Errorf("sandbox failed network health check: port %d not reachable after %v: %w",
-				wp.Port, portTimeout, err)
+		err := c.WaitForPort(ctx, wp.ID, wp.Port, portTimeout)
+		if err == nil {
+			continue // configured port bound — the normal case
 		}
+		if ctx.Err() != nil {
+			// We're shutting down, not looking at a port mismatch — skip
+			// diagnosis so we don't emit misleading "listening elsewhere" events.
+			return err
+		}
+
+		// The configured port never bound within the timeout. See what the app
+		// actually listened on: route to it if it bound a single other port, or
+		// fail with a message that names the real port.
+		routable, loopback, ok := c.diagnoseListening(wp.ID)
+		if alt, single := singleAlternativePort(routable, wp.Port); ok && single {
+			if remapped {
+				// A second configured port diverged. Routing only follows one
+				// observed port, so don't guess — fail loudly instead.
+				msg := fmt.Sprintf("more than one configured port came up on a different port; "+
+					"can't safely auto-route (latest was :%d)", alt)
+				c.EmitSandboxEvent(co, meta.ShortId(), msg)
+				return fmt.Errorf("sandbox failed network health check: %s", msg)
+			}
+			remapped = true
+			c.Log.Warn("app bound a port other than the configured one; routing to it",
+				"id", co.ID, "configured_port", wp.Port, "observed_port", alt)
+			c.EmitSandboxEvent(co, meta.ShortId(), fmt.Sprintf(
+				"app is listening on :%d, not the configured :%d; routing to :%d. "+
+					"Set $PORT or [services.web] port to :%d to silence this.",
+				alt, wp.Port, alt, alt))
+			co.BoundPort = append(co.BoundPort, compute.BoundPort{Port: int64(alt)})
+			continue
+		}
+
+		msg := describePortFailure(wp.Port, routable, loopback)
+		c.EmitSandboxEvent(co, meta.ShortId(), msg)
+		return fmt.Errorf("sandbox failed network health check: %s", msg)
 	}
 
 	// If we're doing a recreate, then we know it's safe to set it to running.

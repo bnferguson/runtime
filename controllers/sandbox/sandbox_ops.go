@@ -142,6 +142,17 @@ func (o *sandboxOps) WaitForPort(ctx context.Context, id string, port int, timeo
 	return o.ctrl.WaitForPort(ctx, id, port, timeout)
 }
 
+// DiagnoseListening reports the ports a container is actually listening on,
+// split into routable and loopback-only sets, by inspecting its netns via the
+// port monitor. Returns ok=false when monitoring is unavailable or the
+// container's pid is unknown.
+func (o *sandboxOps) DiagnoseListening(id string) (routable []int, loopback []int, ok bool) {
+	if o.ctrl.portMonitor == nil {
+		return nil, nil, false
+	}
+	return o.ctrl.portMonitor.DiagnoseListening(id)
+}
+
 // --- SandboxObservability ---
 
 func (o *sandboxOps) AddMetrics(logEntity string, cgroups map[string]string, attrs map[string]string) error {

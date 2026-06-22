@@ -141,6 +141,10 @@ type mockContainerRuntime struct {
 	unconfigureFirewallCalls int
 	waitForPortCalls         int
 	lastWaitForPortTimeout   time.Duration
+	diagnoseListeningCalls   int
+	diagnoseRoutable         []int
+	diagnoseLoopback         []int
+	diagnoseOK               bool
 
 	buildSpecErr         error
 	createContainerErr   error
@@ -256,6 +260,13 @@ func (m *mockContainerRuntime) WaitForPort(ctx context.Context, id string, port 
 	m.waitForPortCalls++
 	m.lastWaitForPortTimeout = timeout
 	return m.waitForPortErr
+}
+
+func (m *mockContainerRuntime) DiagnoseListening(id string) (routable []int, loopback []int, ok bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.diagnoseListeningCalls++
+	return m.diagnoseRoutable, m.diagnoseLoopback, m.diagnoseOK
 }
 
 type mockObservability struct {
@@ -622,7 +633,8 @@ func TestCreateSandboxSaga_ConfigureVolumesFailsLogsEvent(t *testing.T) {
 
 func TestCreateSandboxSaga_WaitPortsFails(t *testing.T) {
 	h := newTestHarness(t)
-	h.runtime.waitForPortErr = fmt.Errorf("port 8080 not reachable")
+	// Configured port times out, and the diagnosis finds nothing listening.
+	h.runtime.waitForPortErr = fmt.Errorf("timeout waiting for port")
 
 	// Set up container Task() for undo
 	h.runtime.mockContainer.taskFn = func(ctx context.Context, attach cio.Attach) (containerd.Task, error) {
@@ -653,6 +665,93 @@ func TestCreateSandboxSaga_WaitPortsFails(t *testing.T) {
 	assert.Equal(t, 1, h.runtime.unconfigureFirewallCalls)
 	assert.Equal(t, 1, h.runtime.cleanupContainerCalls)
 	assert.Equal(t, 1, h.networking.releaseCalls)
+}
+
+func TestSingleAlternativePort(t *testing.T) {
+	// Exactly one routable port that isn't the configured one -> auto-routable.
+	alt, ok := singleAlternativePort([]int{3000}, 8080)
+	assert.True(t, ok)
+	assert.Equal(t, 3000, alt)
+
+	// The configured port itself is filtered out before counting candidates.
+	_, ok = singleAlternativePort([]int{8080}, 8080)
+	assert.False(t, ok)
+
+	// Ambiguous: more than one alternative.
+	_, ok = singleAlternativePort([]int{3000, 9090}, 8080)
+	assert.False(t, ok)
+
+	// Nothing routable.
+	_, ok = singleAlternativePort(nil, 8080)
+	assert.False(t, ok)
+}
+
+func TestDescribePortFailure(t *testing.T) {
+	// A different routable port -> name it and point at the config knobs.
+	msg := describePortFailure(3000, []int{8080, 9090}, nil)
+	assert.Contains(t, msg, ":8080, :9090")
+	assert.Contains(t, msg, "expects :3000")
+	assert.Contains(t, msg, "$PORT")
+
+	// Loopback-only bind -> tell them to bind 0.0.0.0.
+	msg = describePortFailure(3000, nil, []int{8080})
+	assert.Contains(t, msg, "loopback only")
+	assert.Contains(t, msg, "0.0.0.0")
+
+	// Nothing listening at all -> the plain timeout story.
+	msg = describePortFailure(3000, nil, nil)
+	assert.Contains(t, msg, "nothing is listening on :3000")
+}
+
+func TestCreateSandboxSaga_WaitPortAutoRoutesToObservedPort(t *testing.T) {
+	h := newTestHarness(t)
+	// Configured port (8080, from the mock BootContainers) never binds, but the
+	// diagnosis finds the app on a single routable alternative.
+	h.runtime.waitForPortErr = fmt.Errorf("timeout waiting for port 8080")
+	h.runtime.diagnoseOK = true
+	h.runtime.diagnoseRoutable = []int{3000}
+
+	err := h.execute(t)
+	require.NoError(t, err)
+
+	exec := h.execution(t)
+	assert.Equal(t, saga.StatusCompleted, exec.Status)
+	assert.Equal(t, 1, h.runtime.diagnoseListeningCalls)
+	assert.Contains(t, exec.ExecutionOrder, actionSetRunning)
+
+	// The observed port should be persisted as a bound_port component so the
+	// activator can route to it.
+	boundPortFound := false
+	for _, attrs := range h.entities.patchCalls {
+		for _, attr := range attrs {
+			if attr.ID == compute.SandboxBoundPortId {
+				boundPortFound = true
+			}
+		}
+	}
+	assert.True(t, boundPortFound, "observed alternative port should be persisted as bound_port")
+}
+
+func TestCreateSandboxSaga_WaitPortAmbiguousFails(t *testing.T) {
+	h := newTestHarness(t)
+	// Configured port times out and the diagnosis finds two routable
+	// alternatives: Miren can't guess which, so it must fail.
+	h.runtime.waitForPortErr = fmt.Errorf("timeout waiting for port 8080")
+	h.runtime.diagnoseOK = true
+	h.runtime.diagnoseRoutable = []int{3000, 9090}
+
+	// Task() needed for the undo path.
+	h.runtime.mockContainer.taskFn = func(ctx context.Context, attach cio.Attach) (containerd.Task, error) {
+		return h.runtime.mockTask, nil
+	}
+
+	err := h.execute(t)
+	require.Error(t, err)
+
+	exec := h.execution(t)
+	assert.Equal(t, saga.StatusFailed, exec.Status)
+	assert.Equal(t, 1, h.runtime.diagnoseListeningCalls)
+	assert.Equal(t, 1, h.runtime.destroySubCtrsCalls)
 }
 
 func TestCreateSandboxSaga_PortWaitTimeoutDefault(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -65,6 +66,120 @@ func TestPortListeningIPv6(t *testing.T) {
 func TestPortListeningMissingFile(t *testing.T) {
 	if portListening("/nonexistent/path/tcp", 80) {
 		t.Error("expected false for missing file")
+	}
+}
+
+func TestParseHexAddr(t *testing.T) {
+	tests := []struct {
+		hex  string
+		want string
+	}{
+		{"0100007F", "127.0.0.1"},
+		{"00000000", "0.0.0.0"},
+		{"0101A8C0", "192.168.1.1"},
+		// IPv6 ::1 (loopback): last word little-endian = 01000000...
+		{"00000000000000000000000001000000", "::1"},
+		// IPv6 unspecified ::
+		{"00000000000000000000000000000000", "::"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.hex, func(t *testing.T) {
+			addr, ok := parseHexAddr(tt.hex)
+			if !ok {
+				t.Fatalf("parseHexAddr(%q) returned ok=false", tt.hex)
+			}
+			if addr.String() != tt.want {
+				t.Errorf("parseHexAddr(%q) = %s, want %s", tt.hex, addr.String(), tt.want)
+			}
+		})
+	}
+
+	if _, ok := parseHexAddr("zzzz"); ok {
+		t.Error("expected ok=false for invalid hex")
+	}
+}
+
+func TestListListeningPorts(t *testing.T) {
+	// Listener on 0.0.0.0:6667 (0x1A0B), listener on 127.0.0.1:8080 (0x1F90),
+	// and an established (non-listening) connection that must be ignored.
+	content := `  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 00000000:1A0B 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 12345 1 0000000000000000 100 0 0 10 0
+   1: 0100007F:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 23456 1 0000000000000000 100 0 0 10 0
+   2: 0100007F:0BB8 0100007F:C000 01 00000000:00000000 00:00000000 00000000  1000        0 67890 1 0000000000000000 20 0 0 10 -1
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tcp")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := listListeningPorts(path)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 listening sockets, got %d: %+v", len(got), got)
+	}
+
+	if got[0].port != 6667 || !got[0].addr.IsUnspecified() {
+		t.Errorf("socket 0 = %+v, want 0.0.0.0:6667", got[0])
+	}
+	if got[1].port != 8080 || !got[1].addr.IsLoopback() {
+		t.Errorf("socket 1 = %+v, want 127.0.0.1:8080", got[1])
+	}
+}
+
+func TestListeningPortsForPIDClassification(t *testing.T) {
+	// A routable listener and a loopback-only listener under the current
+	// process, exercised through the real /proc/<pid>/net/tcp path.
+	routableLn, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer routableLn.Close()
+	routablePort := routableLn.Addr().(*net.TCPAddr).Port
+
+	loopbackLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer loopbackLn.Close()
+	loopbackPort := loopbackLn.Addr().(*net.TCPAddr).Port
+
+	routable, loopback := listeningPortsForPID(os.Getpid())
+
+	if !slices.Contains(routable, routablePort) {
+		t.Errorf("expected routable ports %v to contain %d", routable, routablePort)
+	}
+	// The loopback port must not be advertised as routable.
+	if slices.Contains(routable, loopbackPort) {
+		t.Errorf("loopback port %d should not appear in routable set %v", loopbackPort, routable)
+	}
+	if !slices.Contains(loopback, loopbackPort) {
+		t.Errorf("expected loopback ports %v to contain %d", loopback, loopbackPort)
+	}
+}
+
+func TestDiagnoseListening(t *testing.T) {
+	pm := &PortMonitor{
+		tasks: map[string]*monitorTask{"c1": {pid: 1234}},
+		listPorts: func(pid int) ([]int, []int) {
+			return []int{8080}, []int{5000}
+		},
+	}
+
+	routable, loopback, ok := pm.DiagnoseListening("c1")
+	if !ok {
+		t.Fatal("expected ok=true for a monitored container")
+	}
+	if len(routable) != 1 || routable[0] != 8080 {
+		t.Errorf("routable = %v, want [8080]", routable)
+	}
+	if len(loopback) != 1 || loopback[0] != 5000 {
+		t.Errorf("loopback = %v, want [5000]", loopback)
+	}
+
+	// An unmonitored container reports ok=false.
+	if _, _, ok := pm.DiagnoseListening("unknown"); ok {
+		t.Error("expected ok=false for an unmonitored container")
 	}
 }
 

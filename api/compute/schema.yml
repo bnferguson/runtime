@@ -203,6 +203,21 @@ kinds:
           doc: The subnet that the address is associated with
           type: string
 
+    # Observed at startup: the port the app actually bound. Set only when it
+    # diverges from the configured port (the app ignored $PORT), so routing and
+    # health-checking can target the real port instead of the configured one.
+    bound_port:
+      type: component
+      doc: Port the container was observed listening on, set only when it differs from the configured port
+      many: true
+      attrs:
+        port:
+          doc: The observed listening port
+          type: int
+        address:
+          doc: The bind address the port was observed on
+          type: string
+
     # Legacy fields - kept for backward compatibility with existing sandboxes
     # New sandboxes should use spec field instead
     labels:

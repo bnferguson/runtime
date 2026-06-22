@@ -3501,3 +3501,15 @@ func TestResyncWakesParkedWaiter(t *testing.T) {
 		t.Fatal("parked waiter was never woken after re-sync")
 	}
 }
+
+func TestRoutePort(t *testing.T) {
+	// No observed bound port: fall back to the configured port.
+	assert.Equal(t, int64(3000), routePort(nil, 3000))
+
+	// Observed bound port wins over the configured port (the app ignored $PORT).
+	observed := []compute_v1alpha.BoundPort{{Port: 8080}}
+	assert.Equal(t, int64(8080), routePort(observed, 3000))
+
+	// A zero observed port is ignored (defensive): keep the configured port.
+	assert.Equal(t, int64(3000), routePort([]compute_v1alpha.BoundPort{{Port: 0}}, 3000))
+}

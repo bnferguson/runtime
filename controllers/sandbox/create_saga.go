@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"strings"
 
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/errdefs"
@@ -35,6 +36,17 @@ type createSandboxDeps struct {
 	networking SandboxNetworking
 	runtime    SandboxContainerRuntime
 	obs        SandboxObservability
+}
+
+// logSandboxEvent surfaces a startup diagnostic on the sandbox's own log stream
+// so it shows up under `miren logs sandbox <id>` next to the container output.
+// Best-effort: a fetch failure just skips the event rather than failing the saga.
+func (d *createSandboxDeps) logSandboxEvent(ctx context.Context, sandboxID, line string) {
+	sb, meta, err := d.entities.GetSandbox(ctx, sandboxID)
+	if err != nil {
+		return
+	}
+	d.obs.LogSandboxEvent(sb, meta.ShortId(), line)
 }
 
 // --- Action input/output types ---
@@ -423,8 +435,17 @@ type waitPortsIn struct {
 	PortWaitTimeout string   `json:"port_wait_timeout" saga:"port_wait_timeout"`
 }
 
+// observedPort records a port the app actually bound that differs from the one
+// Miren configured. It is carried from waitPorts to setRunning so the divergence
+// is persisted on the sandbox entity for routing.
+type observedPort struct {
+	Port    int    `json:"port"`
+	Address string `json:"address"`
+}
+
 type waitPortsOut struct {
-	PortsReady saga.Edge `saga:"ports_ready"`
+	PortsReady    saga.Edge      `saga:"ports_ready"`
+	ObservedPorts []observedPort `json:"observed_ports" saga:"observed_ports"`
 }
 
 func waitPorts(ctx context.Context, in waitPortsIn) (waitPortsOut, error) {
@@ -438,13 +459,103 @@ func waitPorts(ctx context.Context, in waitPortsIn) (waitPortsOut, error) {
 			len(in.WaitPortIDs), len(in.WaitPortPorts),
 		)
 	}
+
+	var observed []observedPort
+	var remapped bool
 	for i := range in.WaitPortIDs {
-		log.Info("saga: waiting for port", "sandbox", in.SandboxID, "port", in.WaitPortPorts[i])
-		if err := deps.runtime.WaitForPort(ctx, in.WaitPortIDs[i], in.WaitPortPorts[i], portTimeout); err != nil {
-			return waitPortsOut{}, fmt.Errorf("port %d not reachable: %w", in.WaitPortPorts[i], err)
+		id := in.WaitPortIDs[i]
+		port := in.WaitPortPorts[i]
+
+		log.Info("saga: waiting for port", "sandbox", in.SandboxID, "port", port)
+		err := deps.runtime.WaitForPort(ctx, id, port, portTimeout)
+		if err == nil {
+			continue // configured port bound — the normal case
+		}
+		if ctx.Err() != nil {
+			// We're shutting down, not looking at a port mismatch — skip
+			// diagnosis so we don't emit misleading "listening elsewhere" events.
+			return waitPortsOut{}, err
+		}
+
+		// The configured port never bound within the timeout. See what the app
+		// actually listened on: route to it if it bound a single other port, or
+		// fail with a message that names the real port.
+		routable, loopback, ok := deps.runtime.DiagnoseListening(id)
+		if alt, single := singleAlternativePort(routable, port); ok && single {
+			if remapped {
+				// A second configured port diverged. Routing only follows one
+				// observed port, so don't guess — fail loudly instead.
+				msg := fmt.Sprintf("more than one configured port came up on a different port; "+
+					"can't safely auto-route (latest was :%d)", alt)
+				deps.logSandboxEvent(ctx, in.SandboxID, msg)
+				return waitPortsOut{}, fmt.Errorf("port %d not reachable: %s", port, msg)
+			}
+			remapped = true
+			log.Warn("saga: app bound a port other than the configured one; routing to it",
+				"sandbox", in.SandboxID, "configured_port", port, "observed_port", alt)
+			deps.logSandboxEvent(ctx, in.SandboxID, fmt.Sprintf(
+				"app is listening on :%d, not the configured :%d; routing to :%d. "+
+					"Set $PORT or [services.web] port to :%d to silence this.",
+				alt, port, alt, alt))
+			observed = append(observed, observedPort{Port: alt})
+			continue
+		}
+
+		msg := describePortFailure(port, routable, loopback)
+		deps.logSandboxEvent(ctx, in.SandboxID, msg)
+		return waitPortsOut{}, fmt.Errorf("port %d not reachable: %s", port, msg)
+	}
+
+	return waitPortsOut{ObservedPorts: observed}, nil
+}
+
+// singleAlternativePort returns the lone routable port the app bound that isn't
+// the configured one, and true only when exactly one such candidate exists.
+// Ambiguity (zero or several alternatives) is left for describePortFailure.
+func singleAlternativePort(routable []int, configured int) (int, bool) {
+	var candidates []int
+	for _, p := range routable {
+		if p != configured {
+			candidates = append(candidates, p)
 		}
 	}
-	return waitPortsOut{}, nil
+	if len(candidates) == 1 {
+		return candidates[0], true
+	}
+	return 0, false
+}
+
+// describePortFailure turns the observed listening state into an actionable
+// message explaining why the configured port never became reachable.
+func describePortFailure(configured int, routable, loopback []int) string {
+	others := make([]int, 0, len(routable))
+	for _, p := range routable {
+		if p != configured {
+			others = append(others, p)
+		}
+	}
+
+	switch {
+	case len(others) > 0:
+		return fmt.Sprintf(
+			"app is listening on %s but Miren expects :%d (set via $PORT or [services.web] port)",
+			formatPorts(others), configured)
+	case len(loopback) > 0:
+		return fmt.Sprintf(
+			"app is listening on loopback only (%s); bind 0.0.0.0 so Miren can reach it "+
+				"(expected :%d via $PORT or [services.web] port)",
+			formatPorts(loopback), configured)
+	default:
+		return fmt.Sprintf("nothing is listening on :%d after the port timeout", configured)
+	}
+}
+
+func formatPorts(ports []int) string {
+	parts := make([]string, len(ports))
+	for i, p := range ports {
+		parts[i] = fmt.Sprintf(":%d", p)
+	}
+	return strings.Join(parts, ", ")
 }
 
 func undoWaitPorts(_ context.Context, _ waitPortsIn, _ waitPortsOut) error {
@@ -454,8 +565,9 @@ func undoWaitPorts(_ context.Context, _ waitPortsIn, _ waitPortsOut) error {
 // --- Set running ---
 
 type setRunningIn struct {
-	SandboxID  string    `json:"sandbox_id" saga:"sandbox_id"`
-	PortsReady saga.Edge `saga:"ports_ready"`
+	SandboxID     string         `json:"sandbox_id" saga:"sandbox_id"`
+	PortsReady    saga.Edge      `saga:"ports_ready"`
+	ObservedPorts []observedPort `json:"observed_ports" saga:"observed_ports"`
 }
 
 type setRunningOut struct{}
@@ -474,9 +586,21 @@ func setRunning(ctx context.Context, in setRunningIn) (setRunningOut, error) {
 		return setRunningOut{}, nil
 	}
 
+	// Patch only the fields we mean to change. Encoding a whole
+	// compute.Sandbox{Status: RUNNING} would also emit defaults like
+	// hostNetwork=false, clobbering real values on the entity.
 	patchAttrs := entity.New(
 		entity.Ref(entity.DBId, entity.Id(in.SandboxID)),
-		(&compute.Sandbox{Status: compute.RUNNING}).Encode,
+		func() []entity.Attr {
+			attrs := []entity.Attr{
+				entity.Ref(compute.SandboxStatusId, compute.SandboxStatusRunningId),
+			}
+			for _, op := range in.ObservedPorts {
+				bp := compute.BoundPort{Port: int64(op.Port), Address: op.Address}
+				attrs = append(attrs, entity.Component(compute.SandboxBoundPortId, bp.Encode()))
+			}
+			return attrs
+		},
 	)
 	_, err = deps.entities.PatchSandbox(ctx, patchAttrs.Attrs(), meta.Revision)
 	if err != nil {
