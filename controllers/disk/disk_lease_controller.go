@@ -18,6 +18,16 @@ import (
 	"miren.dev/runtime/pkg/idgen"
 )
 
+// OrphanSweepGracePeriod is how old a BOUND/PENDING lease must be before the
+// recurring orphan sweep will reclaim it. It's defense-in-depth: the sweep
+// already only targets leases whose owning sandbox is DEAD or missing, but a
+// young lease may belong to a sandbox that is still booting (its entity not yet
+// settled) or one that just died and whose own in-band ReleaseDiskLeases is
+// still in flight. Skipping young leases lets those in-band paths win the race.
+// The boot-time sweep (Init) bypasses this with a zero grace, since it only ever
+// sees leftovers from a prior, crashed process where nothing is mid-boot.
+const OrphanSweepGracePeriod = 2 * time.Minute
+
 // leaseInfo tracks active lease details
 type leaseInfo struct {
 	leaseId   string
@@ -75,7 +85,9 @@ func (d *DiskLeaseController) Init(ctx context.Context) error {
 	d.diskMode = detectDiskMode(d.configuredMode)
 	d.Log.Info("disk lease controller initialized", "mode", d.diskMode)
 
-	if err := d.reconcileOrphanLeases(ctx); err != nil {
+	// Zero grace at boot: anything we find is a leftover from a prior process,
+	// not a sandbox booting in this one.
+	if err := d.ReconcileOrphanLeases(ctx, 0); err != nil {
 		// Orphan sweep is best-effort — log and continue. Individual
 		// leases may still transition normally via their entity events.
 		d.Log.Warn("orphan lease reconciliation failed", "error", err)
@@ -83,14 +95,21 @@ func (d *DiskLeaseController) Init(ctx context.Context) error {
 	return nil
 }
 
-// reconcileOrphanLeases releases leases whose owning sandbox no longer
+// ReconcileOrphanLeases releases leases whose owning sandbox no longer
 // exists or is already DEAD. On a clean shutdown the sandbox controller
-// releases leases via StopSandbox → ReleaseDiskLeases, but after a
-// SIGKILL the sandbox may be torn down without that path ever running.
-// A BOUND lease left pointing at a dead sandbox then blocks every
-// future sandbox that wants the same disk; clearing those leases at
-// boot turns a latent deadlock into a transient, self-healing one.
-func (d *DiskLeaseController) reconcileOrphanLeases(ctx context.Context) error {
+// releases leases via StopSandbox → ReleaseDiskLeases, but a sandbox can
+// also die without that path running: a SIGKILL, or a boot that fails
+// after binding the lease (the boot-failure defer marks the sandbox DEAD).
+// A BOUND lease left pointing at a dead sandbox then blocks every future
+// sandbox that wants the same disk. This sweep runs both at boot (Init)
+// and periodically, turning a latent deadlock into a transient, self-
+// healing one bounded by the sweep interval.
+//
+// minLeaseAge skips leases younger than the given age. The recurring sweep
+// passes OrphanSweepGracePeriod so it never reclaims a lease that may still
+// belong to a booting sandbox or a death whose in-band release is mid-flight;
+// the boot-time sweep passes 0. See OrphanSweepGracePeriod for the rationale.
+func (d *DiskLeaseController) ReconcileOrphanLeases(ctx context.Context, minLeaseAge time.Duration) error {
 	// Entity-only unit tests instantiate the controller without an EAC
 	// and call Init; skip the sweep cleanly in that case.
 	if d.EAC == nil {
@@ -102,6 +121,7 @@ func (d *DiskLeaseController) reconcileOrphanLeases(ctx context.Context) error {
 		return fmt.Errorf("list disk leases: %w", err)
 	}
 
+	now := time.Now()
 	var released int
 	for _, e := range resp.Values() {
 		var lease storage_v1alpha.DiskLease
@@ -111,6 +131,12 @@ func (d *DiskLeaseController) reconcileOrphanLeases(ctx context.Context) error {
 			continue
 		}
 		if lease.SandboxId == "" {
+			continue
+		}
+
+		// Defense-in-depth: leave young leases alone so the in-band release
+		// paths (and a settling sandbox entity) win any race against the sweep.
+		if minLeaseAge > 0 && now.Sub(e.Entity().GetCreatedAt()) < minLeaseAge {
 			continue
 		}
 

@@ -993,8 +993,15 @@ func (r *Runner) SetupControllers(
 		workers,
 	)
 
-	// Set up periodic cleanup of old released leases (every 5 minutes)
+	// Set up periodic lease maintenance (every 5 minutes): sweep orphan leases
+	// stranded by sandboxes that died without releasing (SIGKILL, boot failure),
+	// then clean up old released leases. The orphan sweep also runs at Init, but
+	// the periodic tick bounds the worst-case wedge to one interval for sandboxes
+	// that die while the controller is already running.
 	diskLeaseRC.SetPeriodic(5*time.Minute, func(ctx context.Context) error {
+		if err := diskLeaseController.ReconcileOrphanLeases(ctx, disk.OrphanSweepGracePeriod); err != nil {
+			log.Warn("periodic orphan lease sweep failed", "error", err)
+		}
 		return diskLeaseController.CleanupOldReleasedLeases(ctx)
 	})
 

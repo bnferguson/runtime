@@ -130,3 +130,117 @@ func TestReconcileOrphanLeasesReleasesLeaseForMissingSandbox(t *testing.T) {
 	assert.Equal(t, storage_v1alpha.RELEASED, lease.Status,
 		"lease for a missing sandbox must be released by the orphan sweep")
 }
+
+// TestReconcileOrphanLeasesRecurring verifies the sweep works as a recurring
+// entry point, not just at Init. A sandbox can die (SIGKILL, boot failure)
+// while the controller is already running; the periodic tick must release the
+// stranded lease, and calling it again must be a harmless no-op.
+func TestReconcileOrphanLeasesRecurring(t *testing.T) {
+	ctx := context.Background()
+	log := slog.Default()
+
+	es, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+
+	leaseController := NewDiskLeaseController(log, es.EAC, "test-node", "")
+	require.NoError(t, leaseController.Init(ctx))
+
+	// After the controller is already up, a sandbox dies holding a BOUND lease.
+	deadSandboxId := entity.Id("sandbox/late-dead")
+	_, err := es.EAC.Create(ctx, entity.New(
+		entity.DBId, deadSandboxId,
+		(&compute.Sandbox{
+			ID:     deadSandboxId,
+			Status: compute.DEAD,
+		}).Encode,
+	).Attrs())
+	require.NoError(t, err)
+
+	leaseId := entity.Id("disk-lease/late-orphan")
+	_, err = es.EAC.Create(ctx, entity.New(
+		entity.DBId, leaseId,
+		(&storage_v1alpha.DiskLease{
+			ID:         leaseId,
+			DiskId:     entity.Id("disk/late-data"),
+			SandboxId:  deadSandboxId,
+			Status:     storage_v1alpha.BOUND,
+			AcquiredAt: time.Now(),
+			NodeId:     entity.Id("node/test-node"),
+		}).Encode,
+	).Attrs())
+	require.NoError(t, err)
+
+	// The Init sweep already ran before this lease existed; the recurring tick
+	// is what must catch it. Zero grace here to assert the core release logic.
+	require.NoError(t, leaseController.ReconcileOrphanLeases(ctx, 0))
+
+	resp, err := es.EAC.Get(ctx, leaseId.String())
+	require.NoError(t, err)
+	var lease storage_v1alpha.DiskLease
+	lease.Decode(resp.Entity().Entity())
+	assert.Equal(t, storage_v1alpha.RELEASED, lease.Status,
+		"recurring sweep must release a lease whose sandbox died after Init")
+
+	// Running the sweep again is a harmless no-op.
+	require.NoError(t, leaseController.ReconcileOrphanLeases(ctx, 0))
+	resp, err = es.EAC.Get(ctx, leaseId.String())
+	require.NoError(t, err)
+	lease.Decode(resp.Entity().Entity())
+	assert.Equal(t, storage_v1alpha.RELEASED, lease.Status)
+}
+
+// TestReconcileOrphanLeasesGracePeriod verifies the recurring sweep leaves a
+// freshly created lease alone even when its sandbox already reads as DEAD, so a
+// just-booted sandbox or an in-flight teardown isn't raced by the sweep. A zero
+// grace (the boot-time path) still reclaims it immediately.
+func TestReconcileOrphanLeasesGracePeriod(t *testing.T) {
+	ctx := context.Background()
+	log := slog.Default()
+
+	es, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+
+	deadSandboxId := entity.Id("sandbox/grace-dead")
+	_, err := es.EAC.Create(ctx, entity.New(
+		entity.DBId, deadSandboxId,
+		(&compute.Sandbox{
+			ID:     deadSandboxId,
+			Status: compute.DEAD,
+		}).Encode,
+	).Attrs())
+	require.NoError(t, err)
+
+	leaseId := entity.Id("disk-lease/grace-young")
+	_, err = es.EAC.Create(ctx, entity.New(
+		entity.DBId, leaseId,
+		(&storage_v1alpha.DiskLease{
+			ID:         leaseId,
+			DiskId:     entity.Id("disk/grace-data"),
+			SandboxId:  deadSandboxId,
+			Status:     storage_v1alpha.BOUND,
+			AcquiredAt: time.Now(),
+			NodeId:     entity.Id("node/test-node"),
+		}).Encode,
+	).Attrs())
+	require.NoError(t, err)
+
+	leaseController := NewDiskLeaseController(log, es.EAC, "test-node", "")
+
+	// With a long grace, the just-created lease must be left BOUND even though
+	// its sandbox is DEAD.
+	require.NoError(t, leaseController.ReconcileOrphanLeases(ctx, time.Hour))
+	resp, err := es.EAC.Get(ctx, leaseId.String())
+	require.NoError(t, err)
+	var lease storage_v1alpha.DiskLease
+	lease.Decode(resp.Entity().Entity())
+	assert.Equal(t, storage_v1alpha.BOUND, lease.Status,
+		"grace period must protect a freshly created lease from the recurring sweep")
+
+	// With zero grace (boot-time recovery), the same lease is reclaimed.
+	require.NoError(t, leaseController.ReconcileOrphanLeases(ctx, 0))
+	resp, err = es.EAC.Get(ctx, leaseId.String())
+	require.NoError(t, err)
+	lease.Decode(resp.Entity().Entity())
+	assert.Equal(t, storage_v1alpha.RELEASED, lease.Status,
+		"zero grace must reclaim the orphaned lease")
+}

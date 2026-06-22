@@ -1021,6 +1021,21 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 			c.Log.Error("sandbox boot failed, marking DEAD", "id", co.ID, "err", err)
 			co.Status = compute.DEAD
 			meta.Update(co.Encode())
+
+			// Boot can fail after we've already bound a disk lease (e.g. a
+			// later port health check fails). Unlike the graceful StopSandbox
+			// path, this defer doesn't tear the sandbox down, so release any
+			// leases here — otherwise the lease stays status.bound pointing at
+			// a dead sandbox and wedges every replacement until it times out.
+			// Use a non-cancelled context: the boot error may itself be a
+			// cancellation, and we still want the lease freed. Bound it with a
+			// timeout so a hung release can't pin the reconcile worker, matching
+			// the cleanup defer below.
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+			defer cancel()
+			if relErr := c.ReleaseDiskLeases(cleanupCtx, co.ID); relErr != nil {
+				c.Log.Error("failed to release disk leases after boot failure", "id", co.ID, "err", relErr)
+			}
 		}
 	}()
 
