@@ -181,6 +181,10 @@ const config: Config = {
       indexName: 'Miren Docs',
       contextualSearch: true,
       searchPagePath: 'search',
+      // Send click & conversion events to Algolia so we can see which search
+      // results people actually open (Click Analytics in the Algolia
+      // dashboard). DocSearch handles the queryID/userToken plumbing.
+      insights: true,
     },
     prism: {
       theme: prismThemes.github,
