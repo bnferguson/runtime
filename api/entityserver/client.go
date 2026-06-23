@@ -411,11 +411,22 @@ type Session struct {
 	mu sync.Mutex
 
 	cancel context.CancelFunc
+
+	dead     chan struct{}
+	deadOnce sync.Once
 }
 
-const defaultTTL = 60
+const (
+	defaultTTL = 60
 
-// Grant creates a new lease with the given TTL
+	// keepalivePingTimeout bounds a single renewal so a hung call can't stall
+	// the ticker long enough for the lease to lapse on its own.
+	keepalivePingTimeout = 5 * time.Second
+)
+
+// NewSession creates a new lease-backed session with the default TTL and a
+// keepalive goroutine that renews it until the context is cancelled or the
+// lease can no longer be renewed (see Done).
 func (c *Client) NewSession(ctx context.Context, usage string) (*Session, *Client, error) {
 	ttl := int64(defaultTTL)
 	ret, err := c.eac.CreateSession(ctx, ttl, usage)
@@ -435,9 +446,15 @@ func (c *Client) NewSession(ctx context.Context, usage string) (*Session, *Clien
 		id: ret.Id(),
 
 		cancel: cancel,
+		dead:   make(chan struct{}),
 	}
 
 	go func() {
+		// Release the session context whichever way the loop exits, including
+		// the markDead path where Close (the only other caller of cancel) never
+		// runs. Revoke below uses its own context, so it's unaffected.
+		defer cancel()
+
 		defer c.log.Debug("session closed", "id", session.id)
 
 		defer func() {
@@ -446,14 +463,36 @@ func (c *Client) NewSession(ctx context.Context, usage string) (*Session, *Clien
 			session.Revoke(ctx)
 		}()
 
-		ticker := time.NewTicker((time.Duration(ttl) * time.Second) / 2)
+		interval := (time.Duration(ttl) * time.Second) / 2
+		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
+		// Once renewals have failed for a full TTL the lease is gone
+		// server-side and pinging it again only logs forever, so declare the
+		// session dead and let the owner re-establish it via Done.
+		maxFailures := int(time.Duration(ttl) * time.Second / interval)
+		if maxFailures < 1 {
+			maxFailures = 1
+		}
+
+		failures := 0
 		for {
 			select {
 			case <-ticker.C:
-				if err := session.Ping(ctx); err != nil {
-					c.log.Error("failed to ping session", "error", err)
+				pingCtx, cancelPing := context.WithTimeout(ctx, keepalivePingTimeout)
+				err := session.Ping(pingCtx)
+				cancelPing()
+				if err == nil {
+					failures = 0
+					continue
+				}
+
+				failures++
+				c.log.Error("failed to ping session", "error", err, "failures", failures)
+				if failures >= maxFailures {
+					c.log.Error("session lease lost, marking session dead", "id", session.id)
+					session.markDead()
+					return
 				}
 			case <-ctx.Done():
 				return
@@ -462,6 +501,17 @@ func (c *Client) NewSession(ctx context.Context, usage string) (*Session, *Clien
 	}()
 
 	return session, sc, nil
+}
+
+// Done is closed when the keepalive gives up on a lease it can no longer renew.
+// It does not fire on a clean Close/Revoke; owners watch it to re-establish the
+// session and any session-scoped state.
+func (l *Session) Done() <-chan struct{} {
+	return l.dead
+}
+
+func (l *Session) markDead() {
+	l.deadOnce.Do(func() { close(l.dead) })
 }
 
 func (l *Session) Close() error {

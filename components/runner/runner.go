@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -123,6 +124,9 @@ const (
 	// Bounded retry for the coordinator's workload-issuer-info query at startup.
 	issuerInfoMaxAttempts = 3
 	issuerInfoRetryDelay  = 2 * time.Second
+
+	// Delay between attempts to re-register the node after its health session dies.
+	healthSessionRetryDelay = 2 * time.Second
 )
 
 type shutdownCloser struct{ s interface{ Shutdown() } }
@@ -166,6 +170,9 @@ type Runner struct {
 
 	cc *containerd.Client
 
+	// mu guards ec and se, which the health-session supervisor swaps out when
+	// it re-registers the node on a fresh session.
+	mu sync.Mutex
 	ec *entityserver.Client
 	se *entityserver.Session
 
@@ -207,7 +214,11 @@ func (r *Runner) SetRestartMode(v bool) {
 
 // Drain sets the runner's node status to disabled and stops all running sandboxes
 func (r *Runner) Drain(ctx context.Context) error {
-	if r.ec == nil || r.Id == "" {
+	r.mu.Lock()
+	ec := r.ec
+	r.mu.Unlock()
+
+	if ec == nil || r.Id == "" {
 		return fmt.Errorf("runner not initialized with entity client")
 	}
 
@@ -215,7 +226,7 @@ func (r *Runner) Drain(ctx context.Context) error {
 
 	// Set node status to disabled
 	r.Log.Info("setting node status to disabled", "id", r.Id)
-	err := r.ec.UpdateAttrs(ctx, entity.Id(r.Id), (&compute_v1alpha.Node{
+	err := ec.UpdateAttrs(ctx, entity.Id(r.Id), (&compute_v1alpha.Node{
 		Status: compute_v1alpha.DISABLED,
 	}).Encode)
 	if err != nil {
@@ -226,7 +237,7 @@ func (r *Runner) Drain(ctx context.Context) error {
 
 	// List all sandboxes scheduled to this node
 	idx := compute_v1alpha.Index(compute_v1alpha.KindSandbox, entity.Id("node/"+r.Id))
-	results, err := r.ec.List(ctx, idx)
+	results, err := ec.List(ctx, idx)
 	if err != nil {
 		return fmt.Errorf("failed to query sandboxes on node: %w", err)
 	}
@@ -611,15 +622,29 @@ func (r *Runner) setupEntity(ctx context.Context, ec *entityserver.Client) error
 		return nil
 	}
 
-	r.Log.Info("Creating health session")
-
-	sess, ec, err := ec.NewSession(ctx, "runner health")
-	if err != nil {
+	if err := r.registerNode(ctx, ec); err != nil {
 		return err
 	}
 
-	r.ec = ec
-	r.se = sess
+	// The node's READY status is scoped to the health session's lease. If a
+	// renewal stalls past the TTL etcd revokes the lease, the node silently
+	// drops out of READY and the scheduler stops placing work here. Re-register
+	// on a fresh session when that happens so the node recovers on its own.
+	go r.superviseHealthSession(ctx, ec)
+
+	return nil
+}
+
+// registerNode opens a health session and publishes the node entity as READY
+// under it. The READY attribute lives only as long as the session's lease, so
+// ec must be the base client; the session-scoped client it returns becomes r.ec.
+func (r *Runner) registerNode(ctx context.Context, ec *entityserver.Client) error {
+	r.Log.Info("Creating health session")
+
+	sess, sc, err := ec.NewSession(ctx, "runner health")
+	if err != nil {
+		return err
+	}
 
 	role := "runner"
 	if r.deps.IsCoordinator {
@@ -636,21 +661,62 @@ func (r *Runner) setupEntity(ctx context.Context, ec *entityserver.Client) error
 
 	r.Log.Info("Registering node entity", "role", role, "address", r.ListenAddress)
 
-	res, err := ec.CreateOrUpdate(ctx, r.Id, &node)
+	res, err := sc.CreateOrUpdate(ctx, r.Id, &node)
 	if err != nil {
+		_ = sess.Close()
 		return err
 	}
 
-	err = ec.UpdateAttrs(ctx, res, (&compute_v1alpha.Node{
+	err = sc.UpdateAttrs(ctx, res, (&compute_v1alpha.Node{
 		Status: compute_v1alpha.READY,
 	}).Encode)
 	if err != nil {
+		_ = sess.Close()
 		return err
 	}
+
+	r.mu.Lock()
+	r.ec = sc
+	r.se = sess
+	r.mu.Unlock()
 
 	r.Log.Info("Runner registered and ready", "id", res, "status", "ready")
 
 	return nil
+}
+
+// superviseHealthSession re-registers the node whenever its health session's
+// lease is lost. Without this a transient lease lapse leaves the node out of
+// READY until the process is restarted by hand.
+func (r *Runner) superviseHealthSession(ctx context.Context, ec *entityserver.Client) {
+	for {
+		r.mu.Lock()
+		sess := r.se
+		r.mu.Unlock()
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-sess.Done():
+		}
+
+		r.Log.Error("runner health session lost, re-registering node", "id", r.Id)
+
+		for {
+			err := r.registerNode(ctx, ec)
+			if err == nil {
+				break
+			}
+
+			r.Log.Error("failed to re-register node, retrying", "id", r.Id, "error", err)
+
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(healthSessionRetryDelay):
+			}
+		}
+	}
 }
 
 func (r *Runner) SetupControllers(
