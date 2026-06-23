@@ -5,41 +5,60 @@ const testQueue = "bun-test-queue";
 
 async function publishAndConsume(): Promise<string> {
   const conn = await amqp.connect(url);
+  // Connection-level errors (e.g. the broker closing the connection) surface
+  // as async 'error' events, not as rejections of the awaited calls below.
+  // Without a handler they become uncaught exceptions and crash the process.
+  conn.on("error", () => {});
   const ch = await conn.createChannel();
+  ch.on("error", () => {});
 
-  await ch.assertQueue(testQueue, { durable: false });
+  try {
+    // RabbitMQ 4.3+ denies transient non-exclusive queues by default (the
+    // transient_nonexcl_queues deprecated feature went denied_by_default in
+    // 4.3.0), so this queue must be durable.
+    await ch.assertQueue(testQueue, { durable: true });
 
-  const message = `hello-${Date.now()}`;
-  ch.sendToQueue(testQueue, Buffer.from(message));
+    const message = `hello-${Date.now()}`;
+    ch.sendToQueue(testQueue, Buffer.from(message));
 
-  // Consume the message we just published.
-  const result = await new Promise<string>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("consume timeout")), 5000);
-    ch.consume(
-      testQueue,
-      (msg) => {
-        if (msg) {
-          clearTimeout(timeout);
-          ch.ack(msg);
-          resolve(msg.content.toString());
-        }
-      },
-      { noAck: false }
-    );
-  });
-
-  await ch.close();
-  await conn.close();
-  return result;
+    // Consume the message we just published.
+    return await new Promise<string>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("consume timeout")), 5000);
+      ch.consume(
+        testQueue,
+        (msg) => {
+          if (msg) {
+            clearTimeout(timeout);
+            ch.ack(msg);
+            resolve(msg.content.toString());
+          }
+        },
+        { noAck: false }
+      );
+    });
+  } finally {
+    // Always release the channel/connection, even on the error or timeout
+    // paths, so repeated failures can't leak connections against broker limits.
+    await ch.close().catch(() => {});
+    await conn.close().catch(() => {});
+  }
 }
 
 async function healthCheck(): Promise<boolean> {
   const conn = await amqp.connect(url);
+  conn.on("error", () => {});
   const ch = await conn.createChannel();
-  await ch.assertQueue("health-check", { durable: false });
-  await ch.deleteQueue("health-check");
-  await ch.close();
-  await conn.close();
+  ch.on("error", () => {});
+  try {
+    // Exclusive queues are connection-scoped and auto-delete on close, so they
+    // sidestep the transient_nonexcl_queues restriction without needing
+    // durability or an explicit delete. Use a server-generated name (empty
+    // string) so concurrent health checks can't collide on a locked name.
+    await ch.assertQueue("", { exclusive: true });
+  } finally {
+    await ch.close().catch(() => {});
+    await conn.close().catch(() => {});
+  }
   return true;
 }
 
