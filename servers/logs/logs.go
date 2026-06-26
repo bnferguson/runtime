@@ -273,6 +273,10 @@ func (s *Server) StreamLogChunks(ctx context.Context, state *app_v1alpha.LogsStr
 	} else if !args.Follow() {
 		opts = append(opts, observability.WithLimit(defaultTailLimit))
 	}
+	if args.HasTo() {
+		toTime := standard.FromTimestamp(args.To())
+		opts = append(opts, observability.WithUntilTime(toTime))
+	}
 
 	logTarget, err := s.resolveLogTarget(ctx, target)
 	if err != nil {

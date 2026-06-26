@@ -526,6 +526,152 @@ func TestFormatAttributes(t *testing.T) {
 	})
 }
 
+func TestParseTimeFlag(t *testing.T) {
+	now := time.Date(2026, 6, 26, 15, 30, 0, 0, time.Local)
+
+	t.Run("RFC3339 with zone", func(t *testing.T) {
+		got, err := parseTimeFlag("2026-06-25T14:00:00Z", now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := time.Date(2026, 6, 25, 14, 0, 0, 0, time.UTC); !got.Equal(want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("naive datetime parsed as local", func(t *testing.T) {
+		got, err := parseTimeFlag("2026-06-25 14:00", now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := time.Date(2026, 6, 25, 14, 0, 0, 0, time.Local); !got.Equal(want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("date only is midnight local", func(t *testing.T) {
+		got, err := parseTimeFlag("2026-06-25", now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := time.Date(2026, 6, 25, 0, 0, 0, 0, time.Local); !got.Equal(want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("time only anchors to today", func(t *testing.T) {
+		got, err := parseTimeFlag("14:30", now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := time.Date(2026, 6, 26, 14, 30, 0, 0, time.Local); !got.Equal(want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("duration is treated as ago", func(t *testing.T) {
+		got, err := parseTimeFlag("2h", now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := now.Add(-2 * time.Hour); !got.Equal(want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("surrounding whitespace tolerated", func(t *testing.T) {
+		got, err := parseTimeFlag("  90m  ", now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := now.Add(-90 * time.Minute); !got.Equal(want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+
+	for _, in := range []string{"", "not-a-time", "2026/06/25", "yesterday"} {
+		t.Run("rejects "+in, func(t *testing.T) {
+			if _, err := parseTimeFlag(in, now); err == nil {
+				t.Errorf("parseTimeFlag(%q) = nil error, want error", in)
+			}
+		})
+	}
+}
+
+func TestResolveLogWindow(t *testing.T) {
+	now := time.Date(2026, 6, 26, 15, 30, 0, 0, time.Local)
+	dur := 2 * time.Hour
+
+	at := func(ts *standard.Timestamp) time.Time { return standard.FromTimestamp(ts) }
+
+	t.Run("--since and --last conflict", func(t *testing.T) {
+		if _, _, err := resolveLogWindow(&dur, "1h", "", false, now); err == nil {
+			t.Error("expected error when both --since and --last set")
+		}
+	})
+
+	t.Run("--until with --follow conflict", func(t *testing.T) {
+		if _, _, err := resolveLogWindow(nil, "", "1h", true, now); err == nil {
+			t.Error("expected error when --until combined with --follow")
+		}
+	})
+
+	t.Run("--last sets from, until open", func(t *testing.T) {
+		from, to, err := resolveLogWindow(&dur, "", "", false, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if to != nil {
+			t.Errorf("expected nil until, got %v", at(to))
+		}
+		if want := now.Add(-dur); !at(from).Equal(want) {
+			t.Errorf("from = %v, want %v", at(from), want)
+		}
+	})
+
+	t.Run("--since and --until set both bounds", func(t *testing.T) {
+		from, to, err := resolveLogWindow(nil, "2026-06-25T14:00:00Z", "2026-06-25T15:00:00Z", false, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := time.Date(2026, 6, 25, 14, 0, 0, 0, time.UTC); !at(from).Equal(want) {
+			t.Errorf("from = %v, want %v", at(from), want)
+		}
+		if want := time.Date(2026, 6, 25, 15, 0, 0, 0, time.UTC); !at(to).Equal(want) {
+			t.Errorf("until = %v, want %v", at(to), want)
+		}
+	})
+
+	t.Run("no flags leaves both open", func(t *testing.T) {
+		from, to, err := resolveLogWindow(nil, "", "", false, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if from != nil || to != nil {
+			t.Errorf("expected both nil, got from=%v to=%v", from, to)
+		}
+	})
+
+	t.Run("invalid --since surfaces error", func(t *testing.T) {
+		if _, _, err := resolveLogWindow(nil, "bogus", "", false, now); err == nil {
+			t.Error("expected error for invalid --since")
+		}
+	})
+
+	t.Run("invalid --until surfaces error", func(t *testing.T) {
+		if _, _, err := resolveLogWindow(nil, "", "bogus", false, now); err == nil {
+			t.Error("expected error for invalid --until")
+		}
+	})
+
+	t.Run("inverted window is rejected", func(t *testing.T) {
+		// --since 1h, --until 2h → start (1h ago) is after end (2h ago).
+		if _, _, err := resolveLogWindow(nil, "1h", "2h", false, now); err == nil {
+			t.Error("expected error when --until is before --since")
+		}
+	})
+}
+
 func TestBuildSystemFilter(t *testing.T) {
 	tests := []struct {
 		name       string

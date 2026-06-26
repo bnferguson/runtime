@@ -15,17 +15,28 @@ Running ` + "`" + `miren logs` + "`" + ` without a subcommand shows app logs (ba
 
 ## Time Range
 
-By default, logs show the last 100 lines. Use ` + "`" + `--last` + "`" + ` to specify a time range:
+By default, logs show the last 100 lines. Use ` + "`" + `--since` + "`" + ` and ` + "`" + `--until` + "`" + ` to bound the window. Each accepts an RFC3339 timestamp, a friendlier ` + "`" + `2006-01-02 15:04` + "`" + ` style time (interpreted in your local timezone), or a duration that's read as "ago":
 
 ` + "```" + `bash
-# Show logs from the last 5 minutes
-miren logs --last 5m
+# Last 5 minutes (a duration is read as "ago")
+miren logs --since 5m
 
-# Show logs from the last hour
+# A bounded historical window, e.g. chasing an incident
+miren logs --since "2026-06-25 14:00" --until "2026-06-25 14:30"
+
+# From an absolute start up to now
+miren logs --since 2026-06-25T14:00:00Z
+
+# Everything up to a point in the past (start of retention through --until)
+miren logs --until "2026-06-25 14:30"
+` + "```" + `
+
+` + "`" + `--since` + "`" + ` and ` + "`" + `--until` + "`" + ` compose with ` + "`" + `--grep` + "`" + ` and ` + "`" + `--service` + "`" + `. ` + "`" + `--until` + "`" + ` can't be combined with ` + "`" + `--follow` + "`" + ` (a live tail has no end). The older ` + "`" + `--last` + "`" + ` flag still works and is equivalent to ` + "`" + `--since` + "`" + ` with a duration:
+
+` + "```" + `bash
+# These two are equivalent
 miren logs --last 1h
-
-# Show logs from the last 24 hours
-miren logs --last 24h
+miren logs --since 1h
 ` + "```" + `
 
 ## Following Logs

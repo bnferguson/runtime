@@ -152,7 +152,7 @@ func TestStreamLogChunks_Basic(t *testing.T) {
 	target := &app_v1alpha.LogTarget{}
 	target.SetApp("test-app")
 
-	_, err = client.StreamLogChunks(ctx, target, nil, false, "", callback)
+	_, err = client.StreamLogChunks(ctx, target, nil, false, "", callback, nil)
 	r.NoError(err)
 
 	mu.Lock()
@@ -217,7 +217,7 @@ func TestStreamLogChunks_Chunking(t *testing.T) {
 	target := &app_v1alpha.LogTarget{}
 	target.SetApp("test-app")
 
-	_, err = client.StreamLogChunks(ctx, target, nil, false, "", callback)
+	_, err = client.StreamLogChunks(ctx, target, nil, false, "", callback, nil)
 	r.NoError(err)
 
 	mu.Lock()
@@ -277,7 +277,7 @@ func TestStreamLogChunks_BySandbox(t *testing.T) {
 	target := &app_v1alpha.LogTarget{}
 	target.SetSandbox("sandbox/test-sandbox-123")
 
-	_, err = client.StreamLogChunks(ctx, target, nil, false, "", callback)
+	_, err = client.StreamLogChunks(ctx, target, nil, false, "", callback, nil)
 	r.NoError(err)
 
 	mu.Lock()
@@ -325,13 +325,61 @@ func TestStreamLogChunks_WithFromTime(t *testing.T) {
 
 	fromTime := standard.ToTimestamp(now.Add(-1 * time.Hour))
 
-	_, err = client.StreamLogChunks(ctx, target, fromTime, false, "", callback)
+	_, err = client.StreamLogChunks(ctx, target, fromTime, false, "", callback, nil)
 	r.NoError(err)
 
 	mu.Lock()
 	defer mu.Unlock()
 
 	r.NotEmpty(receivedChunks)
+}
+
+// TestStreamLogChunks_WithUntilTime verifies the `to` bound is threaded all the
+// way to the VictoriaLogs query as the `end` parameter, rather than the server
+// hardcoding end=now.
+func TestStreamLogChunks_WithUntilTime(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	r := require.New(t)
+
+	until := time.Now().Add(-30 * time.Minute)
+
+	var mu sync.Mutex
+	var gotEnd string
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		mu.Lock()
+		gotEnd = req.URL.Query().Get("end")
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	server, ec, cleanup := setupTestServer(t, mockServer)
+	defer cleanup()
+
+	app := &core_v1alpha.App{}
+	_, err := ec.Create(ctx, "test-app", app)
+	r.NoError(err)
+
+	client := &app_v1alpha.LogsClient{
+		Client: rpc.LocalClient(app_v1alpha.AdaptLogs(server)),
+	}
+
+	callback := stream.Callback(func(chunk *app_v1alpha.LogChunk) error { return nil })
+
+	target := &app_v1alpha.LogTarget{}
+	target.SetApp("test-app")
+
+	_, err = client.StreamLogChunks(ctx, target, nil, false, "", callback, standard.ToTimestamp(until))
+	r.NoError(err)
+
+	mu.Lock()
+	defer mu.Unlock()
+	r.NotEmpty(gotEnd, "expected the server to forward an end bound to victorialogs")
+	parsed, err := time.Parse(time.RFC3339Nano, gotEnd)
+	r.NoError(err)
+	r.WithinDuration(until, parsed, time.Second)
 }
 
 func TestStreamLogChunks_FollowModePeriodicFlush(t *testing.T) {
@@ -393,7 +441,7 @@ func TestStreamLogChunks_FollowModePeriodicFlush(t *testing.T) {
 	target := &app_v1alpha.LogTarget{}
 	target.SetApp("test-app")
 
-	_, err = client.StreamLogChunks(ctx, target, nil, true, "", callback)
+	_, err = client.StreamLogChunks(ctx, target, nil, true, "", callback, nil)
 	r.NoError(err)
 
 	mu.Lock()
@@ -431,7 +479,7 @@ func TestStreamLogChunks_ErrorNoTarget(t *testing.T) {
 	// Empty target - should error
 	target := &app_v1alpha.LogTarget{}
 
-	_, err := client.StreamLogChunks(ctx, target, nil, false, "", callback)
+	_, err := client.StreamLogChunks(ctx, target, nil, false, "", callback, nil)
 	r.Error(err)
 	r.Contains(err.Error(), "target must specify exactly one of app, sandbox, or system")
 }
@@ -457,7 +505,7 @@ func TestStreamLogChunks_AppNotFound(t *testing.T) {
 	target := &app_v1alpha.LogTarget{}
 	target.SetApp("nonexistent-app")
 
-	_, err := client.StreamLogChunks(ctx, target, nil, false, "", callback)
+	_, err := client.StreamLogChunks(ctx, target, nil, false, "", callback, nil)
 	r.Error(err)
 }
 
@@ -504,7 +552,7 @@ func TestStreamLogChunks_LogEntryFields(t *testing.T) {
 	target := &app_v1alpha.LogTarget{}
 	target.SetApp("test-app")
 
-	_, err = client.StreamLogChunks(ctx, target, nil, false, "", callback)
+	_, err = client.StreamLogChunks(ctx, target, nil, false, "", callback, nil)
 	r.NoError(err)
 
 	mu.Lock()
@@ -558,7 +606,7 @@ func TestStreamLogChunks_FilterPassedToVictoriaLogs(t *testing.T) {
 	target.SetApp("test-app")
 
 	// Filter for ERROR logs - this should be passed to VictoriaLogs
-	_, err = client.StreamLogChunks(ctx, target, nil, false, "ERROR", callback)
+	_, err = client.StreamLogChunks(ctx, target, nil, false, "ERROR", callback, nil)
 	r.NoError(err)
 
 	mu.Lock()
@@ -608,7 +656,7 @@ func TestStreamLogChunks_FilterNoMatches(t *testing.T) {
 	target.SetApp("test-app")
 
 	// Filter for something that doesn't exist
-	_, err = client.StreamLogChunks(ctx, target, nil, false, "CRITICAL", callback)
+	_, err = client.StreamLogChunks(ctx, target, nil, false, "CRITICAL", callback, nil)
 	r.NoError(err)
 
 	mu.Lock()
@@ -696,7 +744,7 @@ func TestStreamLogChunks_FilterWithFollow(t *testing.T) {
 	target.SetApp("test-app")
 
 	// Filter for ERROR in follow mode
-	_, err = client.StreamLogChunks(ctx, target, nil, true, "ERROR", callback)
+	_, err = client.StreamLogChunks(ctx, target, nil, true, "ERROR", callback, nil)
 	r.NoError(err)
 
 	mu.Lock()
@@ -765,7 +813,7 @@ func TestStreamLogChunks_InvalidFilterRegex(t *testing.T) {
 	target.SetApp("test-app")
 
 	// Invalid regex should return error
-	_, err = client.StreamLogChunks(ctx, target, nil, false, "/[invalid/", callback)
+	_, err = client.StreamLogChunks(ctx, target, nil, false, "/[invalid/", callback, nil)
 	r.Error(err)
 	r.Contains(err.Error(), "invalid filter")
 }
@@ -819,7 +867,7 @@ func TestStreamLogChunks_FilterWithRegex(t *testing.T) {
 	target.SetApp("test-app")
 
 	// Use regex filter syntax /pattern/
-	_, err = client.StreamLogChunks(ctx, target, nil, false, "/ERR(OR)?/", callback)
+	_, err = client.StreamLogChunks(ctx, target, nil, false, "/ERR(OR)?/", callback, nil)
 	r.NoError(err)
 
 	// Verify the query contains the compiled LogsQL regex format
@@ -872,7 +920,7 @@ func TestStreamLogChunks_FilterWithNegation(t *testing.T) {
 	target.SetApp("test-app")
 
 	// Use negation filter syntax: show errors but not debug
-	_, err = client.StreamLogChunks(ctx, target, nil, false, "error -debug", callback)
+	_, err = client.StreamLogChunks(ctx, target, nil, false, "error -debug", callback, nil)
 	r.NoError(err)
 
 	// Verify the query contains negation
@@ -941,7 +989,7 @@ func TestStreamLogChunks_QueryContract(t *testing.T) {
 		target.SetApp("test-app")
 
 		// No from time, no follow → server applies default limit
-		_, err := client.StreamLogChunks(ctx, target, nil, false, "", noop)
+		_, err := client.StreamLogChunks(ctx, target, nil, false, "", noop, nil)
 		r.NoError(err)
 
 		mu.Lock()
@@ -962,7 +1010,7 @@ func TestStreamLogChunks_QueryContract(t *testing.T) {
 		target.SetApp("test-app")
 
 		fromTime := standard.ToTimestamp(now.Add(-5 * time.Minute))
-		_, err := client.StreamLogChunks(ctx, target, fromTime, false, "", noop)
+		_, err := client.StreamLogChunks(ctx, target, fromTime, false, "", noop, nil)
 		r.NoError(err)
 
 		mu.Lock()

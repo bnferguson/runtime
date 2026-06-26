@@ -567,6 +567,9 @@ interfaces:
             doc: "Optional regex pattern to filter log lines"
           - name: chunks
             type: stream.SendStream[*LogChunk]
+          - name: to
+            type: standard.Timestamp
+            doc: "Optional upper time bound; when unset, reads up to now"
 
   - name: Disks
     methods:

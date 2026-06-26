@@ -3134,6 +3134,7 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			InterfaceName: "Crud",
 			Index:         0,
 			Public:        false,
+			Params:        []string{"name"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.New(ctx, &CrudNew{Call: call})
 			},
@@ -3143,6 +3144,7 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			InterfaceName: "Crud",
 			Index:         0,
 			Public:        false,
+			Params:        []string{"app", "configuration"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.SetConfiguration(ctx, &CrudSetConfiguration{Call: call})
 			},
@@ -3152,6 +3154,7 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			InterfaceName: "Crud",
 			Index:         0,
 			Public:        false,
+			Params:        []string{"app"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.GetConfiguration(ctx, &CrudGetConfiguration{Call: call})
 			},
@@ -3161,6 +3164,7 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			InterfaceName: "Crud",
 			Index:         0,
 			Public:        false,
+			Params:        []string{"app", "host"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.SetHost(ctx, &CrudSetHost{Call: call})
 			},
@@ -3170,6 +3174,7 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			InterfaceName: "Crud",
 			Index:         0,
 			Public:        false,
+			Params:        []string{},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.List(ctx, &CrudList{Call: call})
 			},
@@ -3179,6 +3184,7 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			InterfaceName: "Crud",
 			Index:         0,
 			Public:        false,
+			Params:        []string{"name"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Destroy(ctx, &CrudDestroy{Call: call})
 			},
@@ -3188,6 +3194,7 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			InterfaceName: "Crud",
 			Index:         0,
 			Public:        false,
+			Params:        []string{"app", "key", "value", "sensitive", "service"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.SetEnvVar(ctx, &CrudSetEnvVar{Call: call})
 			},
@@ -3197,6 +3204,7 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			InterfaceName: "Crud",
 			Index:         0,
 			Public:        false,
+			Params:        []string{"app", "vars", "service"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.SetEnvVars(ctx, &CrudSetEnvVars{Call: call})
 			},
@@ -3206,6 +3214,7 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			InterfaceName: "Crud",
 			Index:         0,
 			Public:        false,
+			Params:        []string{"app", "vars", "service"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.SetInitialEnvVars(ctx, &CrudSetInitialEnvVars{Call: call})
 			},
@@ -3215,6 +3224,7 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			InterfaceName: "Crud",
 			Index:         0,
 			Public:        false,
+			Params:        []string{"app", "key", "service"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.DeleteEnvVar(ctx, &CrudDeleteEnvVar{Call: call})
 			},
@@ -3224,6 +3234,7 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			InterfaceName: "Crud",
 			Index:         0,
 			Public:        false,
+			Params:        []string{"app", "service"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Restart(ctx, &CrudRestart{Call: call})
 			},
@@ -3753,6 +3764,7 @@ func AdaptUserQuery(t UserQuery) *rpc.Interface {
 			InterfaceName: "UserQuery",
 			Index:         0,
 			Public:        false,
+			Params:        []string{},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.WhoAmI(ctx, &UserQueryWhoAmI{Call: call})
 			},
@@ -3914,6 +3926,7 @@ func AdaptAppStatus(t AppStatus) *rpc.Interface {
 			InterfaceName: "AppStatus",
 			Index:         0,
 			Public:        false,
+			Params:        []string{"application"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.AppInfo(ctx, &AppStatusAppInfo{Call: call})
 			},
@@ -4231,6 +4244,7 @@ type logsStreamLogChunksArgsData struct {
 	Follow *bool               `cbor:"2,keyasint,omitempty" json:"follow,omitempty"`
 	Filter *string             `cbor:"3,keyasint,omitempty" json:"filter,omitempty"`
 	Chunks *rpc.Capability     `cbor:"4,keyasint,omitempty" json:"chunks,omitempty"`
+	To     *standard.Timestamp `cbor:"5,keyasint,omitempty" json:"to,omitempty"`
 }
 
 type LogsStreamLogChunksArgs struct {
@@ -4285,6 +4299,14 @@ func (v *LogsStreamLogChunksArgs) Chunks() *stream.SendStreamClient[*LogChunk] {
 		return nil
 	}
 	return &stream.SendStreamClient[*LogChunk]{Client: v.call.NewClient(v.data.Chunks)}
+}
+
+func (v *LogsStreamLogChunksArgs) HasTo() bool {
+	return v.data.To != nil
+}
+
+func (v *LogsStreamLogChunksArgs) To() *standard.Timestamp {
+	return v.data.To
 }
 
 func (v *LogsStreamLogChunksArgs) MarshalCBOR() ([]byte, error) {
@@ -4468,6 +4490,7 @@ func AdaptLogs(t Logs) *rpc.Interface {
 			InterfaceName: "Logs",
 			Index:         0,
 			Public:        false,
+			Params:        []string{"application", "from", "follow"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.AppLogs(ctx, &LogsAppLogs{Call: call})
 			},
@@ -4477,6 +4500,7 @@ func AdaptLogs(t Logs) *rpc.Interface {
 			InterfaceName: "Logs",
 			Index:         0,
 			Public:        false,
+			Params:        []string{"sandbox", "from", "follow"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.SandboxLogs(ctx, &LogsSandboxLogs{Call: call})
 			},
@@ -4486,6 +4510,7 @@ func AdaptLogs(t Logs) *rpc.Interface {
 			InterfaceName: "Logs",
 			Index:         0,
 			Public:        false,
+			Params:        []string{"target", "from", "follow", "logs"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.StreamLogs(ctx, &LogsStreamLogs{Call: call})
 			},
@@ -4495,6 +4520,7 @@ func AdaptLogs(t Logs) *rpc.Interface {
 			InterfaceName: "Logs",
 			Index:         0,
 			Public:        false,
+			Params:        []string{"target", "from", "follow", "filter", "chunks", "to"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.StreamLogChunks(ctx, &LogsStreamLogChunks{Call: call})
 			},
@@ -4612,7 +4638,7 @@ type LogsClientStreamLogChunksResults struct {
 	data   logsStreamLogChunksResultsData
 }
 
-func (v LogsClient) StreamLogChunks(ctx context.Context, target *LogTarget, from *standard.Timestamp, follow bool, filter string, chunks stream.SendStream[*LogChunk]) (*LogsClientStreamLogChunksResults, error) {
+func (v LogsClient) StreamLogChunks(ctx context.Context, target *LogTarget, from *standard.Timestamp, follow bool, filter string, chunks stream.SendStream[*LogChunk], to *standard.Timestamp) (*LogsClientStreamLogChunksResults, error) {
 	args := LogsStreamLogChunksArgs{}
 	caps := map[rpc.OID]*rpc.InlineCapability{}
 	args.data.Target = target
@@ -4624,6 +4650,7 @@ func (v LogsClient) StreamLogChunks(ctx context.Context, target *LogTarget, from
 		args.data.Chunks = c
 		caps[oid] = ic
 	}
+	args.data.To = to
 
 	var ret logsStreamLogChunksResultsData
 
@@ -5127,6 +5154,7 @@ func AdaptDisks(t Disks) *rpc.Interface {
 			InterfaceName: "Disks",
 			Index:         0,
 			Public:        false,
+			Params:        []string{"name", "capacity"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.New(ctx, &DisksNew{Call: call})
 			},
@@ -5136,6 +5164,7 @@ func AdaptDisks(t Disks) *rpc.Interface {
 			InterfaceName: "Disks",
 			Index:         0,
 			Public:        false,
+			Params:        []string{"id"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.GetById(ctx, &DisksGetById{Call: call})
 			},
@@ -5145,6 +5174,7 @@ func AdaptDisks(t Disks) *rpc.Interface {
 			InterfaceName: "Disks",
 			Index:         0,
 			Public:        false,
+			Params:        []string{"name"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.GetByName(ctx, &DisksGetByName{Call: call})
 			},
@@ -5154,6 +5184,7 @@ func AdaptDisks(t Disks) *rpc.Interface {
 			InterfaceName: "Disks",
 			Index:         0,
 			Public:        false,
+			Params:        []string{},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.List(ctx, &DisksList{Call: call})
 			},
@@ -5163,6 +5194,7 @@ func AdaptDisks(t Disks) *rpc.Interface {
 			InterfaceName: "Disks",
 			Index:         0,
 			Public:        false,
+			Params:        []string{"id"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Delete(ctx, &DisksDelete{Call: call})
 			},
@@ -5678,6 +5710,7 @@ func AdaptAddons(t Addons) *rpc.Interface {
 			InterfaceName: "Addons",
 			Index:         0,
 			Public:        false,
+			Params:        []string{"name", "addon", "variant", "app", "version"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.CreateInstance(ctx, &AddonsCreateInstance{Call: call})
 			},
@@ -5687,6 +5720,7 @@ func AdaptAddons(t Addons) *rpc.Interface {
 			InterfaceName: "Addons",
 			Index:         0,
 			Public:        false,
+			Params:        []string{"app"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.ListInstances(ctx, &AddonsListInstances{Call: call})
 			},
@@ -5696,6 +5730,7 @@ func AdaptAddons(t Addons) *rpc.Interface {
 			InterfaceName: "Addons",
 			Index:         0,
 			Public:        false,
+			Params:        []string{"app", "name"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.DeleteInstance(ctx, &AddonsDeleteInstance{Call: call})
 			},

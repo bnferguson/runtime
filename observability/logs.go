@@ -225,6 +225,7 @@ func NewLogReader(address string, timeout time.Duration) *LogReader {
 
 type logReadOpts struct {
 	From  time.Time
+	Until time.Time
 	Limit int
 }
 
@@ -233,6 +234,14 @@ type LogReaderOption func(*logReadOpts)
 func WithFromTime(t time.Time) LogReaderOption {
 	return func(o *logReadOpts) {
 		o.From = t
+	}
+}
+
+// WithUntilTime bounds the query to entries at or before t. When unset, queries
+// read up to the present.
+func WithUntilTime(t time.Time) LogReaderOption {
+	return func(o *logReadOpts) {
+		o.Until = t
 	}
 }
 
@@ -363,8 +372,12 @@ func (l *LogReader) executeStreamQuery(ctx context.Context, query string, logCh 
 	if startTime.IsZero() {
 		startTime = time.Now().Add(-24 * time.Hour)
 	}
+	endTime := o.Until
+	if endTime.IsZero() {
+		endTime = time.Now()
+	}
 	params.Set("start", startTime.Format(time.RFC3339Nano))
-	params.Set("end", time.Now().Format(time.RFC3339Nano))
+	params.Set("end", endTime.Format(time.RFC3339Nano))
 
 	fullURL := fmt.Sprintf("%s?%s", queryURL, params.Encode())
 

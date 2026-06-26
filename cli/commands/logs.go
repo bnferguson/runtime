@@ -63,12 +63,95 @@ func buildSystemFilter(component, userFilter string) string {
 	return filter
 }
 
+// timeFlagLayouts are the absolute timestamp formats accepted by --since/--until,
+// tried in order. Naive (zoneless) layouts are interpreted in the local timezone,
+// matching docker and journalctl.
+var timeFlagLayouts = []string{
+	time.RFC3339Nano,
+	time.RFC3339,
+	"2006-01-02 15:04:05",
+	"2006-01-02 15:04",
+	"2006-01-02",
+	"15:04:05",
+	"15:04",
+}
+
+// parseTimeFlag resolves a --since/--until value to an absolute time. It accepts
+// RFC3339 timestamps, a handful of common naive layouts (interpreted in local
+// time, with time-only forms anchored to today), and Go durations like "2h" or
+// "90m", which are treated as that long ago relative to now.
+func parseTimeFlag(s string, now time.Time) (time.Time, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return time.Time{}, fmt.Errorf("empty time value")
+	}
+
+	for _, layout := range timeFlagLayouts {
+		t, err := time.ParseInLocation(layout, s, time.Local)
+		if err != nil {
+			continue
+		}
+		// Time-only layouts parse with a zero (year 0) date; anchor them to today.
+		if t.Year() == 0 {
+			t = time.Date(now.Year(), now.Month(), now.Day(),
+				t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), time.Local)
+		}
+		return t, nil
+	}
+
+	if d, err := time.ParseDuration(s); err == nil {
+		return now.Add(-d), nil
+	}
+
+	return time.Time{}, fmt.Errorf(
+		"not a recognized timestamp or duration (try RFC3339, '2006-01-02 15:04', or a duration like '2h')")
+}
+
+// resolveLogWindow computes the from/until bounds for a log query from the
+// --last/--since/--until flags, enforcing the flag-combination rules. A nil
+// return means that bound is open (read from the start of retention / up to now).
+func resolveLogWindow(last *time.Duration, since, until string, follow bool, now time.Time) (from, to *standard.Timestamp, err error) {
+	if since != "" && last != nil {
+		return nil, nil, fmt.Errorf("--since and --last both set the start of the window; use one or the other")
+	}
+	if until != "" && follow {
+		return nil, nil, fmt.Errorf("--until cannot be combined with --follow (a live tail has no end)")
+	}
+
+	switch {
+	case since != "":
+		t, perr := parseTimeFlag(since, now)
+		if perr != nil {
+			return nil, nil, fmt.Errorf("invalid --since value %q: %w", since, perr)
+		}
+		from = standard.ToTimestamp(t)
+	case last != nil:
+		from = standard.ToTimestamp(now.Add(-*last))
+	}
+
+	if until != "" {
+		t, perr := parseTimeFlag(until, now)
+		if perr != nil {
+			return nil, nil, fmt.Errorf("invalid --until value %q: %w", until, perr)
+		}
+		to = standard.ToTimestamp(t)
+	}
+
+	if from != nil && to != nil && standard.FromTimestamp(to).Before(standard.FromTimestamp(from)) {
+		return nil, nil, fmt.Errorf("the window is empty: --until is before --since")
+	}
+
+	return from, to, nil
+}
+
 // LogsApp shows application logs. This is the default subcommand for `miren logs`.
 func LogsApp(ctx *Context, opts struct {
 	AppCentric
 	FormatOptions
 
 	Last    *time.Duration `short:"l" long:"last" description:"Show logs from the last duration"`
+	Since   string         `long:"since" description:"Show logs since a time (RFC3339, '2006-01-02 15:04', or a duration like '2h' ago)"`
+	Until   string         `long:"until" description:"Show logs until a time (RFC3339, '2006-01-02 15:04', or a duration like '30m' ago); not valid with --follow"`
 	Follow  bool           `short:"f" long:"follow" description:"Follow log output (live tail)"`
 	Filter  string         `short:"g" long:"grep" description:"Filter logs (e.g., 'error', '\"exact phrase\"', 'error -debug', '/regex/')"`
 	Service string         `long:"service" description:"Filter logs by service name (e.g., 'web', 'worker')"`
@@ -78,10 +161,16 @@ func LogsApp(ctx *Context, opts struct {
 		return err
 	}
 
+	from, until, err := resolveLogWindow(opts.Last, opts.Since, opts.Until, opts.Follow, time.Now())
+	if err != nil {
+		return err
+	}
+
 	combinedFilter := buildFilterWithService(opts.Filter, opts.Service)
 	return dispatchLogs(ctx, cl, logDispatchArgs{
 		app:            opts.App,
-		last:           opts.Last,
+		from:           from,
+		until:          until,
 		follow:         opts.Follow,
 		rawFilter:      opts.Filter,
 		combinedFilter: combinedFilter,
@@ -96,6 +185,8 @@ func LogsSandbox(ctx *Context, opts struct {
 
 	SandboxID string         `position:"0" usage:"Sandbox ID" required:"true"`
 	Last      *time.Duration `short:"l" long:"last" description:"Show logs from the last duration"`
+	Since     string         `long:"since" description:"Show logs since a time (RFC3339, '2006-01-02 15:04', or a duration like '2h' ago)"`
+	Until     string         `long:"until" description:"Show logs until a time (RFC3339, '2006-01-02 15:04', or a duration like '30m' ago); not valid with --follow"`
 	Follow    bool           `short:"f" long:"follow" description:"Follow log output (live tail)"`
 	Filter    string         `short:"g" long:"grep" description:"Filter logs (e.g., 'error', '\"exact phrase\"', 'error -debug', '/regex/')"`
 }) error {
@@ -106,9 +197,15 @@ func LogsSandbox(ctx *Context, opts struct {
 		return err
 	}
 
+	from, until, err := resolveLogWindow(opts.Last, opts.Since, opts.Until, opts.Follow, time.Now())
+	if err != nil {
+		return err
+	}
+
 	return dispatchLogs(ctx, cl, logDispatchArgs{
 		sandbox:        sandbox,
-		last:           opts.Last,
+		from:           from,
+		until:          until,
 		follow:         opts.Follow,
 		rawFilter:      opts.Filter,
 		combinedFilter: opts.Filter,
@@ -123,6 +220,8 @@ func LogsBuild(ctx *Context, opts struct {
 
 	Version string         `position:"0" usage:"Build version (e.g., v3)" required:"true"`
 	Last    *time.Duration `short:"l" long:"last" description:"Show logs from the last duration"`
+	Since   string         `long:"since" description:"Show logs since a time (RFC3339, '2006-01-02 15:04', or a duration like '2h' ago)"`
+	Until   string         `long:"until" description:"Show logs until a time (RFC3339, '2006-01-02 15:04', or a duration like '30m' ago); not valid with --follow"`
 	Follow  bool           `short:"f" long:"follow" description:"Follow log output (live tail)"`
 	Filter  string         `short:"g" long:"grep" description:"Filter logs (e.g., 'error', '\"exact phrase\"', 'error -debug', '/regex/')"`
 }) error {
@@ -131,10 +230,16 @@ func LogsBuild(ctx *Context, opts struct {
 		return err
 	}
 
+	from, until, err := resolveLogWindow(opts.Last, opts.Since, opts.Until, opts.Follow, time.Now())
+	if err != nil {
+		return err
+	}
+
 	combinedFilter := buildBuildFilter(opts.Version, opts.Filter)
 	return dispatchLogs(ctx, cl, logDispatchArgs{
 		app:            opts.App,
-		last:           opts.Last,
+		from:           from,
+		until:          until,
 		follow:         opts.Follow,
 		rawFilter:      opts.Filter,
 		combinedFilter: combinedFilter,
@@ -149,6 +254,8 @@ func LogsSystem(ctx *Context, opts struct {
 
 	Component string         `position:"0" usage:"System component to filter by (e.g., 'etcd', 'scheduler')"`
 	Last      *time.Duration `short:"l" long:"last" description:"Show logs from the last duration"`
+	Since     string         `long:"since" description:"Show logs since a time (RFC3339, '2006-01-02 15:04', or a duration like '2h' ago)"`
+	Until     string         `long:"until" description:"Show logs until a time (RFC3339, '2006-01-02 15:04', or a duration like '30m' ago); not valid with --follow"`
 	Follow    bool           `short:"f" long:"follow" description:"Follow log output (live tail)"`
 	Filter    string         `short:"g" long:"grep" description:"Filter logs (e.g., 'error', '\"exact phrase\"', 'error -debug', '/regex/')"`
 }) error {
@@ -161,16 +268,20 @@ func LogsSystem(ctx *Context, opts struct {
 		return fmt.Errorf("system logs require a newer server version")
 	}
 
+	from, until, err := resolveLogWindow(opts.Last, opts.Since, opts.Until, opts.Follow, time.Now())
+	if err != nil {
+		return err
+	}
+	// When no time bounds and no --follow, from is nil → server returns last 100 lines
+
+	if until != nil && !cl.HasMethodParam(ctx, "streamLogChunks", "to") {
+		return fmt.Errorf("--until requires a newer server version")
+	}
+
 	target := &app_v1alpha.LogTarget{}
 	target.SetSystem(true)
 
 	combinedFilter := buildSystemFilter(opts.Component, opts.Filter)
-
-	var ts *standard.Timestamp
-	if opts.Last != nil {
-		ts = standard.ToTimestamp(time.Now().Add(-*opts.Last))
-	}
-	// When no --last and no --follow, ts is nil → server returns last 100 lines
 
 	printer, flush := logPrinter(ctx, opts.IsJSON(), opts.Follow)
 	defer flush()
@@ -183,7 +294,7 @@ func LogsSystem(ctx *Context, opts struct {
 		return nil
 	})
 
-	_, err = ac.StreamLogChunks(ctx, target, ts, opts.Follow, combinedFilter, callback)
+	_, err = ac.StreamLogChunks(ctx, target, from, opts.Follow, combinedFilter, callback, until)
 	return err
 }
 
@@ -192,7 +303,8 @@ func LogsSystem(ctx *Context, opts struct {
 type logDispatchArgs struct {
 	app            string
 	sandbox        string
-	last           *time.Duration
+	from           *standard.Timestamp
+	until          *standard.Timestamp
 	follow         bool
 	rawFilter      string
 	combinedFilter string
@@ -220,6 +332,14 @@ func dispatchLogs(ctx *Context, cl *rpc.NetworkClient, args logDispatchArgs) err
 
 	// Check if server supports streaming (prefer chunked for efficiency)
 	if cl.HasMethod(ctx, "streamLogChunks") {
+		// The `to` bound (from --until) is a parameter added to streamLogChunks
+		// after it first shipped. A server with the method but not the parameter
+		// would silently ignore the bound, so detect that and error instead of
+		// quietly returning a wider window than asked for.
+		if args.until != nil && !cl.HasMethodParam(ctx, "streamLogChunks", "to") {
+			return fmt.Errorf("--until requires a newer server version")
+		}
+
 		// Append system exclusion for server-side filtering on app queries
 		filter := args.combinedFilter
 		if args.app != "" {
@@ -229,7 +349,12 @@ func dispatchLogs(ctx *Context, cl *rpc.NetworkClient, args logDispatchArgs) err
 				filter = systemExclusion + " " + filter
 			}
 		}
-		return streamLogChunks(ctx, cl, args.app, args.sandbox, args.last, args.follow, filter, printer)
+		return streamLogChunks(ctx, cl, args.app, args.sandbox, args.from, args.until, args.follow, filter, printer)
+	}
+
+	// Servers without streamLogChunks can't honor an upper bound at all.
+	if args.until != nil {
+		return fmt.Errorf("--until requires a newer server version")
 	}
 
 	// Older server - warn about upgrade and limited functionality
@@ -253,7 +378,7 @@ func dispatchLogs(ctx *Context, cl *rpc.NetworkClient, args logDispatchArgs) err
 	}
 
 	if cl.HasMethod(ctx, "streamLogs") {
-		return streamLogs(ctx, cl, args.app, args.sandbox, args.last, args.follow, filter, printer)
+		return streamLogs(ctx, cl, args.app, args.sandbox, args.from, args.follow, filter, printer)
 	}
 
 	// Warn if --follow requested but not supported
@@ -262,7 +387,7 @@ func dispatchLogs(ctx *Context, cl *rpc.NetworkClient, args logDispatchArgs) err
 	}
 
 	// Fall back to legacy pagination
-	return legacyLogs(ctx, cl, args.app, args.sandbox, args.last, filter, printer)
+	return legacyLogs(ctx, cl, args.app, args.sandbox, args.from, filter, printer)
 }
 
 var streamTypePrefixes = map[string]string{
@@ -488,7 +613,7 @@ func formatAttributes(m map[string]string) string {
 	return b.String()
 }
 
-func streamLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *time.Duration, follow bool, filter *logfilter.Filter, printer func(*app_v1alpha.LogEntry)) error {
+func streamLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, from *standard.Timestamp, follow bool, filter *logfilter.Filter, printer func(*app_v1alpha.LogEntry)) error {
 	ac := app_v1alpha.LogsClient{Client: cl}
 
 	// Build target
@@ -499,14 +624,9 @@ func streamLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *
 		target.SetApp(app)
 	}
 
-	// Determine start time
-	var ts *standard.Timestamp
-	if last != nil {
-		ts = standard.ToTimestamp(time.Now().Add(-*last))
-	}
-	// When no --last: ts is nil
-	// - follow mode: start from now
-	// - non-follow: server returns last 100 lines
+	// from is resolved by the caller from --last/--since. When nil: follow
+	// starts from now, non-follow returns the last 100 lines. This protocol has
+	// no end bound, so --until is rejected before reaching here.
 
 	// Create callback to print logs as they arrive
 	callback := stream.Callback(func(l *app_v1alpha.LogEntry) error {
@@ -519,11 +639,11 @@ func streamLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *
 		return nil
 	})
 
-	_, err := ac.StreamLogs(ctx, target, ts, follow, callback)
+	_, err := ac.StreamLogs(ctx, target, from, follow, callback)
 	return err
 }
 
-func streamLogChunks(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *time.Duration, follow bool, filter string, printer func(*app_v1alpha.LogEntry)) error {
+func streamLogChunks(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, from, until *standard.Timestamp, follow bool, filter string, printer func(*app_v1alpha.LogEntry)) error {
 	ac := app_v1alpha.LogsClient{Client: cl}
 
 	// Build target
@@ -534,14 +654,9 @@ func streamLogChunks(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, l
 		target.SetApp(app)
 	}
 
-	// Determine start time
-	var ts *standard.Timestamp
-	if last != nil {
-		ts = standard.ToTimestamp(time.Now().Add(-*last))
-	}
-	// When no --last: ts is nil
-	// - follow mode: start from now
-	// - non-follow: server returns last 100 lines
+	// from/until are resolved by the caller from --last/--since/--until. When
+	// from is nil: follow starts from now, non-follow returns the last 100 lines.
+	// When until is nil, the server reads up to now.
 
 	// Create callback to print logs as they arrive in chunks
 	callback := stream.Callback(func(chunk *app_v1alpha.LogChunk) error {
@@ -551,18 +666,15 @@ func streamLogChunks(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, l
 		return nil
 	})
 
-	_, err := ac.StreamLogChunks(ctx, target, ts, follow, filter, callback)
+	_, err := ac.StreamLogChunks(ctx, target, from, follow, filter, callback, until)
 	return err
 }
 
-func legacyLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, last *time.Duration, filter *logfilter.Filter, printer func(*app_v1alpha.LogEntry)) error {
+func legacyLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, from *standard.Timestamp, filter *logfilter.Filter, printer func(*app_v1alpha.LogEntry)) error {
 	ac := app_v1alpha.LogsClient{Client: cl}
 
-	var ts *standard.Timestamp
-
-	if last != nil {
-		ts = standard.ToTimestamp(time.Now().Add(-*last))
-	} else {
+	ts := from
+	if ts == nil {
 		// Legacy protocol can't do server-side limit=100, so default to
 		// last 1 hour as a reasonable bounded window of recent logs.
 		ts = standard.ToTimestamp(time.Now().Add(-1 * time.Hour))

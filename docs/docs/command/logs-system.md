@@ -27,6 +27,8 @@ miren logs system <component> [flags]
 - `--grep, -g` — Filter logs (e.g., 'error', '"exact phrase"', 'error -debug', '/regex/')
 - `--json` — Shorthand for --format json
 - `--last, -l` — Show logs from the last duration
+- `--since` — Show logs since a time (RFC3339, '2006-01-02 15:04', or a duration like '2h' ago)
+- `--until` — Show logs until a time (RFC3339, '2006-01-02 15:04', or a duration like '30m' ago); not valid with --follow
 
 ## Global Options
 
