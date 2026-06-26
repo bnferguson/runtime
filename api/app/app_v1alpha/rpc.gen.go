@@ -1127,6 +1127,61 @@ func (v *ErrorBreakdown) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type boundPortData struct {
+	Port    *int64  `cbor:"0,keyasint,omitempty" json:"port,omitempty"`
+	Address *string `cbor:"1,keyasint,omitempty" json:"address,omitempty"`
+}
+
+type BoundPort struct {
+	data boundPortData
+}
+
+func (v *BoundPort) HasPort() bool {
+	return v.data.Port != nil
+}
+
+func (v *BoundPort) Port() int64 {
+	if v.data.Port == nil {
+		return 0
+	}
+	return *v.data.Port
+}
+
+func (v *BoundPort) SetPort(port int64) {
+	v.data.Port = &port
+}
+
+func (v *BoundPort) HasAddress() bool {
+	return v.data.Address != nil
+}
+
+func (v *BoundPort) Address() string {
+	if v.data.Address == nil {
+		return ""
+	}
+	return *v.data.Address
+}
+
+func (v *BoundPort) SetAddress(address string) {
+	v.data.Address = &address
+}
+
+func (v *BoundPort) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *BoundPort) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *BoundPort) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *BoundPort) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type poolStatusData struct {
 	Name      *string          `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
 	Windows   *[]*WindowStatus `cbor:"1,keyasint,omitempty" json:"windows,omitempty"`
@@ -1301,6 +1356,12 @@ type applicationStatusData struct {
 	RequestStats      *[]*RequestStat     `cbor:"11,keyasint,omitempty" json:"request_stats,omitempty"`
 	TopPaths          *[]*PathStat        `cbor:"12,keyasint,omitempty" json:"top_paths,omitempty"`
 	ErrorBreakdown    *[]*ErrorBreakdown  `cbor:"13,keyasint,omitempty" json:"error_breakdown,omitempty"`
+	Health            *string             `cbor:"14,keyasint,omitempty" json:"health,omitempty"`
+	ReadyInstances    *int32              `cbor:"15,keyasint,omitempty" json:"ready_instances,omitempty"`
+	DesiredInstances  *int32              `cbor:"16,keyasint,omitempty" json:"desired_instances,omitempty"`
+	CrashCount        *int64              `cbor:"17,keyasint,omitempty" json:"crash_count,omitempty"`
+	CooldownSeconds   *int32              `cbor:"18,keyasint,omitempty" json:"cooldown_seconds,omitempty"`
+	BoundPorts        *[]*BoundPort       `cbor:"19,keyasint,omitempty" json:"bound_ports,omitempty"`
 }
 
 type ApplicationStatus struct {
@@ -1519,6 +1580,97 @@ func (v *ApplicationStatus) ErrorBreakdown() []*ErrorBreakdown {
 func (v *ApplicationStatus) SetErrorBreakdown(errorBreakdown []*ErrorBreakdown) {
 	x := slices.Clone(errorBreakdown)
 	v.data.ErrorBreakdown = &x
+}
+
+func (v *ApplicationStatus) HasHealth() bool {
+	return v.data.Health != nil
+}
+
+func (v *ApplicationStatus) Health() string {
+	if v.data.Health == nil {
+		return ""
+	}
+	return *v.data.Health
+}
+
+func (v *ApplicationStatus) SetHealth(health string) {
+	v.data.Health = &health
+}
+
+func (v *ApplicationStatus) HasReadyInstances() bool {
+	return v.data.ReadyInstances != nil
+}
+
+func (v *ApplicationStatus) ReadyInstances() int32 {
+	if v.data.ReadyInstances == nil {
+		return 0
+	}
+	return *v.data.ReadyInstances
+}
+
+func (v *ApplicationStatus) SetReadyInstances(readyInstances int32) {
+	v.data.ReadyInstances = &readyInstances
+}
+
+func (v *ApplicationStatus) HasDesiredInstances() bool {
+	return v.data.DesiredInstances != nil
+}
+
+func (v *ApplicationStatus) DesiredInstances() int32 {
+	if v.data.DesiredInstances == nil {
+		return 0
+	}
+	return *v.data.DesiredInstances
+}
+
+func (v *ApplicationStatus) SetDesiredInstances(desiredInstances int32) {
+	v.data.DesiredInstances = &desiredInstances
+}
+
+func (v *ApplicationStatus) HasCrashCount() bool {
+	return v.data.CrashCount != nil
+}
+
+func (v *ApplicationStatus) CrashCount() int64 {
+	if v.data.CrashCount == nil {
+		return 0
+	}
+	return *v.data.CrashCount
+}
+
+func (v *ApplicationStatus) SetCrashCount(crashCount int64) {
+	v.data.CrashCount = &crashCount
+}
+
+func (v *ApplicationStatus) HasCooldownSeconds() bool {
+	return v.data.CooldownSeconds != nil
+}
+
+func (v *ApplicationStatus) CooldownSeconds() int32 {
+	if v.data.CooldownSeconds == nil {
+		return 0
+	}
+	return *v.data.CooldownSeconds
+}
+
+func (v *ApplicationStatus) SetCooldownSeconds(cooldownSeconds int32) {
+	v.data.CooldownSeconds = &cooldownSeconds
+}
+
+func (v *ApplicationStatus) HasBoundPorts() bool {
+	return v.data.BoundPorts != nil
+}
+
+func (v *ApplicationStatus) BoundPorts() []*BoundPort {
+	if v.data.BoundPorts == nil {
+		return nil
+	}
+	return *v.data.BoundPorts
+}
+
+func (v *ApplicationStatus) SetBoundPorts(boundPorts []*BoundPort) {
+	x := slices.Clone(boundPorts)
+	v.data.BoundPorts = &x
 }
 
 func (v *ApplicationStatus) MarshalCBOR() ([]byte, error) {

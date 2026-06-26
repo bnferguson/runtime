@@ -226,6 +226,17 @@ types:
         index: 2
         doc: "Percentage of total errors"
 
+  - type: BoundPort
+    fields:
+      - name: port
+        type: int64
+        index: 0
+        doc: "The port the app actually bound"
+      - name: address
+        type: string
+        index: 1
+        doc: "The listening address, when not the default"
+
   - type: PoolStatus
     fields:
       - name: name
@@ -309,6 +320,31 @@ types:
         element: '*ErrorBreakdown'
         index: 13
         doc: "Breakdown of errors by HTTP status code"
+      - name: health
+        type: string
+        index: 14
+        doc: "Readiness of the active version derived from pool state: healthy, degraded, starting, crashed, idle, or unknown"
+      - name: readyInstances
+        type: int32
+        index: 15
+        doc: "Number of instances of the active version that are RUNNING and serving"
+      - name: desiredInstances
+        type: int32
+        index: 16
+        doc: "Number of instances the active version's pools want running"
+      - name: crashCount
+        type: int64
+        index: 17
+        doc: "Consecutive crash count when the active version is in cooldown"
+      - name: cooldownSeconds
+        type: int32
+        index: 18
+        doc: "Seconds remaining in crash cooldown, when crashed"
+      - name: boundPorts
+        type: list
+        element: '*BoundPort'
+        index: 19
+        doc: "Ports the active version's instances actually bound that diverge from the configured port"
 
   - type: LogEntry
     fields:

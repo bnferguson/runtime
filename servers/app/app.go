@@ -17,6 +17,7 @@ import (
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/metrics"
+	"miren.dev/runtime/pkg/apphealth"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
@@ -161,15 +162,7 @@ func (r *AppInfo) List(ctx context.Context, state *app_v1alpha.CrudList) error {
 	}
 
 	// Aggregate sandbox pool state per app
-	type appPoolState struct {
-		ready        int
-		desired      int
-		inCooldown   bool
-		crashCount   int64
-		cooldownLeft time.Duration
-		isAutoscale  bool
-	}
-	poolStateMap := make(map[string]*appPoolState)
+	poolStateMap := make(map[string]*poolHealth)
 
 	poolList, err := r.EC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool))
 	if err != nil {
@@ -183,20 +176,10 @@ func (r *AppInfo) List(ctx context.Context, state *app_v1alpha.CrudList) error {
 
 		appName := ui.CleanEntityID(pool.App.String())
 		if poolStateMap[appName] == nil {
-			poolStateMap[appName] = &appPoolState{isAutoscale: true}
+			poolStateMap[appName] = &poolHealth{isAutoscale: true}
 		}
 		ps := poolStateMap[appName]
-		ps.ready += int(pool.ReadyInstances)
-		ps.desired += int(pool.DesiredInstances)
-		if !pool.CooldownUntil.IsZero() && pool.CooldownUntil.After(now) {
-			ps.inCooldown = true
-			if pool.ConsecutiveCrashCount > ps.crashCount {
-				ps.crashCount = pool.ConsecutiveCrashCount
-			}
-			if left := pool.CooldownUntil.Sub(now); left > ps.cooldownLeft {
-				ps.cooldownLeft = left
-			}
-		}
+		ps.accumulate(&pool, now)
 
 		if spec, ok := specMap[pool.SandboxSpec.Version.String()]; ok {
 			for _, svc := range spec.Services {
@@ -254,21 +237,22 @@ func (r *AppInfo) List(ctx context.Context, state *app_v1alpha.CrudList) error {
 				a.SetScalingMode("fixed")
 			}
 
+			a.SetHealth(ps.classify())
 			if ps.inCooldown {
-				a.SetHealth("crashed")
 				a.SetCrashCount(ps.crashCount)
 				a.SetCooldownSeconds(int32(ps.cooldownLeft.Seconds()))
-			} else if ps.desired == 0 {
-				a.SetHealth("idle")
-			} else if ps.ready == ps.desired {
-				a.SetHealth("healthy")
-			} else if ps.ready > 0 {
-				a.SetHealth("degraded")
-			} else {
-				a.SetHealth("starting")
 			}
+		} else if entry.activeVersion != nil {
+			// Active version but no pools yet. Mirror AppInfo so `m app list`
+			// and app-status/deploy agree: an autoscale app reads as idle
+			// (deliberately at zero), while a fixed service reads as starting
+			// (not up yet) rather than a misleading idle.
+			ps := poolHealth{isAutoscale: specAllowsScaleToZero(specMap[entry.activeVersion.ID.String()])}
+			a.SetReadyInstances(0)
+			a.SetDesiredInstances(0)
+			a.SetHealth(ps.classify())
 		} else {
-			a.SetHealth("unknown")
+			a.SetHealth(apphealth.Unknown)
 		}
 
 		// Routes
