@@ -40,6 +40,14 @@ func init() {
 	}
 
 	DefaultQUICConfig = quic.Config{
+		// Pin the QUIC Initial at the 1200-byte spec minimum so the handshake
+		// fits a 1280-MTU path (Tailscale/WireGuard tunnels, the IPv6 minimum).
+		// quic-go's default of 1280 yields a 1308-byte IPv4 datagram with DF
+		// set, which such tunnels silently drop, hanging the handshake in both
+		// directions. PMTUD raises the packet size again after the handshake
+		// completes, so 1500-MTU paths are unaffected. See quic-go#5573,
+		// quic-go#5634, tailscale#2633.
+		InitialPacketSize:              1200,
 		EnableDatagrams:                true,
 		MaxIncomingStreams:             1000,
 		MaxIncomingUniStreams:          1000,
