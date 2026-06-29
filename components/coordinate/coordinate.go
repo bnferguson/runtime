@@ -813,8 +813,18 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		return err
 	}
 
+	// Best-effort startup maintenance (format migration, short-id backfill, and
+	// reindex) scans the entity store. Bound it with a timeout so that a large or
+	// not-recently-compacted store fails fast and lets startup continue, rather
+	// than blocking the coordinator — and therefore the edge listener — on an
+	// unbounded read. Each step below already treats failure as non-fatal, so a
+	// timeout simply defers the work to a later startup once compaction catches up.
+	const startupMaintenanceTimeout = 2 * time.Minute
+	maintCtx, cancelMaint := context.WithTimeout(ctx, startupMaintenanceTimeout)
+	defer cancelMaint()
+
 	// Migrate entities from old format to new attribute-based format
-	migrated, skipped, err := entity.MigrateEntityStore(ctx, c.Log, client, entity.MigrateOptions{
+	migrated, skipped, err := entity.MigrateEntityStore(maintCtx, c.Log, client, entity.MigrateOptions{
 		Prefix: c.Prefix,
 		DryRun: false,
 	})
@@ -825,7 +835,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	}
 
 	// Backfill short-ids for entities that don't have one
-	sidMigrated, sidSkipped, sidErr := entity.MigrateShortIds(ctx, c.Log, client, entity.MigrateShortIdOptions{
+	sidMigrated, sidSkipped, sidErr := entity.MigrateShortIds(maintCtx, c.Log, client, entity.MigrateShortIdOptions{
 		Prefix: c.Prefix,
 		DryRun: false,
 	})
@@ -836,7 +846,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	}
 
 	// Check if indexes have changed and reindex if needed
-	if err := c.checkAndReindex(ctx, etcdStore, client); err != nil {
+	if err := c.checkAndReindex(maintCtx, etcdStore, client); err != nil {
 		c.Log.Error("automatic reindex failed (will retry next startup)", "error", err)
 	}
 
