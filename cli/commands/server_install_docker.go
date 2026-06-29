@@ -5,16 +5,19 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/quic-go/quic-go/http3"
 	"gopkg.in/yaml.v3"
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/pkg/serverconfig"
 	"miren.dev/runtime/pkg/ui"
 )
 
@@ -24,6 +27,7 @@ func ServerInstallDocker(ctx *Context, opts struct {
 	Name         string            `short:"n" long:"name" description:"Container name"`
 	Force        bool              `short:"f" long:"force" description:"Remove existing container if present"`
 	HTTPPort     int               `long:"http-port" description:"HTTP port mapping" default:"80"`
+	IngressMode  string            `long:"ingress-mode" description:"Ingress mode: tls-autoprovision (default), behind-proxy-http (Miren serves plain HTTP behind a TLS-terminating proxy like tailscale serve / nginx), or behind-proxy-https (Miren terminates TLS on :443 behind a TCP-passthrough proxy)"`
 	HostNetwork  bool              `long:"host-network" description:"Use host networking (ignores port mappings)"`
 	WithoutCloud bool              `long:"without-cloud" description:"Skip cloud registration setup"`
 	ClusterName  string            `long:"cluster-name" description:"Cluster name for cloud registration"`
@@ -39,6 +43,10 @@ func ServerInstallDocker(ctx *Context, opts struct {
 
 	if opts.Name == "" {
 		opts.Name = "miren"
+	}
+
+	if err := validateIngressMode(opts.IngressMode); err != nil {
+		return err
 	}
 
 	// Derive volume name from container name
@@ -68,6 +76,24 @@ func ServerInstallDocker(ctx *Context, opts struct {
 		ctx.Completed("Existing container removed")
 	}
 
+	config := dockerContainerConfig{
+		HTTPPort:    opts.HTTPPort,
+		IngressMode: opts.IngressMode,
+		VolumeName:  volumeName,
+		HostNetwork: opts.HostNetwork,
+		Labs:        opts.Labs,
+	}
+
+	// Verify the host ports we're about to publish are actually free before we
+	// do any expensive setup (volume creation, cloud registration). We run this
+	// after removing any existing miren container so we don't flag its ports as
+	// "taken" by itself. Every required port is a clear, actionable stop — we
+	// don't silently relocate any of them, so what the user asked for is what
+	// they get (or a clear explanation of why they can't have it).
+	if err := preflightPortCheck(ctx, config); err != nil {
+		return err
+	}
+
 	// Create volume if it doesn't exist
 	if err := dockerEnsureVolume(volumeName); err != nil {
 		return fmt.Errorf("failed to ensure volume exists: %w", err)
@@ -92,13 +118,17 @@ func ServerInstallDocker(ctx *Context, opts struct {
 
 	// Create and optionally start the container
 	ctx.Info("Creating miren server container...")
-	containerID, err := dockerCreateContainer(opts.Name, opts.Image, dockerContainerConfig{
-		HTTPPort:    opts.HTTPPort,
-		VolumeName:  volumeName,
-		HostNetwork: opts.HostNetwork,
-		Labs:        opts.Labs,
-	})
+	containerID, err := dockerCreateContainer(opts.Name, opts.Image, config)
 	if err != nil {
+		// The pre-flight check above catches the common case, but a port can
+		// still be grabbed in the race between check and create, or be
+		// undetectable when we lack privileges to test-bind it (binding <1024
+		// unprivileged returns EACCES, not EADDRINUSE). Translate docker's raw
+		// "address already in use" daemon error into friendly guidance rather
+		// than leaking a stack trace.
+		if friendly, ok := dockerPortConflictError(ctx, err); ok {
+			return friendly
+		}
 		return fmt.Errorf("failed to create container: %w", err)
 	}
 	ctx.Completed("Container created: %s", containerID[:12])
@@ -290,6 +320,7 @@ func ServerStatusDocker(ctx *Context, opts struct {
 
 type dockerContainerConfig struct {
 	HTTPPort    int
+	IngressMode string
 	VolumeName  string
 	HostNetwork bool
 	Labs        []string
@@ -310,6 +341,238 @@ func checkDockerAvailable() error {
 	return nil
 }
 
+// defaultAPIPort is the host UDP port the miren API / control plane (QUIC) is
+// published on. The generated client config and the health check both dial it
+// by this number, so it's fixed rather than negotiated.
+const defaultAPIPort = 8443
+
+// requiredPortsHelpURL points operators at the ingress-mode docs when a
+// load-bearing ingress port (80/443) is already held by something else, such
+// as a TLS-terminating reverse proxy like `tailscale serve`.
+const requiredPortsHelpURL = "https://miren.md/tls#ingress-modes-and-tls"
+
+// portRole identifies what a published host port is for, which determines the
+// guidance we show when it's taken (each role has a different right answer).
+type portRole int
+
+const (
+	roleHTTP  portRole = iota // app HTTP ingress + HTTP-01 ACME challenges
+	roleHTTPS                 // app HTTPS ingress
+	roleAPI                   // control-plane API (QUIC)
+)
+
+// requiredHostPort is one host port Miren needs for a given config. It is the
+// single source of truth for both the pre-flight availability check and the
+// actual `docker run -p` arguments, so the two can never drift apart.
+type requiredHostPort struct {
+	hostPort      int
+	containerPort int
+	proto         string // "tcp" or "udp"
+	role          portRole
+}
+
+// requiredHostPorts returns the host ports Miren needs for a given config. The
+// API port is needed in every mode; the app ingress ports vary by ingress mode
+// (behind-proxy-http hands :443 to the proxy, behind-proxy-https gives up :80).
+//
+// Under host networking the server binds the container ports directly on the
+// host, so docker's -p mappings (and --http-port) don't apply and the host port
+// equals the container port. The pre-flight still needs this list to catch a
+// busy port before the server fails to bind at startup; dockerIngressArgs is
+// what decides whether to actually publish these via -p.
+func requiredHostPorts(config dockerContainerConfig) []requiredHostPort {
+	httpHostPort := config.HTTPPort
+	if config.HostNetwork {
+		httpHostPort = 80
+	}
+
+	ports := []requiredHostPort{
+		{hostPort: defaultAPIPort, containerPort: 8443, proto: "udp", role: roleAPI},
+	}
+	switch config.IngressMode {
+	case serverconfig.IngressModeBehindProxyHTTP:
+		ports = append(ports, requiredHostPort{httpHostPort, 80, "tcp", roleHTTP})
+	case serverconfig.IngressModeBehindProxyHTTPS:
+		ports = append(ports, requiredHostPort{443, 443, "tcp", roleHTTPS})
+	default:
+		ports = append(ports,
+			requiredHostPort{httpHostPort, 80, "tcp", roleHTTP},
+			requiredHostPort{443, 443, "tcp", roleHTTPS},
+		)
+	}
+	return ports
+}
+
+type portStatus int
+
+const (
+	portFree portStatus = iota
+	portInUse
+	// portUndetermined means we couldn't tell — e.g. binding the port needs
+	// privileges we don't have. We let the install proceed and rely on the
+	// docker error backstop rather than blocking on a maybe.
+	portUndetermined
+)
+
+func classifyBindErr(err error) portStatus {
+	if err == nil {
+		return portFree
+	}
+	if errors.Is(err, syscall.EADDRINUSE) {
+		return portInUse
+	}
+	return portUndetermined
+}
+
+func checkHostTCPPort(port int) portStatus {
+	ln, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
+	if err == nil {
+		_ = ln.Close()
+		return portFree
+	}
+	return classifyBindErr(err)
+}
+
+func checkHostUDPPort(port int) portStatus {
+	conn, err := net.ListenPacket("udp", fmt.Sprintf("0.0.0.0:%d", port))
+	if err == nil {
+		_ = conn.Close()
+		return portFree
+	}
+	return classifyBindErr(err)
+}
+
+func hostPortStatus(p requiredHostPort) portStatus {
+	if p.proto == "udp" {
+		return checkHostUDPPort(p.hostPort)
+	}
+	return checkHostTCPPort(p.hostPort)
+}
+
+// describePortListener makes a best-effort attempt to name the process holding
+// a port, purely to make the conflict message friendlier. proto is "TCP" or
+// "UDP". Returns "" when lsof is unavailable or reveals nothing (e.g. the
+// holder is a root-owned process and we're running unprivileged).
+func describePortListener(port int, proto string) string {
+	if _, err := exec.LookPath("lsof"); err != nil {
+		return ""
+	}
+	args := []string{"-nP", fmt.Sprintf("-i%s:%d", proto, port)}
+	if proto == "TCP" {
+		args = append(args, "-sTCP:LISTEN")
+	}
+	out, err := exec.Command("lsof", args...).Output()
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) < 2 {
+		return ""
+	}
+	// lsof columns: COMMAND PID USER ...
+	fields := strings.Fields(lines[1])
+	if len(fields) < 2 {
+		return ""
+	}
+	return fmt.Sprintf("%s, PID %s", fields[0], fields[1])
+}
+
+// preflightPortCheck stops the install with actionable guidance if any host
+// port we're about to publish is already taken, before any expensive setup
+// (volume creation, cloud registration). It's best-effort: binding a port we
+// lack privileges for returns portUndetermined and we proceed, relying on the
+// docker error backstop to catch what we couldn't test here.
+func preflightPortCheck(ctx *Context, config dockerContainerConfig) error {
+	for _, p := range requiredHostPorts(config) {
+		if hostPortStatus(p) == portInUse {
+			return portConflict(ctx, p)
+		}
+	}
+	return nil
+}
+
+// portConflict prints actionable guidance for a taken host port and returns a
+// terse error to halt the install. The remedy differs by role: the HTTP
+// listener can simply be relocated with --http-port; a taken 443 is best handed
+// off to a TLS-terminating proxy via behind-proxy mode (moving 443 wouldn't help
+// — browsers expect HTTPS there); the API port just needs to be freed.
+func portConflict(ctx *Context, p requiredHostPort) error {
+	heldBy := ""
+	if holder := describePortListener(p.hostPort, strings.ToUpper(p.proto)); holder != "" {
+		heldBy = fmt.Sprintf(" (%s)", holder)
+	}
+
+	ctx.Printf("\n%s Port %d is already in use%s.\n\n", infoRed.Render("✗"), p.hostPort, heldBy)
+
+	switch p.role {
+	case roleHTTP:
+		ctx.Printf("Miren publishes this port to serve your apps over HTTP and to answer\n")
+		ctx.Printf("HTTP-01 TLS challenges. Move it to a free port with:\n")
+		ctx.Printf("  %s\n\n", infoGray.Render("miren server docker install --http-port 8080"))
+		ctx.Printf("Otherwise, free the port and re-run.\n")
+	case roleHTTPS:
+		ctx.Printf("Miren publishes port 443 to serve your apps with automatic HTTPS.\n\n")
+		ctx.Printf("If a TLS-terminating reverse proxy (tailscale serve, nginx, Caddy,\n")
+		ctx.Printf("Cloudflare Tunnel) already owns 443, run Miren behind it instead —\n")
+		ctx.Printf("Miren serves plain HTTP and the proxy handles TLS:\n")
+		ctx.Printf("  %s\n", infoGray.Render("miren server docker install --ingress-mode behind-proxy-http"))
+		ctx.Printf("  %s\n\n", infoGray.Render(requiredPortsHelpURL))
+		ctx.Printf("Otherwise, free the port and re-run.\n")
+	case roleAPI:
+		ctx.Printf("Miren's control-plane API listens on this port (UDP). The miren CLI\n")
+		ctx.Printf("connects to it directly, so it can't be relocated — free the port and\n")
+		ctx.Printf("re-run.\n")
+	}
+
+	return fmt.Errorf("required port %d is unavailable", p.hostPort)
+}
+
+// validateIngressMode rejects an unknown --ingress-mode early with a clear
+// message rather than letting the container boot and fail. An empty value means
+// "use the default" (tls-autoprovision).
+func validateIngressMode(mode string) error {
+	switch mode {
+	case "",
+		serverconfig.IngressModeAutoprovision,
+		serverconfig.IngressModeBehindProxyHTTP,
+		serverconfig.IngressModeBehindProxyHTTPS:
+		return nil
+	default:
+		return fmt.Errorf("invalid --ingress-mode %q (valid: %s, %s, %s)",
+			mode,
+			serverconfig.IngressModeAutoprovision,
+			serverconfig.IngressModeBehindProxyHTTP,
+			serverconfig.IngressModeBehindProxyHTTPS)
+	}
+}
+
+// dockerPortConflictError is the backstop for conflicts the pre-flight check
+// couldn't see — most often an unprivileged CLI that can't test-bind ports
+// below 1024 (binding returns EACCES, not EADDRINUSE), so docker is the first
+// to discover the clash. We match only docker's stable "port already taken"
+// phrasings (not the exact port, which is phrased differently across docker
+// versions and platforms) and turn them into friendly guidance. Returns
+// (nil, false) for any other error so the caller falls back to generic handling.
+func dockerPortConflictError(ctx *Context, err error) (error, bool) {
+	msg := err.Error()
+	if !strings.Contains(msg, "address already in use") && !strings.Contains(msg, "Ports are not available") {
+		return nil, false
+	}
+
+	// We don't parse the offending port out of the error: docker's bind-conflict
+	// phrasing varies across versions and rootful-vs-rootless, so the precise,
+	// per-port guidance lives in the pre-flight (portConflict). This fallback
+	// only fires when the pre-flight couldn't test-bind, so it stays generic and
+	// names both levers without guessing which port clashed.
+	ctx.Printf("\n%s A host port Miren needs (80, 443, or %d) is already in use.\n\n", infoRed.Render("✗"), defaultAPIPort)
+	ctx.Printf("Free the port and re-run. If the conflict is on the HTTP port, move it\n")
+	ctx.Printf("with --http-port. If a TLS-terminating reverse proxy (tailscale serve,\n")
+	ctx.Printf("nginx, Caddy) already owns 443, run Miren behind it with\n")
+	ctx.Printf("--ingress-mode behind-proxy-http instead:\n")
+	ctx.Printf("  %s\n", infoGray.Render(requiredPortsHelpURL))
+	return fmt.Errorf("a required host port is unavailable"), true
+}
+
 func dockerContainerExists(name string) (bool, error) {
 	cmd := exec.Command("docker", "ps", "-a", "-q", "-f", fmt.Sprintf("name=^%s$", name))
 	output, err := cmd.Output()
@@ -328,6 +591,38 @@ func dockerContainerIsRunning(name string) (bool, error) {
 	return strings.TrimSpace(string(output)) == "true", nil
 }
 
+// dockerIngressArgs builds the `docker run` arguments that publish ports and
+// configure the ingress mode. The published ports come straight from
+// requiredHostPorts so they can't drift from what the pre-flight check verified.
+// In behind-proxy modes the server otherwise binds its ingress to 127.0.0.1,
+// which docker's port publishing can't reach, so we pin it to 0.0.0.0 via env.
+func dockerIngressArgs(config dockerContainerConfig) []string {
+	var args []string
+
+	if config.HostNetwork {
+		args = append(args, "--network", "host")
+	} else {
+		for _, p := range requiredHostPorts(config) {
+			args = append(args, "-p", fmt.Sprintf("%d:%d/%s", p.hostPort, p.containerPort, p.proto))
+		}
+	}
+
+	switch config.IngressMode {
+	case serverconfig.IngressModeBehindProxyHTTP:
+		args = append(args,
+			"-e", "MIREN_INGRESS_MODE="+serverconfig.IngressModeBehindProxyHTTP,
+			"-e", "MIREN_INGRESS_ADDRESS=0.0.0.0:80",
+		)
+	case serverconfig.IngressModeBehindProxyHTTPS:
+		args = append(args,
+			"-e", "MIREN_INGRESS_MODE="+serverconfig.IngressModeBehindProxyHTTPS,
+			"-e", "MIREN_INGRESS_ADDRESS=0.0.0.0:443",
+		)
+	}
+
+	return args
+}
+
 func dockerCreateContainer(name, image string, config dockerContainerConfig) (string, error) {
 	args := []string{
 		"run", "-d",
@@ -337,16 +632,7 @@ func dockerCreateContainer(name, image string, config dockerContainerConfig) (st
 		"--restart", "always",
 	}
 
-	// Use host networking if requested, otherwise map ports
-	if config.HostNetwork {
-		args = append(args, "--network", "host")
-	} else {
-		args = append(args,
-			"-p", fmt.Sprintf("%d:80/tcp", config.HTTPPort),
-			"-p", "8443:8443/udp",
-			"-p", "443:443/tcp",
-		)
-	}
+	args = append(args, dockerIngressArgs(config)...)
 
 	if len(config.Labs) > 0 {
 		args = append(args, "-e", fmt.Sprintf("MIREN_LABS=%s", strings.Join(config.Labs, ",")))
@@ -449,7 +735,7 @@ func waitForServerReady(ctx *Context) error {
 	}
 	defer client.CloseIdleConnections()
 
-	healthURL := fmt.Sprintf("https://%s:8443/healthz", "localhost")
+	healthURL := fmt.Sprintf("https://localhost:%d/healthz", defaultAPIPort)
 	ctx.Log.Debug("health check endpoint", "url", healthURL)
 
 	for i := range maxRetries {
@@ -496,7 +782,7 @@ func copyClientConfig(ctx *Context, containerName string) error {
 	ctx.Log.Debug("generating client config", "host", "localhost")
 
 	// Generate client config by running miren auth generate
-	target := "localhost:8443"
+	target := fmt.Sprintf("localhost:%d", defaultAPIPort)
 	ctx.Log.Debug("running auth generate", "target", target, "cluster", "docker")
 	output, err := dockerExec(containerName, []string{"miren", "auth", "generate", "-C", "docker", "-t", target, "-c", "-"})
 	if err != nil {

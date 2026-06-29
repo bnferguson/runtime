@@ -21,6 +21,7 @@ miren server docker install [flags]
 - `--host-network` — Use host networking (ignores port mappings)
 - `--http-port` — HTTP port mapping (default: `80`)
 - `--image, -i` — Docker image to use (default: `oci.miren.cloud/miren:latest`)
+- `--ingress-mode` — Ingress mode: tls-autoprovision (default), behind-proxy-http (Miren serves plain HTTP behind a TLS-terminating proxy like tailscale serve / nginx), or behind-proxy-https (Miren terminates TLS on :443 behind a TCP-passthrough proxy)
 - `--labs, -l` — Miren Labs features to enable (e.g. distributedrunners). Prefix with - to disable.
 - `--name, -n` — Container name
 - `--url, -u` — Cloud URL for registration (default: `https://miren.cloud`)
@@ -50,6 +51,12 @@ miren server docker install --without-cloud
 
 ```bash
 miren server docker install --http-port 8080
+```
+
+**Install behind a TLS-terminating proxy (e.g. tailscale serve):**
+
+```bash
+miren server docker install --ingress-mode behind-proxy-http
 ```
 
 ## See also

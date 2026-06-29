@@ -835,6 +835,10 @@ miren deploy --analyze
 			Name: "Install with a custom HTTP port",
 			Body: "miren server docker install --http-port 8080",
 		}),
+		WithExample(mflags.Example{
+			Name: "Install behind a TLS-terminating proxy (e.g. tailscale serve)",
+			Body: "miren server docker install --ingress-mode behind-proxy-http",
+		}),
 	))
 	d.Dispatch("server docker uninstall", Infer("server docker uninstall", "Uninstall miren server Docker container", ServerUninstallDocker,
 		WithExample(mflags.Example{
