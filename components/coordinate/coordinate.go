@@ -1543,10 +1543,13 @@ func (c *Coordinator) checkAndReindex(ctx context.Context, store *entity.EtcdSto
 		"stored_hash", storedHash,
 		"current_hash", currentHash)
 
-	reindexCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-	defer cancel()
-
-	stats, err := store.Reindex(reindexCtx, c.Log, entity.ReindexOptions{
+	// Reindex is the heaviest maintenance step and runs last, inside the shared
+	// startup-maintenance deadline that bounds how long the coordinator blocks
+	// the edge listener. That ceiling is the single bound; don't layer a second
+	// timeout here, which would only ever clamp to whatever's left of it. A
+	// reindex that doesn't finish in time is retried on the next startup (it's
+	// gated on the index hash below).
+	stats, err := store.Reindex(ctx, c.Log, entity.ReindexOptions{
 		DryRun:       false,
 		CleanupStale: false,
 	})
