@@ -129,16 +129,16 @@ func MigrateEntityStore(ctx context.Context, log *slog.Logger, client *clientv3.
 	log.Info("starting entity migration", "prefix", opts.Prefix, "dry_run", opts.DryRun)
 
 	// List all entities
-	resp, err := client.Get(ctx, opts.Prefix, clientv3.WithPrefix())
+	kvs, err := listEntitiesPaged(ctx, client, opts.Prefix)
 	if err != nil {
 		return 0, 0, fmt.Errorf("failed to list entities: %w", err)
 	}
 
-	log.Info("found entities to scan", "count", len(resp.Kvs))
+	log.Info("found entities to scan", "count", len(kvs))
 
 	var errors int
 
-	for _, kv := range resp.Kvs {
+	for _, kv := range kvs {
 		key := string(kv.Key)
 
 		if strings.Contains(key, "/session/") {
@@ -316,7 +316,7 @@ func MigrateEntityStore(ctx context.Context, log *slog.Logger, client *clientv3.
 
 	if errors > 0 {
 		log.Warn("migration completed with errors",
-			"total", len(resp.Kvs),
+			"total", len(kvs),
 			"migrated", migrated,
 			"skipped", skipped,
 			"errors", errors)
@@ -324,7 +324,7 @@ func MigrateEntityStore(ctx context.Context, log *slog.Logger, client *clientv3.
 	}
 
 	log.Info("migration completed successfully",
-		"total", len(resp.Kvs),
+		"total", len(kvs),
 		"migrated", migrated,
 		"skipped", skipped)
 
