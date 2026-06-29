@@ -3,12 +3,15 @@ package app
 import (
 	"context"
 	"errors"
+	"time"
 
 	"miren.dev/runtime/api/addon/addon_v1alpha"
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
+	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/pkg/addon"
+	"miren.dev/runtime/pkg/apphealth"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/rpc"
@@ -157,12 +160,35 @@ func (a *AppInfo) AppInfo(ctx context.Context, state *app_v1alpha.AppStatusAppIn
 		poolsResp, err := a.EC.List(ctx, entity.Ref(compute_v1alpha.SandboxPoolReferencedByVersionsId, appVer.ID))
 		if err != nil {
 			a.Log.Warn("failed to get sandbox pools", "error", err)
+			// Health is part of the contract now; report unknown rather than
+			// leaving it empty so a transient backend error doesn't read as a
+			// definite state.
+			rai.SetHealth(apphealth.Unknown)
 		} else {
 			var pools []*app_v1alpha.PoolStatus
+			poolIDs := make(map[string]bool)
+			hasInstances := false
+			now := time.Now()
+
+			// Resolve the active version's config so we can tell fixed services
+			// from autoscale ones, the same way the List path does. Set this
+			// before the loop so an active version with no pools yet is still
+			// classified correctly (a fixed service reads as starting, not idle).
+			var spec *core_v1alpha.ConfigSpec
+			if resolved, rerr := coreutil.ResolveConfig(ctx, a.EC.EAC(), &appVer); rerr == nil {
+				spec = resolved
+			}
+			health := poolHealth{isAutoscale: specAllowsScaleToZero(spec)}
 
 			for poolsResp.Next() {
 				var pool compute_v1alpha.SandboxPool
 				poolsResp.Read(&pool)
+
+				poolIDs[pool.ID.String()] = true
+				if pool.CurrentInstances > 0 {
+					hasInstances = true
+				}
+				health.accumulate(&pool, now)
 
 				var rp app_v1alpha.PoolStatus
 				rp.SetName(pool.Service)
@@ -183,7 +209,27 @@ func (a *AppInfo) AppInfo(ctx context.Context, state *app_v1alpha.AppStatusAppIn
 			}
 
 			rai.SetPools(pools)
+			rai.SetHealth(health.classify())
+			rai.SetReadyInstances(int32(health.ready))
+			rai.SetDesiredInstances(int32(health.desired))
+			if health.inCooldown {
+				rai.SetCrashCount(health.crashCount)
+				rai.SetCooldownSeconds(int32(health.cooldownLeft.Seconds()))
+			}
+
+			// Scan for port divergence once there's an instance (running or
+			// booting), not only once it's ready: a wrong bound port can be the
+			// reason ready stays 0, and that's exactly when we want to surface
+			// it. Skipping when there are no instances keeps the global sandbox
+			// scan out of the scaled-to-zero path.
+			if hasInstances {
+				if bp := a.collectBoundPortDivergence(ctx, poolIDs); len(bp) > 0 {
+					rai.SetBoundPorts(bp)
+				}
+			}
 		}
+	} else {
+		rai.SetHealth(apphealth.Unknown)
 	}
 
 	// Get addon instances from entity store

@@ -22,6 +22,7 @@ var (
 	deployPrefixStyle = lipgloss.NewStyle().Faint(true)
 	phaseSummaryStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("10")) // Green for completed phases
 	phaseTimeStyle    = lipgloss.NewStyle().Faint(true)
+	phaseFailStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("9")) // Red for failed phases
 )
 
 func init() {
@@ -86,6 +87,25 @@ type updateMsg struct {
 	msg string
 }
 
+// buildDoneMsg tells the model the build finished: it finalizes the build
+// phase from its own step state and shows an "activating" spinner until the
+// health phase begins. Sent instead of quitting the program after the build.
+type buildDoneMsg struct{}
+
+// healthWaitMsg sets the in-progress label for the health phase (e.g.
+// "Waiting for version X to become healthy" or "1/3 instances ready").
+type healthWaitMsg struct{ label string }
+
+// healthDoneMsg resolves the health phase: it commits the pre-rendered verdict
+// line to scrollback and quits the program. line is built by the caller (which
+// knows the version display string); outcome/snap are recorded for the caller's
+// post-quit follow-up (port warning, crash logs).
+type healthDoneMsg struct {
+	line    string
+	outcome terminalOutcome
+	snap    healthSnapshot
+}
+
 // deployInfo is the TEA model for the deploy UI
 type deployInfo struct {
 	spinner spinner.Model
@@ -124,6 +144,12 @@ type deployInfo struct {
 
 	showProgress bool
 	bp           tea.Model
+
+	// Health phase: populated once the build TUI keeps running through the
+	// wait-for-healthy step so it renders as one continuous process.
+	healthResolved bool
+	healthOutcome  terminalOutcome
+	healthSnap     healthSnapshot
 }
 
 func initialModel(update chan string, buildCh chan buildProgress, uploadProgress chan upload.Progress, cachedFiles int32, totalFiles int, cachedBytes int64) *deployInfo {
@@ -182,6 +208,16 @@ func (m *deployInfo) uploadDetails() string {
 		parts = append(parts, detail)
 	}
 	return strings.Join(parts, ", ")
+}
+
+// completePhase records a finished phase and returns a command that commits its
+// summary line to permanent scrollback (above the live spinner). Completed lines
+// must be emitted this way rather than rendered in View: bubbletea clears its
+// live region on exit, so anything left in View at quit time can be wiped or
+// overwritten by later output.
+func (m *deployInfo) completePhase(p phaseSummary) tea.Cmd {
+	m.completedPhases = append(m.completedPhases, p)
+	return tea.Println(renderPhaseSummary(p))
 }
 
 func (m *deployInfo) Init() tea.Cmd {
@@ -254,11 +290,11 @@ func (m *deployInfo) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				duration := time.Since(m.phaseStart)
 				m.uploadDuration = duration
 
-				m.completedPhases = append(m.completedPhases, phaseSummary{
+				cmds = append(cmds, m.completePhase(phaseSummary{
 					name:     "Upload artifacts",
 					duration: duration,
 					details:  m.uploadDetails(),
-				})
+				}))
 
 				// Start tracking buildkit phase
 				m.phaseStart = time.Now()
@@ -303,11 +339,11 @@ func (m *deployInfo) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			if !hasUploadPhase {
-				m.completedPhases = append(m.completedPhases, phaseSummary{
+				cmds = append(cmds, m.completePhase(phaseSummary{
 					name:     "Upload artifacts",
 					duration: duration,
 					details:  m.uploadDetails(),
-				})
+				}))
 			}
 
 			// Always start tracking buildkit phase when transitioning
@@ -322,6 +358,55 @@ func (m *deployInfo) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, func() tea.Msg {
 			return <-m.buildCh
 		})
+	case buildDoneMsg:
+		// Emit the phase summaries in order. tea.Batch gives no ordering
+		// guarantee, so when a fully cached build finalizes both the upload and
+		// build phases in one update, sequence the prints or they can land out
+		// of order in scrollback.
+		var phasePrints []tea.Cmd
+
+		// A very fast or fully cached build can finish before the upload-phase
+		// transition fires, so close out the upload phase first or it never gets
+		// committed to the TUI.
+		if m.isUploading {
+			m.isUploading = false
+			m.uploadDuration = time.Since(m.phaseStart)
+			phasePrints = append(phasePrints, m.completePhase(phaseSummary{
+				name:     "Upload artifacts",
+				duration: m.uploadDuration,
+				details:  m.uploadDetails(),
+			}))
+			m.phaseStart = time.Now()
+		}
+
+		// Commit the build phase, then show an "activating" spinner until the
+		// health phase reports in.
+		phasePrints = append(phasePrints, m.completePhase(phaseSummary{
+			name:     "Build & push image",
+			duration: time.Since(m.phaseStart),
+			details:  buildStepsSummary(m.buildSteps),
+		}))
+		cmds = append(cmds, tea.Sequence(phasePrints...))
+
+		m.isUploading = false
+		m.buildSteps = 0
+		m.currentPhase = "activating"
+		m.message = "Activating version"
+		m.phaseStart = time.Now()
+	case healthWaitMsg:
+		m.currentPhase = "health"
+		m.message = msg.label
+	case healthDoneMsg:
+		// Commit the verdict line to scrollback, then clear the spinner and quit.
+		// A canceled wait carries no line, so just quit.
+		m.currentPhase = "completed"
+		m.healthResolved = true
+		m.healthOutcome = msg.outcome
+		m.healthSnap = msg.snap
+		if msg.line == "" {
+			return m, tea.Quit
+		}
+		return m, tea.Sequence(tea.Println(msg.line), tea.Quit)
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
@@ -336,17 +421,8 @@ func (m *deployInfo) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *deployInfo) View() string {
 	var lines []string
 
-	// Show completed phase summaries
-	for _, phase := range m.completedPhases {
-		phaseStr := fmt.Sprintf("  ✓ %s", phaseSummaryStyle.Render(phase.name))
-		timeStr := phaseTimeStyle.Render(fmt.Sprintf("(%s)", formatPhaseDuration(phase.duration)))
-
-		if phase.details != "" {
-			lines = append(lines, fmt.Sprintf("%s %s - %s", phaseStr, timeStr, phase.details))
-		} else {
-			lines = append(lines, fmt.Sprintf("%s %s", phaseStr, timeStr))
-		}
-	}
+	// Completed phases are committed to scrollback via tea.Println (see
+	// completePhase); View renders only the live, in-progress line.
 
 	// Show current progress
 	var currentLine string
@@ -380,6 +456,13 @@ func (m *deployInfo) View() string {
 
 	// Join all lines
 	str := strings.Join(lines, "\n")
+
+	// The explain toggle only applies to the build; once we're activating or
+	// waiting on health there's nothing to explain, so drop the footer.
+	inBuild := m.currentPhase == "upload" || m.currentPhase == "buildkit"
+	if !inBuild {
+		return str
+	}
 
 	if !m.showProgress {
 		return lipgloss.JoinVertical(lipgloss.Top,

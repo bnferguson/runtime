@@ -423,9 +423,7 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 			needsUpdate = true
 		}
 
-		// Only force DesiredInstances when the strategy enforces a minimum
-		// (fixed mode). Auto and ephemeral strategies leave the activator and
-		// sandboxpool manager to drive DesiredInstances dynamically.
+		// Fixed-mode strategies enforce their configured minimum.
 		if min := int64(strategy.MinInstances()); min > 0 && poolWithEntity.Pool.DesiredInstances != min {
 			poolWithEntity.Pool.DesiredInstances = min
 			l.Log.Info("strategy-enforced minimum, updating desired instances",
@@ -434,13 +432,34 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 			needsUpdate = true
 		}
 
+		// A deploy should boot the new version so we can verify it, even when
+		// reusing a pool that drained to zero (an autoscale app gone idle).
+		// Floor a drained pool back to 1, the same way a fresh pool seeds; the
+		// autoscaler scales it down again afterward. Without this, a redeploy of
+		// a scaled-to-zero app would just point the pool at the new version
+		// without ever booting it, so we'd never know if it actually works.
+		bootForVerification := false
+		if poolWithEntity.Pool.DesiredInstances < 1 {
+			poolWithEntity.Pool.DesiredInstances = 1
+			l.Log.Info("flooring drained pool to one instance for deploy verification",
+				"service", serviceName,
+				"pool", poolWithEntity.Pool.ID)
+			needsUpdate = true
+			bootForVerification = true
+		}
+
 		if needsUpdate {
 			if err := l.updatePool(ctx, poolWithEntity); err != nil {
 				return "", fmt.Errorf("failed to update pool: %w", err)
 			}
 		}
 
-		// Return empty ID — existing pool already has running sandboxes
+		// A revived drained pool has to boot before it's ready, so return its ID
+		// to gate readiness like a fresh pool. Otherwise the existing pool is
+		// already running and needs no wait.
+		if bootForVerification {
+			return poolWithEntity.Pool.ID, nil
+		}
 		return "", nil
 	}
 

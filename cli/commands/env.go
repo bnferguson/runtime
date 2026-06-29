@@ -156,12 +156,10 @@ func EnvSet(ctx *Context, opts struct {
 	}
 
 	versionDisplay := ui.DisplayShortID(res.Deployment().AppVersionShortId(), res.VersionId())
-	ctx.Printf("✓ Set env vars on %s — new version: %s\n", opts.App, versionDisplay)
+	ctx.Printf("Setting env vars on %s — new version: %s\n", opts.App, versionDisplay)
 
-	appCl, appErr := ctx.RPCClient(rpcAppStatus)
-	if appErr == nil {
-		appStatusClient := app_v1alpha.NewAppStatusClient(appCl)
-		waitForActivation(ctx, appStatusClient, opts.App, res.VersionId(), versionDisplay)
+	if err := awaitHealthy(ctx, opts.App, res.VersionId(), versionDisplay); err != nil {
+		return err
 	}
 
 	if res.HasAccessInfo() && res.AccessInfo() != nil {
@@ -401,7 +399,7 @@ func EnvDelete(ctx *Context, opts struct {
 	}
 
 	versionDisplay := ui.DisplayShortID(res.Deployment().AppVersionShortId(), res.VersionId())
-	ctx.Printf("✓ Deleted env vars from %s — new version: %s\n", opts.App, versionDisplay)
+	ctx.Printf("Deleting env vars from %s — new version: %s\n", opts.App, versionDisplay)
 
 	// Warn about config vars that will reappear on next deploy
 	if res.HasDeletedSources() {
@@ -424,10 +422,8 @@ func EnvDelete(ctx *Context, opts struct {
 		}
 	}
 
-	appCl, appErr := ctx.RPCClient(rpcAppStatus)
-	if appErr == nil {
-		appStatusClient := app_v1alpha.NewAppStatusClient(appCl)
-		waitForActivation(ctx, appStatusClient, opts.App, res.VersionId(), versionDisplay)
+	if err := awaitHealthy(ctx, opts.App, res.VersionId(), versionDisplay); err != nil {
+		return err
 	}
 
 	if res.HasAccessInfo() && res.AccessInfo() != nil {

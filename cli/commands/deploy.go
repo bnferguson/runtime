@@ -24,7 +24,6 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/term"
 
-	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/deployment/deployment_v1alpha"
 	"miren.dev/runtime/appconfig"
@@ -215,12 +214,10 @@ func Deploy(ctx *Context, opts struct {
 					}
 				}
 			} else {
-				ctx.Printf("✓ Deployed version %s to %s\n", versionDisplay, ctx.ClusterName)
+				ctx.Printf("Deploying version %s to %s\n", versionDisplay, ctx.ClusterName)
 
-				appCl, appErr := ctx.RPCClient(rpcAppStatus)
-				if appErr == nil {
-					appStatusClient := app_v1alpha.NewAppStatusClient(appCl)
-					waitForActivation(ctx, appStatusClient, name, deployedVersion, versionDisplay)
+				if err := awaitHealthy(ctx, name, deployedVersion, versionDisplay); err != nil {
+					return err
 				}
 
 				if result.HasAccessInfo() && result.AccessInfo() != nil {
@@ -644,6 +641,26 @@ func Deploy(ctx *Context, opts struct {
 	isTTY := term.IsTerminal(int(os.Stdout.Fd()))
 	useExplainMode := opts.Explain || !isTTY
 
+	// When we render the interactive build TUI, the program stays alive past the
+	// build so the activate + health steps render as part of the same process.
+	// These hold the running program across that span; they stay nil/zero in
+	// explain mode. quitBuildUI tears it down (idempotent) before any path that
+	// needs to print directly to stdout.
+	var (
+		buildProg       *tea.Program
+		buildModel      *deployInfo
+		buildWG         sync.WaitGroup
+		buildFinalModel tea.Model
+	)
+	quitBuildUI := func() {
+		if buildProg != nil {
+			buildProg.Quit()
+			buildWG.Wait()
+			buildProg = nil
+		}
+	}
+	defer quitBuildUI()
+
 	if useExplainMode {
 		if useOptimized && cachedFiles > 0 {
 			faintStyle := lipgloss.NewStyle().Faint(true)
@@ -757,10 +774,7 @@ func Deploy(ctx *Context, opts struct {
 			updateCh         = make(chan string, 1)
 			buildCh          = make(chan buildProgress, 1)
 			uploadProgressCh = make(chan upload.Progress, 1)
-			wg               sync.WaitGroup
 		)
-
-		defer wg.Wait()
 
 		progressReader := upload.NewProgressReader(r, func(progress upload.Progress) {
 			enrichUploadProgress(&progress, &uncompressedWritten, totalUncompressed)
@@ -775,18 +789,16 @@ func Deploy(ctx *Context, opts struct {
 		deployCtx, cancelDeploy := context.WithCancel(buildCtx)
 		defer cancelDeploy()
 
-		model := initialModel(updateCh, buildCh, uploadProgressCh, cachedFiles, totalFiles, cachedBytes)
-		p := tea.NewProgram(model)
+		buildModel = initialModel(updateCh, buildCh, uploadProgressCh, cachedFiles, totalFiles, cachedBytes)
+		buildProg = tea.NewProgram(buildModel)
 
-		var finalModel tea.Model
-		var runErr error
-
-		wg.Add(1)
+		buildWG.Add(1)
 		go func() {
-			defer wg.Done()
-			finalModel, runErr = p.Run()
+			defer buildWG.Done()
+			fm, runErr := buildProg.Run()
+			buildFinalModel = fm
 			if runErr == nil {
-				if dm, ok := finalModel.(*deployInfo); ok && dm.interrupted {
+				if dm, ok := fm.(*deployInfo); ok && dm.interrupted {
 					cancelDeploy()
 				}
 			} else {
@@ -795,11 +807,9 @@ func Deploy(ctx *Context, opts struct {
 			}
 		}()
 
-		defer p.Quit()
-
 		// Progress handler for interactive mode
 		progressHandler := func(status *client.SolveStatus) error {
-			p.Send(status)
+			buildProg.Send(status)
 			return nil
 		}
 
@@ -807,34 +817,16 @@ func Deploy(ctx *Context, opts struct {
 
 		results, err = buildCall(deployCtx, r, cb)
 
-		// Ensure the progress UI is shut down before printing
-		p.Quit()
-		wg.Wait()
-
-		// Get the final model to extract phase summaries
-		if m, ok := finalModel.(*deployInfo); ok && m.currentPhase == "buildkit" && err == nil {
-			// Complete the buildkit phase if it's still running and we succeeded
-			duration := time.Since(m.phaseStart)
-			buildPhase := phaseSummary{
-				name:     "Build & push image",
-				duration: duration,
-				details:  buildStepsSummary(m.buildSteps),
-			}
-
-			// Only print the final build phase summary (TEA UI already showed the others)
-			ctx.Printf("%s\n", renderPhaseSummary(buildPhase))
-
-			// Update phase to pushing (build includes push in buildkit)
-			updateDeploymentPhase("pushing")
-		}
-
 		if err != nil {
+			// Build failed: shut down the UI before printing anything.
+			quitBuildUI()
+
 			uploadSpan.RecordError(err)
 			uploadSpan.SetStatus(codes.Error, err.Error())
 			uploadSpan.End()
 
 			// Check if this was a user interruption (via UI flag or context cancellation)
-			dm, isDeploy := finalModel.(*deployInfo)
+			dm, isDeploy := buildFinalModel.(*deployInfo)
 			if (isDeploy && dm.interrupted) || deployCtx.Err() != nil {
 				ctx.Printf("\n\n❌ Deploy cancelled.\n")
 				// Don't update deployment status if externally cancelled - it's already cancelled
@@ -867,9 +859,15 @@ func Deploy(ctx *Context, opts struct {
 			return err
 		}
 
+		// Build succeeded: fold the build phase into the model and keep the
+		// program alive, so the activate + health steps render as continuations
+		// of the same TUI rather than flat text printed below it.
+		buildProg.Send(buildDoneMsg{})
+		updateDeploymentPhase("pushing")
 	}
 
 	if results.Version() == "" {
+		quitBuildUI()
 		noVersionErr := fmt.Errorf("build failed: no version returned")
 		uploadSpan.RecordError(noVersionErr)
 		uploadSpan.SetStatus(codes.Error, noVersionErr.Error())
@@ -895,7 +893,10 @@ func Deploy(ctx *Context, opts struct {
 	ctx.Log.Debug("Build completed with version", "version", appVersionId)
 
 	if ephemeralLabel != "" {
-		// Ephemeral deploy: no deployment record to update, just show info
+		// Ephemeral deploy: no deployment record to update, just show info.
+		// Tear down the build TUI first so its final frame doesn't fight our
+		// direct output (ephemeral skips the health phase that would own it).
+		quitBuildUI()
 		versionDisplay := ui.DisplayShortID(results.VersionShortId(), results.Version())
 		ctx.Printf("\n\nEphemeral version %s created.\n", versionDisplay)
 		ctx.Printf("  Label: %s\n", ephemeralLabel)
@@ -940,20 +941,57 @@ func Deploy(ctx *Context, opts struct {
 		finalizeSpan.End()
 		deploymentFinalized = true
 
-		versionDisplay := ui.DisplayShortID(results.VersionShortId(), results.Version())
-		ctx.Printf("\n\nUpdated version %s deployed. All traffic moved to new version.\n", versionDisplay)
+		// No standalone "deployed" line here: the health step below is the next
+		// beat of the same process and reports the version's real state, so an
+		// extra announcement would just split the flow.
 	}
 
-	_, _, warnsSnap := snapshotBuildState()
-	if len(warnsSnap) > 0 {
+	printDeployWarnings := func() {
+		_, _, warns := snapshotBuildState()
+		if len(warns) == 0 {
+			return
+		}
 		warnHeaderStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("208")).Bold(true)
 		ctx.Printf("\n%s\n", warnHeaderStyle.Render("Warnings:"))
-		for _, entry := range warnsSnap {
+		for _, entry := range warns {
 			renderDeployWarning(ctx, entry)
 		}
 	}
 
-	// Show route/access information using server-provided data
+	// Wait for the new version to actually become healthy before declaring
+	// success, so a broken deploy reports the failure instead of handing out
+	// next-steps for an app that isn't serving. On the interactive build path
+	// the program is still running, so health renders as the next phase of the
+	// same TUI; otherwise we run the plain spinner/line wait. Either way the
+	// build warnings and route info come afterward, once stdout is ours and the
+	// version's real state is known. Ephemeral deploys don't take over routing,
+	// so there's nothing to wait on.
+	if ephemeralLabel == "" {
+		versionDisplay := ui.DisplayShortID(results.VersionShortId(), results.Version())
+
+		var healthErr error
+		if buildProg != nil {
+			healthErr = awaitHealthyInProgram(ctx, buildProg, func() *deployInfo {
+				buildWG.Wait()
+				dm, _ := buildFinalModel.(*deployInfo)
+				return dm
+			}, name, results.Version(), versionDisplay)
+			buildProg = nil // program has quit
+		} else {
+			healthErr = awaitHealthy(ctx, name, results.Version(), versionDisplay)
+		}
+
+		printDeployWarnings()
+
+		if healthErr != nil {
+			return healthErr
+		}
+	} else {
+		printDeployWarnings()
+	}
+
+	// Show route/access information (the "what's next" guidance) last, once we
+	// know the app is actually up.
 	displayAccessInfo(ctx, name, results)
 
 	return nil

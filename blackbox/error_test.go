@@ -20,7 +20,10 @@ func TestCrashLoop(t *testing.T) {
 		m.Run("app", "delete", name, "-f")
 	})
 
-	m.MustRun("deploy", "-a", name, "-d", m.ContainerPath(c.TestdataDir+"/crash-loop"), "-f")
+	// Deploy waits for the new version to become healthy and exits non-zero
+	// when it never does, so a crash-looping app fails the deploy.
+	m.Run("deploy", "-a", name, "-d", m.ContainerPath(c.TestdataDir+"/crash-loop"), "-f").
+		RequireExitCode(t, 1)
 
 	waitForAppCrashed(t, m, name)
 }
@@ -34,7 +37,10 @@ func TestBadCommand(t *testing.T) {
 		m.Run("app", "delete", name, "-f")
 	})
 
-	m.MustRun("deploy", "-a", name, "-d", m.ContainerPath(c.TestdataDir+"/bad-command"), "-f")
+	// A bad command never comes up healthy, so the deploy reports the failure
+	// and exits non-zero.
+	m.Run("deploy", "-a", name, "-d", m.ContainerPath(c.TestdataDir+"/bad-command"), "-f").
+		RequireExitCode(t, 1)
 
 	waitForAppCrashed(t, m, name)
 }
