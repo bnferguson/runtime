@@ -824,7 +824,6 @@ func (c *SandboxController) checkNetworkHealth(ctx context.Context, sb *compute.
 		}
 	}
 	if !hasTCPPorts {
-		c.Log.Debug("sandbox has no exposed TCP ports, skipping network health check", "sandbox_id", sb.ID)
 		return true
 	}
 
@@ -843,8 +842,6 @@ func (c *SandboxController) checkNetworkHealth(ctx context.Context, sb *compute.
 			}
 			port := int(p.Port)
 			if checkPort(pid, port) {
-				c.Log.Debug("network health check passed",
-					"sandbox_id", sb.ID, "container_name", container.Name, "port", port)
 				return true
 			}
 			c.Log.Debug("network health check found no listener for port",
@@ -859,8 +856,6 @@ func (c *SandboxController) checkNetworkHealth(ctx context.Context, sb *compute.
 	for _, bp := range sb.BoundPort {
 		port := int(bp.Port)
 		if checkPort(pid, port) {
-			c.Log.Debug("network health check passed on observed bound port",
-				"sandbox_id", sb.ID, "port", port)
 			return true
 		}
 		c.Log.Debug("network health check found no listener for observed bound port",
@@ -942,8 +937,6 @@ func (c *SandboxController) reattachLogs(ctx context.Context, sb *compute.Sandbo
 }
 
 func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, meta *entity.Meta) error {
-	c.Log.Info("considering sandbox create or update", "id", co.ID, "status", co.Status)
-
 	switch co.Status {
 	case compute.DEAD:
 		return nil
@@ -2861,12 +2854,6 @@ func (c *SandboxController) Periodic(ctx context.Context, timeHorizon time.Durat
 		// Check if sandbox is DEAD and UpdatedAt is older than time horizon
 		if sb.Status == compute.DEAD {
 			updatedAt := e.Entity().GetUpdatedAt()
-
-			c.Log.Debug("checking sandbox for cleanup",
-				"id", sb.ID,
-				"status", sb.Status,
-				"updated_at", updatedAt.Format(time.RFC3339),
-				"age", now.Sub(updatedAt).String())
 
 			if updatedAt.Before(cutoffTime) {
 				c.Log.Info("deleting old dead sandbox",

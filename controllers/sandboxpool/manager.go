@@ -152,12 +152,6 @@ func (m *Manager) Reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPo
 		desired = MaxPoolSize
 	}
 
-	m.log.Debug("sandbox counts",
-		"pool", pool.ID,
-		"actual", actual,
-		"ready", ready,
-		"desired", desired)
-
 	// Scale up if needed
 	if actual < desired {
 		toCreate := desired - actual
@@ -513,7 +507,8 @@ func (m *Manager) updatePoolStatus(ctx context.Context, pool *compute_v1alpha.Sa
 		m.log.Debug("updated pool status",
 			"pool", pool.ID,
 			"current", current,
-			"ready", ready)
+			"ready", ready,
+			"desired", min(pool.DesiredInstances, MaxPoolSize))
 	}
 
 	// Propagate all pool changes back to the entity for the framework to diff and persist.
