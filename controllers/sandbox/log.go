@@ -39,27 +39,58 @@ func NewSandboxLogs(
 	}
 }
 
+// maxLineBytes caps a single newline-terminated log line. A sandbox that emits
+// a huge, newline-poor blob to stdout (e.g. a verbose scraper dumping a raw
+// payload) would otherwise grow s.buf — and the control process's Go heap —
+// without bound, since a line is only flushed on '\n'. containerd streams in
+// small chunks, so the unbounded growth happens by accumulation across many
+// Write calls into s.buf; capping the buffer bounds memory to roughly
+// maxLineBytes per concurrent sandbox regardless of what an app spews. Bytes
+// past the cap are dropped until the next newline flushes the truncated line.
+const maxLineBytes = 1 << 20 // 1 MiB
+
 func (s *SandboxLogs) Write(p []byte) (n int, err error) {
 	n = len(p)
-
-	if s.buf.Len() > 0 {
-		s.buf.Write(p)
-		p = s.buf.Bytes()
-	}
 
 	for len(p) > 0 {
 		nl := bytes.IndexByte(p, '\n')
 		if nl == -1 {
-			s.buf.Write(p)
+			// No newline yet: stash the remainder for the next Write, capped.
+			s.bufferCapped(p)
 			break
 		}
 
-		s.processLine(string(p[:nl]))
+		if s.buf.Len() > 0 {
+			// Complete a line started in a previous Write.
+			s.bufferCapped(p[:nl])
+			s.processLine(s.buf.String())
+			s.buf.Reset()
+		} else {
+			line := p[:nl]
+			if len(line) > maxLineBytes {
+				line = line[:maxLineBytes]
+			}
+			s.processLine(string(line))
+		}
 
 		p = p[nl+1:]
 	}
 
 	return
+}
+
+// bufferCapped appends p to the partial-line buffer but never lets it exceed
+// maxLineBytes, so an unterminated firehose can't grow the buffer (and the
+// heap) without bound.
+func (s *SandboxLogs) bufferCapped(p []byte) {
+	room := maxLineBytes - s.buf.Len()
+	if room <= 0 {
+		return
+	}
+	if len(p) > room {
+		p = p[:room]
+	}
+	s.buf.Write(p)
 }
 
 var jsonLevelToStream = map[string]observability.LogStream{

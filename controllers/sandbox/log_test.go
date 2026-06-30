@@ -83,6 +83,35 @@ func TestSandboxLogs(t *testing.T) {
 		r.Equal("partial line", mock.entries[0].log.Body)
 	})
 
+	t.Run("caps an unterminated firehose line", func(t *testing.T) {
+		r := require.New(t)
+
+		mock := &mockLogWriter{}
+		entityID := identity.NewID()
+
+		logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+		sl := NewSandboxLogs(logger, entityID, map[string]string{}, mock)
+
+		// Stream ~12.5 MiB with no newline, in 64 KiB chunks the way containerd
+		// pumps a blob — far more than the 1 MiB cap.
+		chunk := bytes.Repeat([]byte("x"), 64*1024)
+		for i := 0; i < 200; i++ {
+			n, err := sl.Write(chunk)
+			r.NoError(err)
+			r.Equal(len(chunk), n) // all bytes are always "consumed"
+		}
+
+		// Nothing flushed yet (no newline), and the buffer never exceeded the cap.
+		r.Len(mock.entries, 0)
+		r.LessOrEqual(sl.buf.Len(), maxLineBytes)
+
+		// A newline flushes the line, truncated to the cap rather than ~12 MiB.
+		_, err := sl.Write([]byte("\n"))
+		r.NoError(err)
+		r.Len(mock.entries, 1)
+		r.Equal(maxLineBytes, len(mock.entries[0].log.Body))
+	})
+
 	t.Run("handles USER prefix", func(t *testing.T) {
 		r := require.New(t)
 
