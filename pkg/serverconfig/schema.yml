@@ -72,6 +72,11 @@ configs:
         toml: buildkit
         nested: true
 
+      app_version:
+        type: AppVersionConfig
+        toml: app_version
+        nested: true
+
   ServerConfig:
     description: Core server settings
     fields:
@@ -507,3 +512,24 @@ configs:
           description: How long to keep BuildKit cache entries (e.g., 7d, 24h)
         env: MIREN_BUILDKIT_GC_KEEP_DURATION
         toml: gc_keep_duration
+
+  AppVersionConfig:
+    description: App version retention garbage collection
+    fields:
+      retention_count:
+        type: int
+        default: 10
+        cli:
+          long: app-version-retention-count
+          description: Number of most-recent versions to retain per app regardless of age
+        env: MIREN_APP_VERSION_RETENTION_COUNT
+        toml: retention_count
+
+      retention_period:
+        type: string
+        default: "30d"
+        cli:
+          long: app-version-retention-period
+          description: Retain versions newer than this duration regardless of count (e.g. 30d, 2w)
+        env: MIREN_APP_VERSION_RETENTION_PERIOD
+        toml: retention_period

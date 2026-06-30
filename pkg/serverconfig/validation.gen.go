@@ -11,6 +11,10 @@ import (
 // Validate validates the configuration
 func (c *Config) Validate() error {
 
+	if err := c.AppVersion.Validate(); err != nil {
+		return fmt.Errorf("app_version: %w", err)
+	}
+
 	if err := c.Buildkit.Validate(); err != nil {
 		return fmt.Errorf("buildkit: %w", err)
 	}
@@ -52,6 +56,14 @@ func (c *Config) Validate() error {
 	if err := c.Victoriametrics.Validate(); err != nil {
 		return fmt.Errorf("victoriametrics: %w", err)
 	}
+	return nil
+}
+
+// Validate validates AppVersionConfig
+func (c *AppVersionConfig) Validate() error {
+
+	// Check for port conflicts in AppVersionConfig
+
 	return nil
 }
 

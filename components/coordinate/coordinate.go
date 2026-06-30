@@ -48,6 +48,7 @@ import (
 	nodehealthctrl "miren.dev/runtime/controllers/nodehealth"
 	"miren.dev/runtime/controllers/sandboxpool"
 	schedulerctrl "miren.dev/runtime/controllers/scheduler"
+	versionctrl "miren.dev/runtime/controllers/version"
 	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/addon"
@@ -130,6 +131,11 @@ type CoordinatorConfig struct {
 
 	// HTTPRequestTimeout is the timeout for HTTP requests to app sandboxes
 	HTTPRequestTimeout time.Duration
+
+	// AppVersionRetentionCount and AppVersionRetentionPeriod tune the version
+	// retention GC. Values <= 0 fall back to the controller defaults.
+	AppVersionRetentionCount  int
+	AppVersionRetentionPeriod time.Duration
 
 	// WorkloadIssuer signs workload identity tokens for sandbox containers
 	WorkloadIssuer *workloadidentity.Issuer
@@ -344,6 +350,7 @@ type Coordinator struct {
 	autocertReady func() // nil when DNS-01 path is used
 	artifactGC    *artifactctrl.GCController
 	ephemeralGC   *ephemeralctrl.GCController
+	versionGC     *versionctrl.GCController
 	hs            *httpingress.Server
 
 	authority *caauth.Authority
@@ -385,6 +392,9 @@ func (c *Coordinator) Stop() {
 	}
 	if c.ephemeralGC != nil {
 		c.ephemeralGC.Stop()
+	}
+	if c.versionGC != nil {
+		c.versionGC.Stop()
 	}
 	if c.debugServer != nil {
 		if err := c.debugServer.Close(); err != nil {
@@ -1106,6 +1116,21 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		Config: ephemeralctrl.DefaultGCConfig(),
 	}
 	c.ephemeralGC.Start(ctx)
+
+	// Start the version retention GC controller
+	versionGCConfig := versionctrl.DefaultGCConfig()
+	if c.AppVersionRetentionCount > 0 {
+		versionGCConfig.RetentionCount = c.AppVersionRetentionCount
+	}
+	if c.AppVersionRetentionPeriod > 0 {
+		versionGCConfig.RetentionPeriod = c.AppVersionRetentionPeriod
+	}
+	c.versionGC = &versionctrl.GCController{
+		Log:    c.Log.With("module", "version-gc"),
+		EAC:    eac,
+		Config: versionGCConfig,
+	}
+	c.versionGC.Start(ctx)
 
 	eps := execproxy.NewServer(c.Log, eac, rs)
 	server.ExposeValue("dev.miren.runtime/exec", exec_v1alpha.AdaptSandboxExec(eps))

@@ -2,15 +2,14 @@ package ephemeral
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
 	"time"
 
-	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/pkg/appversion"
 	"miren.dev/runtime/pkg/entity"
 )
 
@@ -30,7 +29,7 @@ func ReplaceExisting(ctx context.Context, eac *entityserver_v1alpha.EntityAccess
 		if v.version.EphemeralLabel == label {
 			log.Info("replacing existing ephemeral version",
 				"label", label, "version_id", v.version.ID)
-			if err := deleteEphemeralVersion(ctx, eac, v.version.ID, log); err != nil {
+			if err := appversion.DeleteWithPools(ctx, eac, v.version, log); err != nil {
 				return fmt.Errorf("failed to delete existing ephemeral version %s: %w", v.version.ID, err)
 			}
 		}
@@ -64,7 +63,7 @@ func EnforceLimit(ctx context.Context, eac *entityserver_v1alpha.EntityAccessCli
 			"label", v.version.EphemeralLabel,
 			"version_id", v.version.ID,
 			"expires_at", v.version.EphemeralExpiresAt)
-		if err := deleteEphemeralVersion(ctx, eac, v.version.ID, log); err != nil {
+		if err := appversion.DeleteWithPools(ctx, eac, v.version, log); err != nil {
 			return fmt.Errorf("failed to evict ephemeral version %s: %w", v.version.ID, err)
 		}
 	}
@@ -87,7 +86,7 @@ func DeleteExpired(ctx context.Context, eac *entityserver_v1alpha.EntityAccessCl
 				"label", v.version.EphemeralLabel,
 				"version_id", v.version.ID,
 				"expired_at", v.version.EphemeralExpiresAt)
-			if err := deleteEphemeralVersion(ctx, eac, v.version.ID, log); err != nil {
+			if err := appversion.DeleteWithPools(ctx, eac, v.version, log); err != nil {
 				log.Error("failed to delete expired ephemeral version",
 					"version_id", v.version.ID, "error", err)
 				continue
@@ -120,81 +119,6 @@ func listEphemeralVersions(ctx context.Context, eac *entityserver_v1alpha.Entity
 		}
 	}
 	return result, nil
-}
-
-// DeleteVersion deletes an ephemeral AppVersion and its associated
-// sandbox pools.
-func DeleteVersion(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient, versionID entity.Id, log *slog.Logger) error {
-	return deleteEphemeralVersion(ctx, eac, versionID, log)
-}
-
-func deleteEphemeralVersion(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient, versionID entity.Id, log *slog.Logger) error {
-	// Delete sandbox pools that reference this version. If pool cleanup fails,
-	// abort deletion of the AppVersion entity — the version must remain so a
-	// future GC pass can retry pool cleanup. Otherwise we'd permanently leak
-	// sandbox pools that can no longer be traced back to any version.
-	poolResp, err := eac.List(ctx, entity.Ref(
-		compute_v1alpha.SandboxPoolReferencedByVersionsId,
-		versionID,
-	))
-	if err != nil {
-		return fmt.Errorf("failed to list pools for ephemeral version %s: %w", versionID, err)
-	}
-
-	var poolErrs []error
-	for _, p := range poolResp.Values() {
-		poolID := p.Id()
-
-		// Pools can be shared across versions (ReferencedByVersions is plural).
-		// Only delete pools exclusively owned by this version. For shared pools,
-		// remove just this version's reference.
-		var pool compute_v1alpha.SandboxPool
-		pool.Decode(p.Entity())
-
-		if len(pool.ReferencedByVersions) > 1 {
-			// Shared pool — remove our reference instead of deleting
-			var remaining []entity.Id
-			for _, ref := range pool.ReferencedByVersions {
-				if ref != versionID {
-					remaining = append(remaining, ref)
-				}
-			}
-			pool.ReferencedByVersions = remaining
-
-			updateEntity := &entityserver_v1alpha.Entity{}
-			updateEntity.SetId(poolID)
-			updateEntity.SetAttrs(pool.Encode())
-			updateEntity.SetRevision(p.Revision())
-			if _, err := eac.Put(ctx, updateEntity); err != nil {
-				log.Warn("failed to remove version reference from shared pool", "pool_id", poolID, "error", err)
-				poolErrs = append(poolErrs, fmt.Errorf("pool %s: %w", poolID, err))
-			} else {
-				log.Debug("removed version reference from shared pool", "pool_id", poolID)
-			}
-			continue
-		}
-
-		// Exclusively owned — delete the pool
-		if _, err := eac.Delete(ctx, poolID); err != nil {
-			log.Warn("failed to delete sandbox pool", "pool_id", poolID, "error", err)
-			poolErrs = append(poolErrs, fmt.Errorf("pool %s: %w", poolID, err))
-		} else {
-			log.Debug("deleted sandbox pool for ephemeral version", "pool_id", poolID)
-		}
-	}
-
-	if len(poolErrs) > 0 {
-		return fmt.Errorf("failed to delete %d sandbox pool(s) for ephemeral version %s; retaining version for retry: %w",
-			len(poolErrs), versionID, errors.Join(poolErrs...))
-	}
-
-	// Delete the AppVersion entity itself
-	if _, err := eac.Delete(ctx, string(versionID)); err != nil {
-		return fmt.Errorf("failed to delete app version %s: %w", versionID, err)
-	}
-
-	log.Info("Deleted ephemeral version", "version_id", versionID)
-	return nil
 }
 
 // LookupByLabel finds an ephemeral AppVersion for the given app and label.

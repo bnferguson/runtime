@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sort"
 	"time"
 
 	"miren.dev/runtime/api/core/core_v1alpha"
@@ -16,18 +15,12 @@ import (
 type GCConfig struct {
 	// CheckInterval is how often to run the GC sweep (default: 1h)
 	CheckInterval time.Duration
-	// RetentionDays is how many days to keep artifacts regardless of count (default: 30)
-	RetentionDays int
-	// RetentionCount is how many recent artifacts per app to keep regardless of age (default: 20)
-	RetentionCount int
 }
 
 // DefaultGCConfig returns the default GC configuration.
 func DefaultGCConfig() GCConfig {
 	return GCConfig{
-		CheckInterval:  1 * time.Hour,
-		RetentionDays:  30,
-		RetentionCount: 20,
+		CheckInterval: 1 * time.Hour,
 	}
 }
 
@@ -37,14 +30,22 @@ type GCResult struct {
 	ArchivedArtifacts []entity.Id
 	// FailedArtifacts contains IDs and errors for artifacts that failed to update
 	FailedArtifacts map[entity.Id]error
-	// TotalArtifacts is the total number of artifacts evaluated
+	// TotalArtifacts is the total number of active artifacts evaluated
 	TotalArtifacts int
 	// RetainedArtifacts is the number of artifacts kept active
 	RetainedArtifacts int
 }
 
-// GCController periodically applies retention policies to artifacts,
-// transitioning old artifacts to "archived" status.
+// GCController periodically archives artifacts that are no longer referenced by
+// any AppVersion. Archiving (Status=ARCHIVED) is the signal the downstream
+// image GC and blob GC key off to reclaim the image and its registry blobs.
+//
+// Retention is reference-driven rather than age- or count-based: an artifact is
+// kept exactly as long as some AppVersion still points at it. Because artifacts
+// are deduplicated by manifest digest (many versions can share one artifact),
+// an artifact survives until its last referencing version is pruned. The
+// version retention GC (controllers/version) is what removes those references
+// over time; this controller reacts to the result.
 type GCController struct {
 	Log    *slog.Logger
 	EAC    *entityserver_v1alpha.EntityAccessClient
@@ -56,9 +57,7 @@ type GCController struct {
 // Start begins the periodic GC process.
 func (c *GCController) Start(ctx context.Context) {
 	c.Log.Info("starting artifact GC controller",
-		"check_interval", c.Config.CheckInterval,
-		"retention_days", c.Config.RetentionDays,
-		"retention_count", c.Config.RetentionCount)
+		"check_interval", c.Config.CheckInterval)
 
 	ctx, c.cancel = context.WithCancel(ctx)
 	go c.run(ctx)
@@ -124,7 +123,7 @@ func (c *GCController) runGCWithLogging(ctx context.Context) {
 	}
 }
 
-// RunGC applies the retention policy to all artifacts.
+// RunGC archives every active artifact that no AppVersion references.
 func (c *GCController) RunGC(ctx context.Context) (*GCResult, error) {
 	result := &GCResult{
 		ArchivedArtifacts: []entity.Id{},
@@ -134,94 +133,58 @@ func (c *GCController) RunGC(ctx context.Context) (*GCResult, error) {
 	gcCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
-	// List only active artifacts - archived and empty-status artifacts are skipped
+	// Build the set of artifacts still referenced by a version. This spans ALL
+	// AppVersions — ephemeral ones included — since an ephemeral version's image
+	// must stay available for as long as the version exists.
+	referenced, err := c.referencedArtifacts(gcCtx)
+	if err != nil {
+		return result, err
+	}
+
+	// Only active artifacts can be archived; already-archived ones are skipped.
 	resp, err := c.EAC.List(gcCtx, entity.Ref(core_v1alpha.ArtifactStatusId, core_v1alpha.ArtifactStatusActiveId))
 	if err != nil {
 		return result, fmt.Errorf("failed to list active artifacts: %w", err)
 	}
 
-	now := time.Now()
-	retentionCutoff := now.Add(-time.Duration(c.Config.RetentionDays) * 24 * time.Hour)
-
-	// Group artifacts by app
-	type artifactInfo struct {
-		artifact  core_v1alpha.Artifact
-		revision  int64
-		createdAt time.Time
-	}
-
-	artifactsByApp := make(map[entity.Id][]artifactInfo)
-	var orphanedArtifacts []artifactInfo
+	result.TotalArtifacts = len(resp.Values())
 
 	for _, e := range resp.Values() {
 		var art core_v1alpha.Artifact
 		art.Decode(e.Entity())
 
-		info := artifactInfo{
-			artifact:  art,
-			revision:  e.Revision(),
-			createdAt: time.UnixMilli(e.CreatedAt()),
-		}
-
-		if art.App == "" {
-			// Orphaned artifact (no app reference)
-			orphanedArtifacts = append(orphanedArtifacts, info)
-		} else {
-			artifactsByApp[art.App] = append(artifactsByApp[art.App], info)
-		}
-	}
-
-	result.TotalArtifacts = len(resp.Values())
-
-	// Process artifacts per app
-	for _, artifacts := range artifactsByApp {
-		// Sort by creation time, newest first
-		sort.Slice(artifacts, func(i, j int) bool {
-			return artifacts[i].createdAt.After(artifacts[j].createdAt)
-		})
-
-		for i, info := range artifacts {
-			shouldRetain := false
-
-			// Keep if within retention days
-			if info.createdAt.After(retentionCutoff) {
-				shouldRetain = true
-			}
-
-			// Keep if within retention count (first N in sorted list)
-			if i < c.Config.RetentionCount {
-				shouldRetain = true
-			}
-
-			if shouldRetain {
-				result.RetainedArtifacts++
-			} else {
-				// Archive this artifact
-				err := c.archiveArtifact(gcCtx, info.artifact, info.revision)
-				if err != nil {
-					result.FailedArtifacts[info.artifact.ID] = err
-				} else {
-					result.ArchivedArtifacts = append(result.ArchivedArtifacts, info.artifact.ID)
-				}
-			}
-		}
-	}
-
-	// Handle orphaned artifacts - archive if older than retention days
-	for _, info := range orphanedArtifacts {
-		if info.createdAt.After(retentionCutoff) {
+		if referenced[art.ID] {
 			result.RetainedArtifacts++
+			continue
+		}
+
+		if err := c.archiveArtifact(gcCtx, art, e.Revision()); err != nil {
+			result.FailedArtifacts[art.ID] = err
 		} else {
-			err := c.archiveArtifact(gcCtx, info.artifact, info.revision)
-			if err != nil {
-				result.FailedArtifacts[info.artifact.ID] = err
-			} else {
-				result.ArchivedArtifacts = append(result.ArchivedArtifacts, info.artifact.ID)
-			}
+			result.ArchivedArtifacts = append(result.ArchivedArtifacts, art.ID)
 		}
 	}
 
 	return result, nil
+}
+
+// referencedArtifacts returns the set of artifact IDs referenced by any
+// AppVersion.
+func (c *GCController) referencedArtifacts(ctx context.Context) (map[entity.Id]bool, error) {
+	resp, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, core_v1alpha.KindAppVersion))
+	if err != nil {
+		return nil, fmt.Errorf("failed to list app versions: %w", err)
+	}
+
+	referenced := make(map[entity.Id]bool)
+	for _, e := range resp.Values() {
+		var av core_v1alpha.AppVersion
+		av.Decode(e.Entity())
+		if av.Artifact != "" {
+			referenced[av.Artifact] = true
+		}
+	}
+	return referenced, nil
 }
 
 // archiveArtifact updates an artifact's status to archived.
