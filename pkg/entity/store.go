@@ -1787,15 +1787,13 @@ func enumerateAllAttrs(attrs []Attr) []Attr {
 // ListAllEntityIDs returns all entity IDs in the store
 func (s *EtcdStore) ListAllEntityIDs(ctx context.Context) ([]Id, error) {
 	prefix := fmt.Sprintf("%s/entity/", s.prefix)
-	resp, err := s.client.Get(ctx, prefix,
-		clientv3.WithPrefix(),
-		clientv3.WithKeysOnly())
+	kvs, err := s.scanPaged(ctx, prefix, withKeysOnly())
 	if err != nil {
 		return nil, fmt.Errorf("failed to list entities: %w", err)
 	}
 
 	var ids []Id
-	for _, kv := range resp.Kvs {
+	for _, kv := range kvs {
 		key := string(kv.Key)
 		// Skip session keys (they have /session/ in the path)
 		if strings.Contains(key, "/session/") {

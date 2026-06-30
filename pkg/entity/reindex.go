@@ -95,14 +95,14 @@ func (s *EtcdStore) Reindex(ctx context.Context, log *slog.Logger, opts ReindexO
 		log.Info("reindex: cleaning up stale index entries")
 		collectionPrefix := s.prefix + "/collections/"
 
-		resp, err := s.client.Get(ctx, collectionPrefix, clientv3.WithPrefix())
+		kvs, err := s.scanPaged(ctx, collectionPrefix)
 		if err != nil {
 			log.Warn("reindex: failed to list collection entries", "error", err)
 		} else {
-			stats.CollectionEntriesScanned = int64(len(resp.Kvs))
+			stats.CollectionEntriesScanned = int64(len(kvs))
 
 			var staleKeys []string
-			for _, kv := range resp.Kvs {
+			for _, kv := range kvs {
 				select {
 				case <-ctx.Done():
 					return stats, ctx.Err()

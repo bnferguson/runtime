@@ -129,7 +129,7 @@ func MigrateEntityStore(ctx context.Context, log *slog.Logger, client *clientv3.
 	log.Info("starting entity migration", "prefix", opts.Prefix, "dry_run", opts.DryRun)
 
 	// List all entities
-	kvs, err := listEntitiesPaged(ctx, client, opts.Prefix)
+	kvs, err := scanPaged(ctx, client, opts.Prefix)
 	if err != nil {
 		return 0, 0, fmt.Errorf("failed to list entities: %w", err)
 	}
