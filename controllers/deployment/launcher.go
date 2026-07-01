@@ -47,6 +47,11 @@ type Launcher struct {
 	PoolReadyTimeout time.Duration
 
 	appMu sync.Map // per-app mutexes: app ID -> *sync.Mutex
+
+	// warnedNoDisk tracks apps we've already warned about auto-mounting local
+	// storage without a disk config, so the warning fires once per app instead
+	// of on every reconcile tick. Keyed by app ID.
+	warnedNoDisk sync.Map
 }
 
 // PoolWithEntity wraps a SandboxPool with its entity, allowing updates without re-fetching
@@ -131,7 +136,6 @@ func (l *Launcher) Reconcile(ctx context.Context, app *core_v1alpha.App, meta *e
 
 	span.SetAttributes(attribute.String("miren.app.active_version", current.ActiveVersion.String()))
 
-	l.Log.Info("reconciling app", "app", current.ID, "version", current.ActiveVersion)
 	ready, err := l.addonsReady(ctx, current.ID)
 	if err != nil {
 		l.Log.Error("failed to check addon readiness", "app", current.ID, "error", err)
@@ -235,11 +239,6 @@ func (l *Launcher) reconcileAppVersion(ctx context.Context, app *core_v1alpha.Ap
 		return fmt.Errorf("failed to resolve config: %w", err)
 	}
 
-	l.Log.Info("reconciling app version",
-		"app", app.ID,
-		"version", ver.Version,
-		"services", len(spec.Services))
-
 	// For each service, ensure a pool exists. Collect IDs of newly created pools.
 	var newPoolIDs []entity.Id
 	for _, svc := range spec.Services {
@@ -319,12 +318,26 @@ func (l *Launcher) reconcileAppVersion(ctx context.Context, app *core_v1alpha.Ap
 	}
 
 	// Clean up old version pools (pools not referenced by current version)
-	if err := l.cleanupOldVersionPools(ctx, app, ver.ID); err != nil {
+	cleaned, err := l.cleanupOldVersionPools(ctx, app, ver.ID)
+	if err != nil {
 		l.Log.Error("failed to cleanup old version pools",
 			"app", app.ID,
 			"version", ver.ID,
 			"error", err)
 		// Don't fail the entire reconciliation if cleanup fails
+	}
+
+	// Summarize only when this reconcile actually did something. The loop runs
+	// constantly; a steady-state pass that created and cleaned up nothing stays
+	// silent so the journal isn't buried in no-op narration.
+	// pools_started counts pools we booted this pass: both brand-new pools and
+	// drained pools revived for deploy verification (newPoolIDs holds both).
+	if len(newPoolIDs) > 0 || cleaned > 0 {
+		l.Log.Info("reconciled app version",
+			"app", app.ID,
+			"version", ver.Version,
+			"pools_started", len(newPoolIDs),
+			"pools_cleaned_up", cleaned)
 	}
 
 	return nil
@@ -392,12 +405,9 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 	}
 
 	if poolWithEntity != nil {
-		// Reuse existing pool — sandboxes already running, no wait needed
-		l.Log.Info("reusing existing pool",
-			"pool", poolWithEntity.Pool.ID,
-			"service", serviceName,
-			"app", app.ID)
-
+		// Reuse existing pool — sandboxes already running, no wait needed.
+		// Steady-state reuse is a no-op; only log (below) when reuse actually
+		// mutates the pool.
 		needsUpdate := false
 
 		// Update the pool's sandbox spec version to track the current AppVersion
@@ -449,6 +459,10 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 		}
 
 		if needsUpdate {
+			l.Log.Info("reusing existing pool, applying updates",
+				"pool", poolWithEntity.Pool.ID,
+				"service", serviceName,
+				"app", app.ID)
 			if err := l.updatePool(ctx, poolWithEntity); err != nil {
 				return "", fmt.Errorf("failed to update pool: %w", err)
 			}
@@ -779,9 +793,14 @@ func (l *Launcher) buildSandboxSpec(
 			}
 		}
 		if !hasLocalMount && dirHasData(filepath.Join(l.DataPath, "data", "local", app.ID.String())) {
-			l.Log.Warn("auto-mounting local storage for app with existing data but no disk config",
-				"service", serviceName,
-				"app", app.ID)
+			// Warn once per app; this condition holds on every reconcile tick
+			// until the app gets an explicit disk config, so logging each time
+			// just floods the journal.
+			if _, warned := l.warnedNoDisk.LoadOrStore(app.ID, struct{}{}); !warned {
+				l.Log.Warn("auto-mounting local storage for app with existing data but no disk config",
+					"service", serviceName,
+					"app", app.ID)
+			}
 			sbSpec.Volume = append(sbSpec.Volume, compute_v1alpha.SandboxSpecVolume{
 				Name:      "local-data",
 				Provider:  "local",
@@ -1227,21 +1246,16 @@ func (l *Launcher) hasRunningSandboxForPool(ctx context.Context, poolID entity.I
 	return false, nil
 }
 
-// cleanupOldVersionPools removes old version references from pools and scales down unreferenced pools
-func (l *Launcher) cleanupOldVersionPools(ctx context.Context, app *core_v1alpha.App, currentVersionID entity.Id) error {
-	l.Log.Info("cleaning up old version pools",
-		"app", app.ID,
-		"current_version", currentVersionID)
-
+// cleanupOldVersionPools removes old version references from pools and scales
+// down unreferenced pools. It returns the number of pools it actually changed.
+func (l *Launcher) cleanupOldVersionPools(ctx context.Context, app *core_v1alpha.App, currentVersionID entity.Id) (int, error) {
 	// List all pools
 	poolsResp, err := l.EAC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool))
 	if err != nil {
-		return fmt.Errorf("failed to list pools: %w", err)
+		return 0, fmt.Errorf("failed to list pools: %w", err)
 	}
 
-	poolCount := len(poolsResp.Values())
-	l.Log.Info("found pools to check", "count", poolCount)
-
+	cleaned := 0
 	for _, ent := range poolsResp.Values() {
 		var pool compute_v1alpha.SandboxPool
 		pool.Decode(ent.Entity())
@@ -1256,20 +1270,12 @@ func (l *Launcher) cleanupOldVersionPools(ctx context.Context, app *core_v1alpha
 			continue
 		}
 
-		l.Log.Info("checking pool for cleanup",
-			"pool", pool.ID,
-			"service", pool.Service,
-			"references", pool.ReferencedByVersions)
-
 		// Check if this pool is being used by the current version
 		isUsedByCurrentVersion := containsRef(pool.ReferencedByVersions, currentVersionID)
 
 		if isUsedByCurrentVersion {
-			// Pool is being reused by current version - keep ALL references
-			// Multiple versions may reference the same pool during rolling deployments
-			l.Log.Info("pool is being reused by current version, keeping all references",
-				"pool", pool.ID,
-				"service", pool.Service)
+			// Pool is being reused by current version - keep ALL references.
+			// Multiple versions may reference the same pool during rolling deployments.
 			continue
 		}
 
@@ -1310,9 +1316,10 @@ func (l *Launcher) cleanupOldVersionPools(ctx context.Context, app *core_v1alpha
 			l.Log.Error("failed to update pool", "error", err, "pool", pool.ID)
 			continue
 		}
+		cleaned++
 	}
 
-	return nil
+	return cleaned, nil
 }
 
 // ensureServiceForPorts creates or updates a network Service entity for a service

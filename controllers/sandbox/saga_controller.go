@@ -72,8 +72,6 @@ func (s *SagaSandboxController) Init(ctx context.Context) error {
 // Create handles sandbox create/update events. For new sandboxes, it uses
 // the saga-based creation flow.
 func (s *SagaSandboxController) Create(ctx context.Context, co *compute.Sandbox, meta *entity.Meta) error {
-	s.log.Info("considering sandbox create or update (saga)", "id", co.ID, "status", co.Status)
-
 	switch co.Status {
 	case compute.DEAD:
 		return nil
