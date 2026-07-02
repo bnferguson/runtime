@@ -477,6 +477,17 @@ kinds:
       type: time
       doc: When the runner first registered with the coordinator
 
+    scheduling:
+      type: enum
+      doc: |
+        Operator-controlled scheduling eligibility for the node. Unlike status
+        (which is session-scoped and reset to ready on every runner rejoin),
+        scheduling is persistent, so a cordoned node stays unschedulable across
+        runner restarts until an operator uncordons it. The zero value (unset)
+        is treated as schedulable. A future "draining" value can be added here
+        when drain becomes asynchronous.
+      choices: [schedulable, cordoned]
+
   schedule:
     key:
       type: component
