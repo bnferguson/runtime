@@ -130,9 +130,22 @@ func (s *EntityStorage) ListIncomplete(ctx context.Context) ([]*Execution, error
 		return nil, fmt.Errorf("listing undoing sagas: %w", err)
 	}
 
-	// Combine IDs
-	allIds := append(pendingIds, runningIds...)
-	allIds = append(allIds, undoingIds...)
+	// Combine IDs, deduplicating by ID. A saga can transiently appear under
+	// more than one status index (e.g. a stale pending entry lingering after
+	// the transition to running). Recovering the same execution twice causes
+	// double execution: the second pass re-runs already-completed actions and
+	// collides on entities the first pass created.
+	seen := make(map[entity.Id]struct{})
+	var allIds []entity.Id
+	for _, ids := range [][]entity.Id{pendingIds, runningIds, undoingIds} {
+		for _, id := range ids {
+			if _, dup := seen[id]; dup {
+				continue
+			}
+			seen[id] = struct{}{}
+			allIds = append(allIds, id)
+		}
+	}
 	if len(allIds) == 0 {
 		return nil, nil
 	}
