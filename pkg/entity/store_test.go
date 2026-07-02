@@ -2384,3 +2384,83 @@ func TestCreateEntity_OverwritePreservesAllAttrs(t *testing.T) {
 	require.True(t, hasDoc, "entity should still have db/doc after overwrite")
 	assert.Equal(t, "updated doc", docAttr.Value.Any(), "doc should reflect the overwrite")
 }
+
+// TestEtcdStore_PatchPreservesReadInSessionAttributes reproduces the scenario
+// that broke coordinator-side cordon writes: an entity carries a session-scoped
+// attribute owned by one client's session, and a different client with no
+// session patches a primary attribute. The patch must succeed and leave the
+// existing session attribute in place, rather than failing with "session ID is
+// required for session attributes". A sessionless patch that itself sets a
+// session attribute must still be rejected.
+func TestEtcdStore_PatchPreservesReadInSessionAttributes(t *testing.T) {
+	r := require.New(t)
+	store, _ := setupTestEtcdStore(t)
+
+	_, err := store.CreateEntity(t.Context(), New(
+		Ident, "test/kind",
+		Doc, "a kind",
+		Cardinality, CardinalityOne,
+		Type, TypeStr,
+		Index, true,
+	))
+	r.NoError(err)
+
+	// A session-scoped attribute, like a Node's status.
+	_, err = store.CreateEntity(t.Context(), New(
+		Ident, "test/status",
+		Doc, "session-scoped status",
+		Cardinality, CardinalityOne,
+		Type, TypeStr,
+		Session, true,
+	))
+	r.NoError(err)
+
+	// A persistent primary attribute, like a Node's scheduling flag.
+	_, err = store.CreateEntity(t.Context(), New(
+		Ident, "test/scheduling",
+		Doc, "persistent scheduling flag",
+		Cardinality, CardinalityOne,
+		Type, TypeStr,
+	))
+	r.NoError(err)
+
+	// The "runner" session sets the session-scoped status.
+	sid, err := store.CreateSession(t.Context(), 30)
+	r.NoError(err)
+
+	ent, err := store.CreateEntity(t.Context(), New(
+		String(Id("test/kind"), "foo"),
+	))
+	r.NoError(err)
+
+	_, err = store.UpdateEntity(t.Context(), ent.Id(), New(
+		String(Id("test/status"), "ready"),
+	), WithSession(sid))
+	r.NoError(err)
+
+	// The "coordinator" (no session) patches the persistent attribute.
+	_, err = store.PatchEntity(t.Context(), New(
+		Ref(DBId, ent.Id()),
+		String(Id("test/scheduling"), "cordoned"),
+	))
+	r.NoError(err, "sessionless patch of a primary attr must not require the session")
+
+	// Both the new primary value and the existing session value survive.
+	got, err := store.GetEntity(t.Context(), ent.Id())
+	r.NoError(err)
+
+	sched, ok := got.Get(Id("test/scheduling"))
+	r.True(ok)
+	r.Equal("cordoned", sched.Value.String())
+
+	status, ok := got.Get(Id("test/status"))
+	r.True(ok, "read-in session attribute must be preserved across the sessionless patch")
+	r.Equal("ready", status.Value.String())
+
+	// A sessionless patch that itself sets a session attribute is still an error.
+	_, err = store.PatchEntity(t.Context(), New(
+		Ref(DBId, ent.Id()),
+		String(Id("test/status"), "disabled"),
+	))
+	r.Error(err, "patching a session attribute without a session must still fail")
+}

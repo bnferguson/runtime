@@ -855,6 +855,23 @@ func (s *EtcdStore) collectIndexedAttributes(ctx context.Context, attrs []Attr) 
 }
 
 // separateSessionAttributes separates attributes into primary and session attributes
+// hasSessionAttr reports whether any of the given attributes is session-scoped.
+// It's a lighter-weight check than separateSessionAttributes for callers that
+// only need the yes/no answer and don't want to rebuild the primary/session/
+// indexed split.
+func (s *EtcdStore) hasSessionAttr(ctx context.Context, attrs []Attr) (bool, error) {
+	for _, attr := range attrs {
+		schema, err := s.GetAttributeSchema(ctx, attr.ID)
+		if err != nil {
+			return false, err
+		}
+		if schema.Session {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (s *EtcdStore) separateSessionAttributes(ctx context.Context, attrs []Attr) (primary, session []Attr, indexedAttrs map[Id][]Attr, err error) {
 	indexedAttrs = make(map[Id][]Attr)
 	// Enumerate all attributes including nested ones in components for indexing
@@ -1197,6 +1214,22 @@ func (s *EtcdStore) PatchEntity(
 	primary, session, newIndexedAttrs, err := s.separateSessionAttributes(ctx, entity.attrs)
 	if err != nil {
 		return nil, err
+	}
+
+	// When the caller has no session, the only session attributes present were
+	// read from the existing entity (this patch didn't set them) — they belong
+	// to another client's session lease and live under their own sub-key. Leave
+	// them untouched rather than trying to re-save them (which would fail for
+	// lack of a session id). A patch that itself carries session attributes
+	// without a session is still a real error, handled by buildEntitySaveOps.
+	if len(o.session) == 0 && len(session) > 0 {
+		inputHasSession, serr := s.hasSessionAttr(ctx, current.attrs)
+		if serr != nil {
+			return nil, serr
+		}
+		if !inputHasSession {
+			session = nil
+		}
 	}
 
 	// Build collection update operations
