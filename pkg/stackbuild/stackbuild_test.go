@@ -619,6 +619,64 @@ func TestGo(t *testing.T) {
 	})
 }
 
+// TestGoRuntimeIncludesNonGoFiles verifies that a pure-Go app lands on the
+// distroless static runtime carrying its non-Go files (README, nested data
+// dirs) so it can read them at runtime, while the Go source and module/vendor
+// build inputs are left behind on the builder.
+func TestGoRuntimeIncludesNonGoFiles(t *testing.T) {
+	if !checkDocker() {
+		t.Skip("Docker not available")
+	}
+
+	root := t.TempDir()
+	dir := setupTestDir(root, t)
+
+	files := map[string]string{
+		"go.mod":        readFile(t, "go/go.mod"),
+		"go.sum":        readFile(t, "go/go.sum"),
+		"main.go":       readFile(t, "go/main.go"),
+		"README.md":     "# hello\n",
+		"data/seed.txt": "seed\n",
+	}
+
+	for name, content := range files {
+		full := filepath.Join(dir, name)
+		require.NoError(t, os.MkdirAll(filepath.Dir(full), 0755))
+		require.NoError(t, os.WriteFile(full, []byte(content), 0644))
+	}
+
+	stack := &GoStack{
+		MetaStack: MetaStack{
+			dir: dir,
+		},
+	}
+	state, err := stack.GenerateLLB(dir, BuildOptions{Version: "1.23"})
+	require.NoError(t, err)
+
+	buildLLB(t, dir, state, func(r io.Reader) {
+		names := map[string]bool{}
+		tr := tar.NewReader(r)
+		for {
+			th, err := tr.Next()
+			if err == io.EOF {
+				break
+			}
+			require.NoError(t, err)
+			names[th.Name] = true
+		}
+
+		// Non-Go files travel with the binary onto the distroless runtime.
+		require.True(t, names["bin/app"], "built binary should be present at bin/app")
+		require.True(t, names["app/README.md"], "non-Go README.md should be carried into the runtime")
+		require.True(t, names["app/data/seed.txt"], "nested non-Go data files should be carried into the runtime")
+
+		// Go source and module/vendor build inputs are stripped.
+		require.False(t, names["app/main.go"], "Go source must not be shipped in the runtime")
+		require.False(t, names["app/go.mod"], "go.mod must not be shipped in the runtime")
+		require.False(t, names["app/go.sum"], "go.sum must not be shipped in the runtime")
+	})
+}
+
 func TestGoCgo(t *testing.T) {
 	if !checkDocker() {
 		t.Skip("Docker not available")
