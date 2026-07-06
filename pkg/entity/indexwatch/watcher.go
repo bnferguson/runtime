@@ -158,6 +158,14 @@ type Watcher struct {
 	// exclusively by the watch goroutine; no locking required.
 	cursor int64
 
+	// mu guards the updates channel against the send/close race. Events reach
+	// updates from two unsynchronized senders: the run goroutine (snapshots) and
+	// the RPC dispatch goroutine that invokes our WatchIndex callback. The latter
+	// can still be mid-send when run returns and closes the channel, so both
+	// send and close take mu and consult closed.
+	mu     sync.Mutex
+	closed bool
+
 	startOnce sync.Once
 	stopOnce  sync.Once
 	cancel    context.CancelFunc
@@ -204,7 +212,7 @@ func (w *Watcher) Start(ctx context.Context) error {
 		w.wg.Add(1)
 		go func() {
 			defer w.wg.Done()
-			defer close(w.updates)
+			defer w.closeUpdates()
 			w.run(runCtx)
 		}()
 	})
@@ -244,13 +252,35 @@ func decodeEntity(aen *entityserver_v1alpha.Entity) *entity.Entity {
 // send delivers an event on the Updates channel, blocking until there is room
 // (backpressure) or the context is cancelled. It reports whether the event was
 // delivered; a false return means the watcher is shutting down.
+//
+// It holds mu across the send so a late callback delivery from the RPC dispatch
+// goroutine can never race closeUpdates onto a closed channel. A plain
+// select-with-ctx.Done guard is not enough on its own: once updates is closed,
+// the send case is permanently ready (it panics rather than blocks) and select
+// picks randomly among ready cases, so it would still hit the closed channel
+// roughly half the time even with ctx already cancelled.
 func (w *Watcher) send(ctx context.Context, ev Event) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return false
+	}
 	select {
 	case <-ctx.Done():
 		return false
 	case w.updates <- ev:
 		return true
 	}
+}
+
+// closeUpdates closes the Updates channel exactly once, serialized with send via
+// mu so an in-flight send can never observe the channel mid-close. Called from
+// the run goroutine's deferred teardown after run returns.
+func (w *Watcher) closeUpdates() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.closed = true
+	close(w.updates)
 }
 
 // run is the main loop. It maintains the revision cursor, snapshots when needed
