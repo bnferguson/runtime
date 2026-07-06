@@ -208,6 +208,15 @@ Miren looks for your main package in the `cmd/` directory:
 
 If your project has a `vendor/` directory, Miren uses `-mod=vendor` for faster builds.
 
+### Runtime Files
+
+The compiled binary ships on a minimal runtime image, but Miren also carries your
+non-Go files (READMEs, templates, migrations, data directories, and other assets)
+into the image so the app can read them at runtime relative to `/app`. Go source
+(`*.go`) along with `go.mod`, `go.sum`, and `vendor/` are excluded — the compiled
+binary needs none of them. If your app relies on files it does **not** read from
+disk, prefer embedding them with [`go:embed`](https://pkg.go.dev/embed).
+
 ### Example Procfile
 
 ```

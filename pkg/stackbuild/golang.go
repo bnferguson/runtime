@@ -269,10 +269,12 @@ func (s *GoStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error)
 //     and augmented apps carry a built /app tree (compiled frontend assets,
 //     templates) that the binary serves. The full working tree is copied so
 //     that behavior is preserved.
-//   - everything else lands on distroless/static as a binary-only static image
-//     — the canonical tiny Go container. Apps on this path that need runtime
-//     files should embed them (go:embed); a JS augmentation or an explicit
-//     build.cgo = true routes them to the slim base instead.
+//   - everything else lands on distroless/static — the canonical tiny Go
+//     container. The compiled binary is joined by the app's non-Go files
+//     (READMEs, templates, data dirs) so it can read them at runtime relative
+//     to /app; Go source and the module/vendor build inputs are left behind
+//     (see goRuntimeExcludePatterns). A JS augmentation or an explicit
+//     build.cgo = true routes to the slim base instead.
 //
 // Both paths run as uid 2010 (the app user) for consistency with every other
 // stack: debian-slim creates it with adduser, distroless gets a written
@@ -319,6 +321,23 @@ func (s *GoStack) assembleRuntime(h *highlevelBuilder, mr llb.ImageMetaResolver,
 	rt = rt.File(llb.Mkdir("/app", 0o755,
 		llb.WithParents(true), llb.WithUIDGID(2010, 2011)))
 	rt = rt.File(llb.Copy(builder, "/bin/app", "/bin/app", &llb.CopyInfo{}))
+
+	// Carry the app's non-Go files (READMEs, templates, data dirs) from the
+	// built working tree so a pure-Go app can still read them at runtime. The
+	// distroless base would otherwise ship only the binary, silently dropping
+	// everything else — a footgun for apps that open files relative to /app.
+	// Go source and the module/vendor build inputs are excluded: the compiled
+	// binary needs none of them, and copying them would only bloat the image.
+	rt = rt.File(llb.Copy(builder, "/app", "/app", &llb.CopyInfo{
+		CopyDirContentsOnly: true,
+		CreateDestPath:      true,
+		FollowSymlinks:      true,
+		AllowWildcard:       true,
+		AllowEmptyWildcard:  true,
+		ChownOpt:            &appChown,
+		ExcludePatterns:     goRuntimeExcludePatterns,
+	}))
+
 	s.result.Config.User = "2010"
 	return rt
 }
@@ -330,6 +349,12 @@ var (
 	goRuntimePasswd = []byte("root:x:0:0:root:/root:/sbin/nologin\napp:x:2010:2011:app:/app:/sbin/nologin\n")
 	goRuntimeGroup  = []byte("root:x:0:\napp:x:2011:\n")
 )
+
+// goRuntimeExcludePatterns lists build-only inputs stripped when the pure-Go
+// distroless runtime carries the app's data files. The compiled binary needs
+// none of these at runtime, so they are left behind on the builder. Patterns
+// use .dockerignore semantics, so **/*.go matches Go source at any depth.
+var goRuntimeExcludePatterns = []string{"**/*.go", "go.mod", "go.sum", "vendor"}
 
 func (s *GoStack) WebCommand() string {
 	return "/bin/app"
