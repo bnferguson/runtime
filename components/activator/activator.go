@@ -618,6 +618,11 @@ func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1al
 	strategy := concurrency.NewStrategyForVersion(ver, service, &sc)
 	maxInstances := int64(strategy.MaxInstances())
 
+	// poolLoop is labeled so the pool-creation retry path below can break all
+	// the way back out to re-read the cache. The outer loop re-acquires a.mu
+	// from scratch on every iteration (RLock immediately below), so any
+	// `continue poolLoop` MUST leave the lock released.
+poolLoop:
 	for {
 		// Check if pool exists or is being created (read lock)
 		a.mu.RLock()
@@ -838,11 +843,18 @@ func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1al
 		if exists {
 			// Another goroutine claimed creation while we waited for lock
 			a.mu.Unlock()
-			continue // Loop back to wait/increment logic
+			continue poolLoop // Loop back to wait/increment logic
 		}
 
 		// Try to find an existing pool in the entity store with retries
-		// DeploymentLauncher may have already created it, but we haven't seen it yet in our cache
+		// DeploymentLauncher may have already created it, but we haven't seen it yet in our cache.
+		//
+		// Lock invariant for this loop: a.mu is held at the top of every
+		// iteration. The attempt>0 backoff below releases it (line ~a.mu.Unlock)
+		// and re-acquires it before the next store query, so any path that exits
+		// an iteration must leave the lock in the state the next iteration (or
+		// the code after the loop) expects: held to stay in this loop, released
+		// to `continue poolLoop`.
 		const maxRetries = 3
 		const baseRetryDelay = 100 * time.Millisecond
 
@@ -870,9 +882,15 @@ func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1al
 				a.mu.Lock()
 				_, exists = a.pools[key]
 				if exists {
-					// Another goroutine found or created the pool while we were waiting
+					// Another goroutine found or created the pool while we were
+					// waiting. Break all the way out to the outer loop to pick it
+					// up through the normal wait/increment path. A bare `continue`
+					// here would re-enter *this* attempt loop with the lock
+					// released, and the next iteration's a.mu.Unlock() during
+					// backoff would fatally unlock an already-unlocked mutex
+					// (MIR-1306).
 					a.mu.Unlock()
-					continue // Loop back to main logic
+					continue poolLoop
 				}
 			}
 
