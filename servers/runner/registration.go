@@ -620,6 +620,10 @@ func (s *RegistrationServer) ListRunners(ctx context.Context, req *runner_v1alph
 			info.SetRegisteredAt(standard.ToTimestamp(node.RegisteredAt))
 		}
 
+		if node.Scheduling != "" {
+			info.SetScheduling(strings.TrimPrefix(string(node.Scheduling), "scheduling."))
+		}
+
 		runners = append(runners, info)
 	}
 
@@ -717,6 +721,218 @@ func (s *RegistrationServer) RemoveRunner(ctx context.Context, req *runner_v1alp
 	results.SetName(name)
 	results.SetRunnerId(node.RunnerId)
 	results.SetRemovedResources(removedResources)
+	return nil
+}
+
+const (
+	// drainDefaultTimeout bounds how long DrainRunner waits for a node's
+	// sandboxes to be descheduled before returning with timed_out set.
+	drainDefaultTimeout = 2 * time.Minute
+	// drainPollInterval is how often DrainRunner re-checks the node's schedule
+	// count while waiting for it to empty.
+	drainPollInterval = 500 * time.Millisecond
+)
+
+// setNodeScheduling writes the persistent scheduling eligibility on a node.
+// Unlike the session-scoped Status attribute (which the runner resets to READY
+// on every rejoin), this survives runner restarts, so a cordoned node stays
+// parked until an operator explicitly uncordons it. The value is an explicit
+// enum id (schedulable or cordoned), so uncordon is a plain write rather than a
+// clear.
+func (s *RegistrationServer) setNodeScheduling(ctx context.Context, nodeID entity.Id, scheduling entity.Id) error {
+	attrs := []entity.Attr{
+		entity.Ref(entity.DBId, nodeID),
+		entity.Ref(compute_v1alpha.NodeSchedulingId, scheduling),
+	}
+	_, err := s.EAC.Patch(ctx, attrs, 0)
+	return err
+}
+
+// CordonRunner marks a runner unschedulable without disrupting its running
+// sandboxes. The scheduler stops placing new work on the node; existing
+// sandboxes keep running.
+func (s *RegistrationServer) CordonRunner(ctx context.Context, req *runner_v1alpha.RunnerRegistrationCordonRunner) error {
+	args := req.Args()
+	results := req.Results()
+
+	if !args.HasQuery() || args.Query() == "" {
+		results.SetError("runner name or ID is required")
+		return nil
+	}
+	query := args.Query()
+	reason := ""
+	if args.HasReason() {
+		reason = args.Reason()
+	}
+
+	node, nodeID, err := s.findNodeByQuery(ctx, query)
+	if err != nil {
+		s.Log.Error("Failed to find runner", "query", query, "error", err)
+		results.SetError(err.Error())
+		return nil
+	}
+	if node == nil {
+		results.SetError(fmt.Sprintf("runner %q not found", query))
+		return nil
+	}
+
+	if err := s.setNodeScheduling(ctx, nodeID, compute_v1alpha.NodeSchedulingCordonedId); err != nil {
+		s.Log.Error("Failed to cordon runner", "node_id", nodeID, "error", err)
+		results.SetError("failed to cordon runner")
+		return nil
+	}
+
+	name := node.Name
+	if name == "" {
+		name = string(nodeID)
+	}
+	s.Log.Info("Cordoned runner", "name", name, "runner_id", node.RunnerId, "node_id", nodeID, "reason", reason)
+	results.SetName(name)
+	results.SetRunnerId(node.RunnerId)
+	return nil
+}
+
+// UncordonRunner clears a runner's cordon, making it eligible for scheduling
+// again.
+func (s *RegistrationServer) UncordonRunner(ctx context.Context, req *runner_v1alpha.RunnerRegistrationUncordonRunner) error {
+	args := req.Args()
+	results := req.Results()
+
+	if !args.HasQuery() || args.Query() == "" {
+		results.SetError("runner name or ID is required")
+		return nil
+	}
+	query := args.Query()
+
+	node, nodeID, err := s.findNodeByQuery(ctx, query)
+	if err != nil {
+		s.Log.Error("Failed to find runner", "query", query, "error", err)
+		results.SetError(err.Error())
+		return nil
+	}
+	if node == nil {
+		results.SetError(fmt.Sprintf("runner %q not found", query))
+		return nil
+	}
+
+	if err := s.setNodeScheduling(ctx, nodeID, compute_v1alpha.NodeSchedulingSchedulableId); err != nil {
+		s.Log.Error("Failed to uncordon runner", "node_id", nodeID, "error", err)
+		results.SetError("failed to uncordon runner")
+		return nil
+	}
+
+	name := node.Name
+	if name == "" {
+		name = string(nodeID)
+	}
+	s.Log.Info("Uncordoned runner", "name", name, "runner_id", node.RunnerId, "node_id", nodeID)
+	results.SetName(name)
+	results.SetRunnerId(node.RunnerId)
+	return nil
+}
+
+// DrainRunner cordons a runner and evicts its sandboxes so app controllers
+// reschedule them onto other ready nodes. It marks each scheduled sandbox
+// STOPPED — the same action the sandbox pool takes during a crash cooldown —
+// which makes the owning runner tear down its local container (via its
+// node-scoped watch on the sandbox status) and lets the pool controllers
+// recreate the capacity elsewhere. The sandbox entities themselves are left in
+// place (STOPPED, not deleted), as are disk mounts, volumes, and leases (unlike
+// RemoveRunner --force). It blocks until no live sandboxes remain on the node or
+// the timeout elapses, then reports how many sandboxes were evicted.
+func (s *RegistrationServer) DrainRunner(ctx context.Context, req *runner_v1alpha.RunnerRegistrationDrainRunner) error {
+	args := req.Args()
+	results := req.Results()
+
+	if !args.HasQuery() || args.Query() == "" {
+		results.SetError("runner name or ID is required")
+		return nil
+	}
+	query := args.Query()
+	reason := ""
+	if args.HasReason() {
+		reason = args.Reason()
+	}
+	timeout := drainDefaultTimeout
+	if args.HasTimeoutSeconds() && args.TimeoutSeconds() > 0 {
+		timeout = time.Duration(args.TimeoutSeconds()) * time.Second
+	}
+
+	node, nodeID, err := s.findNodeByQuery(ctx, query)
+	if err != nil {
+		s.Log.Error("Failed to find runner", "query", query, "error", err)
+		results.SetError(err.Error())
+		return nil
+	}
+	if node == nil {
+		results.SetError(fmt.Sprintf("runner %q not found", query))
+		return nil
+	}
+
+	name := node.Name
+	if name == "" {
+		name = string(nodeID)
+	}
+
+	// Cordon first so the scheduler stops placing new work while we evict. The
+	// flag is persistent, so the node stays drained across restarts until an
+	// operator uncordons it (e.g. drain -> reissue cert -> uncordon).
+	if err := s.setNodeScheduling(ctx, nodeID, compute_v1alpha.NodeSchedulingCordonedId); err != nil {
+		s.Log.Error("Failed to cordon runner for drain", "node_id", nodeID, "error", err)
+		results.SetError("failed to cordon runner")
+		return nil
+	}
+
+	// Evict the node's sandboxes and wait until none remain live (or the timeout
+	// elapses). The eviction sweep runs on every iteration rather than just
+	// once, so a sandbox skipped by a transient stop failure — or one that slips
+	// onto the node before the cordon fully takes effect — is retried instead of
+	// stranding the drain until it times out. stopNodeSandboxes skips sandboxes
+	// that are already terminal, so evicted accumulates only distinct stops.
+	evicted := 0
+	timedOut := false
+	deadline := time.Now().Add(timeout)
+	for {
+		stopped, err := s.stopNodeSandboxes(ctx, nodeID)
+		if err != nil {
+			s.Log.Error("Failed to evict sandboxes", "node_id", nodeID, "error", err)
+			results.SetError("failed to evict sandboxes from runner")
+			return nil
+		}
+		evicted += stopped
+
+		remaining, err := s.countLiveNodeSandboxes(ctx, nodeID)
+		if err != nil {
+			s.Log.Warn("Failed to poll node schedules during drain", "node_id", nodeID, "error", err)
+			break
+		}
+		if remaining == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			timedOut = true
+			s.Log.Warn("Drain timed out waiting for node to empty", "node_id", nodeID, "remaining", remaining)
+			break
+		}
+		select {
+		case <-ctx.Done():
+			results.SetError("drain canceled")
+			return nil
+		case <-time.After(drainPollInterval):
+		}
+	}
+
+	s.Log.Info("Drained runner",
+		"name", name,
+		"runner_id", node.RunnerId,
+		"node_id", nodeID,
+		"reason", reason,
+		"evicted", evicted,
+		"timed_out", timedOut)
+	results.SetName(name)
+	results.SetRunnerId(node.RunnerId)
+	results.SetEvictedCount(int32(evicted))
+	results.SetTimedOut(timedOut)
 	return nil
 }
 
@@ -963,6 +1179,61 @@ func (s *RegistrationServer) deleteNodeSchedules(ctx context.Context, nodeID ent
 		deleted++
 	}
 	return deleted, nil
+}
+
+// sandboxTerminal reports whether a sandbox status is terminal (no longer
+// counts as live capacity on a node).
+func sandboxTerminal(status compute_v1alpha.SandboxStatus) bool {
+	return status == compute_v1alpha.STOPPED || status == compute_v1alpha.DEAD
+}
+
+// stopNodeSandboxes marks every non-terminal sandbox scheduled to a node as
+// STOPPED, the same action the sandbox pool takes during a crash cooldown. The
+// owning runner observes the status change through its node-scoped watch and
+// tears down the local container; the pool controllers then recreate the
+// capacity on other ready nodes. It returns the number of sandboxes stopped.
+func (s *RegistrationServer) stopNodeSandboxes(ctx context.Context, nodeID entity.Id) (int, error) {
+	listResp, err := s.EAC.List(ctx, compute_v1alpha.Index(compute_v1alpha.KindSandbox, nodeID))
+	if err != nil {
+		return 0, err
+	}
+
+	stopped := 0
+	for _, e := range listResp.Values() {
+		var sb compute_v1alpha.Sandbox
+		decodeEntity(e, &sb)
+		if sandboxTerminal(sb.Status) {
+			continue
+		}
+
+		attrs := append([]entity.Attr{entity.Ref(entity.DBId, entity.Id(e.Id()))},
+			(&compute_v1alpha.Sandbox{Status: compute_v1alpha.STOPPED}).Encode()...)
+		if _, err := s.EAC.Patch(ctx, attrs, 0); err != nil {
+			s.Log.Warn("Failed to stop sandbox during drain", "id", e.Id(), "error", err)
+			continue
+		}
+		stopped++
+	}
+	return stopped, nil
+}
+
+// countLiveNodeSandboxes counts sandboxes scheduled to a node that are not yet
+// terminal. Drain uses this to wait until the node has been fully vacated.
+func (s *RegistrationServer) countLiveNodeSandboxes(ctx context.Context, nodeID entity.Id) (int, error) {
+	listResp, err := s.EAC.List(ctx, compute_v1alpha.Index(compute_v1alpha.KindSandbox, nodeID))
+	if err != nil {
+		return 0, err
+	}
+
+	live := 0
+	for _, e := range listResp.Values() {
+		var sb compute_v1alpha.Sandbox
+		decodeEntity(e, &sb)
+		if !sandboxTerminal(sb.Status) {
+			live++
+		}
+	}
+	return live, nil
 }
 
 func (s *RegistrationServer) deleteEntitiesByIndex(ctx context.Context, ref entity.Attr) (int, error) {

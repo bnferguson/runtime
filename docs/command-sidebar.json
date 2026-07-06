@@ -266,6 +266,8 @@
       "id": "command/runner"
     },
     "items": [
+      "command/runner-cordon",
+      "command/runner-drain",
       "command/runner-install",
       "command/runner-join",
       "command/runner-list",
@@ -277,6 +279,7 @@
       "command/runner-token-create",
       "command/runner-token-list",
       "command/runner-token-revoke",
+      "command/runner-uncordon",
       "command/runner-uninstall",
       "command/runner-upgrade",
       "command/runner-upgrade-rollback"

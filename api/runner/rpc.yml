@@ -227,6 +227,82 @@ interfaces:
             type: string
             doc: Error message if the refresh failed
 
+      - name: CordonRunner
+        index: 9
+        doc: |
+          Mark a runner unschedulable without disrupting its running sandboxes.
+          The scheduler stops placing new work on the node; existing sandboxes
+          keep running. Persists across runner restarts until uncordoned.
+        parameters:
+          - name: query
+            type: string
+            doc: Runner to cordon (name, ID, or short ID)
+          - name: reason
+            type: string
+            doc: Optional operator-supplied reason for the cordon
+        results:
+          - name: name
+            type: string
+            doc: Name of the cordoned runner
+          - name: runner_id
+            type: string
+            doc: Runner ID of the cordoned runner
+          - name: error
+            type: string
+            doc: Error message if the cordon failed
+
+      - name: UncordonRunner
+        index: 10
+        doc: Clear a runner's cordon, making it eligible for scheduling again.
+        parameters:
+          - name: query
+            type: string
+            doc: Runner to uncordon (name, ID, or short ID)
+        results:
+          - name: name
+            type: string
+            doc: Name of the uncordoned runner
+          - name: runner_id
+            type: string
+            doc: Runner ID of the uncordoned runner
+          - name: error
+            type: string
+            doc: Error message if the uncordon failed
+
+      - name: DrainRunner
+        index: 11
+        doc: |
+          Cordon a runner and evict its sandboxes so app controllers reschedule
+          them onto other ready nodes. Blocks until the node is empty or the
+          timeout elapses, then reports how many sandboxes were evicted. Leaves
+          disk mounts, volumes, and leases intact (unlike RemoveRunner --force).
+        parameters:
+          - name: query
+            type: string
+            doc: Runner to drain (name, ID, or short ID)
+          - name: reason
+            type: string
+            doc: Optional operator-supplied reason for the drain
+          - name: timeout_seconds
+            type: int64
+            doc: Max seconds to wait for the node to empty (0 uses a default)
+        results:
+          - name: name
+            type: string
+            doc: Name of the drained runner
+          - name: runner_id
+            type: string
+            doc: Runner ID of the drained runner
+          - name: evicted_count
+            type: int32
+            doc: Number of sandboxes evicted from the node
+          - name: timed_out
+            type: bool
+            doc: True if the timeout elapsed before the node fully emptied
+          - name: error
+            type: string
+            doc: Error message if the drain failed
+
 types:
   - type: InviteInfo
     doc: Information about a runner invite
@@ -313,3 +389,7 @@ types:
         type: standard.Timestamp
         index: 7
         doc: When the runner first registered
+      - name: scheduling
+        type: string
+        index: 9
+        doc: Scheduling eligibility (empty/schedulable = accepting work, cordoned = parked)

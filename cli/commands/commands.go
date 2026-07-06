@@ -719,6 +719,35 @@ miren deploy --analyze
 				Body: "miren runner remove my-runner --force",
 			}),
 		))
+		d.Dispatch("runner cordon", Infer("runner cordon", "Mark a runner unschedulable without stopping its sandboxes", RunnerCordon,
+			WithLabsFeature(labs.FeatureDistributedRunners),
+			WithExample(mflags.Example{
+				Name: "Cordon a runner",
+				Body: "miren runner cordon my-runner",
+			}),
+			WithExample(mflags.Example{
+				Name: "Cordon with a reason",
+				Body: "miren runner cordon my-runner --reason \"cert rotation\"",
+			}),
+		))
+		d.Dispatch("runner uncordon", Infer("runner uncordon", "Make a cordoned runner eligible for scheduling again", RunnerUncordon,
+			WithLabsFeature(labs.FeatureDistributedRunners),
+			WithExample(mflags.Example{
+				Name: "Uncordon a runner",
+				Body: "miren runner uncordon my-runner",
+			}),
+		))
+		d.Dispatch("runner drain", Infer("runner drain", "Cordon a runner and evict its sandboxes onto other nodes", RunnerDrain,
+			WithLabsFeature(labs.FeatureDistributedRunners),
+			WithExample(mflags.Example{
+				Name: "Drain a runner before maintenance",
+				Body: "miren runner drain my-runner",
+			}),
+			WithExample(mflags.Example{
+				Name: "Drain with a timeout",
+				Body: "miren runner drain my-runner --timeout 300",
+			}),
+		))
 		d.Dispatch("runner install", Infer("runner install", "Install systemd service for miren runner", RunnerInstall,
 			WithLabsFeature(labs.FeatureDistributedRunners),
 			WithExample(mflags.Example{

@@ -124,6 +124,142 @@ func TestDistributedRunnerLogs(t *testing.T) {
 // and all runners), not only on the node hosting the sandbox. The tcp-echo
 // testdata app declares node_port = 7000, so after deploy every peer's nft
 // service_nodeports map must contain an entry for tcp/7000.
+// runnerListEntry mirrors the JSON emitted by `runner list --format json` for
+// the fields the cordon/drain tests care about.
+type runnerListEntry struct {
+	RunnerID   string   `json:"runner_id"`
+	Name       string   `json:"name"`
+	Status     string   `json:"status"`
+	Scheduling string   `json:"scheduling"`
+	Cordoned   bool     `json:"cordoned"`
+	Labels     []string `json:"labels"`
+}
+
+func listRunners(t *testing.T, m *harness.Miren) []runnerListEntry {
+	t.Helper()
+	r := m.Run("runner", "list", "--format", "json")
+	r.RequireSuccess(t)
+	var runners []runnerListEntry
+	if err := json.Unmarshal([]byte(r.Stdout), &runners); err != nil {
+		t.Fatalf("failed to parse runner list JSON: %v", err)
+	}
+	return runners
+}
+
+func isCoordinator(r runnerListEntry) bool {
+	for _, l := range r.Labels {
+		if l == "role=coordinator" {
+			return true
+		}
+	}
+	return false
+}
+
+// findRunnerNode returns the stable runner_id of a non-coordinator (distributed
+// runner) node, waiting until at least one is ready. runner_id is used rather
+// than the mutable Name so lookups stay unambiguous even for unnamed or
+// duplicate-named runners; the miren CLI accepts it wherever a runner is named.
+func findRunnerNode(t *testing.T, m *harness.Miren) string {
+	t.Helper()
+	var runnerID string
+	harness.Poll(t, "a ready distributed runner node", 30*time.Second, 3*time.Second,
+		func() (bool, string) {
+			for _, r := range listRunners(t, m) {
+				if isCoordinator(r) {
+					continue
+				}
+				if r.Status == "ready" || r.Status == "status.ready" {
+					runnerID = r.RunnerID
+					return true, ""
+				}
+			}
+			return false, "no ready runner node yet"
+		},
+	)
+	return runnerID
+}
+
+func runnerEntry(t *testing.T, m *harness.Miren, runnerID string) runnerListEntry {
+	t.Helper()
+	for _, r := range listRunners(t, m) {
+		if r.RunnerID == runnerID {
+			return r
+		}
+	}
+	t.Fatalf("runner %q not found in runner list", runnerID)
+	return runnerListEntry{}
+}
+
+// TestDistributedRunnerCordon verifies cordon/uncordon toggle a distributed
+// runner's schedulability from the coordinator without going through SIGUSR2.
+func TestDistributedRunnerCordon(t *testing.T) {
+	c := harness.NewCluster(t)
+	skipIfNotDistributed(t, c)
+	m := harness.NewMiren(t, c)
+
+	runner := findRunnerNode(t, m)
+
+	m.Run("runner", "cordon", runner, "--reason", "blackbox cordon test").RequireSuccess(t)
+
+	harness.Poll(t, "runner reports cordoned", 15*time.Second, 2*time.Second,
+		func() (bool, string) {
+			e := runnerEntry(t, m, runner)
+			if !e.Cordoned || e.Scheduling != "cordoned" {
+				return false, "runner not yet cordoned"
+			}
+			return true, ""
+		},
+	)
+
+	m.Run("runner", "uncordon", runner).RequireSuccess(t)
+
+	harness.Poll(t, "runner reports uncordoned", 15*time.Second, 2*time.Second,
+		func() (bool, string) {
+			if runnerEntry(t, m, runner).Cordoned {
+				return false, "runner still cordoned"
+			}
+			return true, ""
+		},
+	)
+}
+
+// TestDistributedRunnerDrain deploys a stateless app (which prefers the runner
+// node), drains that runner from the coordinator, and verifies the app recovers
+// (rescheduled onto the coordinator) while the runner ends up cordoned. It then
+// uncordons to restore the cluster.
+func TestDistributedRunnerDrain(t *testing.T) {
+	c := harness.NewCluster(t)
+	skipIfNotDistributed(t, c)
+	m := harness.NewMiren(t, c)
+
+	runner := findRunnerNode(t, m)
+
+	name := harness.DeployApp(t, m, harness.AppOptions{
+		Testdata: "go-server",
+	})
+
+	// Drain the runner. This cordons it and evicts its sandboxes; the drain
+	// command blocks until the node is empty (or times out).
+	m.Run("runner", "drain", runner, "--reason", "blackbox drain test", "--timeout", "120").RequireSuccess(t)
+
+	// The runner must end up cordoned and still present (drain does not remove
+	// the node).
+	harness.Poll(t, "runner cordoned after drain", 15*time.Second, 2*time.Second,
+		func() (bool, string) {
+			if !runnerEntry(t, m, runner).Cordoned {
+				return false, "runner not cordoned after drain"
+			}
+			return true, ""
+		},
+	)
+
+	// The app must recover on another node now that the runner is drained.
+	harness.WaitForAppReady(t, m, name, 120*time.Second)
+
+	// Restore the cluster for subsequent tests.
+	m.Run("runner", "uncordon", runner).RequireSuccess(t)
+}
+
 func TestDistributedRunnerNodePort(t *testing.T) {
 	c := harness.NewCluster(t)
 	skipIfNotDistributed(t, c)
