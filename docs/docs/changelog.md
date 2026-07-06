@@ -11,6 +11,11 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *main*
 
+---
+
+## v0.11.0
+*2026-07-06*
+
 **Features**
 - **Version retention and image blob reclamation** - Every deploy used to mint an AppVersion that lived forever, bloating the entity store and pinning old images on disk. Miren now runs a periodic retention GC that per-app keeps the most recent `retention_count` versions (or anything newer than `retention_period`), always keeps the active version, and skips anything a running or pending sandbox still references. Reclaimed versions release their artifacts so the existing image and blob GC can finally recover the disk. ([#877](https://github.com/mirendev/runtime/pull/877))
 - **Absolute time windows for `miren logs`** - `miren logs` could only ever look backward from now via `--last`. All four log subcommands (`app`, `sandbox`, `build`, `system`) now take a `--since`/`--until` pair, each of which accepts an RFC3339 timestamp, a friendly local form like `"2026-06-25 14:00"`, or a duration read as "that long ago." `--since 2h --until 30m` gives you exactly the window from two hours ago to thirty minutes ago. The old `--last` still works as shorthand. ([#868](https://github.com/mirendev/runtime/pull/868))
