@@ -11,29 +11,69 @@ func TestGenerateConfig(t *testing.T) {
 	c := &Component{}
 	config := c.generateConfig(10*1024*1024*1024, 86400, "registry.example.com:5000")
 
-	t.Run("has single catch-all gcpolicy", func(t *testing.T) {
+	// gcPolicyBlocks splits the config into its individual gcpolicy bodies
+	// (text from one "[[worker.oci.gcpolicy]]" header to the next section).
+	gcPolicyBlocks := func(cfg string) []string {
+		var blocks []string
+		const hdr = "[[worker.oci.gcpolicy]]"
+		rest := cfg
+		for {
+			i := strings.Index(rest, hdr)
+			if i < 0 {
+				break
+			}
+			rest = rest[i+len(hdr):]
+			end := len(rest)
+			if n := strings.Index(rest, "[["); n >= 0 {
+				end = n
+			}
+			if n := strings.Index(rest, "\n[registry"); n >= 0 && n < end {
+				end = n
+			}
+			blocks = append(blocks, rest[:end])
+		}
+		return blocks
+	}
+
+	t.Run("enforces the byte cap with an age-less tier", func(t *testing.T) {
 		r := require.New(t)
 
-		count := strings.Count(config, "[[worker.oci.gcpolicy]]")
-		r.Equal(1, count, "should have exactly one gcpolicy block")
+		blocks := gcPolicyBlocks(config)
+		r.GreaterOrEqual(len(blocks), 2, "should have multiple graduated gcpolicy tiers")
+
+		// MIR-1280: a keepDuration-only policy can never enforce the cap because
+		// it pins recently-used records and their whole ancestry. At least one
+		// tier must carry maxUsedSpace WITHOUT keepDuration so the ceiling binds
+		// regardless of entry age.
+		ageless := 0
+		for _, b := range blocks {
+			if strings.Contains(b, "maxUsedSpace") && !strings.Contains(b, "keepDuration") {
+				ageless++
+			}
+		}
+		r.GreaterOrEqual(ageless, 1, "at least one tier must enforce maxUsedSpace with no keepDuration")
+
+		// The last-resort tier must be the age-less all=true ceiling, or
+		// internal/frontend cache stays outside the enforced cap.
+		last := blocks[len(blocks)-1]
+		r.Contains(last, "all = true", "final tier should cover all cache types")
+		r.Contains(last, "maxUsedSpace", "final tier should enforce the byte cap")
+		r.NotContains(last, "keepDuration", "final tier must not be age-gated")
 	})
 
-	t.Run("policy has no filters (catch-all)", func(t *testing.T) {
+	t.Run("uses maxUsedSpace as the cap, not deprecated keepBytes", func(t *testing.T) {
 		r := require.New(t)
+		r.Contains(config, "maxUsedSpace")
+		r.NotContains(config, "keepBytes")
+	})
 
-		idx := strings.Index(config, "[[worker.oci.gcpolicy]]")
-		r.GreaterOrEqual(idx, 0, "gcpolicy block should be present in config")
-
-		block := config[idx:]
-		// Extract just the policy block (up to next section)
-		nextSection := strings.Index(block, "\n[registry")
-		if nextSection > 0 {
-			block = block[:nextSection]
-		}
-
-		r.NotContains(block, "filters")
-		r.Contains(block, "keepBytes")
-		r.Contains(block, "keepDuration")
+	t.Run("source filters use OR (array) form, not comma-joined AND", func(t *testing.T) {
+		r := require.New(t)
+		// A single comma-joined filter string is AND'd and matches no record.
+		r.NotContains(config, "type==source.local,type==exec.cachemount")
+		r.Contains(config, `"type==source.local"`)
+		r.Contains(config, `"type==exec.cachemount"`)
+		r.Contains(config, `"type==source.git.checkout"`)
 	})
 
 	t.Run("uses provided registry host", func(t *testing.T) {
