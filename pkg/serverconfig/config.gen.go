@@ -6,6 +6,38 @@ import (
 	"time"
 )
 
+// AppVersionConfig App version retention garbage collection
+type AppVersionConfig struct {
+	RetentionCount  *int    `toml:"retention_count" env:"MIREN_APP_VERSION_RETENTION_COUNT"`
+	RetentionPeriod *string `toml:"retention_period" env:"MIREN_APP_VERSION_RETENTION_PERIOD"`
+}
+
+// GetRetentionCount returns the value of RetentionCount or its zero value if nil
+func (c *AppVersionConfig) GetRetentionCount() int {
+	if c.RetentionCount != nil {
+		return *c.RetentionCount
+	}
+	return 0
+}
+
+// SetRetentionCount sets the value of RetentionCount
+func (c *AppVersionConfig) SetRetentionCount(v int) {
+	c.RetentionCount = &v
+}
+
+// GetRetentionPeriod returns the value of RetentionPeriod or its zero value if nil
+func (c *AppVersionConfig) GetRetentionPeriod() string {
+	if c.RetentionPeriod != nil {
+		return *c.RetentionPeriod
+	}
+	return ""
+}
+
+// SetRetentionPeriod sets the value of RetentionPeriod
+func (c *AppVersionConfig) SetRetentionPeriod(v string) {
+	c.RetentionPeriod = &v
+}
+
 // BuildkitConfig BuildKit daemon configuration
 type BuildkitConfig struct {
 	GcKeepDuration *string `toml:"gc_keep_duration" env:"MIREN_BUILDKIT_GC_KEEP_DURATION"`
@@ -82,6 +114,7 @@ func (c *BuildkitConfig) SetStartEmbedded(v bool) {
 
 // Config Complete server configuration from all sources
 type Config struct {
+	AppVersion      AppVersionConfig      `toml:"app_version"`
 	Buildkit        BuildkitConfig        `toml:"buildkit"`
 	Containerd      ContainerdConfig      `toml:"containerd"`
 	Etcd            EtcdConfig            `toml:"etcd"`

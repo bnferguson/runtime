@@ -5,6 +5,8 @@ package serverconfig
 // CLIFlags represents command-line flags for server configuration
 // All fields are pointers to distinguish between set and unset values
 type CLIFlags struct {
+	AppVersionConfigRetentionCount       *int     `long:"app-version-retention-count" description:"Number of most-recent versions to retain per app regardless of age" env:"MIREN_APP_VERSION_RETENTION_COUNT"`
+	AppVersionConfigRetentionPeriod      *string  `long:"app-version-retention-period" description:"Retain versions newer than this duration regardless of count (e.g. 30d, 2w)" env:"MIREN_APP_VERSION_RETENTION_PERIOD"`
 	BuildkitConfigGcKeepDuration         *string  `long:"buildkit-gc-duration" description:"How long to keep BuildKit cache entries (e.g., 7d, 24h)" env:"MIREN_BUILDKIT_GC_KEEP_DURATION"`
 	BuildkitConfigGcKeepStorage          *string  `long:"buildkit-gc-storage" description:"Maximum BuildKit layer cache size (e.g., 10GB, 50GB)" env:"MIREN_BUILDKIT_GC_KEEP_STORAGE"`
 	BuildkitConfigSocketDir              *string  `long:"buildkit-socket-dir" description:"Directory for embedded BuildKit Unix socket (defaults to data_path/buildkit/socket)" env:"MIREN_BUILDKIT_SOCKET_DIR"`

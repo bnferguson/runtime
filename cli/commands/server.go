@@ -635,30 +635,41 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		}
 	}
 
+	// A malformed retention period parses to 0, which the coordinator treats as
+	// "use the default" rather than "retain nothing". Warn so the operator knows
+	// their configured value was ignored.
+	appVersionRetentionPeriod, err := units.ParseDuration(cfg.AppVersion.GetRetentionPeriod())
+	if err != nil {
+		ctx.Log.Warn("invalid app_version.retention_period, falling back to default",
+			"value", cfg.AppVersion.GetRetentionPeriod(), "error", err)
+	}
+
 	// Build coordinator config
 	coordConfig := coordinate.CoordinatorConfig{
-		Address:                srvaddr,
-		EtcdEndpoints:          cfg.Etcd.Endpoints,
-		Prefix:                 cfg.Etcd.GetPrefix(),
-		NetworkBackend:         cfg.Server.GetNetworkBackend(),
-		DataPath:               cfg.Server.GetDataPath(),
-		AdditionalNames:        cfg.TLS.AdditionalNames,
-		IPs:                    ipSet,
-		AcmeEmail:              cfg.TLS.GetAcmeEmail(),
-		AcmeDNSProvider:        cfg.TLS.GetAcmeDNSProvider(),
-		Resolver:               res,
-		TempDir:                os.TempDir(),
-		CloudAuth:              cloudAuthConfig,
-		Mem:                    mem,
-		Cpu:                    cpu,
-		HTTP:                   httpMetrics,
-		Logs:                   logs,
-		LogWriter:              logWriter,
-		BuildKit:               buildkitComponent,
-		HTTPRequestTimeout:     cfg.Server.HTTPRequestTimeoutDuration(),
-		VictoriametricsAddress: ctx.ServerState.VictoriametricsAddress,
-		VictorialogsAddress:    ctx.ServerState.VictorialogsAddress,
-		WorkloadIssuer:         workloadIssuer,
+		Address:                   srvaddr,
+		EtcdEndpoints:             cfg.Etcd.Endpoints,
+		Prefix:                    cfg.Etcd.GetPrefix(),
+		NetworkBackend:            cfg.Server.GetNetworkBackend(),
+		DataPath:                  cfg.Server.GetDataPath(),
+		AdditionalNames:           cfg.TLS.AdditionalNames,
+		IPs:                       ipSet,
+		AcmeEmail:                 cfg.TLS.GetAcmeEmail(),
+		AcmeDNSProvider:           cfg.TLS.GetAcmeDNSProvider(),
+		Resolver:                  res,
+		TempDir:                   os.TempDir(),
+		CloudAuth:                 cloudAuthConfig,
+		Mem:                       mem,
+		Cpu:                       cpu,
+		HTTP:                      httpMetrics,
+		Logs:                      logs,
+		LogWriter:                 logWriter,
+		BuildKit:                  buildkitComponent,
+		HTTPRequestTimeout:        cfg.Server.HTTPRequestTimeoutDuration(),
+		VictoriametricsAddress:    ctx.ServerState.VictoriametricsAddress,
+		VictorialogsAddress:       ctx.ServerState.VictorialogsAddress,
+		WorkloadIssuer:            workloadIssuer,
+		AppVersionRetentionCount:  cfg.AppVersion.GetRetentionCount(),
+		AppVersionRetentionPeriod: appVersionRetentionPeriod,
 	}
 
 	// Pass etcd TLS config when distributed runners is enabled
