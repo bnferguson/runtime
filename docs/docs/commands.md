@@ -193,6 +193,8 @@ Complete reference for all `miren` CLI commands.
 | Command | Description |
 |---------|-------------|
 | [`miren runner`](/command/runner) | Runner management commands |
+| [`miren runner cordon`](/command/runner-cordon) | Mark a runner unschedulable without stopping its sandboxes _(`distributedrunners`)_ |
+| [`miren runner drain`](/command/runner-drain) | Cordon a runner and evict its sandboxes onto other nodes _(`distributedrunners`)_ |
 | [`miren runner install`](/command/runner-install) | Install systemd service for miren runner _(`distributedrunners`)_ |
 | [`miren runner join`](/command/runner-join) | Join this machine to a coordinator as a runner _(`distributedrunners`)_ |
 | [`miren runner list`](/command/runner-list) | List all registered runners _(`distributedrunners`)_ |
@@ -204,6 +206,7 @@ Complete reference for all `miren` CLI commands.
 | [`miren runner token create`](/command/runner-token-create) | Create a join token for a runner _(`distributedrunners`)_ |
 | [`miren runner token list`](/command/runner-token-list) | List all join tokens _(`distributedrunners`)_ |
 | [`miren runner token revoke`](/command/runner-token-revoke) | Revoke a join token _(`distributedrunners`)_ |
+| [`miren runner uncordon`](/command/runner-uncordon) | Make a cordoned runner eligible for scheduling again _(`distributedrunners`)_ |
 | [`miren runner uninstall`](/command/runner-uninstall) | Remove systemd service for miren runner _(`distributedrunners`)_ |
 | [`miren runner upgrade`](/command/runner-upgrade) | Upgrade miren runner to the latest or specified version _(`distributedrunners`)_ |
 | [`miren runner upgrade rollback`](/command/runner-upgrade-rollback) | Rollback runner to previous version _(`distributedrunners`)_ |

@@ -48,6 +48,7 @@ import (
 	nodehealthctrl "miren.dev/runtime/controllers/nodehealth"
 	"miren.dev/runtime/controllers/sandboxpool"
 	schedulerctrl "miren.dev/runtime/controllers/scheduler"
+	versionctrl "miren.dev/runtime/controllers/version"
 	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/addon"
@@ -130,6 +131,11 @@ type CoordinatorConfig struct {
 
 	// HTTPRequestTimeout is the timeout for HTTP requests to app sandboxes
 	HTTPRequestTimeout time.Duration
+
+	// AppVersionRetentionCount and AppVersionRetentionPeriod tune the version
+	// retention GC. Values <= 0 fall back to the controller defaults.
+	AppVersionRetentionCount  int
+	AppVersionRetentionPeriod time.Duration
 
 	// WorkloadIssuer signs workload identity tokens for sandbox containers
 	WorkloadIssuer *workloadidentity.Issuer
@@ -344,6 +350,7 @@ type Coordinator struct {
 	autocertReady func() // nil when DNS-01 path is used
 	artifactGC    *artifactctrl.GCController
 	ephemeralGC   *ephemeralctrl.GCController
+	versionGC     *versionctrl.GCController
 	hs            *httpingress.Server
 
 	authority *caauth.Authority
@@ -361,6 +368,12 @@ type Coordinator struct {
 	logAddressesOnce sync.Once
 
 	debugServer *debugsrv.Server
+
+	// sagaBuilder is retained so build saga recovery can be driven from
+	// the boot sequence (RecoverBuildSagas) after the build's runtime
+	// dependencies — the registry and the cluster.local mapping — are
+	// ready. nil when sagas are disabled. See MIR-1285.
+	sagaBuilder *build.SagaBuilder
 }
 
 func (c *Coordinator) Activator() activator.AppActivator {
@@ -375,6 +388,22 @@ func (c *Coordinator) HttpIngress() *httpingress.Server {
 	return c.hs
 }
 
+// RecoverBuildSagas resumes in-flight build sagas left by a previous
+// process. It must be called from the boot sequence AFTER the runtime
+// dependencies a resumed build needs — the cluster registry and the
+// cluster.local name mapping — are ready. Recovery is deliberately not
+// run during Start, where it would resume an image push before those
+// exist (MIR-1285). No-op when sagas are disabled; recovery errors are
+// logged, not fatal.
+func (c *Coordinator) RecoverBuildSagas(ctx context.Context) {
+	if c.sagaBuilder == nil {
+		return
+	}
+	if err := c.sagaBuilder.Recover(ctx); err != nil {
+		c.Log.Error("build saga recovery completed with errors", "error", err)
+	}
+}
+
 // Stop stops the coordinator and all managed controllers
 func (c *Coordinator) Stop() {
 	if c.cm != nil {
@@ -385,6 +414,9 @@ func (c *Coordinator) Stop() {
 	}
 	if c.ephemeralGC != nil {
 		c.ephemeralGC.Stop()
+	}
+	if c.versionGC != nil {
+		c.versionGC.Stop()
 	}
 	if c.debugServer != nil {
 		if err := c.debugServer.Close(); err != nil {
@@ -1107,6 +1139,21 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	}
 	c.ephemeralGC.Start(ctx)
 
+	// Start the version retention GC controller
+	versionGCConfig := versionctrl.DefaultGCConfig()
+	if c.AppVersionRetentionCount > 0 {
+		versionGCConfig.RetentionCount = c.AppVersionRetentionCount
+	}
+	if c.AppVersionRetentionPeriod > 0 {
+		versionGCConfig.RetentionPeriod = c.AppVersionRetentionPeriod
+	}
+	c.versionGC = &versionctrl.GCController{
+		Log:    c.Log.With("module", "version-gc"),
+		EAC:    eac,
+		Config: versionGCConfig,
+	}
+	c.versionGC.Start(ctx)
+
 	eps := execproxy.NewServer(c.Log, eac, rs)
 	server.ExposeValue("dev.miren.runtime/exec", exec_v1alpha.AdaptSandboxExec(eps))
 
@@ -1133,10 +1180,15 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	if labs.Sagas() {
 		sagaStorage := saga.NewEntityStorage(etcdStore, c.Log)
 		sagaBuilder := build.NewSagaBuilder(bs, sagaStorage, c.Log)
-		if err := sagaBuilder.Init(ctx); err != nil {
+		if err := sagaBuilder.Init(); err != nil {
 			c.Log.Error("failed to initialize saga builder", "error", err)
 			return err
 		}
+		// Retain for RecoverBuildSagas, driven from the boot sequence
+		// after the registry and cluster.local mapping are ready. Running
+		// recovery here would resume an image push before they exist
+		// (MIR-1285).
+		c.sagaBuilder = sagaBuilder
 		buildHandler = sagaBuilder
 	}
 	server.ExposeValue("dev.miren.runtime/build", build_v1alpha.AdaptBuilder(buildHandler))

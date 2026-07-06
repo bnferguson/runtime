@@ -10,6 +10,7 @@ func strPtr(s string) *string { return &s }
 // DefaultConfig returns the default configuration
 func DefaultConfig() *Config {
 	return &Config{
+		AppVersion:      DefaultAppVersionConfig(),
 		Buildkit:        DefaultBuildkitConfig(),
 		Containerd:      DefaultContainerdConfig(),
 		Etcd:            DefaultEtcdConfig(),
@@ -20,6 +21,14 @@ func DefaultConfig() *Config {
 		TLS:             DefaultTLSConfig(),
 		Victorialogs:    DefaultVictoriaLogsConfig(),
 		Victoriametrics: DefaultVictoriaMetricsConfig(),
+	}
+}
+
+// DefaultAppVersionConfig returns default AppVersionConfig
+func DefaultAppVersionConfig() AppVersionConfig {
+	return AppVersionConfig{
+		RetentionCount:  intPtr(10),
+		RetentionPeriod: strPtr("30d"),
 	}
 }
 

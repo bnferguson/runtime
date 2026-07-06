@@ -183,3 +183,14 @@ Controls the embedded VictoriaMetrics instance used for application metrics.
 | `address` | string | `victoriametrics:8428` | Address when not using embedded | `MIREN_VICTORIAMETRICS_ADDRESS` | `--victoriametrics-addr` |
 
 \* Defaults to `true` in standalone mode only.
+
+## `[app_version]` — Version Retention {#app-version}
+
+Every deploy creates a new version of an app, and Miren keeps a bounded history of them rather than retaining every version forever. Pruning old versions frees the disk space their container images take up and keeps the server's per-app state from growing with every deploy.
+
+A version is retained if it is among the most recent `retention_count` **or** newer than `retention_period` — whichever rule keeps it. The two settings are a floor, not a budget: raising either one keeps more versions. The currently active version is always retained regardless of these limits, and ephemeral (preview) versions are managed separately by their own TTL.
+
+| Field | Type | Default | Description | Env Var | CLI Flag |
+|-------|------|---------|-------------|---------|----------|
+| `retention_count` | int | `10` | Most-recent versions to keep per app, regardless of age | `MIREN_APP_VERSION_RETENTION_COUNT` | `--app-version-retention-count` |
+| `retention_period` | string | `30d` | Keep versions newer than this, regardless of count (e.g. `30d`, `2w`) | `MIREN_APP_VERSION_RETENTION_PERIOD` | `--app-version-retention-period` |

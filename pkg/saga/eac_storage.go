@@ -103,6 +103,7 @@ func (s *EACStorage) Get(ctx context.Context, id string) (*Execution, error) {
 func (s *EACStorage) ListIncomplete(ctx context.Context) ([]*Execution, error) {
 	// Query for each incomplete status
 	var allEntities []*es.Entity
+	seen := make(map[string]struct{})
 
 	for _, statusRef := range []entity.Id{
 		saga_v1alpha.SagaStatusPendingId,
@@ -116,7 +117,17 @@ func (s *EACStorage) ListIncomplete(ctx context.Context) ([]*Execution, error) {
 		if err != nil {
 			return nil, fmt.Errorf("listing sagas with status %s: %w", statusRef, err)
 		}
-		allEntities = append(allEntities, resp.Values()...)
+		// Deduplicate by ID: a saga can appear under more than one status
+		// index (e.g. a stale pending entry after transitioning to running),
+		// and recovering the same execution twice causes double execution.
+		for _, v := range resp.Values() {
+			id := v.Id()
+			if _, dup := seen[id]; dup {
+				continue
+			}
+			seen[id] = struct{}{}
+			allEntities = append(allEntities, v)
+		}
 	}
 
 	if len(allEntities) == 0 {

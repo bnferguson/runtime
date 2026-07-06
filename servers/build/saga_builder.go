@@ -77,19 +77,30 @@ func NewSagaBuilder(inner *Builder, sagaStorage saga.Storage, log *slog.Logger) 
 	}
 }
 
-// Init registers the build-from-tar saga definition with the executor
-// and recovers any incomplete sagas left over from a previous process.
-// Should be called once at server startup before serving RPC requests.
-func (s *SagaBuilder) Init(ctx context.Context) error {
+// Init registers the build-from-tar saga definition with the executor.
+// It must be called once at startup, before serving RPC requests, so new
+// builds can run. It deliberately does not recover in-flight sagas:
+// recovery resumes a build's image push, which needs the cluster
+// registry and the cluster.local name mapping, and those are established
+// late in boot (after the coordinator's own startup). Recovery is split
+// into Recover and driven from the boot sequence once those dependencies
+// exist. See MIR-1285.
+func (s *SagaBuilder) Init() error {
 	if err := registerBuildSaga(s.registry, s.inner, s.streams, s.statuses, s.log); err != nil {
 		return fmt.Errorf("registering build-from-tar saga: %w", err)
 	}
-	if err := s.executor.Recover(ctx); err != nil {
-		// Recovery failures don't block startup — they're already
-		// logged inside Recover. New requests can still come in.
-		s.log.Error("saga recovery completed with errors", "error", err)
-	}
 	return nil
+}
+
+// Recover resumes any incomplete sagas left over from a previous
+// process. It must run only after a resumed build's runtime dependencies
+// (the registry listener and the cluster.local name mapping) are ready;
+// running it mid-boot resumes the image push before those exist, so the
+// build fails and rolls back (MIR-1285). The error is returned for the
+// caller to log; recovery failures are not fatal, since new build
+// requests can still be served.
+func (s *SagaBuilder) Recover(ctx context.Context) error {
+	return s.executor.Recover(ctx)
 }
 
 // BuildFromTar is the saga-backed implementation of the RPC method.

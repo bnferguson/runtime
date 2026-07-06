@@ -269,6 +269,38 @@ func (c *Component) Client(ctx context.Context) (*buildkitclient.Client, error) 
 	)
 }
 
+// generateConfig renders the buildkitd.toml the embedded daemon runs with.
+//
+// The GC policy is the part worth reading. BuildKit prunes the build cache
+// after every build, running each worker.oci.gcpolicy tier in order and
+// trimming down to that tier's limit. We tune the tiers for how miren builds:
+// stackbuild turns an uploaded app into an image using persistent package
+// caches, and a small set of base images gets rebuilt constantly.
+//
+// The rule that matters: a byte cap only holds if some tier enforces it with no
+// keepDuration. A keepDuration gate keeps any record used within the window,
+// and it keeps that record's whole ancestry along with it, since we can't drop
+// a base layer while a fresher layer still sits on top. On a busy builder that
+// covers almost the entire cache, so an age-gated cap never binds and the cache
+// grows forever. That's how garden hit 27GB against a 10GB cap and fed the
+// MIR-1279 disk outage. So the last two tiers set no keepDuration.
+//
+// The tiers, in the order BuildKit runs them:
+//
+//  1. Cheap scratch, cleared first. Build inputs and side caches, not built
+//     layers: the uploaded app source (source.local, from stackbuild's
+//     llb.Local context), the persistent package caches (exec.cachemount for
+//     bun/go/pip/bundler, via CacheMountFrom), and git checkouts (rare; we
+//     build from tarballs). Losing these costs a slower next build and nothing
+//     else, so we clear them before touching real layers once they pass 512MB
+//     and 48h. Each filter is its own array element so BuildKit ORs them; a
+//     single comma-joined string gets ANDed, and since a record has one type,
+//     matches nothing.
+//  2. Keep recently-used cache when we can, but stay under the cap.
+//  3. The real ceiling: enforce the cap regardless of age, dropping the
+//     least-recently-used first. This is what breaks the pinning above, since
+//     removing a fresh leaf frees the ancestors under it.
+//  4. Last resort: sweep internal and frontend cache too, to hold the line.
 func (c *Component) generateConfig(gcKeepStorage, gcKeepDuration int64, registryHost string) string {
 	if registryHost == "" {
 		registryHost = "cluster.local:5000"
@@ -297,19 +329,33 @@ insecure-entitlements = [ "network.host", "security.insecure" ]
 
 [worker.oci]
   gc = true
-  gckeepstorage = %d
+  gckeepstorage = %[1]d
+
+  # GC policy tuned for miren's build workload; see generateConfig in
+  # components/buildkit/buildkit.go for the rationale.
+  [[worker.oci.gcpolicy]]
+    filters = [ "type==source.local", "type==exec.cachemount", "type==source.git.checkout" ]
+    keepDuration = 172800
+    maxUsedSpace = 512000000
 
   [[worker.oci.gcpolicy]]
-    keepBytes = %d
-    keepDuration = %d
+    keepDuration = %[2]d
+    maxUsedSpace = %[1]d
+
+  [[worker.oci.gcpolicy]]
+    maxUsedSpace = %[1]d
+
+  [[worker.oci.gcpolicy]]
+    all = true
+    maxUsedSpace = %[1]d
 
 [registry."docker.io"]
   http = true
 
-[registry."%s"]
+[registry."%[3]s"]
   insecure = true
   http = true
-`, gcKeepStorage, gcKeepStorage, gcKeepDuration, registryHost)
+`, gcKeepStorage, gcKeepDuration, registryHost)
 }
 
 // writeHostsFile creates or updates the custom /etc/hosts file for the BuildKit container.

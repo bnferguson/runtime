@@ -38,6 +38,8 @@ func RunnerList(ctx *Context, opts struct {
 			RunnerID     string   `json:"runner_id"`
 			Name         string   `json:"name"`
 			Status       string   `json:"status"`
+			Scheduling   string   `json:"scheduling,omitempty"`
+			Cordoned     bool     `json:"cordoned"`
 			Version      string   `json:"version"`
 			APIAddress   string   `json:"api_address"`
 			Labels       []string `json:"labels,omitempty"`
@@ -52,6 +54,8 @@ func RunnerList(ctx *Context, opts struct {
 				RunnerID:   r.RunnerId(),
 				Name:       r.Name(),
 				Status:     r.Status(),
+				Scheduling: r.Scheduling(),
+				Cordoned:   r.Scheduling() == "cordoned",
 				Version:    r.Version(),
 				APIAddress: r.ApiAddress(),
 				Labels:     r.Labels(),
@@ -94,6 +98,9 @@ func RunnerList(ctx *Context, opts struct {
 			status = infoLabel.Render("disabled")
 		case "status.unhealthy":
 			status = infoRed.Render("unhealthy")
+		}
+		if r.Scheduling() == "cordoned" {
+			status += " " + infoLabel.Render("(cordoned)")
 		}
 
 		version := r.Version()

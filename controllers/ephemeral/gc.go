@@ -8,6 +8,7 @@ import (
 
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/pkg/appversion"
 	"miren.dev/runtime/pkg/entity"
 	ephemeralx "miren.dev/runtime/pkg/ephemeral"
 )
@@ -100,10 +101,15 @@ func (c *GCController) RunGC(ctx context.Context) (*GCResult, error) {
 	gcCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
-	// List all app versions — filter for ephemeral ones
-	// We use the app_version app index to get all versions across all apps
-	// A more efficient approach would use the ephemeral_expires_at index,
-	// but that requires range queries. For now, scan all versions.
+	// Scan every AppVersion and filter to the ephemeral ones. This set is
+	// bounded: non-ephemeral versions are capped by the retention GC
+	// (controllers/version) and ephemeral ones by DefaultMaxEphemeral per app,
+	// so the scan does not grow with total deploy history. The store's index
+	// lookups are equality-only, so there is no range query over
+	// ephemeral_expires_at to target expired versions directly. If this scan
+	// ever costs too much (roughly thousands of apps, given the 5-minute
+	// cadence), the fix is an equality-indexed "ephemeral" marker attr so we can
+	// List(ephemeral=true) instead of scanning-and-filtering every version.
 	resp, err := c.EAC.List(gcCtx, entity.Ref(entity.EntityKind, core_v1alpha.KindAppVersion))
 	if err != nil {
 		// Fall back to scanning by iterating through known apps
@@ -130,7 +136,7 @@ func (c *GCController) RunGC(ctx context.Context) (*GCResult, error) {
 			"label", av.EphemeralLabel,
 			"expired_at", av.EphemeralExpiresAt)
 
-		if err := ephemeralx.DeleteVersion(gcCtx, c.EAC, av.ID, c.Log); err != nil {
+		if err := appversion.DeleteWithPools(gcCtx, c.EAC, &av, c.Log); err != nil {
 			c.Log.Error("failed to delete expired ephemeral version",
 				"version_id", av.ID, "error", err)
 			result.FailedVersions++

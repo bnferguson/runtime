@@ -195,6 +195,7 @@ type runnerInfoData struct {
 	Labels       *[]string           `cbor:"6,keyasint,omitempty" json:"labels,omitempty"`
 	RegisteredAt *standard.Timestamp `cbor:"7,keyasint,omitempty" json:"registered_at,omitempty"`
 	ShortId      *string             `cbor:"8,keyasint,omitempty" json:"short_id,omitempty"`
+	Scheduling   *string             `cbor:"9,keyasint,omitempty" json:"scheduling,omitempty"`
 }
 
 type RunnerInfo struct {
@@ -332,6 +333,21 @@ func (v *RunnerInfo) ShortId() string {
 
 func (v *RunnerInfo) SetShortId(short_id string) {
 	v.data.ShortId = &short_id
+}
+
+func (v *RunnerInfo) HasScheduling() bool {
+	return v.data.Scheduling != nil
+}
+
+func (v *RunnerInfo) Scheduling() string {
+	if v.data.Scheduling == nil {
+		return ""
+	}
+	return *v.data.Scheduling
+}
+
+func (v *RunnerInfo) SetScheduling(scheduling string) {
+	v.data.Scheduling = &scheduling
 }
 
 func (v *RunnerInfo) MarshalCBOR() ([]byte, error) {
@@ -1161,6 +1177,277 @@ func (v *RunnerRegistrationRefreshCertificateResults) UnmarshalJSON(data []byte)
 	return json.Unmarshal(data, &v.data)
 }
 
+type runnerRegistrationCordonRunnerArgsData struct {
+	Query  *string `cbor:"0,keyasint,omitempty" json:"query,omitempty"`
+	Reason *string `cbor:"1,keyasint,omitempty" json:"reason,omitempty"`
+}
+
+type RunnerRegistrationCordonRunnerArgs struct {
+	call rpc.Call
+	data runnerRegistrationCordonRunnerArgsData
+}
+
+func (v *RunnerRegistrationCordonRunnerArgs) HasQuery() bool {
+	return v.data.Query != nil
+}
+
+func (v *RunnerRegistrationCordonRunnerArgs) Query() string {
+	if v.data.Query == nil {
+		return ""
+	}
+	return *v.data.Query
+}
+
+func (v *RunnerRegistrationCordonRunnerArgs) HasReason() bool {
+	return v.data.Reason != nil
+}
+
+func (v *RunnerRegistrationCordonRunnerArgs) Reason() string {
+	if v.data.Reason == nil {
+		return ""
+	}
+	return *v.data.Reason
+}
+
+func (v *RunnerRegistrationCordonRunnerArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationCordonRunnerArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunnerRegistrationCordonRunnerArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationCordonRunnerArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type runnerRegistrationCordonRunnerResultsData struct {
+	Name     *string `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+	RunnerId *string `cbor:"1,keyasint,omitempty" json:"runner_id,omitempty"`
+	Error    *string `cbor:"2,keyasint,omitempty" json:"error,omitempty"`
+}
+
+type RunnerRegistrationCordonRunnerResults struct {
+	call rpc.Call
+	data runnerRegistrationCordonRunnerResultsData
+}
+
+func (v *RunnerRegistrationCordonRunnerResults) SetName(name string) {
+	v.data.Name = &name
+}
+
+func (v *RunnerRegistrationCordonRunnerResults) SetRunnerId(runner_id string) {
+	v.data.RunnerId = &runner_id
+}
+
+func (v *RunnerRegistrationCordonRunnerResults) SetError(error string) {
+	v.data.Error = &error
+}
+
+func (v *RunnerRegistrationCordonRunnerResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationCordonRunnerResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunnerRegistrationCordonRunnerResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationCordonRunnerResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type runnerRegistrationUncordonRunnerArgsData struct {
+	Query *string `cbor:"0,keyasint,omitempty" json:"query,omitempty"`
+}
+
+type RunnerRegistrationUncordonRunnerArgs struct {
+	call rpc.Call
+	data runnerRegistrationUncordonRunnerArgsData
+}
+
+func (v *RunnerRegistrationUncordonRunnerArgs) HasQuery() bool {
+	return v.data.Query != nil
+}
+
+func (v *RunnerRegistrationUncordonRunnerArgs) Query() string {
+	if v.data.Query == nil {
+		return ""
+	}
+	return *v.data.Query
+}
+
+func (v *RunnerRegistrationUncordonRunnerArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationUncordonRunnerArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunnerRegistrationUncordonRunnerArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationUncordonRunnerArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type runnerRegistrationUncordonRunnerResultsData struct {
+	Name     *string `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+	RunnerId *string `cbor:"1,keyasint,omitempty" json:"runner_id,omitempty"`
+	Error    *string `cbor:"2,keyasint,omitempty" json:"error,omitempty"`
+}
+
+type RunnerRegistrationUncordonRunnerResults struct {
+	call rpc.Call
+	data runnerRegistrationUncordonRunnerResultsData
+}
+
+func (v *RunnerRegistrationUncordonRunnerResults) SetName(name string) {
+	v.data.Name = &name
+}
+
+func (v *RunnerRegistrationUncordonRunnerResults) SetRunnerId(runner_id string) {
+	v.data.RunnerId = &runner_id
+}
+
+func (v *RunnerRegistrationUncordonRunnerResults) SetError(error string) {
+	v.data.Error = &error
+}
+
+func (v *RunnerRegistrationUncordonRunnerResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationUncordonRunnerResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunnerRegistrationUncordonRunnerResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationUncordonRunnerResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type runnerRegistrationDrainRunnerArgsData struct {
+	Query          *string `cbor:"0,keyasint,omitempty" json:"query,omitempty"`
+	Reason         *string `cbor:"1,keyasint,omitempty" json:"reason,omitempty"`
+	TimeoutSeconds *int64  `cbor:"2,keyasint,omitempty" json:"timeout_seconds,omitempty"`
+}
+
+type RunnerRegistrationDrainRunnerArgs struct {
+	call rpc.Call
+	data runnerRegistrationDrainRunnerArgsData
+}
+
+func (v *RunnerRegistrationDrainRunnerArgs) HasQuery() bool {
+	return v.data.Query != nil
+}
+
+func (v *RunnerRegistrationDrainRunnerArgs) Query() string {
+	if v.data.Query == nil {
+		return ""
+	}
+	return *v.data.Query
+}
+
+func (v *RunnerRegistrationDrainRunnerArgs) HasReason() bool {
+	return v.data.Reason != nil
+}
+
+func (v *RunnerRegistrationDrainRunnerArgs) Reason() string {
+	if v.data.Reason == nil {
+		return ""
+	}
+	return *v.data.Reason
+}
+
+func (v *RunnerRegistrationDrainRunnerArgs) HasTimeoutSeconds() bool {
+	return v.data.TimeoutSeconds != nil
+}
+
+func (v *RunnerRegistrationDrainRunnerArgs) TimeoutSeconds() int64 {
+	if v.data.TimeoutSeconds == nil {
+		return 0
+	}
+	return *v.data.TimeoutSeconds
+}
+
+func (v *RunnerRegistrationDrainRunnerArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationDrainRunnerArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunnerRegistrationDrainRunnerArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationDrainRunnerArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type runnerRegistrationDrainRunnerResultsData struct {
+	Name         *string `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+	RunnerId     *string `cbor:"1,keyasint,omitempty" json:"runner_id,omitempty"`
+	EvictedCount *int32  `cbor:"2,keyasint,omitempty" json:"evicted_count,omitempty"`
+	TimedOut     *bool   `cbor:"3,keyasint,omitempty" json:"timed_out,omitempty"`
+	Error        *string `cbor:"4,keyasint,omitempty" json:"error,omitempty"`
+}
+
+type RunnerRegistrationDrainRunnerResults struct {
+	call rpc.Call
+	data runnerRegistrationDrainRunnerResultsData
+}
+
+func (v *RunnerRegistrationDrainRunnerResults) SetName(name string) {
+	v.data.Name = &name
+}
+
+func (v *RunnerRegistrationDrainRunnerResults) SetRunnerId(runner_id string) {
+	v.data.RunnerId = &runner_id
+}
+
+func (v *RunnerRegistrationDrainRunnerResults) SetEvictedCount(evicted_count int32) {
+	v.data.EvictedCount = &evicted_count
+}
+
+func (v *RunnerRegistrationDrainRunnerResults) SetTimedOut(timed_out bool) {
+	v.data.TimedOut = &timed_out
+}
+
+func (v *RunnerRegistrationDrainRunnerResults) SetError(error string) {
+	v.data.Error = &error
+}
+
+func (v *RunnerRegistrationDrainRunnerResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationDrainRunnerResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunnerRegistrationDrainRunnerResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationDrainRunnerResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type RunnerRegistrationCreateInvite struct {
 	rpc.Call
 	args    RunnerRegistrationCreateInviteArgs
@@ -1395,6 +1682,84 @@ func (t *RunnerRegistrationRefreshCertificate) Results() *RunnerRegistrationRefr
 	return results
 }
 
+type RunnerRegistrationCordonRunner struct {
+	rpc.Call
+	args    RunnerRegistrationCordonRunnerArgs
+	results RunnerRegistrationCordonRunnerResults
+}
+
+func (t *RunnerRegistrationCordonRunner) Args() *RunnerRegistrationCordonRunnerArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *RunnerRegistrationCordonRunner) Results() *RunnerRegistrationCordonRunnerResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type RunnerRegistrationUncordonRunner struct {
+	rpc.Call
+	args    RunnerRegistrationUncordonRunnerArgs
+	results RunnerRegistrationUncordonRunnerResults
+}
+
+func (t *RunnerRegistrationUncordonRunner) Args() *RunnerRegistrationUncordonRunnerArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *RunnerRegistrationUncordonRunner) Results() *RunnerRegistrationUncordonRunnerResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type RunnerRegistrationDrainRunner struct {
+	rpc.Call
+	args    RunnerRegistrationDrainRunnerArgs
+	results RunnerRegistrationDrainRunnerResults
+}
+
+func (t *RunnerRegistrationDrainRunner) Args() *RunnerRegistrationDrainRunnerArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *RunnerRegistrationDrainRunner) Results() *RunnerRegistrationDrainRunnerResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type RunnerRegistration interface {
 	CreateInvite(ctx context.Context, state *RunnerRegistrationCreateInvite) error
 	Join(ctx context.Context, state *RunnerRegistrationJoin) error
@@ -1405,6 +1770,9 @@ type RunnerRegistration interface {
 	WorkloadIssuerInfo(ctx context.Context, state *RunnerRegistrationWorkloadIssuerInfo) error
 	IssueWorkloadToken(ctx context.Context, state *RunnerRegistrationIssueWorkloadToken) error
 	RefreshCertificate(ctx context.Context, state *RunnerRegistrationRefreshCertificate) error
+	CordonRunner(ctx context.Context, state *RunnerRegistrationCordonRunner) error
+	UncordonRunner(ctx context.Context, state *RunnerRegistrationUncordonRunner) error
+	DrainRunner(ctx context.Context, state *RunnerRegistrationDrainRunner) error
 }
 
 type reexportRunnerRegistration struct {
@@ -1444,6 +1812,18 @@ func (reexportRunnerRegistration) IssueWorkloadToken(ctx context.Context, state 
 }
 
 func (reexportRunnerRegistration) RefreshCertificate(ctx context.Context, state *RunnerRegistrationRefreshCertificate) error {
+	panic("not implemented")
+}
+
+func (reexportRunnerRegistration) CordonRunner(ctx context.Context, state *RunnerRegistrationCordonRunner) error {
+	panic("not implemented")
+}
+
+func (reexportRunnerRegistration) UncordonRunner(ctx context.Context, state *RunnerRegistrationUncordonRunner) error {
+	panic("not implemented")
+}
+
+func (reexportRunnerRegistration) DrainRunner(ctx context.Context, state *RunnerRegistrationDrainRunner) error {
 	panic("not implemented")
 }
 
@@ -1541,6 +1921,36 @@ func AdaptRunnerRegistration(t RunnerRegistration) *rpc.Interface {
 			Params:        []string{"listen_addr"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.RefreshCertificate(ctx, &RunnerRegistrationRefreshCertificate{Call: call})
+			},
+		},
+		{
+			Name:          "CordonRunner",
+			InterfaceName: "RunnerRegistration",
+			Index:         9,
+			Public:        false,
+			Params:        []string{"query", "reason"},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.CordonRunner(ctx, &RunnerRegistrationCordonRunner{Call: call})
+			},
+		},
+		{
+			Name:          "UncordonRunner",
+			InterfaceName: "RunnerRegistration",
+			Index:         10,
+			Public:        false,
+			Params:        []string{"query"},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.UncordonRunner(ctx, &RunnerRegistrationUncordonRunner{Call: call})
+			},
+		},
+		{
+			Name:          "DrainRunner",
+			InterfaceName: "RunnerRegistration",
+			Index:         11,
+			Public:        false,
+			Params:        []string{"query", "reason", "timeout_seconds"},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.DrainRunner(ctx, &RunnerRegistrationDrainRunner{Call: call})
 			},
 		},
 	}
@@ -2058,4 +2468,185 @@ func (v RunnerRegistrationClient) RefreshCertificate(ctx context.Context, listen
 	}
 
 	return &RunnerRegistrationClientRefreshCertificateResults{client: v.Client, data: ret}, nil
+}
+
+type RunnerRegistrationClientCordonRunnerResults struct {
+	client rpc.Client
+	data   runnerRegistrationCordonRunnerResultsData
+}
+
+func (v *RunnerRegistrationClientCordonRunnerResults) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *RunnerRegistrationClientCordonRunnerResults) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *RunnerRegistrationClientCordonRunnerResults) HasRunnerId() bool {
+	return v.data.RunnerId != nil
+}
+
+func (v *RunnerRegistrationClientCordonRunnerResults) RunnerId() string {
+	if v.data.RunnerId == nil {
+		return ""
+	}
+	return *v.data.RunnerId
+}
+
+func (v *RunnerRegistrationClientCordonRunnerResults) HasError() bool {
+	return v.data.Error != nil
+}
+
+func (v *RunnerRegistrationClientCordonRunnerResults) Error() string {
+	if v.data.Error == nil {
+		return ""
+	}
+	return *v.data.Error
+}
+
+func (v RunnerRegistrationClient) CordonRunner(ctx context.Context, query string, reason string) (*RunnerRegistrationClientCordonRunnerResults, error) {
+	args := RunnerRegistrationCordonRunnerArgs{}
+	args.data.Query = &query
+	args.data.Reason = &reason
+
+	var ret runnerRegistrationCordonRunnerResultsData
+
+	err := v.Call(ctx, "CordonRunner", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &RunnerRegistrationClientCordonRunnerResults{client: v.Client, data: ret}, nil
+}
+
+type RunnerRegistrationClientUncordonRunnerResults struct {
+	client rpc.Client
+	data   runnerRegistrationUncordonRunnerResultsData
+}
+
+func (v *RunnerRegistrationClientUncordonRunnerResults) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *RunnerRegistrationClientUncordonRunnerResults) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *RunnerRegistrationClientUncordonRunnerResults) HasRunnerId() bool {
+	return v.data.RunnerId != nil
+}
+
+func (v *RunnerRegistrationClientUncordonRunnerResults) RunnerId() string {
+	if v.data.RunnerId == nil {
+		return ""
+	}
+	return *v.data.RunnerId
+}
+
+func (v *RunnerRegistrationClientUncordonRunnerResults) HasError() bool {
+	return v.data.Error != nil
+}
+
+func (v *RunnerRegistrationClientUncordonRunnerResults) Error() string {
+	if v.data.Error == nil {
+		return ""
+	}
+	return *v.data.Error
+}
+
+func (v RunnerRegistrationClient) UncordonRunner(ctx context.Context, query string) (*RunnerRegistrationClientUncordonRunnerResults, error) {
+	args := RunnerRegistrationUncordonRunnerArgs{}
+	args.data.Query = &query
+
+	var ret runnerRegistrationUncordonRunnerResultsData
+
+	err := v.Call(ctx, "UncordonRunner", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &RunnerRegistrationClientUncordonRunnerResults{client: v.Client, data: ret}, nil
+}
+
+type RunnerRegistrationClientDrainRunnerResults struct {
+	client rpc.Client
+	data   runnerRegistrationDrainRunnerResultsData
+}
+
+func (v *RunnerRegistrationClientDrainRunnerResults) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *RunnerRegistrationClientDrainRunnerResults) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *RunnerRegistrationClientDrainRunnerResults) HasRunnerId() bool {
+	return v.data.RunnerId != nil
+}
+
+func (v *RunnerRegistrationClientDrainRunnerResults) RunnerId() string {
+	if v.data.RunnerId == nil {
+		return ""
+	}
+	return *v.data.RunnerId
+}
+
+func (v *RunnerRegistrationClientDrainRunnerResults) HasEvictedCount() bool {
+	return v.data.EvictedCount != nil
+}
+
+func (v *RunnerRegistrationClientDrainRunnerResults) EvictedCount() int32 {
+	if v.data.EvictedCount == nil {
+		return 0
+	}
+	return *v.data.EvictedCount
+}
+
+func (v *RunnerRegistrationClientDrainRunnerResults) HasTimedOut() bool {
+	return v.data.TimedOut != nil
+}
+
+func (v *RunnerRegistrationClientDrainRunnerResults) TimedOut() bool {
+	if v.data.TimedOut == nil {
+		return false
+	}
+	return *v.data.TimedOut
+}
+
+func (v *RunnerRegistrationClientDrainRunnerResults) HasError() bool {
+	return v.data.Error != nil
+}
+
+func (v *RunnerRegistrationClientDrainRunnerResults) Error() string {
+	if v.data.Error == nil {
+		return ""
+	}
+	return *v.data.Error
+}
+
+func (v RunnerRegistrationClient) DrainRunner(ctx context.Context, query string, reason string, timeout_seconds int64) (*RunnerRegistrationClientDrainRunnerResults, error) {
+	args := RunnerRegistrationDrainRunnerArgs{}
+	args.data.Query = &query
+	args.data.Reason = &reason
+	args.data.TimeoutSeconds = &timeout_seconds
+
+	var ret runnerRegistrationDrainRunnerResultsData
+
+	err := v.Call(ctx, "DrainRunner", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &RunnerRegistrationClientDrainRunnerResults{client: v.Client, data: ret}, nil
 }

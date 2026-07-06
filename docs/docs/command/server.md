@@ -19,6 +19,8 @@ miren server [flags]
 - `--acme-dns-provider` — DNS provider for ACME DNS-01 challenges (e.g., cloudflare, route53, exec). When set, uses DNS challenge instead of HTTP challenge. See https://go-acme.github.io/lego/dns/ for available providers.
 - `--acme-email` — Email address for ACME account registration (recommended for account recovery and notifications)
 - `--address, -a` — Address to listen on (host:port). For IPv6 use brackets, e.g. "[::1]:8443".
+- `--app-version-retention-count` — Number of most-recent versions to retain per app regardless of age
+- `--app-version-retention-period` — Retain versions newer than this duration regardless of count (e.g. 30d, 2w)
 - `--buildkit-gc-duration` — How long to keep BuildKit cache entries (e.g., 7d, 24h)
 - `--buildkit-gc-storage` — Maximum BuildKit layer cache size (e.g., 10GB, 50GB)
 - `--buildkit-socket` — Path to external BuildKit Unix socket (for distributed mode)

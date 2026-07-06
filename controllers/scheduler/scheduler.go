@@ -59,13 +59,17 @@ func (c *Controller) Reconcile(ctx context.Context, sandbox *compute_v1alpha.San
 		return err
 	}
 
-	// Find available READY nodes with a valid address.
-	// Both conditions are required: status=READY (session-scoped, proves the
-	// runner process is alive) and a non-empty ApiAddress (proves the runner
-	// has fully started and is reachable).
+	// Find available READY nodes with a valid address that are schedulable.
+	// All three conditions are required: status=READY (session-scoped, proves
+	// the runner process is alive), a non-empty ApiAddress (proves the runner
+	// has fully started and is reachable), and a schedulable scheduling state
+	// (a persistent operator flag that survives runner restarts; the zero value
+	// means schedulable, and anything other than SCHEDULABLE — e.g. cordoned —
+	// keeps the node out of scheduling until explicitly uncordoned).
 	var nodes []*compute_v1alpha.Node
 	for _, node := range allNodes {
-		if node.Status == compute_v1alpha.READY && node.ApiAddress != "" {
+		schedulable := node.Scheduling == "" || node.Scheduling == compute_v1alpha.SCHEDULABLE
+		if node.Status == compute_v1alpha.READY && node.ApiAddress != "" && schedulable {
 			nodes = append(nodes, node)
 		}
 	}

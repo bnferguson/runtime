@@ -118,6 +118,51 @@ func TestSchedulerAssignsUnscheduledSandbox(t *testing.T) {
 	assert.Equal(t, compute_v1alpha.KindSandbox, schedule.Key.Kind, "schedule key should have sandbox kind")
 }
 
+// TestSchedulerSkipsCordonedNode verifies that a cordoned node (READY, but with
+// a persistent Scheduling=cordoned) is not a scheduling candidate: an
+// unscheduled sandbox lands on the uncordoned node instead.
+func TestSchedulerSkipsCordonedNode(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	// A READY but cordoned node. Scheduling is a persistent (non-session)
+	// attribute, so it is written directly at create time.
+	createReadyNode(t, ctx, server.Client, "cordoned-node", &compute_v1alpha.Node{
+		Status:     compute_v1alpha.READY,
+		Scheduling: compute_v1alpha.CORDONED,
+	})
+	// A plain READY node that should receive the work.
+	readyID := createReadyNode(t, ctx, server.Client, "ready-node", &compute_v1alpha.Node{
+		Status: compute_v1alpha.READY,
+	})
+
+	scheduler := NewController(log, server.EAC)
+	require.NoError(t, scheduler.Init(ctx))
+
+	sandbox := &compute_v1alpha.Sandbox{
+		Status: compute_v1alpha.PENDING,
+		Spec: compute_v1alpha.SandboxSpec{
+			Container: []compute_v1alpha.SandboxSpecContainer{
+				{Image: "test:latest"},
+			},
+		},
+	}
+	sandboxID, err := server.Client.Create(ctx, "test-sandbox", sandbox)
+	require.NoError(t, err)
+
+	reconcileSandbox(t, ctx, server, scheduler, sandboxID)
+
+	resp, err := server.EAC.Get(ctx, sandboxID.String())
+	require.NoError(t, err)
+
+	var schedule compute_v1alpha.Schedule
+	schedule.Decode(resp.Entity().Entity())
+	assert.Equal(t, readyID, schedule.Key.Node, "sandbox should avoid the cordoned node")
+}
+
 // TestSchedulerSkipsAlreadyScheduledSandbox tests that the scheduler
 // doesn't re-assign a sandbox that already has a ScheduleKey
 func TestSchedulerSkipsAlreadyScheduledSandbox(t *testing.T) {
