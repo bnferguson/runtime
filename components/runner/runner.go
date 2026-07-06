@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand/v2"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -166,8 +168,11 @@ type Runner struct {
 
 	cc *containerd.Client
 
-	ec *entityserver.Client
-	se *entityserver.Session
+	// sessMu guards ec/se, which are swapped when the health session is
+	// re-established after a lost lease (see superviseSession).
+	sessMu sync.Mutex
+	ec     *entityserver.Client
+	se     *entityserver.Session
 
 	closers []io.Closer
 
@@ -205,9 +210,18 @@ func (r *Runner) SetRestartMode(v bool) {
 	}
 }
 
+// entityClient returns the current session-scoped entity client, which may be
+// swapped out when the health session is re-established (see superviseSession).
+func (r *Runner) entityClient() *entityserver.Client {
+	r.sessMu.Lock()
+	defer r.sessMu.Unlock()
+	return r.ec
+}
+
 // Drain sets the runner's node status to disabled and stops all running sandboxes
 func (r *Runner) Drain(ctx context.Context) error {
-	if r.ec == nil || r.Id == "" {
+	ec := r.entityClient()
+	if ec == nil || r.Id == "" {
 		return fmt.Errorf("runner not initialized with entity client")
 	}
 
@@ -215,7 +229,7 @@ func (r *Runner) Drain(ctx context.Context) error {
 
 	// Set node status to disabled
 	r.Log.Info("setting node status to disabled", "id", r.Id)
-	err := r.ec.UpdateAttrs(ctx, entity.Id(r.Id), (&compute_v1alpha.Node{
+	err := ec.UpdateAttrs(ctx, entity.Id(r.Id), (&compute_v1alpha.Node{
 		Status: compute_v1alpha.DISABLED,
 	}).Encode)
 	if err != nil {
@@ -226,7 +240,7 @@ func (r *Runner) Drain(ctx context.Context) error {
 
 	// List all sandboxes scheduled to this node
 	idx := compute_v1alpha.Index(compute_v1alpha.KindSandbox, entity.Id("node/"+r.Id))
-	results, err := r.ec.List(ctx, idx)
+	results, err := ec.List(ctx, idx)
 	if err != nil {
 		return fmt.Errorf("failed to query sandboxes on node: %w", err)
 	}
@@ -606,20 +620,51 @@ func (r *Runner) initializeNetwork(ctx context.Context, eg ...*errgroup.Group) e
 	return nil
 }
 
-func (r *Runner) setupEntity(ctx context.Context, ec *entityserver.Client) error {
+// setupEntity establishes the runner's coordinator health session and node
+// registration, then supervises the session so a lost lease (e.g. from a
+// coordinator restart) is transparently re-established. base is the plain,
+// non-session entity client; each session is minted from it.
+func (r *Runner) setupEntity(ctx context.Context, base *entityserver.Client) error {
 	if r.Id == "" {
 		return nil
 	}
 
+	if err := r.establishSession(ctx, base); err != nil {
+		return err
+	}
+
+	go r.superviseSession(ctx, base)
+
+	return nil
+}
+
+// establishSession mints a fresh health session from base, registers the node
+// entity, and marks it READY. The node's READY status is session-scoped: it
+// lives under the etcd lease and vanishes when the lease dies, so this must be
+// re-run to bring the runner back after a lost session. base is the plain
+// (non-session) client; the session-scoped client it returns is stored on r.ec.
+func (r *Runner) establishSession(ctx context.Context, base *entityserver.Client) error {
 	r.Log.Info("Creating health session")
 
-	sess, ec, err := ec.NewSession(ctx, "runner health")
+	sess, ec, err := base.NewSession(ctx, "runner health")
 	if err != nil {
 		return err
 	}
 
-	r.ec = ec
-	r.se = sess
+	// If registration below fails we abandon this session, so revoke its
+	// lease rather than leaking a keepalive goroutine and orphaned lease.
+	// The retry path can otherwise pile these up on a flaky coordinator.
+	published := false
+	defer func() {
+		if published {
+			return
+		}
+		revokeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if rerr := sess.Revoke(revokeCtx); rerr != nil {
+			r.Log.Warn("failed to revoke unregistered health session", "error", rerr)
+		}
+	}()
 
 	role := "runner"
 	if r.deps.IsCoordinator {
@@ -648,9 +693,70 @@ func (r *Runner) setupEntity(ctx context.Context, ec *entityserver.Client) error
 		return err
 	}
 
+	r.sessMu.Lock()
+	r.ec = ec
+	r.se = sess
+	published = true
+	r.sessMu.Unlock()
+
 	r.Log.Info("Runner registered and ready", "id", res, "status", "ready")
 
 	return nil
+}
+
+// superviseSession watches the current health session and re-establishes it
+// when its lease is lost. Without this, a coordinator restart orphans the
+// runner's lease, the session-scoped READY status is dropped, and the runner
+// stays not-ready until manually restarted (MIR-1305). Re-establishing well
+// within nodehealth's grace period keeps the runner's sandboxes from being
+// evacuated.
+func (r *Runner) superviseSession(ctx context.Context, base *entityserver.Client) {
+	for {
+		r.sessMu.Lock()
+		se := r.se
+		r.sessMu.Unlock()
+		if se == nil {
+			return
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-se.Dead():
+		}
+
+		// No explicit Close on the old session: by the time Dead() fires its
+		// keepalive goroutine has already stopped and revoked what it could,
+		// so establishSession can simply overwrite r.se with a fresh one.
+		r.Log.Warn("runner health session lease lost, re-establishing", "id", r.Id)
+
+		backoff := time.Second
+		for {
+			if ctx.Err() != nil {
+				return
+			}
+
+			if err := r.establishSession(ctx, base); err == nil {
+				r.Log.Info("runner health session re-established", "id", r.Id)
+				break
+			} else {
+				r.Log.Error("failed to re-establish runner health session, retrying",
+					"error", err, "backoff", backoff)
+			}
+
+			// Jitter the wait so a fleet of runners knocked offline by the
+			// same coordinator restart doesn't reconnect in lockstep. Sleep a
+			// random 50-100% of the current backoff.
+			wait := backoff/2 + time.Duration(rand.Int64N(int64(backoff/2)+1))
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(wait):
+			}
+
+			backoff = min(backoff*2, 30*time.Second)
+		}
+	}
 }
 
 func (r *Runner) SetupControllers(
