@@ -2015,6 +2015,49 @@ func (a *localActivator) removePoolFromTracking(poolID entity.Id) {
 	}
 }
 
+// evictStaleVersionBindingsLocked drops version->pool bindings that point at
+// freshPool but whose version freshPool no longer references. When the launcher
+// supersedes a pool it dereferences it (ReferencedByVersions=nil,
+// DesiredInstances=0) without deleting the entity, so the pool still exists and
+// removePoolFromTracking never fires. Without this, a binding established at
+// recovery stays pinned to the drained pool and never re-resolves to the
+// canonical one that still references the version, which is how ingress gets
+// stranded on a superseded pool across a restart (MIR-1293). Evicting the stale
+// entry lets the next AcquireLease re-resolve the key via findPoolInStore, which
+// selects the pool that still references the version.
+//
+// Callers must hold a.mu.
+func (a *localActivator) evictStaleVersionBindingsLocked(freshPool *compute_v1alpha.SandboxPool) {
+	references := func(versionID string) bool {
+		for _, ref := range freshPool.ReferencedByVersions {
+			if ref.String() == versionID {
+				return true
+			}
+		}
+		return false
+	}
+
+	for key, versionRef := range a.versions {
+		if versionRef.poolID == freshPool.ID && !references(key.ver) {
+			delete(a.versions, key)
+			a.log.Info("evicted stale version->pool mapping after pool dereferenced version",
+				"version", key.ver,
+				"service", key.service,
+				"pool", freshPool.ID)
+		}
+	}
+
+	for key, state := range a.pools {
+		if state.pool != nil && state.pool.ID == freshPool.ID && !references(key.ver) {
+			delete(a.pools, key)
+			a.log.Info("evicted stale pool state after pool dereferenced version",
+				"version", key.ver,
+				"service", key.service,
+				"pool", freshPool.ID)
+		}
+	}
+}
+
 // watchPools watches for pool entity changes and keeps the in-memory cache in sync.
 // Handles deletions (cleanup stale entries) and updates (refresh DesiredInstances, etc.).
 func (a *localActivator) watchPools(ctx context.Context) {
@@ -2075,6 +2118,11 @@ func (a *localActivator) watchPools(ctx context.Context) {
 				if ps, ok := a.poolSandboxes[freshPool.ID]; ok {
 					ps.pool = &freshPool
 				}
+
+				// Drop any binding still pinned to this pool for a version it no
+				// longer references (e.g. the launcher just drained a superseded
+				// pool), so the next lease request re-resolves to the canonical pool.
+				a.evictStaleVersionBindingsLocked(&freshPool)
 
 				a.mu.Unlock()
 			}

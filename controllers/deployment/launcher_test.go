@@ -2732,6 +2732,176 @@ func TestNoAutoMountWhenExplicitDiskConfig(t *testing.T) {
 	assert.Equal(t, "local", volumes[0].Provider)
 }
 
+// TestNoAutoMountWhenDiskNameTaken verifies the auto-mount is skipped when the
+// service already declares a disk under the "local-data" name, even at a
+// different mount path. Injecting a second disk with that name would produce a
+// duplicate volume name in the sandbox spec.
+func TestNoAutoMountWhenDiskNameTaken(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{
+		Project: entity.Id("project-1"),
+	}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	version := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+					Disks: []core_v1alpha.Disks{
+						{
+							Name:      "local-data",
+							Provider:  core_v1alpha.LOCAL,
+							MountPath: "/somewhere/else",
+						},
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", version)
+	require.NoError(t, err)
+	version.ID = verID
+
+	app.ActiveVersion = version.ID
+	require.NoError(t, server.Client.Update(ctx, app))
+
+	// Existing data would otherwise trigger the auto-mount.
+	dataPath := t.TempDir()
+	localDir := filepath.Join(dataPath, "data", "local", app.ID.String())
+	require.NoError(t, os.MkdirAll(localDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "data.db"), []byte("test"), 0644))
+
+	launcher := newTestLauncher(log, server.EAC)
+	launcher.DataPath = dataPath
+	require.NoError(t, launcher.Reconcile(ctx, app, nil))
+
+	pools := listAllPools(t, ctx, server)
+	require.Len(t, pools, 1)
+
+	// Only the explicitly-named disk should be present; no injected duplicate.
+	volumes := pools[0].SandboxSpec.Volume
+	require.Len(t, volumes, 1, "should not inject a duplicate local-data disk")
+	assert.Equal(t, "local-data", volumes[0].Name)
+	assert.Equal(t, "/somewhere/else", volumes[0].MountPath)
+}
+
+// TestAutoMountDrainsSupersededPool reproduces MIR-1293: an app using
+// auto-mounted local storage (existing data, no explicit disk config) must not
+// accumulate a second pool for the same version when the auto-mount first drifts
+// the pool spec. Before the fix the auto-mount was patched into the sandbox spec
+// at build time only, so serviceHasDisks stayed false, the stale-pool drain never
+// ran, and the superseded diskless pool lingered as a duplicate that still
+// referenced the current version. Registering the auto-mount as a real disk in
+// the resolved config puts the app on the disk-aware path, so the superseded pool
+// is drained and dereferenced.
+func TestAutoMountDrainsSupersededPool(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{
+		Project: entity.Id("project-1"),
+	}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	version := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name: "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+						Mode:         "fixed",
+						NumInstances: 1,
+					},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", version)
+	require.NoError(t, err)
+	version.ID = verID
+
+	app.ActiveVersion = version.ID
+	require.NoError(t, server.Client.Update(ctx, app))
+
+	dataPath := t.TempDir()
+	launcher := newTestLauncher(log, server.EAC)
+	launcher.DataPath = dataPath
+
+	// First reconcile: no local data yet, so a single diskless pool is created.
+	require.NoError(t, launcher.Reconcile(ctx, app, nil))
+	pools := listAllPools(t, ctx, server)
+	require.Len(t, pools, 1)
+	require.Empty(t, pools[0].SandboxSpec.Volume, "first pool should be diskless")
+	disklessPoolID := pools[0].ID
+
+	// The app writes to its local storage between reconciles, so the auto-mount
+	// probe now finds existing data.
+	localDir := filepath.Join(dataPath, "data", "local", app.ID.String())
+	require.NoError(t, os.MkdirAll(localDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "data.db"), []byte("test"), 0644))
+
+	// Second reconcile: the auto-mount now drifts the spec. The superseded
+	// diskless pool must be drained and dereferenced, not left as a duplicate
+	// orphan that still references the current version (MIR-1293).
+	require.NoError(t, launcher.Reconcile(ctx, app, nil))
+
+	getRes, err := server.EAC.Get(ctx, disklessPoolID.String())
+	require.NoError(t, err)
+	var oldPool compute_v1alpha.SandboxPool
+	oldPool.Decode(getRes.Entity().Entity())
+	assert.Equal(t, int64(0), oldPool.DesiredInstances,
+		"superseded diskless pool should be scaled to 0")
+	assert.Empty(t, oldPool.ReferencedByVersions,
+		"superseded diskless pool should be dereferenced")
+
+	// Exactly one pool should still reference the current version, and it should
+	// carry the auto-mounted local disk.
+	pools = listAllPools(t, ctx, server)
+	var referencing []compute_v1alpha.SandboxPool
+	for i := range pools {
+		if containsRef(pools[i].ReferencedByVersions, version.ID) {
+			referencing = append(referencing, pools[i])
+		}
+	}
+	require.Len(t, referencing, 1, "exactly one pool should reference the current version")
+	require.Len(t, referencing[0].SandboxSpec.Volume, 1)
+	assert.Equal(t, "local-data", referencing[0].SandboxSpec.Volume[0].Name)
+	assert.Equal(t, "local", referencing[0].SandboxSpec.Volume[0].Provider)
+	assert.Equal(t, "/miren/data/local", referencing[0].SandboxSpec.Volume[0].MountPath)
+
+	// The container mount is the user-visible half of the auto-mount, so verify
+	// it too, not just the volume declaration.
+	require.Len(t, referencing[0].SandboxSpec.Container, 1)
+	require.Len(t, referencing[0].SandboxSpec.Container[0].Mount, 1)
+	assert.Equal(t, "local-data", referencing[0].SandboxSpec.Container[0].Mount[0].Source)
+	assert.Equal(t, "/miren/data/local", referencing[0].SandboxSpec.Container[0].Mount[0].Destination)
+}
+
 // TestDiskPoolDrainedBeforeNewPoolCreated verifies that when deploying a new
 // version of an app with disks, the old pool is scaled to 0 before the new
 // pool is created. This prevents conflicts when both old and new sandboxes try
