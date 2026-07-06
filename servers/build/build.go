@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	buildkitclient "github.com/moby/buildkit/client"
 	"github.com/tonistiigi/fsutil"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -78,6 +79,15 @@ type buildSession struct {
 	cancelFunc context.CancelFunc
 }
 
+// BuildKitProvider is the subset of *buildkit.Component the builder depends on.
+// Abstracting it as an interface lets unit tests inject a fake daemon (e.g. one
+// whose Client fails) instead of standing up a real containerd-managed buildkitd.
+type BuildKitProvider interface {
+	Client(ctx context.Context) (*buildkitclient.Client, error)
+	SocketPath() string
+	IsRunning() bool
+}
+
 type Builder struct {
 	Log           *slog.Logger
 	EAS           *entityserver_v1alpha.EntityAccessClient
@@ -95,14 +105,14 @@ type Builder struct {
 
 	// BuildKit is the persistent BuildKit component for container image builds.
 	// When set, uses the shared daemon instead of launching ephemeral sandboxes.
-	BuildKit *buildkit.Component
+	BuildKit BuildKitProvider
 
 	sessions   sync.Map // sessionID → *buildSession
 	cacheLocks *appLocks
 }
 
 func NewBuilder(log *slog.Logger, eas *entityserver_v1alpha.EntityAccessClient, appClient *app.Client, addonsClient *app_v1alpha.AddonsClient, res netresolve.Resolver, tmpdir string, logWriter observability.LogWriter, dnsHostname string, bk *buildkit.Component, dataPath string) *Builder {
-	return &Builder{
+	b := &Builder{
 		Log:           log.With("module", "builder"),
 		EAS:           eas,
 		appClient:     appClient,
@@ -113,10 +123,16 @@ func NewBuilder(log *slog.Logger, eas *entityserver_v1alpha.EntityAccessClient, 
 		ec:            entityserver.NewClient(log, eas),
 		LogWriter:     logWriter,
 		DNSHostname:   dnsHostname,
-		BuildKit:      bk,
 		DataPath:      dataPath,
 		cacheLocks:    newAppLocks(),
 	}
+	// Only assign when non-nil: storing a typed-nil *buildkit.Component into the
+	// BuildKitProvider interface would make the field non-nil and defeat the
+	// `b.BuildKit == nil` guard used to detect an unconfigured daemon.
+	if bk != nil {
+		b.BuildKit = bk
+	}
+	return b
 }
 
 // mergeServiceEnvVars merges per-service environment variables from app.toml into existing service env vars.

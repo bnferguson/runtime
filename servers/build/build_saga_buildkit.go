@@ -147,11 +147,18 @@ func (b *Builder) runBuildkitBuild(
 	}
 	defer bkc.Close()
 
-	if ci, err := bkc.Info(ctx); err != nil {
-		b.Log.Error("error getting buildkitd info", "error", err)
-	} else {
-		b.Log.Debug("buildkitd info", "version", ci.BuildkitVersion.Version, "rev", ci.BuildkitVersion.Revision)
+	// Pre-flight health check. A daemon whose socket answers the dial but can't
+	// service requests (e.g. a stale buildkitd left bound to a previous miren
+	// process after a restart) fails here, so the build errors out immediately
+	// instead of proceeding into a confusing "NotFound: no such job" partway
+	// through the solve.
+	ci, err := bkc.Info(ctx)
+	if err != nil {
+		b.Log.Error("buildkit daemon health check failed", "error", err)
+		status.SendError("BuildKit daemon health check failed: %v", err)
+		return nil, "", "", fmt.Errorf("buildkit daemon health check failed: %w", err)
 	}
+	b.Log.Debug("buildkitd info", "version", ci.BuildkitVersion.Version, "rev", ci.BuildkitVersion.Revision)
 
 	bk := &Buildkit{Client: bkc, Log: b.Log}
 
