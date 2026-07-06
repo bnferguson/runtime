@@ -2444,6 +2444,180 @@ func TestRemovePoolFromTrackingCleansAllCaches(t *testing.T) {
 	assert.True(t, poolSandboxes2Exists, "pool-2 should still be in poolSandboxes")
 }
 
+// TestEvictStaleVersionBindingsOnDereference verifies that when a pool stops
+// referencing a version but still exists (the launcher drained a superseded
+// pool without deleting the entity), the binding for the dropped version is
+// evicted while bindings for versions the pool still references are retained
+// (MIR-1293).
+func TestEvictStaleVersionBindingsOnDereference(t *testing.T) {
+	log := testutils.TestLogger(t)
+
+	poolID := entity.Id("pool-1")
+	staleKey := verKey{"ver-stale", "web"}
+	keptKey := verKey{"ver-kept", "web"}
+
+	pool := &compute_v1alpha.SandboxPool{ID: poolID, Service: "web"}
+
+	activator := &localActivator{
+		log: log,
+		versions: map[verKey]*versionPoolRef{
+			staleKey: {poolID: poolID, service: "web"},
+			keptKey:  {poolID: poolID, service: "web"},
+		},
+		pools: map[verKey]*poolState{
+			staleKey: {pool: pool, revision: 1},
+			keptKey:  {pool: pool, revision: 1},
+		},
+		poolSandboxes: map[entity.Id]*poolSandboxes{
+			poolID: {pool: pool, sandboxes: []*sandbox{}, service: "web"},
+		},
+	}
+
+	// The launcher drained the pool for ver-stale, but it still serves ver-kept.
+	freshPool := &compute_v1alpha.SandboxPool{
+		ID:                   poolID,
+		Service:              "web",
+		ReferencedByVersions: []entity.Id{entity.Id("ver-kept")},
+	}
+
+	activator.mu.Lock()
+	activator.evictStaleVersionBindingsLocked(freshPool)
+	activator.mu.Unlock()
+
+	activator.mu.RLock()
+	_, staleVerExists := activator.versions[staleKey]
+	_, stalePoolExists := activator.pools[staleKey]
+	_, keptVerExists := activator.versions[keptKey]
+	_, keptPoolExists := activator.pools[keptKey]
+	activator.mu.RUnlock()
+
+	assert.False(t, staleVerExists, "dereferenced version binding should be evicted")
+	assert.False(t, stalePoolExists, "dereferenced version pool state should be evicted")
+	assert.True(t, keptVerExists, "still-referenced version binding should be retained")
+	assert.True(t, keptPoolExists, "still-referenced version pool state should be retained")
+}
+
+// TestWatchPoolsEvictsStaleBindingOnDereference verifies the eviction is wired
+// into the pool watch: when the launcher dereferences a still-existing pool (the
+// EAC.Replace path updatePool uses to drain a superseded pool), the watch drops
+// the now-stale version->pool binding so the next lease request re-resolves to
+// the canonical pool (MIR-1293).
+//
+// This uses the etcd-backed server rather than NewInMemEntityServer because the
+// in-mem index watch classifies every mutation as a Create op and never delivers
+// the Update op this exercises (the same reason TestConcurrentPoolIncrement uses
+// the etcd server for real OCC semantics).
+func TestWatchPoolsEvictsStaleBindingOnDereference(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server, cleanup := testutils.NewEtcdEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	testVer := &core_v1alpha.AppVersion{
+		App:      app.ID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name:               "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{Mode: "auto", RequestsPerInstance: 10},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", testVer)
+	require.NoError(t, err)
+	testVer.ID = verID
+
+	pool := &compute_v1alpha.SandboxPool{
+		Service:              "web",
+		DesiredInstances:     1,
+		ReferencedByVersions: []entity.Id{testVer.ID},
+		SandboxSpec:          compute_v1alpha.SandboxSpec{Version: testVer.ID},
+	}
+	poolID, err := server.Client.Create(ctx, "test-pool", pool)
+	require.NoError(t, err)
+	pool.ID = poolID
+
+	poolResp, err := server.EAC.Get(ctx, poolID.String())
+	require.NoError(t, err)
+
+	log := testutils.TestLogger(t)
+	key := verKey{testVer.ID.String(), "web"}
+
+	activator := &localActivator{
+		log: log,
+		eac: server.EAC,
+		versions: map[verKey]*versionPoolRef{
+			key: {
+				ver:      testVer,
+				poolID:   poolID,
+				service:  "web",
+				strategy: concurrency.NewStrategy(&testVer.Config.Services[0].ServiceConcurrency),
+			},
+		},
+		poolSandboxes: map[entity.Id]*poolSandboxes{
+			poolID: {pool: pool, service: "web"},
+		},
+		pools: map[verKey]*poolState{
+			key: {pool: pool, revision: poolResp.Entity().Revision()},
+		},
+		newSandboxChans: make(map[verKey][]chan struct{}),
+	}
+
+	go activator.watchPools(ctx)
+
+	// Wait until the pool watch is live before issuing the single dereference
+	// below: a late subscription would deliver the pool as part of its initial
+	// snapshot (a Create) rather than as the live Update the eviction keys on. Bump
+	// a harmless field until the watch reflects it in the cache. Each iteration is
+	// a real change so it always produces an op, and the >-threshold check avoids
+	// chasing a moving target across polls.
+	origDesired := pool.DesiredInstances
+	nextDesired := origDesired
+	require.Eventually(t, func() bool {
+		nextDesired++
+		pool.DesiredInstances = nextDesired
+		if err := server.Client.Update(ctx, pool); err != nil {
+			return false
+		}
+		activator.mu.RLock()
+		defer activator.mu.RUnlock()
+		st, ok := activator.pools[key]
+		return ok && st.pool != nil && st.pool.DesiredInstances > origDesired
+	}, 5*time.Second, 50*time.Millisecond, "pool watch should become live")
+
+	// Dereference the pool the way updatePool does: rebuild its attributes
+	// without ReferencedByVersions and Replace, so the pool still exists but no
+	// longer references the version.
+	var finalAttrs []entity.Attr
+	for _, attr := range poolResp.Entity().Attrs() {
+		if attr.ID == compute_v1alpha.SandboxPoolReferencedByVersionsId {
+			continue
+		}
+		finalAttrs = append(finalAttrs, attr)
+	}
+	_, err = server.EAC.Replace(ctx, finalAttrs, 0)
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		activator.mu.RLock()
+		defer activator.mu.RUnlock()
+		_, vOk := activator.versions[key]
+		_, pOk := activator.pools[key]
+		return !vOk && !pOk
+	}, 5*time.Second, 50*time.Millisecond,
+		"watch should evict the stale version->pool binding after the pool is dereferenced")
+}
+
 // TestActivatorRefreshesStaleMaxPoolSizeCache verifies that when the in-memory cache
 // shows DesiredInstances >= MaxPoolSize but the entity store has been reset to a lower
 // value, the activator re-reads from the store and continues rather than permanently
