@@ -86,6 +86,7 @@ func (l *Launcher) CreatePoolForVersion(ctx context.Context, ver *core_v1alpha.A
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve config for version %s: %w", ver.Version, err)
 	}
+	l.injectAutoMountLocalDisks(spec, &app)
 
 	poolID, err := l.ensurePoolForService(ctx, &app, ver, spec, service)
 	if err != nil {
@@ -238,6 +239,7 @@ func (l *Launcher) reconcileAppVersion(ctx context.Context, app *core_v1alpha.Ap
 	if err != nil {
 		return fmt.Errorf("failed to resolve config: %w", err)
 	}
+	l.injectAutoMountLocalDisks(spec, app)
 
 	// For each service, ensure a pool exists. Collect IDs of newly created pools.
 	var newPoolIDs []entity.Id
@@ -781,38 +783,6 @@ func (l *Launcher) buildSandboxSpec(
 		}
 	}
 
-	// Transitional: auto-mount local storage if the host directory has existing
-	// data but no explicit disk config. This prevents data loss for apps that
-	// relied on the old implicit mount behavior. Will be removed in a future release.
-	if l.DataPath != "" {
-		hasLocalMount := false
-		for _, m := range appCont.Mount {
-			if m.Destination == "/miren/data/local" {
-				hasLocalMount = true
-				break
-			}
-		}
-		if !hasLocalMount && dirHasData(filepath.Join(l.DataPath, "data", "local", app.ID.String())) {
-			// Warn once per app; this condition holds on every reconcile tick
-			// until the app gets an explicit disk config, so logging each time
-			// just floods the journal.
-			if _, warned := l.warnedNoDisk.LoadOrStore(app.ID, struct{}{}); !warned {
-				l.Log.Warn("auto-mounting local storage for app with existing data but no disk config",
-					"service", serviceName,
-					"app", app.ID)
-			}
-			sbSpec.Volume = append(sbSpec.Volume, compute_v1alpha.SandboxSpecVolume{
-				Name:      "local-data",
-				Provider:  "local",
-				MountPath: "/miren/data/local",
-			})
-			appCont.Mount = append(appCont.Mount, compute_v1alpha.SandboxSpecContainerMount{
-				Source:      "local-data",
-				Destination: "/miren/data/local",
-			})
-		}
-	}
-
 	if shutdownTimeout != "" {
 		appCont.ShutdownTimeout = shutdownTimeout
 	}
@@ -826,6 +796,67 @@ func (l *Launcher) buildSandboxSpec(
 func dirHasData(path string) bool {
 	entries, err := os.ReadDir(path)
 	return err == nil && len(entries) > 0
+}
+
+// localDataMountPath is where the transitional local-storage auto-mount is
+// exposed inside the container, and localDataDiskName is the disk/volume name
+// it is registered under.
+const (
+	localDataMountPath = "/miren/data/local"
+	localDataDiskName  = "local-data"
+)
+
+// injectAutoMountLocalDisks registers the transitional local-storage auto-mount
+// as a real disk on the resolved config. For any service whose per-app host data
+// directory already holds data but which declares no disk at the auto-mount path,
+// it appends a "local" disk to the config. Doing this at config-resolution time
+// (rather than patching the sandbox spec at build time) puts the app on the
+// disk-aware deploy path: serviceHasDisks reports true, so drainStaleDiskPools
+// reaps superseded pools instead of leaving a duplicate orphaned pool behind that
+// keeps a live version reference and can strand ingress on a restart (MIR-1293).
+//
+// configureLocalVolume keys the on-disk location purely on the app ID, so naming
+// the disk here does not move any existing data.
+func (l *Launcher) injectAutoMountLocalDisks(spec *core_v1alpha.ConfigSpec, app *core_v1alpha.App) {
+	if l.DataPath == "" {
+		return
+	}
+	if !dirHasData(filepath.Join(l.DataPath, "data", "local", app.ID.String())) {
+		return
+	}
+
+	for i := range spec.Services {
+		svc := &spec.Services[i]
+
+		// Skip if the service already declares a disk at the auto-mount path or
+		// under the name we would inject; appending a second disk with the same
+		// name would produce a duplicate volume name in the sandbox spec.
+		conflicts := false
+		for _, d := range svc.Disks {
+			if d.MountPath == localDataMountPath || d.Name == localDataDiskName {
+				conflicts = true
+				break
+			}
+		}
+		if conflicts {
+			continue
+		}
+
+		// Warn once per app; this condition holds on every reconcile tick until
+		// the app gets an explicit disk config, so logging each time would just
+		// flood the journal.
+		if _, warned := l.warnedNoDisk.LoadOrStore(app.ID, struct{}{}); !warned {
+			l.Log.Warn("auto-mounting local storage for app with existing data but no disk config",
+				"service", svc.Name,
+				"app", app.ID)
+		}
+
+		svc.Disks = append(svc.Disks, core_v1alpha.ConfigSpecServicesDisks{
+			Name:      localDataDiskName,
+			Provider:  core_v1alpha.ConfigSpecServicesDisksLOCAL,
+			MountPath: localDataMountPath,
+		})
+	}
 }
 
 // findMatchingPool searches for an existing pool with matching spec.
