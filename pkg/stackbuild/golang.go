@@ -269,10 +269,12 @@ func (s *GoStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error)
 //     and augmented apps carry a built /app tree (compiled frontend assets,
 //     templates) that the binary serves. The full working tree is copied so
 //     that behavior is preserved.
-//   - everything else lands on distroless/static as a binary-only static image
-//     — the canonical tiny Go container. Apps on this path that need runtime
-//     files should embed them (go:embed); a JS augmentation or an explicit
-//     build.cgo = true routes them to the slim base instead.
+//   - everything else lands on distroless/static — the canonical tiny Go
+//     container. The compiled binary is joined by the app's non-Go files
+//     (READMEs, templates, data dirs) so it can read them at runtime relative
+//     to /app; Go source and the module/vendor build inputs are left behind
+//     (see goRuntimeExcludePatterns). A JS augmentation or an explicit
+//     build.cgo = true routes to the slim base instead.
 //
 // Both paths run as uid 2010 (the app user) for consistency with every other
 // stack: debian-slim creates it with adduser, distroless gets a written
