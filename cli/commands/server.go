@@ -943,6 +943,15 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		}
 	}
 
+	// The registry is now listening and cluster.local resolves to it, so
+	// it's safe to resume any build sagas interrupted by a previous crash.
+	// Recovery runs here, not inside co.Start, because a resumed image push
+	// needs these dependencies that Start does not yet have (MIR-1285). It
+	// runs in the background on sub (the errgroup/shutdown context) so a
+	// recovered build, which re-runs to completion and can take minutes,
+	// doesn't block boot but is still cancelled on server shutdown.
+	go co.RecoverBuildSagas(sub)
+
 	cert, err := co.IssueCertificate("miren-server")
 	if err != nil {
 		ctx.Log.Error("failed to issue server certificate", "error", err)
