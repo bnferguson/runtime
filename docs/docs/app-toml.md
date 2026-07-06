@@ -15,7 +15,6 @@ For a guide-style introduction, see [App Configuration](/app-configuration).
 
 ```toml
 name = "myapp"
-post_import = "make db-migrate"
 include = ["configs/"]
 
 # Global environment variables
@@ -71,7 +70,6 @@ tail = "logs app -f"
 | Field | Type | Description | Default |
 |-------|------|-------------|---------|
 | `name` | string | Application name | Inferred from directory name |
-| `post_import` | string | Command to run after importing a new version (e.g. database migrations) | — |
 | `include` | string[] | Extra files or directories to include in the build context | — |
 | `concurrency` | int | **Legacy.** Global concurrency target. Use `[services.<name>.concurrency]` instead. | — |
 

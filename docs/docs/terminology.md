@@ -96,10 +96,6 @@ A configuration that links an [app](#app) to an [identity provider](#identity-pr
 
 Commands defined in the `[build]` section of [app.toml](#apptoml) that run inside the build container after the main build steps. Used for tasks like asset compilation (`npm run build`) or pruning dev dependencies. Equivalent to Dockerfile `ONBUILD` instructions but configured declaratively.
 
-## Post-Import
-
-A command defined in [app.toml](#apptoml) (`post_import = "..."`) that runs after a new [version](#version) is imported but before it receives traffic. Commonly used for database migrations (e.g., `post_import = "make db-migrate"`).
-
 ## Procfile
 
 A simple file format for defining [services](#service) in your app. Each line maps a service name to a command (e.g., `web: node server.js`). For more advanced configuration (scaling, disks, images), use [app.toml](#apptoml) instead.
