@@ -2,6 +2,7 @@ package activator
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"testing"
@@ -3673,6 +3674,117 @@ func TestResyncWakesParkedWaiter(t *testing.T) {
 		assert.Less(t, time.Since(start), 10*time.Second, "waiter was woken by the wake, not the fallback ticker")
 	case <-time.After(15 * time.Second):
 		t.Fatal("parked waiter was never woken after re-sync")
+	}
+}
+
+// TestRequestPoolCapacityRetryRaceNoDoubleUnlock reproduces MIR-1306.
+//
+// Under activation contention, a goroutine sitting in requestPoolCapacity's
+// pool-lookup backoff would notice another goroutine had populated the cache
+// and take a bare `continue`, re-entering the attempt loop with a.mu released.
+// The next backoff iteration then called a.mu.Unlock() on an already-unlocked
+// RWMutex — a fatal, unrecoverable runtime throw that took down the whole
+// process (embedded etcd and every app on the node). The trigger is a pool that
+// becomes visible in the store *while* concurrent callers are mid-retry, so some
+// find it and populate a.pools[key] while others are still backing off and about
+// to re-check the cache.
+//
+// There are no ordinary assertions here: the failure mode is a fatal
+// double-unlock that crashes the test binary outright, so simply reaching the
+// end of the rounds without the process dying is the pass condition. Requires an
+// etcd-backed entity store, so run it inside the dev container:
+//
+//	./hack/dev-exec go test -run TestRequestPoolCapacityRetryRaceNoDoubleUnlock ./components/activator
+//
+// Deliberately without -race: the increment path has a separate, pre-existing
+// data race (MIR-1308) that the detector trips on and that would drown out this
+// test's signal. The double-unlock is a fatal throw, so it surfaces without the
+// detector anyway.
+func TestRequestPoolCapacityRetryRaceNoDoubleUnlock(t *testing.T) {
+	ctx := context.Background()
+
+	server, cleanup := testutils.NewEtcdEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{}
+	appID, err := server.Client.Create(ctx, "test-app-race", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	// The bug is timing-dependent, so we run several rounds. Pre-fix, the very
+	// first round reliably crashes; post-fix, every round drains cleanly.
+	const rounds = 10
+	const numGoroutines = 40
+
+	for round := 0; round < rounds; round++ {
+		// A fresh version each round means a fresh cache key and a store with no
+		// pool for it yet, forcing every caller through the store-lookup retry
+		// loop from an empty cache.
+		testVer := &core_v1alpha.AppVersion{
+			App:      app.ID,
+			Version:  fmt.Sprintf("v%d", round),
+			ImageUrl: "test:latest",
+			Config: core_v1alpha.Config{
+				Services: []core_v1alpha.Services{
+					{
+						Name: "web",
+						ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+							Mode:                "auto",
+							RequestsPerInstance: 10,
+						},
+					},
+				},
+			},
+		}
+		verID, err := server.Client.Create(ctx, fmt.Sprintf("test-ver-race-%d", round), testVer)
+		require.NoError(t, err)
+		testVer.ID = verID
+
+		activator := &localActivator{
+			log:             testutils.TestLogger(t),
+			eac:             server.EAC,
+			versions:        make(map[verKey]*versionPoolRef),
+			poolSandboxes:   make(map[entity.Id]*poolSandboxes),
+			pools:           make(map[verKey]*poolState),
+			newSandboxChans: make(map[verKey][]chan struct{}),
+		}
+
+		// Launch callers that all miss the cache and enter the store-lookup retry
+		// loop. The pool does not exist yet, so their first lookups return nil and
+		// they begin backing off.
+		done := make(chan error, numGoroutines)
+		barrier := make(chan struct{})
+		for i := 0; i < numGoroutines; i++ {
+			go func() {
+				<-barrier
+				_, err := activator.requestPoolCapacity(ctx, testVer, "web")
+				done <- err
+			}()
+		}
+		close(barrier)
+
+		// Let the callers reach their first backoff (100ms), then make the pool
+		// visible in the store, mimicking DeploymentLauncher creating it
+		// mid-activation. Now retry lookups start finding it: whoever finds it
+		// first populates a.pools[key] while others are still mid-backoff and
+		// about to re-check the cache — the exact MIR-1306 race window.
+		time.Sleep(120 * time.Millisecond)
+		racePool := &compute_v1alpha.SandboxPool{
+			Service:              "web",
+			SandboxSpec:          compute_v1alpha.SandboxSpec{Version: testVer.ID},
+			ReferencedByVersions: []entity.Id{testVer.ID},
+			DesiredInstances:     0,
+			CurrentInstances:     0,
+		}
+		_, err = server.Client.Create(ctx, fmt.Sprintf("test-pool-race-%d", round), racePool)
+		require.NoError(t, err)
+
+		// Drain every caller. We don't require success — depending on scheduling a
+		// caller may hit a benign OCC conflict or the not-found terminal path. We
+		// only require the process to survive: no fatal double-unlock.
+		for i := 0; i < numGoroutines; i++ {
+			<-done
+		}
 	}
 }
 
