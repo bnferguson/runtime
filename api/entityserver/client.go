@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -411,9 +412,68 @@ type Session struct {
 	mu sync.Mutex
 
 	cancel context.CancelFunc
+
+	// dead is closed once the keepalive loop concludes the lease is
+	// unrecoverable (e.g. the coordinator/etcd that granted it restarted).
+	// The owner selects on Dead() to re-establish a fresh session.
+	dead     chan struct{}
+	deadOnce sync.Once
 }
 
 const defaultTTL = 60
+
+// Dead returns a channel that is closed when the session's lease has been lost
+// and cannot be pinged back to life. Callers should re-establish a new session
+// (via NewSession) rather than continuing to use this one.
+func (l *Session) Dead() <-chan struct{} {
+	return l.dead
+}
+
+func (l *Session) markDead() {
+	l.deadOnce.Do(func() { close(l.dead) })
+}
+
+// isLeaseGone reports whether err indicates the etcd lease backing the session
+// no longer exists, meaning the session is unrecoverable and must be rebuilt.
+// The error crosses an RPC boundary and arrives as a flattened string, so we
+// match on the underlying etcd message ("requested lease not found") rather
+// than a typed sentinel.
+func isLeaseGone(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "lease not found")
+}
+
+type pingAction int
+
+const (
+	pingOK    pingAction = iota // lease renewed; session healthy
+	pingRetry                   // transient failure; keep trying
+	pingDead                    // lease unrecoverable; rebuild the session
+)
+
+// evalPing classifies the result of one keepalive ping. firstFailure is the
+// time of the first failure in the current run of consecutive failures (zero
+// if the previous ping succeeded); it returns the updated firstFailure to carry
+// forward. A definitive "lease not found" is fatal immediately; other errors
+// are treated as transient until they persist longer than the lease TTL, past
+// which the lease has certainly expired regardless of what the error says.
+func evalPing(err error, firstFailure, now time.Time, ttl time.Duration) (pingAction, time.Time) {
+	if err == nil {
+		return pingOK, time.Time{}
+	}
+	if isLeaseGone(err) {
+		return pingDead, firstFailure
+	}
+	if firstFailure.IsZero() {
+		firstFailure = now
+	}
+	if now.Sub(firstFailure) > ttl {
+		return pingDead, firstFailure
+	}
+	return pingRetry, firstFailure
+}
 
 // Grant creates a new lease with the given TTL
 func (c *Client) NewSession(ctx context.Context, usage string) (*Session, *Client, error) {
@@ -435,6 +495,8 @@ func (c *Client) NewSession(ctx context.Context, usage string) (*Session, *Clien
 		id: ret.Id(),
 
 		cancel: cancel,
+
+		dead: make(chan struct{}),
 	}
 
 	go func() {
@@ -446,14 +508,39 @@ func (c *Client) NewSession(ctx context.Context, usage string) (*Session, *Clien
 			session.Revoke(ctx)
 		}()
 
-		ticker := time.NewTicker((time.Duration(ttl) * time.Second) / 2)
+		leaseTTL := time.Duration(ttl) * time.Second
+		ticker := time.NewTicker(leaseTTL / 2)
 		defer ticker.Stop()
+
+		// firstFailure is the time of the first ping failure in the current
+		// run of consecutive failures; zero when the last ping succeeded.
+		var firstFailure time.Time
 
 		for {
 			select {
 			case <-ticker.C:
-				if err := session.Ping(ctx); err != nil {
+				// Bound each ping so a hung request can't stall the ticker and
+				// freeze dead-detection; a stuck ping simply times out and is
+				// treated as a failure by evalPing.
+				pingCtx, pingCancel := context.WithTimeout(ctx, leaseTTL/2)
+				err := session.Ping(pingCtx)
+				pingCancel()
+
+				var action pingAction
+				action, firstFailure = evalPing(err, firstFailure, time.Now(), leaseTTL)
+
+				switch action {
+				case pingDead:
+					c.log.Warn("session lease lost, signaling for re-establish",
+						"id", session.id, "error", err)
+					session.markDead()
+					// Release the session's context; this goroutine owns it and
+					// is exiting, and nothing re-pings a dead session.
+					cancel()
+					return
+				case pingRetry:
 					c.log.Error("failed to ping session", "error", err)
+				case pingOK:
 				}
 			case <-ctx.Done():
 				return

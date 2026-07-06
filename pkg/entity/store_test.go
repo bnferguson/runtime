@@ -2464,3 +2464,29 @@ func TestEtcdStore_PatchPreservesReadInSessionAttributes(t *testing.T) {
 	))
 	r.Error(err, "patching a session attribute without a session must still fail")
 }
+
+// TestEtcdStore_PingSessionAfterLeaseGone locks in the error contract that the
+// runner's session keepalive relies on to detect a lost lease and re-establish
+// (MIR-1305): once the lease backing a session is gone, PingSession must return
+// an error whose message contains "lease not found". The client-side classifier
+// (entityserver.isLeaseGone) matches on exactly that substring, so if etcd ever
+// changes this wording, this test fails before the runner silently regresses to
+// pinging a dead lease forever.
+func TestEtcdStore_PingSessionAfterLeaseGone(t *testing.T) {
+	r := require.New(t)
+	store, _ := setupTestEtcdStore(t)
+
+	sid, err := store.CreateSession(t.Context(), 30)
+	r.NoError(err)
+
+	// A healthy session pings clean.
+	r.NoError(store.PingSession(t.Context(), sid))
+
+	// Revoking the lease simulates the coordinator/etcd restart that orphans it.
+	r.NoError(store.RevokeSession(t.Context(), sid))
+
+	err = store.PingSession(t.Context(), sid)
+	r.Error(err, "pinging a session whose lease is gone must error")
+	r.Contains(err.Error(), "lease not found",
+		"error wording is load-bearing: entityserver.isLeaseGone matches this substring")
+}
