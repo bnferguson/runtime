@@ -58,13 +58,14 @@ type Component struct {
 	Namespace string
 	DataPath  string
 
-	mu         sync.Mutex
-	container  containerd.Container
-	running    bool
-	socketPath string
-	socketDir  string
-	hostsPath  string // path to custom /etc/hosts file for the container
-	external   bool   // true if connecting to external daemon (no container management)
+	mu            sync.Mutex
+	container     containerd.Container
+	running       bool
+	socketPath    string
+	socketDir     string
+	hostsPath     string             // path to custom /etc/hosts file for the container
+	external      bool               // true if connecting to external daemon (no container management)
+	monitorCancel context.CancelFunc // cancels the task exit-monitor goroutine on intentional stop
 }
 
 // NewComponent creates a new BuildKit component that manages an embedded daemon.
@@ -175,27 +176,20 @@ func (c *Component) Start(ctx context.Context, config Config) error {
 
 	c.container = container
 
-	// Start container with structured logging
+	// Create the task with structured logging.
 	task, err := container.NewTask(ctx, slogout.WithLogger(c.Log, "buildkit"))
 	if err != nil {
 		container.Delete(ctx, containerd.WithSnapshotCleanup)
+		c.container = nil
 		return fmt.Errorf("failed to create buildkit task: %w", err)
 	}
 
-	if err := task.Start(ctx); err != nil {
-		task.Delete(ctx)
+	if err := c.startTaskAndMonitor(ctx, task); err != nil {
 		container.Delete(ctx, containerd.WithSnapshotCleanup)
-		return fmt.Errorf("failed to start buildkit task: %w", err)
-	}
-
-	// Wait for BuildKit to be ready (socket exists and is connectable)
-	if err := c.waitForReady(ctx); err != nil {
-		task.Delete(ctx)
-		container.Delete(ctx, containerd.WithSnapshotCleanup)
+		c.container = nil
 		return err
 	}
 
-	c.running = true
 	c.Log.Info("buildkit daemon started", "container_id", container.ID(), "socket_path", c.socketPath)
 
 	return nil
@@ -207,18 +201,31 @@ func (c *Component) Stop(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if !c.running {
+	// External mode: no container to manage, just flip the flag idempotently.
+	if c.external {
+		if c.running {
+			c.running = false
+			c.Log.Info("disconnected from external buildkit daemon")
+		}
 		return nil
 	}
 
-	// External mode: nothing to stop
-	if c.external {
-		c.running = false
-		c.Log.Info("disconnected from external buildkit daemon")
+	// Nothing to tear down once the container has been released. Note we can't
+	// gate solely on c.running: after an unexpected daemon death the exit
+	// monitor clears c.running while c.container is still set, and we must still
+	// delete that container and its dead task here.
+	if !c.running && c.container == nil {
 		return nil
 	}
 
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
+
+	// Cancel the exit monitor before tearing down the task so its exit is
+	// treated as an intentional shutdown rather than an unexpected death.
+	if c.monitorCancel != nil {
+		c.monitorCancel()
+		c.monitorCancel = nil
+	}
 
 	if c.container != nil {
 		task, err := c.container.Task(ctx, nil)
@@ -473,48 +480,91 @@ func (c *Component) createContainer(ctx context.Context, image containerd.Image,
 func (c *Component) restartExistingContainer(ctx context.Context, container containerd.Container, dataPath string) error {
 	c.container = container
 
-	task, err := container.Task(ctx, nil)
-	if err == nil {
-		status, err := task.Status(ctx)
-		if err != nil {
-			c.Log.Warn("failed to get task status", "error", err)
-		} else if status.Status == containerd.Running {
-			c.Log.Info("buildkit container is already running")
-			c.running = true
-			return c.waitForReady(ctx)
-		}
-
-		c.Log.Info("starting existing buildkit task")
-		if err := task.Start(ctx); err == nil {
-			c.running = true
-			c.Log.Info("buildkit daemon restarted", "container_id", container.ID())
-			return c.waitForReady(ctx)
-		}
-
-		c.Log.Warn("failed to start existing task, deleting it", "error", err)
-		task.Delete(ctx)
+	// A pre-existing task belongs to a previous miren process. buildkitd's
+	// in-process HTTP/2 session server is bound to the miren process that
+	// launched it, so after a miren restart it can never reconnect — reusing
+	// the task silently expunges all jobs ("NotFound: no such job") and every
+	// build fails. Always evict any existing task and start a fresh one bound
+	// to this process.
+	if task, err := container.Task(ctx, nil); err == nil {
+		c.Log.Info("evicting stale buildkit task before restart")
+		c.stopTask(ctx, task)
 	}
 
-	c.Log.Info("creating new task for existing container")
-	task, err = container.NewTask(ctx, slogout.WithLogger(c.Log, "buildkit"))
+	c.Log.Info("creating new task for existing buildkit container")
+	task, err := container.NewTask(ctx, slogout.WithLogger(c.Log, "buildkit"))
 	if err != nil {
+		c.container = nil
 		return fmt.Errorf("failed to create new task for existing container: %w", err)
+	}
+
+	if err := c.startTaskAndMonitor(ctx, task); err != nil {
+		c.container = nil
+		return err
+	}
+
+	c.Log.Info("buildkit daemon restarted with new task", "container_id", container.ID())
+
+	return nil
+}
+
+// startTaskAndMonitor starts an already-created task, waits for buildkit to
+// become ready, records the running state, and spawns a goroutine that watches
+// for the task exiting unexpectedly. The exit channel is established via
+// task.Wait before task.Start so the exit event can never be missed. On any
+// failure the task is torn down before returning, so the caller only needs to
+// clean up container-level resources. Must be called with c.mu held.
+func (c *Component) startTaskAndMonitor(ctx context.Context, task containerd.Task) error {
+	exitCh, err := task.Wait(ctx)
+	if err != nil {
+		task.Delete(ctx)
+		return fmt.Errorf("failed to wait on buildkit task: %w", err)
 	}
 
 	if err := task.Start(ctx); err != nil {
 		task.Delete(ctx)
-		return fmt.Errorf("failed to start new task for existing container: %w", err)
+		return fmt.Errorf("failed to start buildkit task: %w", err)
 	}
 
 	if err := c.waitForReady(ctx); err != nil {
-		task.Delete(ctx)
+		c.stopTask(ctx, task)
 		return err
 	}
 
+	monitorCtx, cancel := context.WithCancel(context.Background())
+	c.monitorCancel = cancel
 	c.running = true
-	c.Log.Info("buildkit daemon restarted with new task", "container_id", container.ID())
+	go c.monitorTask(monitorCtx, exitCh)
 
 	return nil
+}
+
+// monitorTask watches a running buildkit task for an unexpected exit. An
+// intentional shutdown (Stop or a restart force-stop) cancels monitorCtx first,
+// so this returns quietly. If the task exits on its own, it clears c.running so
+// IsRunning/Client reflect reality and the next build fails fast rather than
+// hanging on a dead daemon.
+func (c *Component) monitorTask(monitorCtx context.Context, exitCh <-chan containerd.ExitStatus) {
+	select {
+	case <-monitorCtx.Done():
+		return
+	case es := <-exitCh:
+		c.mu.Lock()
+		defer c.mu.Unlock()
+
+		// A stop may have raced in between the exit firing and acquiring the
+		// lock; in that case the stop path owns the state transition.
+		if monitorCtx.Err() != nil || !c.running {
+			return
+		}
+
+		c.running = false
+		if err := es.Error(); err != nil {
+			c.Log.Error("buildkit task exit wait failed, marking daemon not running", "error", err)
+		} else {
+			c.Log.Error("buildkit daemon exited unexpectedly, marking not running", "exit_code", es.ExitCode())
+		}
+	}
 }
 
 func (c *Component) waitForReady(ctx context.Context) error {
@@ -547,13 +597,12 @@ func (c *Component) stopTask(ctx context.Context, task containerd.Task) {
 	shutdownCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
+	// If SIGTERM can't be delivered we still fall through to Delete: a task we
+	// fail to reap here otherwise leaks and blocks the next NewTask on this
+	// container.
 	if err := task.Kill(shutdownCtx, unix.SIGTERM); err != nil {
 		c.Log.Error("failed to send SIGTERM to buildkit task", "error", err)
-		return
-	}
-
-	status, err := task.Wait(shutdownCtx)
-	if err == nil {
+	} else if status, err := task.Wait(shutdownCtx); err == nil {
 		select {
 		case es := <-status:
 			c.Log.Info("buildkit task exited", "code", es.ExitCode())
@@ -573,7 +622,15 @@ func (c *Component) stopTask(ctx context.Context, task containerd.Task) {
 		}
 	}
 
-	deleteCtx, deleteCancel := context.WithTimeout(ctx, 10*time.Second)
+	// Always delete the task, even if the kill path above failed, so the
+	// container is left in a state where a fresh task can be created. Detach
+	// from the parent's cancellation so a cancelled/expired ctx can't skip
+	// cleanup, but carry over the containerd namespace (Delete requires it).
+	deleteBase := context.Background()
+	if ns, ok := namespaces.Namespace(ctx); ok {
+		deleteBase = namespaces.WithNamespace(deleteBase, ns)
+	}
+	deleteCtx, deleteCancel := context.WithTimeout(deleteBase, 10*time.Second)
 	defer deleteCancel()
 
 	if _, err := task.Delete(deleteCtx); err != nil {
