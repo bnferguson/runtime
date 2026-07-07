@@ -16,6 +16,7 @@ miren server container install [flags]
 
 ## Flags
 
+- `--allow-rootless` — Install even on a rootless runtime (control plane only; app workloads won't run)
 - `--cluster-name` — Cluster name for cloud registration
 - `--force, -f` — Remove existing container if present
 - `--host-network` — Use host networking (ignores port mappings)

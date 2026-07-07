@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -107,4 +108,46 @@ func availableContainerRuntimes() []containerRuntime {
 		}
 	}
 	return found
+}
+
+// isRootless reports whether the runtime is operating in rootless mode. Miren's
+// sandbox runtime does privileged, nested containerization that a rootless
+// (fake-privileged) container can't provide: the server and control plane come
+// up, but app sandboxes fail to start. The installer uses this to stop early
+// with guidance. Podman reports it directly; Docker exposes it via its security
+// options. A probe we can't run reports false — we don't block on uncertainty.
+func (r containerRuntime) isRootless() bool {
+	switch r.bin {
+	case "podman":
+		out, err := r.command("info", "--format", "{{.Host.Security.Rootless}}").Output()
+		return err == nil && strings.TrimSpace(string(out)) == "true"
+	case "docker":
+		out, err := r.command("info", "--format", "{{.SecurityOptions}}").Output()
+		return err == nil && strings.Contains(string(out), "rootless")
+	}
+	return false
+}
+
+// hostMemoryBytes returns the total memory of the host the runtime schedules
+// containers on — the VM on macOS/Windows, the machine itself on Linux — or 0
+// if it can't be determined. Podman and Docker expose it under different keys.
+func (r containerRuntime) hostMemoryBytes() int64 {
+	var format string
+	switch r.bin {
+	case "podman":
+		format = "{{.Host.MemTotal}}"
+	case "docker":
+		format = "{{.MemTotal}}"
+	default:
+		return 0
+	}
+	out, err := r.command("info", "--format", format).Output()
+	if err != nil {
+		return 0
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
 }

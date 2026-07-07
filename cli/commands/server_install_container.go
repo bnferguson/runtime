@@ -24,18 +24,19 @@ import (
 // ServerInstallContainer sets up a container (via Docker or Podman) to run the
 // miren server.
 func ServerInstallContainer(ctx *Context, opts struct {
-	Image        string            `short:"i" long:"image" description:"Container image to use" default:"oci.miren.cloud/miren:latest"`
-	Name         string            `short:"n" long:"name" description:"Container name"`
-	Runtime      string            `long:"runtime" description:"Container runtime to use: docker or podman (auto-detected by default, preferring docker)"`
-	Force        bool              `short:"f" long:"force" description:"Remove existing container if present"`
-	HTTPPort     int               `long:"http-port" description:"HTTP port mapping" default:"80"`
-	IngressMode  string            `long:"ingress-mode" description:"Ingress mode: tls-autoprovision (default), behind-proxy-http (Miren serves plain HTTP behind a TLS-terminating proxy like tailscale serve / nginx), or behind-proxy-https (Miren terminates TLS on :443 behind a TCP-passthrough proxy)"`
-	HostNetwork  bool              `long:"host-network" description:"Use host networking (ignores port mappings)"`
-	WithoutCloud bool              `long:"without-cloud" description:"Skip cloud registration setup"`
-	ClusterName  string            `long:"cluster-name" description:"Cluster name for cloud registration"`
-	CloudURL     string            `short:"u" long:"url" description:"Cloud URL for registration" default:"https://miren.cloud"`
-	Tags         map[string]string `short:"t" long:"tag" description:"Tags for the cluster (key:value)"`
-	Labs         []string          `short:"l" long:"labs" description:"Miren Labs features to enable (e.g. distributedrunners). Prefix with - to disable."`
+	Image         string            `short:"i" long:"image" description:"Container image to use" default:"oci.miren.cloud/miren:latest"`
+	Name          string            `short:"n" long:"name" description:"Container name"`
+	Runtime       string            `long:"runtime" description:"Container runtime to use: docker or podman (auto-detected by default, preferring docker)"`
+	Force         bool              `short:"f" long:"force" description:"Remove existing container if present"`
+	AllowRootless bool              `long:"allow-rootless" description:"Install even on a rootless runtime (control plane only; app workloads won't run)"`
+	HTTPPort      int               `long:"http-port" description:"HTTP port mapping" default:"80"`
+	IngressMode   string            `long:"ingress-mode" description:"Ingress mode: tls-autoprovision (default), behind-proxy-http (Miren serves plain HTTP behind a TLS-terminating proxy like tailscale serve / nginx), or behind-proxy-https (Miren terminates TLS on :443 behind a TCP-passthrough proxy)"`
+	HostNetwork   bool              `long:"host-network" description:"Use host networking (ignores port mappings)"`
+	WithoutCloud  bool              `long:"without-cloud" description:"Skip cloud registration setup"`
+	ClusterName   string            `long:"cluster-name" description:"Cluster name for cloud registration"`
+	CloudURL      string            `short:"u" long:"url" description:"Cloud URL for registration" default:"https://miren.cloud"`
+	Tags          map[string]string `short:"t" long:"tag" description:"Tags for the cluster (key:value)"`
+	Labs          []string          `short:"l" long:"labs" description:"Miren Labs features to enable (e.g. distributedrunners). Prefix with - to disable."`
 }) error {
 	if opts.ClusterName == "" {
 		opts.ClusterName = opts.Name
@@ -59,6 +60,22 @@ func ServerInstallContainer(ctx *Context, opts struct {
 		return err
 	}
 	ctx.Completed("Using %s", rt.bin)
+
+	// A rootless runtime can host the server and control plane, but Miren's
+	// privileged nested sandboxing can't start app workloads there. Stop early
+	// with guidance unless the operator explicitly opts into a control-plane-only
+	// install.
+	if rt.isRootless() {
+		if !opts.AllowRootless {
+			return rootlessRuntimeError(ctx, rt)
+		}
+		ctx.Warn("Rootless %s: installing anyway (--allow-rootless). The control plane "+
+			"will come up, but app deploys will crash-loop.", rt.bin)
+	}
+
+	// Heads-up (never a blocker) when the runtime host is short on memory for the
+	// nested stack (containerd + buildkit + etcd + the server).
+	warnLowContainerMemory(ctx, rt)
 
 	// Derive volume name from container name
 	volumeName := opts.Name + "-data"
@@ -536,6 +553,50 @@ func validateIngressMode(mode string) error {
 			serverconfig.IngressModeAutoprovision,
 			serverconfig.IngressModeBehindProxyHTTP,
 			serverconfig.IngressModeBehindProxyHTTPS)
+	}
+}
+
+// rootlessRuntimeError explains why a rootless runtime can't run Miren workloads
+// and how to switch to a rootful one, returning a terse error to halt the
+// install. Overridable with --allow-rootless for control-plane-only testing.
+func rootlessRuntimeError(ctx *Context, rt containerRuntime) error {
+	ctx.Printf("\n%s Rootless %s detected.\n\n", infoRed.Render("✗"), rt.bin)
+	ctx.Printf("Miren's server will start, but it can't run app workloads under a rootless\n")
+	ctx.Printf("runtime yet: the sandbox runtime does privileged, nested containerization\n")
+	ctx.Printf("(its own containerd, per-sandbox namespaces and devices) that a rootless\n")
+	ctx.Printf("container can't provide. The control plane comes up; app deploys crash-loop.\n\n")
+	if rt.bin == "podman" {
+		ctx.Printf("Fix: switch Podman to rootful and reinstall:\n")
+		ctx.Printf("  %s\n", infoGray.Render("podman machine set --rootful     # macOS"))
+		ctx.Printf("  %s\n\n", infoGray.Render("# or run podman as root on Linux"))
+	}
+	ctx.Printf("Docker is rootful by default and works out of the box.\n\n")
+	ctx.Printf("To install anyway (control plane only), re-run with --allow-rootless.\n")
+	return fmt.Errorf("rootless %s is not supported for running app workloads", rt.bin)
+}
+
+// warnLowContainerMemory prints a heads-up (never blocks) when the runtime host
+// has less memory than Miren recommends. It reads the runtime's own view of
+// host memory (the VM on macOS/Windows), which is what the nested stack actually
+// runs within — not the machine's total. Silent when memory can't be detected.
+func warnLowContainerMemory(ctx *Context, rt containerRuntime) {
+	mem := rt.hostMemoryBytes()
+	if mem <= 0 {
+		return
+	}
+	switch {
+	case mem < minMemoryBytes:
+		ctx.Warn("%s has %s of memory available to containers, below the %s minimum.",
+			rt.bin, formatBytes(mem), formatBytes(minMemoryBytes))
+		fmt.Println("  Miren runs containerd, etcd, and buildkit inside the container — ~600 MB")
+		fmt.Println("  at idle, spiking during builds — so deploys may fail under memory pressure.")
+		fmt.Printf("  Raise the %s VM's memory (macOS/Windows) or free host memory (Linux).\n", rt.bin)
+		fmt.Println("  More: https://miren.md/system-requirements")
+		fmt.Println()
+	case mem < recommendedMemoryBytes:
+		ctx.Warn("%s has %s of memory available to containers — it'll work, but we recommend %s.",
+			rt.bin, formatBytes(mem), formatBytes(recommendedMemoryBytes))
+		fmt.Println()
 	}
 }
 

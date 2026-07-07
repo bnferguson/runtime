@@ -27,9 +27,9 @@ import (
 	"miren.dev/runtime/version"
 )
 
+// minMemoryBytes and recommendedMemoryBytes are shared with the container
+// install path and defined in install_requirements.go (untagged).
 const (
-	minMemoryBytes          = 4 * 1024 * 1024 * 1024   // 4 GB
-	recommendedMemoryBytes  = 8 * 1024 * 1024 * 1024   // 8 GB
 	minStorageBytes         = 50 * 1024 * 1024 * 1024  // 50 GB
 	recommendedStorageBytes = 100 * 1024 * 1024 * 1024 // 100 GB
 
