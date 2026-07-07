@@ -59,7 +59,7 @@ func TestRequiredHostPorts(t *testing.T) {
 
 	t.Run("default mode requires 80, 443, and the API port", func(t *testing.T) {
 		r := require.New(t)
-		got := requiredHostPorts(dockerContainerConfig{HTTPPort: 80})
+		got := requiredHostPorts(containerConfig{HTTPPort: 80})
 		r.Len(got, 3)
 		r.Equal(80, hasRole(got, roleHTTP).hostPort)
 		r.Equal(443, hasRole(got, roleHTTPS).hostPort)
@@ -70,7 +70,7 @@ func TestRequiredHostPorts(t *testing.T) {
 
 	t.Run("custom http port flows through to the host side", func(t *testing.T) {
 		r := require.New(t)
-		got := requiredHostPorts(dockerContainerConfig{HTTPPort: 8080})
+		got := requiredHostPorts(containerConfig{HTTPPort: 8080})
 		http := hasRole(got, roleHTTP)
 		r.Equal(8080, http.hostPort)
 		r.Equal(80, http.containerPort)
@@ -78,7 +78,7 @@ func TestRequiredHostPorts(t *testing.T) {
 
 	t.Run("behind-proxy-http drops 443", func(t *testing.T) {
 		r := require.New(t)
-		got := requiredHostPorts(dockerContainerConfig{HTTPPort: 80, IngressMode: "behind-proxy-http"})
+		got := requiredHostPorts(containerConfig{HTTPPort: 80, IngressMode: "behind-proxy-http"})
 		r.Len(got, 2)
 		r.Nil(hasRole(got, roleHTTPS))
 		r.NotNil(hasRole(got, roleHTTP))
@@ -86,7 +86,7 @@ func TestRequiredHostPorts(t *testing.T) {
 
 	t.Run("behind-proxy-https drops 80", func(t *testing.T) {
 		r := require.New(t)
-		got := requiredHostPorts(dockerContainerConfig{HTTPPort: 80, IngressMode: "behind-proxy-https"})
+		got := requiredHostPorts(containerConfig{HTTPPort: 80, IngressMode: "behind-proxy-https"})
 		r.Len(got, 2)
 		r.Nil(hasRole(got, roleHTTP))
 		r.NotNil(hasRole(got, roleHTTPS))
@@ -96,7 +96,7 @@ func TestRequiredHostPorts(t *testing.T) {
 	// directly), but --http-port doesn't apply, so the HTTP port is 80.
 	t.Run("host networking still requires 80, 443, and the API port", func(t *testing.T) {
 		r := require.New(t)
-		got := requiredHostPorts(dockerContainerConfig{HTTPPort: 8080, HostNetwork: true})
+		got := requiredHostPorts(containerConfig{HTTPPort: 8080, HostNetwork: true})
 		r.Len(got, 3)
 		r.Equal(80, hasRole(got, roleHTTP).hostPort) // not 8080 — host networking ignores --http-port
 		r.Equal(443, hasRole(got, roleHTTPS).hostPort)
@@ -104,14 +104,14 @@ func TestRequiredHostPorts(t *testing.T) {
 	})
 }
 
-func TestDockerIngressArgs(t *testing.T) {
-	joined := func(config dockerContainerConfig) string {
-		return strings.Join(dockerIngressArgs(config), " ")
+func TestIngressArgs(t *testing.T) {
+	joined := func(config containerConfig) string {
+		return strings.Join(ingressArgs(config), " ")
 	}
 
 	t.Run("default mode publishes 80, 443, and 8443", func(t *testing.T) {
 		r := require.New(t)
-		got := joined(dockerContainerConfig{HTTPPort: 80})
+		got := joined(containerConfig{HTTPPort: 80})
 		r.Contains(got, "-p 80:80/tcp")
 		r.Contains(got, "-p 443:443/tcp")
 		r.Contains(got, "-p 8443:8443/udp")
@@ -120,13 +120,13 @@ func TestDockerIngressArgs(t *testing.T) {
 
 	t.Run("custom http port is published on the host side only", func(t *testing.T) {
 		r := require.New(t)
-		got := joined(dockerContainerConfig{HTTPPort: 8080})
+		got := joined(containerConfig{HTTPPort: 8080})
 		r.Contains(got, "-p 8080:80/tcp")
 	})
 
 	t.Run("behind-proxy-http drops 443 and pins the bind to 0.0.0.0:80", func(t *testing.T) {
 		r := require.New(t)
-		got := joined(dockerContainerConfig{HTTPPort: 80, IngressMode: "behind-proxy-http"})
+		got := joined(containerConfig{HTTPPort: 80, IngressMode: "behind-proxy-http"})
 		r.Contains(got, "-p 80:80/tcp")
 		r.NotContains(got, "443:443/tcp")
 		r.Contains(got, "MIREN_INGRESS_MODE=behind-proxy-http")
@@ -135,7 +135,7 @@ func TestDockerIngressArgs(t *testing.T) {
 
 	t.Run("behind-proxy-https drops 80 and pins the bind to 0.0.0.0:443", func(t *testing.T) {
 		r := require.New(t)
-		got := joined(dockerContainerConfig{HTTPPort: 80, IngressMode: "behind-proxy-https"})
+		got := joined(containerConfig{HTTPPort: 80, IngressMode: "behind-proxy-https"})
 		r.Contains(got, "-p 443:443/tcp")
 		r.NotContains(got, ":80/tcp")
 		r.Contains(got, "MIREN_INGRESS_MODE=behind-proxy-https")
@@ -144,7 +144,7 @@ func TestDockerIngressArgs(t *testing.T) {
 
 	t.Run("host networking ignores port mappings", func(t *testing.T) {
 		r := require.New(t)
-		got := joined(dockerContainerConfig{HTTPPort: 80, HostNetwork: true})
+		got := joined(containerConfig{HTTPPort: 80, HostNetwork: true})
 		r.Contains(got, "--network host")
 		r.NotContains(got, "-p ")
 	})
@@ -186,13 +186,13 @@ func TestPortConflictMessage(t *testing.T) {
 	})
 }
 
-func TestDockerPortConflictError(t *testing.T) {
+func TestEnginePortConflictError(t *testing.T) {
 	// translate runs the backstop and returns whether it claimed the error plus
 	// the user-facing text it rendered.
 	translate := func(err error) (bool, string) {
 		var buf bytes.Buffer
 		ctx := &Context{Stdout: &buf}
-		_, ok := dockerPortConflictError(ctx, err)
+		_, ok := enginePortConflictError(ctx, err)
 		return ok, buf.String()
 	}
 

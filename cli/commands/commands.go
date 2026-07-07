@@ -850,45 +850,59 @@ miren deploy --analyze
 			Body: "miren server upgrade rollback",
 		}),
 	))
-	d.Dispatch("server docker", Section("server docker", "Docker-based server management commands", ""))
-	d.Dispatch("server docker install", Infer("server docker install", "Install miren server using Docker", ServerInstallDocker,
+	d.Dispatch("server container", Section("server container", "Run the miren server in a container (Docker or Podman)", ""))
+	d.Dispatch("server container install", Infer("server container install", "Install miren server in a container", ServerInstallContainer,
 		WithExample(mflags.Example{
 			Name: "Install with cloud registration",
-			Body: "miren server docker install",
+			Body: "miren server container install",
 		}),
 		WithExample(mflags.Example{
 			Name: "Install without cloud (local only)",
-			Body: "miren server docker install --without-cloud",
+			Body: "miren server container install --without-cloud",
 		}),
 		WithExample(mflags.Example{
 			Name: "Install with a custom HTTP port",
-			Body: "miren server docker install --http-port 8080",
+			Body: "miren server container install --http-port 8080",
 		}),
 		WithExample(mflags.Example{
 			Name: "Install behind a TLS-terminating proxy (e.g. tailscale serve)",
-			Body: "miren server docker install --ingress-mode behind-proxy-http",
+			Body: "miren server container install --ingress-mode behind-proxy-http",
+		}),
+		WithExample(mflags.Example{
+			Name: "Force a specific runtime",
+			Body: "miren server container install --runtime podman",
 		}),
 	))
-	d.Dispatch("server docker uninstall", Infer("server docker uninstall", "Uninstall miren server Docker container", ServerUninstallDocker,
+	d.Dispatch("server container uninstall", Infer("server container uninstall", "Uninstall miren server container", ServerUninstallContainer,
 		WithExample(mflags.Example{
 			Name: "Uninstall the container",
-			Body: "miren server docker uninstall",
+			Body: "miren server container uninstall",
 		}),
 		WithExample(mflags.Example{
 			Name: "Uninstall and remove all data",
-			Body: "miren server docker uninstall --remove-volume",
+			Body: "miren server container uninstall --remove-volume",
 		}),
 	))
-	d.Dispatch("server docker status", Infer("server docker status", "Show status of miren server Docker container", ServerStatusDocker,
+	d.Dispatch("server container status", Infer("server container status", "Show status of miren server container", ServerStatusContainer,
 		WithExample(mflags.Example{
 			Name: "Show status",
-			Body: "miren server docker status",
+			Body: "miren server container status",
 		}),
 		WithExample(mflags.Example{
 			Name: "Follow logs",
-			Body: "miren server docker status --follow",
+			Body: "miren server container status --follow",
 		}),
 	))
+
+	// Deprecated `server docker` aliases. The container-install path used to be
+	// docker-only and shipped under this name; keep it working (pointing at the
+	// same handlers) so existing scripts and docs don't break, but steer new
+	// users to `server container`. These are marked deprecated in help rather
+	// than hidden, since mflags doesn't filter hidden groups below the top level.
+	d.Dispatch("server docker", Section("server docker", "Deprecated alias for 'server container'", ""))
+	d.Dispatch("server docker install", Infer("server docker install", "Deprecated: use 'miren server container install'", ServerInstallContainer))
+	d.Dispatch("server docker uninstall", Infer("server docker uninstall", "Deprecated: use 'miren server container uninstall'", ServerUninstallContainer))
+	d.Dispatch("server docker status", Infer("server docker status", "Deprecated: use 'miren server container status'", ServerStatusContainer))
 
 	// CLI management commands
 	d.Dispatch("download", Section("download", "Download management commands", "", WithSectionGroup(GroupServer)))

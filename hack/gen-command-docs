@@ -40,8 +40,10 @@ jq -c '
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 
-# Hidden command prefixes (not included in public docs)
-HIDDEN_PREFIXES=("internal")
+# Hidden command prefixes (not included in public docs).
+# "server docker" is a deprecated alias for "server container" — kept working in
+# the CLI for back-compat, but not advertised in the docs.
+HIDDEN_PREFIXES=("internal" "server docker")
 
 is_hidden() {
   local path="$1"
@@ -317,7 +319,8 @@ generate_commands_index() {
   jq -r '
     [.[] | select(
       (.path | startswith("internal") | not) and
-      (.path | startswith("debug") | not)
+      (.path | startswith("debug") | not) and
+      (.path | startswith("server docker") | not)
     )] |
     group_by(.path | split(" ")[0]) |
     sort_by(.[0].path | split(" ")[0]) |
@@ -400,7 +403,10 @@ generate_sidebar() {
   # Groups commands by their top-level word, creating categories for groups
   # with subcommands and plain doc refs for leaf commands.
   jq -r '
-    [.[] | select(.path | startswith("internal") | not)] |
+    [.[] | select(
+      (.path | startswith("internal") | not) and
+      (.path | startswith("server docker") | not)
+    )] |
 
     # Group by top-level command word
     group_by(.path | split(" ")[0]) |

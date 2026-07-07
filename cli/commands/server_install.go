@@ -143,17 +143,18 @@ func printSystemRequirementsGuidance(ctx *Context, reqs systemRequirements) bool
 
 // installPrerequisites holds information about the system's readiness for installation
 type installPrerequisites struct {
-	hasRoot    bool
-	hasSystemd bool
-	hasDocker  bool
+	hasRoot             bool
+	hasSystemd          bool
+	hasContainerRuntime bool
 }
 
 // checkInstallPrerequisites checks all prerequisites and returns their status
 func checkInstallPrerequisites() installPrerequisites {
+	_, runtimeErr := resolveContainerRuntime("")
 	return installPrerequisites{
-		hasRoot:    os.Geteuid() == 0,
-		hasSystemd: checkSystemdAvailable(),
-		hasDocker:  checkDockerAvailable() == nil,
+		hasRoot:             os.Geteuid() == 0,
+		hasSystemd:          checkSystemdAvailable(),
+		hasContainerRuntime: runtimeErr == nil,
 	}
 }
 
@@ -189,17 +190,18 @@ func printInstallPrerequisiteGuidance(ctx *Context, prereqs installPrerequisites
 		ctx.Info("systemd is not available on this system.")
 		fmt.Println()
 
-		if prereqs.hasDocker {
-			ctx.Info("Docker is available! You can install using Docker instead:")
-			fmt.Println("  miren server docker install")
+		if prereqs.hasContainerRuntime {
+			ctx.Info("A container runtime is available! You can install in a container instead:")
+			fmt.Println("  miren server container install")
 			fmt.Println()
-			ctx.Info("This will run the miren server in a Docker container with automatic restarts.")
+			ctx.Info("This will run the miren server in a container with automatic restarts.")
 		} else {
 			ctx.Info("Alternative installation options:")
 			fmt.Println()
-			fmt.Println("  1. Install using Docker (recommended for non-systemd systems):")
-			fmt.Println("     First install Docker: https://docs.docker.com/get-docker/")
-			fmt.Println("     Then run: miren server docker install")
+			fmt.Println("  1. Install in a container (recommended for non-systemd systems):")
+			fmt.Println("     First install Docker (https://docs.docker.com/get-docker/)")
+			fmt.Println("     or Podman (https://podman.io/docs/installation)")
+			fmt.Println("     Then run: miren server container install")
 			fmt.Println()
 			fmt.Println("  2. Run the server directly (for testing or development):")
 			fmt.Println("     miren server")

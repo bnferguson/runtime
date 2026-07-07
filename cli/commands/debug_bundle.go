@@ -254,44 +254,45 @@ type dockerContainerInfo struct {
 	id     string
 	name   string
 	status string
+	// rt is the container runtime (docker or podman) that this container was
+	// found under, so later logs/exec/inspect calls drive the right engine.
+	rt containerRuntime
 }
 
+// findDockerContainers finds miren server containers matching containerName
+// across every available container runtime (Docker and/or Podman), tagging each
+// with the runtime it was found under. On a host with both, a container hosted
+// by either engine is picked up.
 func findDockerContainers(containerName string) []dockerContainerInfo {
-	// Check if docker is available
-	if _, err := exec.LookPath("docker"); err != nil {
-		return nil
-	}
-
-	// Find containers matching the specified name (running or recently stopped)
-	output, err := runWithTimeout(cmdTimeoutShort, "docker", "ps", "-a", "--filter", "name="+containerName, "--format", "{{.ID}}\t{{.Names}}\t{{.Status}}")
-	if err != nil {
-		return nil
-	}
-
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	if len(lines) == 0 || (len(lines) == 1 && lines[0] == "") {
-		return nil
-	}
-
 	var containers []dockerContainerInfo
-	for _, line := range lines {
-		if line == "" {
+
+	for _, rt := range availableContainerRuntimes() {
+		// Find containers matching the specified name (running or recently stopped)
+		output, err := runWithTimeout(cmdTimeoutShort, rt.bin, "ps", "-a", "--filter", "name="+containerName, "--format", "{{.ID}}\t{{.Names}}\t{{.Status}}")
+		if err != nil {
 			continue
 		}
 
-		parts := strings.SplitN(line, "\t", 3)
-		if len(parts) < 2 {
-			continue
-		}
+		for line := range strings.SplitSeq(strings.TrimSpace(string(output)), "\n") {
+			if line == "" {
+				continue
+			}
 
-		info := dockerContainerInfo{
-			id:   parts[0],
-			name: parts[1],
+			parts := strings.SplitN(line, "\t", 3)
+			if len(parts) < 2 {
+				continue
+			}
+
+			info := dockerContainerInfo{
+				id:   parts[0],
+				name: parts[1],
+				rt:   rt,
+			}
+			if len(parts) >= 3 {
+				info.status = parts[2]
+			}
+			containers = append(containers, info)
 		}
-		if len(parts) >= 3 {
-			info.status = parts[2]
-		}
-		containers = append(containers, info)
 	}
 
 	return containers
@@ -314,7 +315,7 @@ func gatherDockerLogs(since, containerName string) []byte {
 		fmt.Fprintf(&buf, "%s\n", strings.Repeat("=", 80))
 
 		// Get logs with --since flag
-		logOutput, err := runWithTimeout(cmdTimeoutLong, "docker", "logs", "--since", dockerSince, container.id)
+		logOutput, err := runWithTimeout(cmdTimeoutLong, container.rt.bin, "logs", "--since", dockerSince, container.id)
 		if err != nil {
 			fmt.Fprintf(&buf, "Error getting logs: %v\n%s\n", err, logOutput)
 		} else if len(logOutput) == 0 {
@@ -392,10 +393,10 @@ func gatherDockerProcesses(containerName string) []byte {
 
 		// Run ps inside the container
 		fmt.Fprintf(&buf, "\n--- PROCESSES (ps aux) ---\n")
-		psOutput, err := runWithTimeout(cmdTimeoutShort, "docker", "exec", container.id, "ps", "aux")
+		psOutput, err := runWithTimeout(cmdTimeoutShort, container.rt.bin, "exec", container.id, "ps", "aux")
 		if err != nil {
 			// Try alternative: ps without aux (some minimal containers don't have full ps)
-			psOutput, err = runWithTimeout(cmdTimeoutShort, "docker", "exec", container.id, "ps", "-ef")
+			psOutput, err = runWithTimeout(cmdTimeoutShort, container.rt.bin, "exec", container.id, "ps", "-ef")
 			if err != nil {
 				fmt.Fprintf(&buf, "Error running ps: %v\n", err)
 			} else {
@@ -407,7 +408,7 @@ func gatherDockerProcesses(containerName string) []byte {
 
 		// Run df inside the container
 		fmt.Fprintf(&buf, "\n--- DISK USAGE (df -h) ---\n")
-		dfOutput, err := runWithTimeout(cmdTimeoutShort, "docker", "exec", container.id, "df", "-h")
+		dfOutput, err := runWithTimeout(cmdTimeoutShort, container.rt.bin, "exec", container.id, "df", "-h")
 		if err != nil {
 			fmt.Fprintf(&buf, "Error running df: %v\n", err)
 		} else {
@@ -416,10 +417,10 @@ func gatherDockerProcesses(containerName string) []byte {
 
 		// Run free inside the container
 		fmt.Fprintf(&buf, "\n--- MEMORY USAGE (free -h) ---\n")
-		freeOutput, err := runWithTimeout(cmdTimeoutShort, "docker", "exec", container.id, "free", "-h")
+		freeOutput, err := runWithTimeout(cmdTimeoutShort, container.rt.bin, "exec", container.id, "free", "-h")
 		if err != nil {
 			// Try without -h flag for systems that don't support it
-			freeOutput, err = runWithTimeout(cmdTimeoutShort, "docker", "exec", container.id, "free")
+			freeOutput, err = runWithTimeout(cmdTimeoutShort, container.rt.bin, "exec", container.id, "free")
 			if err != nil {
 				fmt.Fprintf(&buf, "Error running free: %v\n", err)
 			} else {
@@ -432,7 +433,7 @@ func gatherDockerProcesses(containerName string) []byte {
 		// Run nerdctl to list miren containers
 		fmt.Fprintf(&buf, "\n--- MIREN CONTAINERS (nerdctl) ---\n")
 		nerdctlOutput, err := runWithTimeout(cmdTimeoutShort,
-			"docker", "exec", container.id,
+			container.rt.bin, "exec", container.id,
 			"/var/lib/miren/release/nerdctl",
 			"-a", "/var/lib/miren/containerd/containerd.sock",
 			"--namespace", "miren",
@@ -457,20 +458,31 @@ func gatherDockerInspect(containerName string) []byte {
 		return nil
 	}
 
-	// Collect all container IDs to inspect
-	var ids []string
+	// Group container IDs by the runtime they were found under, then inspect
+	// each group with its own engine (a host may run both docker and podman).
+	idsByRuntime := make(map[string][]string)
+	var order []string
 	for _, container := range containers {
-		ids = append(ids, container.id)
+		if _, ok := idsByRuntime[container.rt.bin]; !ok {
+			order = append(order, container.rt.bin)
+		}
+		idsByRuntime[container.rt.bin] = append(idsByRuntime[container.rt.bin], container.id)
 	}
 
-	// Run docker inspect on all containers at once
-	args := append([]string{"inspect"}, ids...)
-	output, err := runWithTimeout(cmdTimeoutShort, "docker", args...)
-	if err != nil {
+	var out []byte
+	for _, bin := range order {
+		args := append([]string{"inspect"}, idsByRuntime[bin]...)
+		output, err := runWithTimeout(cmdTimeoutShort, bin, args...)
+		if err != nil {
+			continue
+		}
+		out = append(out, redactDockerInspect(output)...)
+	}
+
+	if len(out) == 0 {
 		return nil
 	}
-
-	return redactDockerInspect(output)
+	return out
 }
 
 // redactDockerInspect strips secret values from docker inspect JSON output.

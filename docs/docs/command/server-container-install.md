@@ -1,17 +1,17 @@
 ---
-title: "miren server docker install"
-sidebar_label: "server docker install"
-description: "Install miren server using Docker"
+title: "miren server container install"
+sidebar_label: "server container install"
+description: "Install miren server in a container"
 ---
 
-# miren server docker install
+# miren server container install
 
-Install miren server using Docker
+Install miren server in a container
 
 ## Usage
 
 ```bash
-miren server docker install [flags]
+miren server container install [flags]
 ```
 
 ## Flags
@@ -20,10 +20,11 @@ miren server docker install [flags]
 - `--force, -f` — Remove existing container if present
 - `--host-network` — Use host networking (ignores port mappings)
 - `--http-port` — HTTP port mapping (default: `80`)
-- `--image, -i` — Docker image to use (default: `oci.miren.cloud/miren:latest`)
+- `--image, -i` — Container image to use (default: `oci.miren.cloud/miren:latest`)
 - `--ingress-mode` — Ingress mode: tls-autoprovision (default), behind-proxy-http (Miren serves plain HTTP behind a TLS-terminating proxy like tailscale serve / nginx), or behind-proxy-https (Miren terminates TLS on :443 behind a TCP-passthrough proxy)
 - `--labs, -l` — Miren Labs features to enable (e.g. distributedrunners). Prefix with - to disable.
 - `--name, -n` — Container name
+- `--runtime` — Container runtime to use: docker or podman (auto-detected by default, preferring docker)
 - `--url, -u` — Cloud URL for registration (default: `https://miren.cloud`)
 - `--without-cloud` — Skip cloud registration setup
 
@@ -38,27 +39,33 @@ miren server docker install [flags]
 **Install with cloud registration:**
 
 ```bash
-miren server docker install
+miren server container install
 ```
 
 **Install without cloud (local only):**
 
 ```bash
-miren server docker install --without-cloud
+miren server container install --without-cloud
 ```
 
 **Install with a custom HTTP port:**
 
 ```bash
-miren server docker install --http-port 8080
+miren server container install --http-port 8080
 ```
 
 **Install behind a TLS-terminating proxy (e.g. tailscale serve):**
 
 ```bash
-miren server docker install --ingress-mode behind-proxy-http
+miren server container install --ingress-mode behind-proxy-http
+```
+
+**Force a specific runtime:**
+
+```bash
+miren server container install --runtime podman
 ```
 
 ## See also
 
-- [`miren server docker`](/command/server-docker)
+- [`miren server container`](/command/server-container)

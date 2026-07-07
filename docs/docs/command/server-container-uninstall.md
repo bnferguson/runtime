@@ -1,17 +1,17 @@
 ---
-title: "miren server docker uninstall"
-sidebar_label: "server docker uninstall"
-description: "Uninstall miren server Docker container"
+title: "miren server container uninstall"
+sidebar_label: "server container uninstall"
+description: "Uninstall miren server container"
 ---
 
-# miren server docker uninstall
+# miren server container uninstall
 
-Uninstall miren server Docker container
+Uninstall miren server container
 
 ## Usage
 
 ```bash
-miren server docker uninstall [flags]
+miren server container uninstall [flags]
 ```
 
 ## Flags
@@ -19,6 +19,7 @@ miren server docker uninstall [flags]
 - `--force, -f` — Force removal even if container is running
 - `--name, -n` — Container name (default: `miren`)
 - `--remove-volume` — Remove the data volume
+- `--runtime` — Container runtime to use: docker or podman (auto-detected by default, preferring docker)
 
 ## Global Options
 
@@ -31,15 +32,15 @@ miren server docker uninstall [flags]
 **Uninstall the container:**
 
 ```bash
-miren server docker uninstall
+miren server container uninstall
 ```
 
 **Uninstall and remove all data:**
 
 ```bash
-miren server docker uninstall --remove-volume
+miren server container uninstall --remove-volume
 ```
 
 ## See also
 
-- [`miren server docker`](/command/server-docker)
+- [`miren server container`](/command/server-container)

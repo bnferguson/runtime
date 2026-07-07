@@ -237,10 +237,10 @@ Complete reference for all `miren` CLI commands.
 | [`miren server config`](/command/server-config) | Server configuration management commands |
 | [`miren server config generate`](/command/server-config-generate) | Generate a server configuration file from current settings |
 | [`miren server config validate`](/command/server-config-validate) | Validate a server configuration file |
-| [`miren server docker`](/command/server-docker) | Docker-based server management commands |
-| [`miren server docker install`](/command/server-docker-install) | Install miren server using Docker |
-| [`miren server docker status`](/command/server-docker-status) | Show status of miren server Docker container |
-| [`miren server docker uninstall`](/command/server-docker-uninstall) | Uninstall miren server Docker container |
+| [`miren server container`](/command/server-container) | Run the miren server in a container (Docker or Podman) |
+| [`miren server container install`](/command/server-container-install) | Install miren server in a container |
+| [`miren server container status`](/command/server-container-status) | Show status of miren server container |
+| [`miren server container uninstall`](/command/server-container-uninstall) | Uninstall miren server container |
 | [`miren server install`](/command/server-install) | Install systemd service for miren server |
 | [`miren server register`](/command/server-register) | Register this cluster with miren.cloud |
 | [`miren server register status`](/command/server-register-status) | Show cluster registration status |
