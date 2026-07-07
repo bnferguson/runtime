@@ -3,7 +3,7 @@ package metrics
 import (
 	"context"
 	"log/slog"
-	"runtime"
+	runtimemetrics "runtime/metrics"
 	"time"
 )
 
@@ -29,6 +29,25 @@ type RuntimeMemory struct {
 }
 
 const defaultRuntimeMemoryInterval = 10 * time.Second
+
+// runtime/metrics sample names we read. These are the STW-free source for the
+// go_mem_* series below: unlike runtime.ReadMemStats (which stops the world to
+// take a consistent snapshot), runtime/metrics.Read reads live counters. The
+// runtime.MemStats fields the collector historically emitted don't all map to a
+// single sample, so some series are derived — see collect() for the arithmetic,
+// which follows the equivalences documented in the runtime/metrics package.
+const (
+	mHeapObjects  = "/memory/classes/heap/objects:bytes"
+	mHeapUnused   = "/memory/classes/heap/unused:bytes"
+	mHeapReleased = "/memory/classes/heap/released:bytes"
+	mHeapFree     = "/memory/classes/heap/free:bytes"
+	mHeapStacks   = "/memory/classes/heap/stacks:bytes"
+	mTotal        = "/memory/classes/total:bytes"
+	mGCObjects    = "/gc/heap/objects:objects"
+	mGCGoal       = "/gc/heap/goal:bytes"
+	mGCCycles     = "/gc/cycles/total:gc-cycles"
+	mGoroutines   = "/sched/goroutines:goroutines"
+)
 
 // NewRuntimeMemory creates a RuntimeMemory collector. Writer may be nil for
 // environments without metrics collection, in which case Monitor is a no-op.
@@ -67,24 +86,65 @@ func (r *RuntimeMemory) Monitor(ctx context.Context) {
 }
 
 func (r *RuntimeMemory) collect(ctx context.Context) error {
-	var ms runtime.MemStats
-	runtime.ReadMemStats(&ms)
+	samples := []runtimemetrics.Sample{
+		{Name: mHeapObjects}, {Name: mHeapUnused}, {Name: mHeapReleased},
+		{Name: mHeapFree}, {Name: mHeapStacks}, {Name: mTotal},
+		{Name: mGCObjects}, {Name: mGCGoal}, {Name: mGCCycles}, {Name: mGoroutines},
+	}
+	runtimemetrics.Read(samples)
+
+	// Index the readable (KindUint64) samples by name. A sample the runtime
+	// doesn't recognize comes back as KindBad; we simply skip any series that
+	// depends on it rather than emit a bogus zero.
+	vals := make(map[string]uint64, len(samples))
+	for _, s := range samples {
+		if s.Value.Kind() == runtimemetrics.KindUint64 {
+			vals[s.Name] = s.Value.Uint64()
+		}
+	}
 
 	ts := time.Now()
 	labels := map[string]string{"entity": r.Entity}
 
-	points := []MetricPoint{
-		{Name: "go_mem_heap_alloc_bytes", Labels: labels, Value: float64(ms.HeapAlloc), Timestamp: ts},
-		{Name: "go_mem_heap_inuse_bytes", Labels: labels, Value: float64(ms.HeapInuse), Timestamp: ts},
-		{Name: "go_mem_heap_sys_bytes", Labels: labels, Value: float64(ms.HeapSys), Timestamp: ts},
-		{Name: "go_mem_heap_idle_bytes", Labels: labels, Value: float64(ms.HeapIdle), Timestamp: ts},
-		{Name: "go_mem_heap_released_bytes", Labels: labels, Value: float64(ms.HeapReleased), Timestamp: ts},
-		{Name: "go_mem_heap_objects", Labels: labels, Value: float64(ms.HeapObjects), Timestamp: ts},
-		{Name: "go_mem_stack_inuse_bytes", Labels: labels, Value: float64(ms.StackInuse), Timestamp: ts},
-		{Name: "go_mem_sys_bytes", Labels: labels, Value: float64(ms.Sys), Timestamp: ts},
-		{Name: "go_mem_next_gc_bytes", Labels: labels, Value: float64(ms.NextGC), Timestamp: ts},
-		{Name: "go_gc_count_total", Labels: labels, Value: float64(ms.NumGC), Timestamp: ts},
-		{Name: "go_goroutines", Labels: labels, Value: float64(runtime.NumGoroutine()), Timestamp: ts},
+	points := make([]MetricPoint, 0, 12)
+
+	// emit appends one series whose value is the sum of the named samples, but
+	// only if every one of them was present — a missing constituent skips the
+	// series rather than emitting a bogus partial value.
+	emit := func(name string, names ...string) {
+		var total uint64
+		for _, n := range names {
+			v, ok := vals[n]
+			if !ok {
+				return
+			}
+			total += v
+		}
+		points = append(points, MetricPoint{Name: name, Labels: labels, Value: float64(total), Timestamp: ts})
+	}
+
+	// Emitted names are preserved from the previous runtime.MemStats-based
+	// implementation so existing dashboards/PromQL keep working. The
+	// runtime.MemStats -> runtime/metrics equivalences below are the ones
+	// documented in the runtime/metrics package.
+	emit("go_mem_heap_alloc_bytes", mHeapObjects)                                      // MemStats.HeapAlloc
+	emit("go_mem_heap_inuse_bytes", mHeapObjects, mHeapUnused)                         // MemStats.HeapInuse
+	emit("go_mem_heap_sys_bytes", mHeapObjects, mHeapUnused, mHeapReleased, mHeapFree) // MemStats.HeapSys
+	emit("go_mem_heap_idle_bytes", mHeapReleased, mHeapFree)                           // MemStats.HeapIdle
+	emit("go_mem_heap_released_bytes", mHeapReleased)                                  // MemStats.HeapReleased
+	emit("go_mem_heap_objects", mGCObjects)                                            // MemStats.HeapObjects
+	emit("go_mem_stack_inuse_bytes", mHeapStacks)                                      // MemStats.StackInuse
+	emit("go_mem_next_gc_bytes", mGCGoal)                                              // MemStats.NextGC
+	emit("go_gc_count_total", mGCCycles)                                               // MemStats.NumGC
+	emit("go_goroutines", mGoroutines)                                                 // runtime.NumGoroutine()
+
+	// MemStats.Sys = /memory/classes/total:bytes - /memory/classes/heap/released:bytes
+	// (memory obtained from the OS that has not been released back to it). This
+	// one is a difference, not a sum, so it can't go through emit.
+	if total, ok := vals[mTotal]; ok {
+		if released, ok := vals[mHeapReleased]; ok {
+			points = append(points, MetricPoint{Name: "go_mem_sys_bytes", Labels: labels, Value: float64(total - released), Timestamp: ts})
+		}
 	}
 
 	// Process RSS includes off-heap memory the Go runtime stats can't see

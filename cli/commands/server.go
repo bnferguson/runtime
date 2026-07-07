@@ -9,7 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	_ "net/http/pprof" // registers /debug/pprof handlers on http.DefaultServeMux
+	"net/http/pprof"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -55,6 +55,59 @@ import (
 	"miren.dev/runtime/pkg/workloadidentity"
 	"miren.dev/runtime/version"
 )
+
+// pprofAddr is the localhost-only address for the diagnostic pprof endpoint.
+//
+// NOTE: hard-coded, and this assumes a single miren instance per host. If a
+// second instance runs on the same host (e.g. a blue/green deploy) its bind
+// will fail and it will run without pprof, logging an error at startup.
+const pprofAddr = "127.0.0.1:6060"
+
+// startPprofServer starts the diagnostic net/http/pprof endpoint on pprofAddr so
+// a heap profile can be pulled live during a memory balloon without restarting
+// the process.
+//
+// The pprof handlers are registered on a private ServeMux, not the global
+// http.DefaultServeMux, so nothing else in the process can inadvertently expose
+// handlers on this listener. The server shuts down cleanly when ctx is
+// cancelled, matching the rest of the server's lifecycle.
+//
+// pprof is diagnostic-only, so a bind failure is logged as an error (operators
+// need to know it is unavailable) but does not abort server startup.
+func startPprofServer(ctx context.Context, log *slog.Logger) {
+	mux := http.NewServeMux()
+	// Mirror exactly what net/http/pprof's init would register on the default
+	// mux: Index serves the index and the named profiles (heap, goroutine, ...),
+	// the other four are the endpoints Index does not handle.
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+
+	ln, err := net.Listen("tcp", pprofAddr)
+	if err != nil {
+		log.Error("pprof debug server not started", "addr", pprofAddr, "err", err)
+		return
+	}
+
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+
+	go func() {
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Error("pprof debug server exited", "err", err)
+		}
+	}()
+
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			log.Warn("pprof debug server shutdown", "err", err)
+		}
+	}()
+}
 
 func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	eg, sub := errgroup.WithContext(ctx)
@@ -525,11 +578,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	// Diagnostic pprof endpoint, bound to localhost only so it is reachable
 	// on-box / via SSH tunnel but never publicly. Lets us pull a heap profile
 	// during a memory balloon to attribute Go-heap growth to an allocation site.
-	go func() {
-		if err := http.ListenAndServe("127.0.0.1:6060", nil); err != nil {
-			ctx.Log.Warn("pprof debug server exited", "err", err)
-		}
-	}()
+	startPprofServer(sub, ctx.Log)
 
 	// Create log writer and reader
 	logWriter := observability.NewPersistentLogWriter(ctx.ServerState.VictorialogsAddress, ctx.ServerState.VictorialogsTimeout)
