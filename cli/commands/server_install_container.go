@@ -585,7 +585,7 @@ func warnLowContainerMemory(ctx *Context, rt containerRuntime) {
 		return
 	}
 	switch {
-	case mem < minMemoryBytes:
+	case !meetsThreshold(mem, minMemoryBytes):
 		ctx.Warn("%s has %s of memory available to containers, below the %s minimum.",
 			rt.bin, formatBytes(mem), formatBytes(minMemoryBytes))
 		fmt.Println("  Miren runs containerd, etcd, and buildkit inside the container — ~600 MB")
@@ -593,7 +593,7 @@ func warnLowContainerMemory(ctx *Context, rt containerRuntime) {
 		fmt.Printf("  Raise the %s VM's memory (macOS/Windows) or free host memory (Linux).\n", rt.bin)
 		fmt.Println("  More: https://miren.md/system-requirements")
 		fmt.Println()
-	case mem < recommendedMemoryBytes:
+	case !meetsThreshold(mem, recommendedMemoryBytes):
 		ctx.Warn("%s has %s of memory available to containers — it'll work, but we recommend %s.",
 			rt.bin, formatBytes(mem), formatBytes(recommendedMemoryBytes))
 		fmt.Println()

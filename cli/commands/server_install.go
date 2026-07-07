@@ -99,7 +99,7 @@ func printSystemRequirementsGuidance(ctx *Context, reqs systemRequirements) bool
 
 	if reqs.memoryCheckFailed {
 		ctx.Warn("Couldn't detect system memory — we recommend at least %s.", formatBytes(minMemoryBytes))
-	} else if reqs.totalMemoryBytes < minMemoryBytes {
+	} else if !meetsThreshold(reqs.totalMemoryBytes, minMemoryBytes) {
 		belowMinimum = true
 		ctx.Warn("This machine has %s of memory, but Miren needs at least %s.",
 			formatBytes(reqs.totalMemoryBytes), formatBytes(minMemoryBytes))
@@ -107,7 +107,7 @@ func printSystemRequirementsGuidance(ctx *Context, reqs systemRequirements) bool
 		fmt.Println("  about 600 MB at idle and spike higher during builds. With this little memory,")
 		fmt.Println("  things will start failing when you deploy.")
 		fmt.Println()
-	} else if reqs.totalMemoryBytes < recommendedMemoryBytes {
+	} else if !meetsThreshold(reqs.totalMemoryBytes, recommendedMemoryBytes) {
 		ctx.Warn("This machine has %s of memory — it'll work, but we recommend %s.",
 			formatBytes(reqs.totalMemoryBytes), formatBytes(recommendedMemoryBytes))
 		fmt.Println("  You might run into trouble during builds for memory-hungry apps.")
@@ -116,14 +116,14 @@ func printSystemRequirementsGuidance(ctx *Context, reqs systemRequirements) bool
 
 	if reqs.storageCheckFailed {
 		ctx.Warn("Couldn't detect available disk space — we recommend at least %s.", formatBytes(minStorageBytes))
-	} else if reqs.availStorageBytes < minStorageBytes {
+	} else if !meetsThreshold(reqs.availStorageBytes, minStorageBytes) {
 		belowMinimum = true
 		ctx.Warn("Only %s of disk space available at %s, but Miren needs at least %s.",
 			formatBytes(reqs.availStorageBytes), reqs.storagePath, formatBytes(minStorageBytes))
 		fmt.Println("  Container images, build caches, and app data add up fast — a single deploy")
 		fmt.Println("  can use 15-20 GB between images, build cache, and the registry.")
 		fmt.Println()
-	} else if reqs.availStorageBytes < recommendedStorageBytes {
+	} else if !meetsThreshold(reqs.availStorageBytes, recommendedStorageBytes) {
 		ctx.Warn("Disk space is a bit tight: %s available at %s, we recommend %s.",
 			formatBytes(reqs.availStorageBytes), reqs.storagePath, formatBytes(recommendedStorageBytes))
 		fmt.Println("  With multiple apps and version history, storage fills up quicker than you'd expect.")
