@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/deployment/deployment_v1alpha"
+	"miren.dev/runtime/pkg/theme"
 	"miren.dev/runtime/pkg/ui"
 )
 
@@ -67,12 +68,12 @@ func AppStatus(ctx *Context, opts struct {
 	}
 
 	// Define styles
-	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
-	labelStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("8"))
-	greenStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
-	blueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
-	yellowStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
-	redStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(theme.Info)
+	labelStyle := lipgloss.NewStyle().Bold(true).Foreground(theme.Muted)
+	greenStyle := lipgloss.NewStyle().Foreground(theme.Success)
+	blueStyle := lipgloss.NewStyle().Foreground(theme.Info)
+	yellowStyle := lipgloss.NewStyle().Foreground(theme.Warning)
+	redStyle := lipgloss.NewStyle().Foreground(theme.Error)
 
 	// Print header
 	ctx.Printf("%s\n\n", headerStyle.Render(fmt.Sprintf("Status for %s", opts.App)))

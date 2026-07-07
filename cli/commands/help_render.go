@@ -5,6 +5,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"miren.dev/mflags"
+	"miren.dev/runtime/pkg/theme"
 )
 
 // RenderTopLevelHelp renders grouped help output for the top-level command list.
@@ -31,7 +32,7 @@ func RenderTopLevelHelp(d *mflags.Dispatcher) {
 		}
 	}
 
-	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("220"))
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(theme.Header)
 
 	fmt.Printf("Usage: %s <command> [arguments]\n", d.Name())
 
@@ -55,7 +56,7 @@ func RenderTopLevelHelp(d *mflags.Dispatcher) {
 func formatHelpLine(d *mflags.Dispatcher, child mflags.ChildEntry, maxLen int) string {
 	grandchildren := d.GetDirectChildren(child.Path)
 
-	faint := lipgloss.NewStyle().Faint(true)
+	faint := lipgloss.NewStyle().Foreground(theme.Muted)
 
 	suffix := ""
 	if len(grandchildren) > 0 {

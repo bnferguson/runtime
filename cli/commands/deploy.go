@@ -37,6 +37,7 @@ import (
 	"miren.dev/runtime/pkg/rpc/standard"
 	"miren.dev/runtime/pkg/rpc/stream"
 	"miren.dev/runtime/pkg/tarx"
+	"miren.dev/runtime/pkg/theme"
 	"miren.dev/runtime/pkg/ui"
 )
 
@@ -282,8 +283,8 @@ func Deploy(ctx *Context, opts struct {
 		}
 	}
 
-	greenStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
-	faintStyle := lipgloss.NewStyle().Faint(true)
+	greenStyle := lipgloss.NewStyle().Foreground(theme.Success)
+	faintStyle := lipgloss.NewStyle().Foreground(theme.Muted)
 	ctx.Printf("  ✓ %s: %s %s %s\n", greenStyle.Render("Deploying"), name, faintStyle.Render("→"), ctx.ClusterName)
 
 	cl, err := ctx.RPCClient("dev.miren.runtime/build")
@@ -663,7 +664,6 @@ func Deploy(ctx *Context, opts struct {
 
 	if useExplainMode {
 		if useOptimized && cachedFiles > 0 {
-			faintStyle := lipgloss.NewStyle().Faint(true)
 			ctx.Printf("  %s\n", faintStyle.Render(fmt.Sprintf("Reused %d/%d files from previous deploy, uploading %d", cachedFiles, totalFiles, len(neededPaths))))
 		}
 
@@ -951,7 +951,7 @@ func Deploy(ctx *Context, opts struct {
 		if len(warns) == 0 {
 			return
 		}
-		warnHeaderStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("208")).Bold(true)
+		warnHeaderStyle := lipgloss.NewStyle().Foreground(theme.Warning).Bold(true)
 		ctx.Printf("\n%s\n", warnHeaderStyle.Render("Warnings:"))
 		for _, entry := range warns {
 			renderDeployWarning(ctx, entry)
@@ -1219,9 +1219,8 @@ func createBuildStatusCallback(
 }
 
 func renderDeployWarning(ctx *Context, entry *build_v1alpha.LogEntry) {
-	orange := lipgloss.Color("208")
-	headerStyle := lipgloss.NewStyle().Foreground(orange).Bold(true)
-	linkStyle := lipgloss.NewStyle().Foreground(orange).Faint(true)
+	headerStyle := lipgloss.NewStyle().Foreground(theme.Warning).Bold(true)
+	linkStyle := lipgloss.NewStyle().Foreground(theme.Warning)
 
 	// Compute wrap width: terminal width minus indent (4 chars), capped at 76
 	const indent = 4
@@ -1232,7 +1231,7 @@ func renderDeployWarning(ctx *Context, entry *build_v1alpha.LogEntry) {
 			detailWidth = min(available, maxWidth)
 		}
 	}
-	detailStyle := lipgloss.NewStyle().Foreground(orange).Width(detailWidth).PaddingLeft(indent)
+	detailStyle := lipgloss.NewStyle().Foreground(theme.Warning).Width(detailWidth).PaddingLeft(indent)
 
 	ctx.Printf("  %s\n", headerStyle.Render("⚠ "+entry.Text()))
 
@@ -1246,7 +1245,7 @@ func renderDeployWarning(ctx *Context, entry *build_v1alpha.LogEntry) {
 		ctx.Printf("%s\n", detailStyle.Render(detail))
 	}
 	if link, ok := fields["link"]; ok {
-		ctx.Printf("    %s%s\n", linkStyle.Render("See: "), ui.RenderMarkdownLink(link, 208))
+		ctx.Printf("    %s%s\n", linkStyle.Render("See: "), ui.RenderMarkdownLink(link, theme.Warning))
 	}
 }
 
@@ -1372,10 +1371,10 @@ func stripPort(host string) string {
 var (
 	analyzeTitleStyle = lipgloss.NewStyle().
 				Bold(true).
-				Foreground(lipgloss.Color("3")) // yellow
+				Foreground(theme.Header) // yellow
 
 	analyzeLabelStyle = lipgloss.NewStyle().
-				Faint(true).
+				Foreground(theme.Muted).
 				Width(12).
 				Align(lipgloss.Right)
 
@@ -1384,23 +1383,27 @@ var (
 
 	// Badge styles for different event kinds
 	badgeFile = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("12")). // blue
+			Foreground(theme.Info).
 			Bold(true)
 	badgePackage = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("10")). // green
+			Foreground(theme.Success).
 			Bold(true)
 	badgeFramework = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("13")). // magenta
+			Foreground(theme.Highlight).
 			Bold(true)
 	badgeConfig = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("11")). // yellow
+			Foreground(theme.Warning).
 			Bold(true)
+	// dir shares Info with file, and script shares Warning with config; italic
+	// keeps each pair visually distinct now that the palette is role-based.
 	badgeDir = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("14")). // cyan
-			Bold(true)
+			Foreground(theme.Info).
+			Bold(true).
+			Italic(true)
 	badgeScript = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("208")). // orange
-			Bold(true)
+			Foreground(theme.Warning).
+			Bold(true).
+			Italic(true)
 )
 
 func eventKindBadge(kind string) string {
@@ -1419,7 +1422,7 @@ func eventKindBadge(kind string) string {
 	case "script":
 		return badgeScript.Render(badge)
 	default:
-		return lipgloss.NewStyle().Faint(true).Render(badge)
+		return lipgloss.NewStyle().Foreground(theme.Muted).Render(badge)
 	}
 }
 
@@ -1506,13 +1509,13 @@ func analyzeApp(ctx *Context, bc *build_v1alpha.BuilderClient, dir string) error
 			for _, svc := range services {
 				sourceInfo := ""
 				if svc.Source() != "" {
-					sourceInfo = lipgloss.NewStyle().Faint(true).Render(fmt.Sprintf(" (%s)", svc.Source()))
+					sourceInfo = lipgloss.NewStyle().Foreground(theme.Muted).Render(fmt.Sprintf(" (%s)", svc.Source()))
 				}
 
 				command := svc.Command()
 				if command == "" {
 					// Service uses Dockerfile CMD (image default)
-					command = lipgloss.NewStyle().Faint(true).Italic(true).Render("image default")
+					command = lipgloss.NewStyle().Foreground(theme.Muted).Italic(true).Render("image default")
 				}
 
 				ctx.Printf("  %s: %s%s\n",
@@ -1534,17 +1537,17 @@ func analyzeApp(ctx *Context, bc *build_v1alpha.BuilderClient, dir string) error
 
 			// Show available (detected + found locally)
 			if len(localDetection.Available) > 0 {
-				ctx.Printf("  %s\n", lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render("Available locally:"))
+				ctx.Printf("  %s\n", lipgloss.NewStyle().Foreground(theme.Success).Render("Available locally:"))
 				for _, ev := range localDetection.Available {
 					valueDisplay := MaskValue(ev.Value, ev.Sensitive)
 					if ev.Sensitive {
 						ctx.Printf("    %s %s=%s\n",
-							lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render("✓"),
+							lipgloss.NewStyle().Foreground(theme.Success).Render("✓"),
 							ev.Key,
-							lipgloss.NewStyle().Faint(true).Render(valueDisplay))
+							lipgloss.NewStyle().Foreground(theme.Muted).Render(valueDisplay))
 					} else {
 						ctx.Printf("    %s %s=%s\n",
-							lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render("✓"),
+							lipgloss.NewStyle().Foreground(theme.Success).Render("✓"),
 							ev.Key,
 							valueDisplay)
 					}
@@ -1553,27 +1556,27 @@ func analyzeApp(ctx *Context, bc *build_v1alpha.BuilderClient, dir string) error
 
 			// Show missing (detected but not found locally)
 			if len(localDetection.Missing) > 0 {
-				ctx.Printf("  %s\n", lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render("Not set locally:"))
+				ctx.Printf("  %s\n", lipgloss.NewStyle().Foreground(theme.Warning).Render("Not set locally:"))
 				for _, ev := range localDetection.Missing {
 					ctx.Printf("    %s %s\n",
-						lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render("○"),
+						lipgloss.NewStyle().Foreground(theme.Warning).Render("○"),
 						ev.Key)
 				}
 			}
 
 			// Show additional app-related env vars found locally
 			if len(localDetection.Additional) > 0 {
-				ctx.Printf("  %s\n", lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Render("Also found locally (may be relevant):"))
+				ctx.Printf("  %s\n", lipgloss.NewStyle().Foreground(theme.Info).Render("Also found locally (may be relevant):"))
 				for _, ev := range localDetection.Additional {
 					valueDisplay := MaskValue(ev.Value, ev.Sensitive)
 					if ev.Sensitive {
 						ctx.Printf("    %s %s=%s\n",
-							lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Render("?"),
+							lipgloss.NewStyle().Foreground(theme.Info).Render("?"),
 							ev.Key,
-							lipgloss.NewStyle().Faint(true).Render(valueDisplay))
+							lipgloss.NewStyle().Foreground(theme.Muted).Render(valueDisplay))
 					} else {
 						ctx.Printf("    %s %s=%s\n",
-							lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Render("?"),
+							lipgloss.NewStyle().Foreground(theme.Info).Render("?"),
 							ev.Key,
 							valueDisplay)
 					}
@@ -1585,17 +1588,17 @@ func analyzeApp(ctx *Context, bc *build_v1alpha.BuilderClient, dir string) error
 		localDetection := DetectLocalEnvVars(nil)
 		if len(localDetection.Additional) > 0 {
 			ctx.Printf("\n%s\n", analyzeTitleStyle.Render("Environment Variables"))
-			ctx.Printf("  %s\n", lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Render("Found locally (may be relevant):"))
+			ctx.Printf("  %s\n", lipgloss.NewStyle().Foreground(theme.Info).Render("Found locally (may be relevant):"))
 			for _, ev := range localDetection.Additional {
 				valueDisplay := MaskValue(ev.Value, ev.Sensitive)
 				if ev.Sensitive {
 					ctx.Printf("    %s %s=%s\n",
-						lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Render("?"),
+						lipgloss.NewStyle().Foreground(theme.Info).Render("?"),
 						ev.Key,
-						lipgloss.NewStyle().Faint(true).Render(valueDisplay))
+						lipgloss.NewStyle().Foreground(theme.Muted).Render(valueDisplay))
 				} else {
 					ctx.Printf("    %s %s=%s\n",
-						lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Render("?"),
+						lipgloss.NewStyle().Foreground(theme.Info).Render("?"),
 						ev.Key,
 						valueDisplay)
 				}

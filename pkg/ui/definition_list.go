@@ -4,6 +4,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"miren.dev/runtime/pkg/theme"
 )
 
 // Definition represents a single definition entry with a term, description, and optional details
@@ -41,13 +43,13 @@ type DefinitionListStyles struct {
 // DefaultDefinitionListStyles returns the default styling
 func DefaultDefinitionListStyles() DefinitionListStyles {
 	return DefinitionListStyles{
-		Title:       lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")),
-		Term:        lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("10")),
+		Title:       lipgloss.NewStyle().Bold(true).Foreground(theme.Info),
+		Term:        lipgloss.NewStyle().Bold(true).Foreground(theme.Success),
 		Description: lipgloss.NewStyle().Italic(true),
-		DetailName:  lipgloss.NewStyle().Foreground(lipgloss.Color("14")),
-		DetailType:  lipgloss.NewStyle().Foreground(lipgloss.Color("13")),
-		Required:    lipgloss.NewStyle().Foreground(lipgloss.Color("9")),
-		TreeLine:    lipgloss.NewStyle().Faint(true),
+		DetailName:  lipgloss.NewStyle().Foreground(theme.Info),
+		DetailType:  lipgloss.NewStyle().Foreground(theme.Highlight),
+		Required:    lipgloss.NewStyle().Foreground(theme.Error),
+		TreeLine:    lipgloss.NewStyle().Foreground(theme.Muted),
 	}
 }
 

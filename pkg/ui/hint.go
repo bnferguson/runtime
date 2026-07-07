@@ -1,6 +1,10 @@
 package ui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"github.com/charmbracelet/lipgloss"
+
+	"miren.dev/runtime/pkg/theme"
+)
 
 // Hint renders a dimmed hint/tip message
 type Hint struct {
@@ -12,7 +16,7 @@ type Hint struct {
 func NewHint(text string) *Hint {
 	return &Hint{
 		text:  text,
-		style: lipgloss.NewStyle().Faint(true),
+		style: lipgloss.NewStyle().Foreground(theme.Muted),
 	}
 }
 

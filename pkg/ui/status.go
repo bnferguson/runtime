@@ -4,6 +4,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"miren.dev/runtime/pkg/theme"
 )
 
 // DisplayStatus returns a colored version of the status string based on common status values.
@@ -15,15 +17,15 @@ func DisplayStatus(status string) string {
 	// Apply color based on status value
 	switch status {
 	case "dead", "failed", "error":
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(status) // gray
+		return lipgloss.NewStyle().Foreground(theme.Muted).Render(status) // de-emphasized
 	case "running", "active", "healthy", "ready":
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render(status) // green
+		return lipgloss.NewStyle().Foreground(theme.Success).Render(status) // green
 	case "stopped", "inactive", "unhealthy", "not_ready":
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render(status) // red
+		return lipgloss.NewStyle().Foreground(theme.Error).Render(status) // red
 	case "pending", "starting", "waiting", "creating":
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("12")).Render(status) // blue
+		return lipgloss.NewStyle().Foreground(theme.Info).Render(status) // blue
 	case "paused", "suspended":
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(status) // yellow
+		return lipgloss.NewStyle().Foreground(theme.Warning).Render(status) // yellow
 	default:
 		return status // no color for unknown/other statuses
 	}

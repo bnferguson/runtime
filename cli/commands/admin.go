@@ -14,6 +14,7 @@ import (
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 	"miren.dev/runtime/api/admin/admin_v1alpha"
+	"miren.dev/runtime/pkg/theme"
 	"miren.dev/runtime/pkg/ui"
 )
 
@@ -529,7 +530,7 @@ func methodDefinition(m *admin_v1alpha.AdminMethod) ui.Definition {
 // did not advertise its parameters". Returns the empty string when params are
 // listed (the tree already speaks for itself).
 func paramShapeNote(m *admin_v1alpha.AdminMethod) string {
-	faint := lipgloss.NewStyle().Faint(true)
+	faint := lipgloss.NewStyle().Foreground(theme.Muted)
 	switch {
 	case !m.HasParams():
 		return faint.Render("  (parameters not advertised by this method)")
@@ -618,17 +619,17 @@ func adminMethodHelp(ctx *Context, adminClient *admin_v1alpha.AdminClient, appNa
 
 // JSON syntax highlighting styles (similar to jq)
 var (
-	jsonKeyStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("12")) // Blue for keys
-	jsonStringStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("10")) // Green for strings
-	jsonNumberStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("14")) // Cyan for numbers
-	jsonBoolStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("11")) // Yellow for booleans
-	jsonNullStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))  // Gray for null
-	jsonBracket     = lipgloss.NewStyle().Foreground(lipgloss.Color("15")) // White for brackets
+	jsonKeyStyle    = lipgloss.NewStyle().Foreground(theme.Info)    // Blue for keys
+	jsonStringStyle = lipgloss.NewStyle().Foreground(theme.Success) // Green for strings
+	jsonNumberStyle = lipgloss.NewStyle().Foreground(theme.Info)    // Blue for numbers
+	jsonBoolStyle   = lipgloss.NewStyle().Foreground(theme.Warning) // Yellow for booleans
+	jsonNullStyle   = lipgloss.NewStyle().Foreground(theme.Muted)   // Gray for null
+	jsonBracket     = lipgloss.NewStyle().Foreground(theme.Muted)   // Muted for brackets
 )
 
 // Pretty rendering styles
 var (
-	tableTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
+	tableTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(theme.Info)
 )
 
 // highlightJSON recursively renders a JSON value with syntax highlighting

@@ -13,6 +13,7 @@ import (
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/pkg/stackbuild"
+	"miren.dev/runtime/pkg/theme"
 )
 
 // inferAppName derives a sanitized app name from a directory path.
@@ -161,7 +162,7 @@ func Init(ctx *Context, opts struct {
 
 		if len(requiredVars) > 0 {
 			ctx.Printf("\n")
-			ctx.Printf("%s\n", lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("1")).Render("Required Environment Variables"))
+			ctx.Printf("%s\n", lipgloss.NewStyle().Bold(true).Foreground(theme.Error).Render("Required Environment Variables"))
 
 			for _, ev := range requiredVars {
 				if ev.DefaultValue != "" {
@@ -208,12 +209,12 @@ func Init(ctx *Context, opts struct {
 
 		if len(recommendedVars) > 0 {
 			ctx.Printf("\n")
-			ctx.Printf("%s\n", lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("3")).Render("Recommended Environment Variables"))
+			ctx.Printf("%s\n", lipgloss.NewStyle().Bold(true).Foreground(theme.Warning).Render("Recommended Environment Variables"))
 			ctx.Printf("You may also want to configure:\n\n")
 
 			for _, ev := range recommendedVars {
 				ctx.Printf("  %s\n", lipgloss.NewStyle().Bold(true).Render(ev.Name))
-				ctx.Printf("    %s\n", lipgloss.NewStyle().Faint(true).Render(ev.Reason))
+				ctx.Printf("    %s\n", lipgloss.NewStyle().Foreground(theme.Muted).Render(ev.Reason))
 			}
 		}
 	}
@@ -230,7 +231,7 @@ func Init(ctx *Context, opts struct {
 		cl, err := ctx.RPCClient("dev.miren.runtime/app")
 		if err != nil {
 			ctx.Printf("\n%s Could not connect to server: %v\n",
-				lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render("Warning:"), err)
+				lipgloss.NewStyle().Foreground(theme.Warning).Render("Warning:"), err)
 			ctx.Printf("Secrets not stored. Run 'miren config set' to configure manually after logging in.\n")
 		} else {
 			ac := app_v1alpha.NewCrudClient(cl)
@@ -238,7 +239,7 @@ func Init(ctx *Context, opts struct {
 			_, err = ac.New(ctx, appConfig.Name)
 			if err != nil {
 				ctx.Printf("\n%s Could not create app on server: %v\n",
-					lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render("Warning:"), err)
+					lipgloss.NewStyle().Foreground(theme.Warning).Render("Warning:"), err)
 				ctx.Printf("Secrets not stored. Run 'miren config set' to configure manually.\n")
 			} else {
 				// Stage the secrets on the app's initial ConfigVersion via a
@@ -257,7 +258,7 @@ func Init(ctx *Context, opts struct {
 				_, err := ac.SetInitialEnvVars(ctx, appConfig.Name, rpcVars, "")
 				if err != nil {
 					ctx.Printf("\n%s Failed to stage secrets on server: %v\n",
-						lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render("Warning:"), err)
+						lipgloss.NewStyle().Foreground(theme.Warning).Render("Warning:"), err)
 					ctx.Printf("Secrets not stored. Run 'miren config set' to configure manually.\n")
 				} else {
 					serverConfigured = append(serverConfigured, secretsToStore...)
@@ -272,12 +273,12 @@ func Init(ctx *Context, opts struct {
 			ctx.Printf("  %s=%s %s\n",
 				lipgloss.NewStyle().Bold(true).Render(defVar.Key),
 				defVar.Value,
-				lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("2")).Render("✓ default (in app.toml)"))
+				lipgloss.NewStyle().Foreground(theme.Success).Render("✓ default (in app.toml)"))
 		}
 		for _, secret := range serverConfigured {
 			ctx.Printf("  %s %s\n",
 				lipgloss.NewStyle().Bold(true).Render(secret.Key),
-				lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("2")).Render("✓ "+secret.Source+" (stored on server)"))
+				lipgloss.NewStyle().Foreground(theme.Success).Render("✓ "+secret.Source+" (stored on server)"))
 		}
 	}
 
@@ -285,7 +286,7 @@ func Init(ctx *Context, opts struct {
 		ctx.Printf("\nMust be configured manually:\n")
 		for _, ev := range needsManualConfig {
 			ctx.Printf("  %s\n", lipgloss.NewStyle().Bold(true).Render(ev.Name))
-			ctx.Printf("    %s\n", lipgloss.NewStyle().Faint(true).Render(ev.Reason))
+			ctx.Printf("    %s\n", lipgloss.NewStyle().Foreground(theme.Muted).Render(ev.Reason))
 		}
 		ctx.Printf("\nSet their values with:\n")
 		ctx.Printf("  miren config set <KEY>=<value>\n")

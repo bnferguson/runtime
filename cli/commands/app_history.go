@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"miren.dev/runtime/api/deployment/deployment_v1alpha"
+	"miren.dev/runtime/pkg/theme"
 	"miren.dev/runtime/pkg/ui"
 )
 
@@ -114,12 +115,12 @@ var statusStyles = map[string]struct {
 	icon  string
 	style lipgloss.Style
 }{
-	"active":      {"✓", lipgloss.NewStyle().Foreground(lipgloss.Color("10"))}, // Green
-	"succeeded":   {"✓", lipgloss.NewStyle().Foreground(lipgloss.Color("12"))}, // Blue
-	"failed":      {"✗", lipgloss.NewStyle().Foreground(lipgloss.Color("9"))},  // Red
-	"rolled_back": {"↩", lipgloss.NewStyle().Foreground(lipgloss.Color("11"))}, // Yellow
-	"in_progress": {"⟳", lipgloss.NewStyle().Foreground(lipgloss.Color("14"))}, // Cyan
-	"cancelled":   {"⊘", lipgloss.NewStyle().Foreground(lipgloss.Color("11"))}, // Yellow
+	"active":      {"✓", lipgloss.NewStyle().Foreground(theme.Success)}, // Green
+	"succeeded":   {"✓", lipgloss.NewStyle().Foreground(theme.Info)},    // Blue
+	"failed":      {"✗", lipgloss.NewStyle().Foreground(theme.Error)},   // Red
+	"rolled_back": {"↩", lipgloss.NewStyle().Foreground(theme.Warning)}, // Yellow
+	"in_progress": {"⟳", lipgloss.NewStyle().Foreground(theme.Info)},    // Blue
+	"cancelled":   {"⊘", lipgloss.NewStyle().Foreground(theme.Warning)}, // Yellow
 }
 
 type historyDisplayOpts struct {
@@ -176,7 +177,7 @@ func AppHistory(ctx *Context, opts struct {
 	}
 
 	// Print header
-	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(theme.Info)
 	ctx.Printf("%s\n", headerStyle.Render(fmt.Sprintf("Deployment History for %s", opts.App)))
 	ctx.Printf("Cluster: %s\n", ctx.ClusterName)
 	ctx.Printf("\n")

@@ -24,6 +24,8 @@ import (
 	"github.com/tonistiigi/units"
 	"github.com/tonistiigi/vt100"
 	"golang.org/x/time/rate"
+
+	"miren.dev/runtime/pkg/theme"
 )
 
 type displayOpts struct {
@@ -1030,7 +1032,7 @@ func setupTerminals(jobs []*job, height int, all bool) []*job {
 	return jobs
 }
 
-var cachedColor = lipgloss.NewStyle().Foreground(lipgloss.Color("#E2CC8E"))
+var cachedColor = lipgloss.NewStyle().Foreground(theme.Warning)
 
 func (disp *ttyDisplay) print(d displayInfo, width, height int, all bool) {
 	// this output is inspired by Buck
