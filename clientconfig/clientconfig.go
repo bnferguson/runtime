@@ -55,6 +55,7 @@ type ClusterConfig struct {
 // Config represents the complete client configuration
 type Config struct {
 	active     string
+	theme      string
 	clusters   map[string]*ClusterConfig
 	identities map[string]*IdentityConfig
 	keys       map[string]*KeyConfig
@@ -77,6 +78,7 @@ type Config struct {
 // ConfigData is used for YAML unmarshaling to handle private fields
 type ConfigData struct {
 	Active     string                     `yaml:"active_cluster,omitempty"`
+	Theme      string                     `yaml:"theme,omitempty"` // CLI color theme: auto | light | dark | no
 	Clusters   map[string]*ClusterConfig  `yaml:"clusters,omitempty"`
 	Identities map[string]*IdentityConfig `yaml:"identities,omitempty"`
 	Keys       map[string]*KeyConfig      `yaml:"keys,omitempty"`
@@ -90,6 +92,7 @@ func (c *Config) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	}
 
 	c.active = temp.Active
+	c.theme = temp.Theme
 	c.clusters = temp.Clusters
 	c.identities = temp.Identities
 	c.keys = temp.Keys
@@ -101,6 +104,7 @@ func (c *Config) UnmarshalYAML(unmarshal func(interface{}) error) error {
 func (c *Config) MarshalYAML() (interface{}, error) {
 	return &ConfigData{
 		Active:     c.active,
+		Theme:      c.theme,
 		Clusters:   c.clusters,
 		Identities: c.identities,
 		Keys:       c.keys,
@@ -171,6 +175,17 @@ func (c *Config) Validate() error {
 // ActiveCluster returns the name of the active cluster
 func (c *Config) ActiveCluster() string {
 	return c.active
+}
+
+// Theme returns the configured CLI color theme preference (auto | light | dark |
+// no), or "" if unset. An empty value means auto-detect.
+func (c *Config) Theme() string {
+	return c.theme
+}
+
+// SetTheme sets the CLI color theme preference.
+func (c *Config) SetTheme(theme string) {
+	c.theme = theme
 }
 
 // GetActiveCluster returns the active cluster configuration
@@ -434,6 +449,7 @@ func LoadConfig() (*Config, error) {
 	}
 
 	config.active = cdata.Active
+	config.theme = cdata.Theme
 	config.clusters = cdata.Clusters
 	config.identities = cdata.Identities
 	config.keys = cdata.Keys
@@ -548,6 +564,7 @@ func (c *Config) SaveTo(path string) error {
 	var cdata ConfigData
 
 	cdata.Active = c.active
+	cdata.Theme = c.theme
 	cdata.Clusters = c.clusters
 	cdata.Identities = c.identities
 	cdata.Keys = c.keys

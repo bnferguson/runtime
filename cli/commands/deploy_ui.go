@@ -10,29 +10,20 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"miren.dev/runtime/pkg/color"
 	"miren.dev/runtime/pkg/colortheory"
 	"miren.dev/runtime/pkg/progress/progressui"
 	"miren.dev/runtime/pkg/progress/upload"
+	"miren.dev/runtime/pkg/theme"
 )
 
 // UI Styles
 var (
-	liveFaint         lipgloss.Style
-	deployPrefixStyle = lipgloss.NewStyle().Faint(true)
-	phaseSummaryStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("10")) // Green for completed phases
-	phaseTimeStyle    = lipgloss.NewStyle().Faint(true)
-	phaseFailStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("9")) // Red for failed phases
+	liveFaint         = lipgloss.NewStyle().Foreground(theme.Muted)
+	deployPrefixStyle = lipgloss.NewStyle().Foreground(theme.Muted)
+	phaseSummaryStyle = lipgloss.NewStyle().Foreground(theme.Success) // Green for completed phases
+	phaseTimeStyle    = lipgloss.NewStyle().Foreground(theme.Muted)
+	phaseFailStyle    = lipgloss.NewStyle().Foreground(theme.Error) // Red for failed phases
 )
-
-func init() {
-	lf := color.LiveFaint()
-	if lf == "" {
-		liveFaint = lipgloss.NewStyle().Faint(true)
-	} else {
-		liveFaint = lipgloss.NewStyle().Foreground(lipgloss.Color(lf))
-	}
-}
 
 // Custom spinner styles
 var (

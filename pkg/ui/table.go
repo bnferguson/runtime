@@ -9,6 +9,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 	"golang.org/x/term"
+
+	"miren.dev/runtime/pkg/theme"
 )
 
 // oscPattern matches OSC 8 hyperlink sequences: ESC ] 8 ; ; URL ST TEXT ESC ] 8 ; ; ST
@@ -111,7 +113,7 @@ func DefaultTableStyles() TableStyles {
 			Bold(true).
 			Underline(true).
 			UnderlineSpaces(true).
-			Foreground(lipgloss.Color("220")),
+			Foreground(theme.Header),
 		Cell:  lipgloss.NewStyle(),
 		Title: lipgloss.NewStyle().Bold(true),
 	}

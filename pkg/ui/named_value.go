@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"miren.dev/runtime/pkg/theme"
 )
 
 // ValueType represents the type of a value for styling purposes
@@ -91,10 +93,10 @@ func DefaultNamedValueStyles() NamedValueStyles {
 	return NamedValueStyles{
 		Label:       lipgloss.NewStyle(),
 		Separator:   ": ",
-		StringValue: lipgloss.NewStyle().Foreground(lipgloss.Color("10")), // Green
-		NumberValue: lipgloss.NewStyle().Foreground(lipgloss.Color("14")), // Cyan
-		BoolValue:   lipgloss.NewStyle().Foreground(lipgloss.Color("11")), // Yellow
-		NullValue:   lipgloss.NewStyle().Foreground(lipgloss.Color("8")),  // Gray
+		StringValue: lipgloss.NewStyle().Foreground(theme.Success), // Green
+		NumberValue: lipgloss.NewStyle().Foreground(theme.Info),    // Blue
+		BoolValue:   lipgloss.NewStyle().Foreground(theme.Warning), // Yellow
+		NullValue:   lipgloss.NewStyle().Foreground(theme.Muted),   // De-emphasized
 		OtherValue:  lipgloss.NewStyle(),
 	}
 }

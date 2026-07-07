@@ -17,6 +17,7 @@ import (
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/slogfmt"
 	"miren.dev/runtime/pkg/slogrus"
+	"miren.dev/runtime/pkg/theme"
 	"miren.dev/runtime/pkg/ui"
 )
 
@@ -112,6 +113,15 @@ func setup(ctx context.Context, flags *GlobalFlags, opts any) *Context {
 			s.Log.Warn("Failed to load client config", "error", err)
 		}
 	}
+
+	// Resolve the CLI color palette once, adapting to the terminal background and
+	// honoring NO_COLOR/FORCE_COLOR plus the `theme` config field. Safe to call
+	// per-command: it's guarded by a sync.Once internally.
+	var configuredTheme string
+	if s.ClientConfig != nil {
+		configuredTheme = s.ClientConfig.Theme()
+	}
+	theme.Init(configuredTheme)
 
 	if lc, ok := opts.(interface {
 		LoadCluster() (*clientconfig.ClusterConfig, string, error)
@@ -326,7 +336,7 @@ func (c *Context) DisplayTable(headers []string, rows [][]string) {
 	// Define styles
 	headerStyle := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("12")). // Blue
+		Foreground(theme.Info). // Blue
 		PaddingRight(2)
 
 	cellStyle := lipgloss.NewStyle().
@@ -364,7 +374,7 @@ func (c *Context) DisplayTable(headers []string, rows [][]string) {
 		sep += strings.Repeat("─", width+2)
 	}
 	fmt.Fprintln(c.Stdout, lipgloss.NewStyle().
-		Foreground(lipgloss.Color("8")). // Gray
+		Foreground(theme.Muted). // Gray
 		Render(sep))
 
 	// Render data rows

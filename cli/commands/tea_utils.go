@@ -6,6 +6,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"miren.dev/runtime/pkg/theme"
 )
 
 // SelectionModel is a generic model for selecting from a list of items
@@ -81,10 +83,10 @@ func (m *SelectionModel) View() string {
 		if m.cursor == i {
 			// Override with selection color unless item already has custom styling
 			if m.ItemStyle == nil {
-				style = style.Foreground(lipgloss.Color("170"))
+				style = style.Foreground(theme.Highlight)
 			} else {
 				// If there's custom styling, just make it bold
-				style = style.Bold(true).Foreground(lipgloss.Color("170"))
+				style = style.Bold(true).Foreground(theme.Highlight)
 			}
 		}
 
@@ -124,7 +126,7 @@ func SelectCluster(ctx *Context, title string, clusters []string, activeCluster 
 	if dimActive {
 		model.ItemStyle = func(item string) lipgloss.Style {
 			if item == activeCluster {
-				return lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+				return lipgloss.NewStyle().Foreground(theme.Muted)
 			}
 			return lipgloss.NewStyle()
 		}

@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/pkg/theme"
 	"miren.dev/runtime/pkg/ui"
 )
 
@@ -85,7 +86,7 @@ func ClusterList(ctx *Context, opts struct {
 			// Format address - color port portion gray for table display
 			address := ccfg.Hostname
 			if host, port, err := net.SplitHostPort(address); err == nil {
-				grayPort := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(":" + port)
+				grayPort := lipgloss.NewStyle().Foreground(theme.Muted).Render(":" + port)
 				address = host + grayPort
 			}
 

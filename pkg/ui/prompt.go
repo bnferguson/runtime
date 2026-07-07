@@ -7,6 +7,8 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"miren.dev/runtime/pkg/theme"
 )
 
 // PromptOption configures a text input prompt
@@ -146,7 +148,7 @@ func (m textInputModel) View() string {
 		return ""
 	}
 
-	promptStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	promptStyle := lipgloss.NewStyle().Foreground(theme.Muted)
 
 	return fmt.Sprintf(
 		"%s\n\n%s\n\n%s",

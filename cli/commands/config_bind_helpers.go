@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/cloudauth"
+	"miren.dev/runtime/pkg/theme"
 	"miren.dev/runtime/pkg/ui"
 )
 
@@ -40,7 +41,7 @@ func formatAddressWithGrayPort(address string) string {
 	}
 
 	// Gray out the port portion
-	grayStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	grayStyle := lipgloss.NewStyle().Foreground(theme.Muted)
 
 	// Check if host needs brackets (IPv6)
 	if strings.Contains(host, ":") {
@@ -434,7 +435,12 @@ func (m localNameModel) View() string {
 	return modalStyle.Render(modalContent.String())
 }
 
-// Define consistent styles for both list and modal
+// Define consistent styles for both list and modal.
+//
+// These are intentionally NOT drawn from pkg/theme: the modal paints its own dark
+// background (bgColor) and layers light text on top, so it reads correctly on any
+// terminal. Swapping in adaptive foregrounds would flip them to dark tones on a
+// light terminal while the box stayed dark, making the modal unreadable.
 var (
 	// Shared colors
 	primaryColor   = lipgloss.Color("229") // Bright yellow-white for titles

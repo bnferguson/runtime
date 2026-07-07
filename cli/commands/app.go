@@ -19,6 +19,7 @@ import (
 	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/rpc/standard"
+	"miren.dev/runtime/pkg/theme"
 	"miren.dev/runtime/pkg/ui"
 	"miren.dev/runtime/pkg/units"
 )
@@ -269,7 +270,7 @@ var defaultStyle = lipgloss.NewStyle().
 	PaddingLeft(1).PaddingRight(1)
 
 var titleStyle = lipgloss.NewStyle().
-	Foreground(lipgloss.Color("3")) // yellow
+	Foreground(theme.Header) // yellow
 
 func (m Model) Init() tea.Cmd {
 	return nil
@@ -378,7 +379,7 @@ const (
 
 var (
 	bold  = lipgloss.NewStyle().Bold(true)
-	faint = lipgloss.NewStyle().Faint(true)
+	faint = lipgloss.NewStyle().Foreground(theme.Muted)
 )
 
 func (m Model) View() string {
@@ -632,7 +633,7 @@ func (m Model) View() string {
 			bottomRow,
 		)
 		footer =
-			lipgloss.NewStyle().Width(m.width - 3).Align(lipgloss.Right).Faint(true).Render(
+			faint.Width(m.width - 3).Align(lipgloss.Right).Render(
 				fmt.Sprintf("Updated: %s", time.Now().Format(Stamp)),
 			)
 	}

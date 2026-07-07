@@ -7,6 +7,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"miren.dev/runtime/pkg/theme"
 )
 
 // PickerItem represents an item that can be selected in the picker
@@ -113,7 +115,7 @@ func (m *PickerModel) View() string {
 	if m.Title != "" {
 		titleStyle := lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("229"))
+			Foreground(theme.Header)
 		b.WriteString(titleStyle.Render(m.Title))
 		b.WriteString("\n\n")
 	}
@@ -153,12 +155,12 @@ func (m *PickerModel) View() string {
 
 	// Style for selected row
 	selectedStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("39")).
+		Foreground(theme.Highlight).
 		Bold(true)
 
 	// Style for disabled rows
 	disabledStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("240"))
+		Foreground(theme.Muted)
 
 	// Render the table with custom row styling
 	var tableLines []string
@@ -200,7 +202,7 @@ func (m *PickerModel) View() string {
 					Bold(true).
 					Underline(true).
 					UnderlineSpaces(true).
-					Foreground(lipgloss.Color("220"))
+					Foreground(theme.Header)
 
 				headerCells = append(headerCells, headerStyle.Render(renderedCell))
 			}
@@ -250,7 +252,7 @@ func (m *PickerModel) View() string {
 
 	// Help text
 	helpStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("241")).
+		Foreground(theme.Muted).
 		MarginTop(1)
 
 	helpText := "\n(Use ↑/↓ or j/k to navigate, Enter to select, Esc to cancel)"
@@ -258,7 +260,7 @@ func (m *PickerModel) View() string {
 
 	if m.Footer != "" {
 		footerStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("244"))
+			Foreground(theme.Muted)
 		b.WriteString("\n")
 		b.WriteString(footerStyle.Render(m.Footer))
 	}
@@ -269,7 +271,7 @@ func (m *PickerModel) View() string {
 		if m.cursor < len(m.Items) && m.IsDisabled(m.Items[m.cursor]) {
 			// Show the warning message
 			msgStyle := lipgloss.NewStyle().
-				Foreground(lipgloss.Color("196"))
+				Foreground(theme.Error)
 			b.WriteString(msgStyle.Render("⚠ " + m.DisabledMessage))
 		} else {
 			// Keep the space reserved but empty

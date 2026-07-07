@@ -14,14 +14,15 @@ import (
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/auth"
 	"miren.dev/runtime/pkg/cloudauth"
+	"miren.dev/runtime/pkg/theme"
 )
 
 var (
-	infoGreen  = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-	infoRed    = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-	infoYellow = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
-	infoGray   = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	infoLabel  = lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
+	infoGreen  = lipgloss.NewStyle().Foreground(theme.Success)
+	infoRed    = lipgloss.NewStyle().Foreground(theme.Error)
+	infoYellow = lipgloss.NewStyle().Foreground(theme.Warning)
+	infoGray   = lipgloss.NewStyle().Foreground(theme.Muted)
+	infoLabel  = lipgloss.NewStyle().Foreground(theme.Info)
 	infoBold   = lipgloss.NewStyle().Bold(true)
 )
 

@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/deployment/deployment_v1alpha"
+	"miren.dev/runtime/pkg/theme"
 	"miren.dev/runtime/pkg/ui"
 )
 
@@ -436,7 +437,7 @@ func EnvDelete(ctx *Context, opts struct {
 // printEnvTable prints a formatted table of environment variables
 func printEnvTable(ctx *Context, entries []envVarEntry) {
 	// Create a gray style for sensitive values
-	grayStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	grayStyle := lipgloss.NewStyle().Foreground(theme.Muted)
 
 	// Build rows
 	var rows []ui.Row
