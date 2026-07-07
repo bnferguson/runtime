@@ -21,19 +21,22 @@ import (
 	"miren.dev/runtime/pkg/ui"
 )
 
-// ServerInstallDocker sets up a Docker container to run the miren server
-func ServerInstallDocker(ctx *Context, opts struct {
-	Image        string            `short:"i" long:"image" description:"Docker image to use" default:"oci.miren.cloud/miren:latest"`
-	Name         string            `short:"n" long:"name" description:"Container name"`
-	Force        bool              `short:"f" long:"force" description:"Remove existing container if present"`
-	HTTPPort     int               `long:"http-port" description:"HTTP port mapping" default:"80"`
-	IngressMode  string            `long:"ingress-mode" description:"Ingress mode: tls-autoprovision (default), behind-proxy-http (Miren serves plain HTTP behind a TLS-terminating proxy like tailscale serve / nginx), or behind-proxy-https (Miren terminates TLS on :443 behind a TCP-passthrough proxy)"`
-	HostNetwork  bool              `long:"host-network" description:"Use host networking (ignores port mappings)"`
-	WithoutCloud bool              `long:"without-cloud" description:"Skip cloud registration setup"`
-	ClusterName  string            `long:"cluster-name" description:"Cluster name for cloud registration"`
-	CloudURL     string            `short:"u" long:"url" description:"Cloud URL for registration" default:"https://miren.cloud"`
-	Tags         map[string]string `short:"t" long:"tag" description:"Tags for the cluster (key:value)"`
-	Labs         []string          `short:"l" long:"labs" description:"Miren Labs features to enable (e.g. distributedrunners). Prefix with - to disable."`
+// ServerInstallContainer sets up a container (via Docker or Podman) to run the
+// miren server.
+func ServerInstallContainer(ctx *Context, opts struct {
+	Image         string            `short:"i" long:"image" description:"Container image to use" default:"oci.miren.cloud/miren:latest"`
+	Name          string            `short:"n" long:"name" description:"Container name"`
+	Runtime       string            `long:"runtime" description:"Container runtime to use: docker or podman (auto-detected by default, preferring docker)"`
+	Force         bool              `short:"f" long:"force" description:"Remove existing container if present"`
+	AllowRootless bool              `long:"allow-rootless" description:"Install even on a rootless runtime (control plane only; app workloads won't run)"`
+	HTTPPort      int               `long:"http-port" description:"HTTP port mapping" default:"80"`
+	IngressMode   string            `long:"ingress-mode" description:"Ingress mode: tls-autoprovision (default), behind-proxy-http (Miren serves plain HTTP behind a TLS-terminating proxy like tailscale serve / nginx), or behind-proxy-https (Miren terminates TLS on :443 behind a TCP-passthrough proxy)"`
+	HostNetwork   bool              `long:"host-network" description:"Use host networking (ignores port mappings)"`
+	WithoutCloud  bool              `long:"without-cloud" description:"Skip cloud registration setup"`
+	ClusterName   string            `long:"cluster-name" description:"Cluster name for cloud registration"`
+	CloudURL      string            `short:"u" long:"url" description:"Cloud URL for registration" default:"https://miren.cloud"`
+	Tags          map[string]string `short:"t" long:"tag" description:"Tags for the cluster (key:value)"`
+	Labs          []string          `short:"l" long:"labs" description:"Miren Labs features to enable (e.g. distributedrunners). Prefix with - to disable."`
 }) error {
 	if opts.ClusterName == "" {
 		opts.ClusterName = opts.Name
@@ -49,17 +52,36 @@ func ServerInstallDocker(ctx *Context, opts struct {
 		return err
 	}
 
+	// Pick the container runtime (docker or podman) before any work so we fail
+	// fast with clear guidance when neither is installed.
+	ctx.Info("Checking container runtime...")
+	rt, err := resolveContainerRuntime(opts.Runtime)
+	if err != nil {
+		return err
+	}
+	ctx.Completed("Using %s", rt.bin)
+
+	// A rootless runtime can host the server and control plane, but Miren's
+	// privileged nested sandboxing can't start app workloads there. Stop early
+	// with guidance unless the operator explicitly opts into a control-plane-only
+	// install.
+	if rt.isRootless() {
+		if !opts.AllowRootless {
+			return rootlessRuntimeError(ctx, rt)
+		}
+		ctx.Warn("Rootless %s: installing anyway (--allow-rootless). The control plane "+
+			"will come up, but app deploys will crash-loop.", rt.bin)
+	}
+
+	// Heads-up (never a blocker) when the runtime host is short on memory for the
+	// nested stack (containerd + buildkit + etcd + the server).
+	warnLowContainerMemory(ctx, rt)
+
 	// Derive volume name from container name
 	volumeName := opts.Name + "-data"
-	// Check if Docker is installed and running
-	ctx.Info("Checking Docker availability...")
-	if err := checkDockerAvailable(); err != nil {
-		return fmt.Errorf("docker is not available: %w\nPlease install Docker Desktop from https://www.docker.com/products/docker-desktop", err)
-	}
-	ctx.Completed("Docker is available and running")
 
 	// Check if container already exists
-	containerExists, err := dockerContainerExists(opts.Name)
+	containerExists, err := rt.containerExists(opts.Name)
 	if err != nil {
 		return fmt.Errorf("failed to check for existing container: %w", err)
 	}
@@ -70,13 +92,13 @@ func ServerInstallDocker(ctx *Context, opts struct {
 		}
 
 		ctx.Info("Removing existing container '%s'...", opts.Name)
-		if err := dockerRemoveContainer(opts.Name, true); err != nil {
+		if err := rt.removeContainer(opts.Name, true); err != nil {
 			return fmt.Errorf("failed to remove existing container: %w", err)
 		}
 		ctx.Completed("Existing container removed")
 	}
 
-	config := dockerContainerConfig{
+	config := containerConfig{
 		HTTPPort:    opts.HTTPPort,
 		IngressMode: opts.IngressMode,
 		VolumeName:  volumeName,
@@ -95,20 +117,20 @@ func ServerInstallDocker(ctx *Context, opts struct {
 	}
 
 	// Create volume if it doesn't exist
-	if err := dockerEnsureVolume(volumeName); err != nil {
+	if err := rt.ensureVolume(volumeName); err != nil {
 		return fmt.Errorf("failed to ensure volume exists: %w", err)
 	}
 
 	// Register with cloud unless --without-cloud is specified
 	if !opts.WithoutCloud {
-		if err := performDockerRegistrationPreStart(ctx, opts.Image, volumeName, dockerRegistrationOptions{
+		if err := performRegistrationPreStart(ctx, rt, opts.Image, volumeName, containerRegistrationOptions{
 			ClusterName: opts.ClusterName,
 			CloudURL:    opts.CloudURL,
 			Tags:        opts.Tags,
 		}); err != nil {
 			ctx.Warn("Cloud registration failed: %v", err)
 			ctx.Info("Continuing with installation without cloud registration")
-			ctx.Info("You can register later by running: docker exec %s miren server register", opts.Name)
+			ctx.Info("You can register later by running: %s exec %s miren server register", rt.bin, opts.Name)
 		} else {
 			ctx.Completed("Cloud registration complete")
 		}
@@ -118,15 +140,15 @@ func ServerInstallDocker(ctx *Context, opts struct {
 
 	// Create and optionally start the container
 	ctx.Info("Creating miren server container...")
-	containerID, err := dockerCreateContainer(opts.Name, opts.Image, config)
+	containerID, err := rt.createContainer(opts.Name, opts.Image, config)
 	if err != nil {
 		// The pre-flight check above catches the common case, but a port can
 		// still be grabbed in the race between check and create, or be
 		// undetectable when we lack privileges to test-bind it (binding <1024
-		// unprivileged returns EACCES, not EADDRINUSE). Translate docker's raw
-		// "address already in use" daemon error into friendly guidance rather
-		// than leaking a stack trace.
-		if friendly, ok := dockerPortConflictError(ctx, err); ok {
+		// unprivileged returns EACCES, not EADDRINUSE). Translate the engine's
+		// raw "address already in use" error into friendly guidance rather than
+		// leaking a stack trace.
+		if friendly, ok := enginePortConflictError(ctx, err); ok {
 			return friendly
 		}
 		return fmt.Errorf("failed to create container: %w", err)
@@ -135,7 +157,7 @@ func ServerInstallDocker(ctx *Context, opts struct {
 
 	// Start the container
 	ctx.Info("Starting miren server container...")
-	if err := dockerStartContainer(opts.Name); err != nil {
+	if err := rt.startContainer(opts.Name); err != nil {
 		return fmt.Errorf("failed to start container: %w", err)
 	}
 	ctx.Completed("Container started")
@@ -152,14 +174,14 @@ func ServerInstallDocker(ctx *Context, opts struct {
 
 	if err := waitForServerReady(ctx); err != nil {
 		ctx.Warn("Failed to confirm server is ready: %v", err)
-		ctx.Info("The server may still be starting. Check logs with: docker logs %s", opts.Name)
+		ctx.Info("The server may still be starting. Check logs with: %s logs %s", rt.bin, opts.Name)
 	} else {
 		ctx.Completed("Server is ready")
 	}
 
 	// Copy client configuration from container
 	ctx.Info("Configuring miren client...")
-	if err := copyClientConfig(ctx, opts.Name); err != nil {
+	if err := copyClientConfig(ctx, rt, opts.Name); err != nil {
 		ctx.Warn("Failed to copy client configuration: %v", err)
 		ctx.Info("You may need to configure the client manually")
 	} else {
@@ -171,32 +193,34 @@ func ServerInstallDocker(ctx *Context, opts struct {
 	ctx.Info("Installation complete!")
 	fmt.Println()
 	ctx.Info("Container management:")
-	fmt.Printf("  View status:  docker ps -f name=%s\n", opts.Name)
-	fmt.Printf("  View logs:    docker logs %s\n", opts.Name)
-	fmt.Printf("  Follow logs:  docker logs -f %s\n", opts.Name)
-	fmt.Printf("  Stop:         docker stop %s\n", opts.Name)
-	fmt.Printf("  Start:        docker start %s\n", opts.Name)
-	fmt.Printf("  Remove:       docker rm -f %s\n", opts.Name)
+	fmt.Printf("  View status:  %s ps -f name=%s\n", rt.bin, opts.Name)
+	fmt.Printf("  View logs:    %s logs %s\n", rt.bin, opts.Name)
+	fmt.Printf("  Follow logs:  %s logs -f %s\n", rt.bin, opts.Name)
+	fmt.Printf("  Stop:         %s stop %s\n", rt.bin, opts.Name)
+	fmt.Printf("  Start:        %s start %s\n", rt.bin, opts.Name)
+	fmt.Printf("  Remove:       %s rm -f %s\n", rt.bin, opts.Name)
 	fmt.Println()
 
 	return nil
 }
 
-// ServerUninstallDocker removes the miren Docker container and optionally the volume
-func ServerUninstallDocker(ctx *Context, opts struct {
+// ServerUninstallContainer removes the miren container and optionally the volume.
+func ServerUninstallContainer(ctx *Context, opts struct {
 	Name         string `short:"n" long:"name" description:"Container name" default:"miren"`
+	Runtime      string `long:"runtime" description:"Container runtime to use: docker or podman (auto-detected by default, preferring docker)"`
 	RemoveVolume bool   `long:"remove-volume" description:"Remove the data volume"`
 	Force        bool   `short:"f" long:"force" description:"Force removal even if container is running"`
 }) error {
-	// Derive volume name from container name
-	volumeName := opts.Name + "-data"
-	// Check if Docker is available
-	if err := checkDockerAvailable(); err != nil {
-		return fmt.Errorf("docker is not available: %w", err)
+	rt, err := resolveContainerRuntime(opts.Runtime)
+	if err != nil {
+		return err
 	}
 
+	// Derive volume name from container name
+	volumeName := opts.Name + "-data"
+
 	// Check if container exists
-	containerExists, err := dockerContainerExists(opts.Name)
+	containerExists, err := rt.containerExists(opts.Name)
 	if err != nil {
 		return fmt.Errorf("failed to check for container: %w", err)
 	}
@@ -208,7 +232,7 @@ func ServerUninstallDocker(ctx *Context, opts struct {
 		}
 	} else {
 		// Check if container is running
-		isRunning, err := dockerContainerIsRunning(opts.Name)
+		isRunning, err := rt.containerIsRunning(opts.Name)
 		if err != nil {
 			return fmt.Errorf("failed to check container status: %w", err)
 		}
@@ -231,7 +255,7 @@ func ServerUninstallDocker(ctx *Context, opts struct {
 		// Stop container gracefully if running
 		if isRunning {
 			ctx.Info("Stopping container '%s' (waiting for graceful shutdown)...", opts.Name)
-			if err := dockerStopContainer(opts.Name, 30); err != nil {
+			if err := rt.stopContainer(opts.Name, 30); err != nil {
 				ctx.Warn("Graceful stop failed: %v", err)
 				ctx.Info("Forcing container removal...")
 			} else {
@@ -241,25 +265,29 @@ func ServerUninstallDocker(ctx *Context, opts struct {
 
 		// Remove container
 		ctx.Info("Removing container '%s'...", opts.Name)
-		if err := dockerRemoveContainer(opts.Name, true); err != nil {
+		if err := rt.removeContainer(opts.Name, true); err != nil {
 			return fmt.Errorf("failed to remove container: %w", err)
 		}
 		ctx.Completed("Container removed")
+
+		// Drop the client-config cluster this install created so uninstall is
+		// symmetric with install and doesn't leave a dead cluster behind.
+		removeInstalledClusters(ctx)
 	}
 
 	// Remove volume if requested
 	if opts.RemoveVolume {
 		ctx.Info("Removing volume '%s'...", volumeName)
-		if err := dockerRemoveVolume(volumeName); err != nil {
+		if err := rt.removeVolume(volumeName); err != nil {
 			ctx.Warn("Failed to remove volume: %v", err)
-			ctx.Info("You can remove it manually with: docker volume rm %s", volumeName)
+			ctx.Info("You can remove it manually with: %s volume rm %s", rt.bin, volumeName)
 		} else {
 			ctx.Completed("Volume removed")
 		}
 	} else {
 		fmt.Println()
 		ctx.Info("Note: The data volume '%s' has not been removed.", volumeName)
-		ctx.Info("To remove it: docker volume rm %s", volumeName)
+		ctx.Info("To remove it: %s volume rm %s", rt.bin, volumeName)
 	}
 
 	fmt.Println()
@@ -268,30 +296,31 @@ func ServerUninstallDocker(ctx *Context, opts struct {
 	return nil
 }
 
-// ServerStatusDocker shows the status of the miren Docker container
-func ServerStatusDocker(ctx *Context, opts struct {
-	Name   string `short:"n" long:"name" description:"Container name" default:"miren"`
-	Follow bool   `short:"f" long:"follow" description:"Follow logs in real-time"`
+// ServerStatusContainer shows the status of the miren container.
+func ServerStatusContainer(ctx *Context, opts struct {
+	Name    string `short:"n" long:"name" description:"Container name" default:"miren"`
+	Runtime string `long:"runtime" description:"Container runtime to use: docker or podman (auto-detected by default, preferring docker)"`
+	Follow  bool   `short:"f" long:"follow" description:"Follow logs in real-time"`
 }) error {
-	// Check if Docker is available
-	if err := checkDockerAvailable(); err != nil {
-		return fmt.Errorf("docker is not available: %w", err)
+	rt, err := resolveContainerRuntime(opts.Runtime)
+	if err != nil {
+		return err
 	}
 
 	// Check if container exists
-	containerExists, err := dockerContainerExists(opts.Name)
+	containerExists, err := rt.containerExists(opts.Name)
 	if err != nil {
 		return fmt.Errorf("failed to check for container: %w", err)
 	}
 
 	if !containerExists {
 		ctx.Warn("Container '%s' does not exist", opts.Name)
-		ctx.Info("Run 'miren server docker install' to create it")
+		ctx.Info("Run 'miren server container install' to create it")
 		return nil
 	}
 
-	// Show container status using docker ps
-	cmd := exec.Command("docker", "ps", "-a", "-f", fmt.Sprintf("name=%s", opts.Name), "--format", "table {{.Names}}\t{{.Status}}\t{{.Ports}}")
+	// Show container status using the runtime's ps
+	cmd := rt.command("ps", "-a", "-f", fmt.Sprintf("name=%s", opts.Name), "--format", "table {{.Names}}\t{{.Status}}\t{{.Ports}}")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -304,11 +333,11 @@ func ServerStatusDocker(ctx *Context, opts struct {
 	if !opts.Follow {
 		ctx.Info("Recent logs (use -f to follow):")
 		fmt.Println()
-		cmd = exec.Command("docker", "logs", "--tail", "50", opts.Name)
+		cmd = rt.command("logs", "--tail", "50", opts.Name)
 	} else {
 		ctx.Info("Following logs (Ctrl+C to stop)...")
 		fmt.Println()
-		cmd = exec.Command("docker", "logs", "-f", opts.Name)
+		cmd = rt.command("logs", "-f", opts.Name)
 	}
 
 	cmd.Stdout = os.Stdout
@@ -318,27 +347,12 @@ func ServerStatusDocker(ctx *Context, opts struct {
 
 // Helper functions
 
-type dockerContainerConfig struct {
+type containerConfig struct {
 	HTTPPort    int
 	IngressMode string
 	VolumeName  string
 	HostNetwork bool
 	Labs        []string
-}
-
-func checkDockerAvailable() error {
-	// Check if docker command exists
-	if _, err := exec.LookPath("docker"); err != nil {
-		return fmt.Errorf("docker command not found")
-	}
-
-	// Check if Docker daemon is running
-	cmd := exec.Command("docker", "info")
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("docker daemon is not running")
-	}
-
-	return nil
 }
 
 // defaultAPIPort is the host UDP port the miren API / control plane (QUIC) is
@@ -363,7 +377,7 @@ const (
 
 // requiredHostPort is one host port Miren needs for a given config. It is the
 // single source of truth for both the pre-flight availability check and the
-// actual `docker run -p` arguments, so the two can never drift apart.
+// actual `run -p` arguments, so the two can never drift apart.
 type requiredHostPort struct {
 	hostPort      int
 	containerPort int
@@ -376,11 +390,11 @@ type requiredHostPort struct {
 // (behind-proxy-http hands :443 to the proxy, behind-proxy-https gives up :80).
 //
 // Under host networking the server binds the container ports directly on the
-// host, so docker's -p mappings (and --http-port) don't apply and the host port
+// host, so the -p mappings (and --http-port) don't apply and the host port
 // equals the container port. The pre-flight still needs this list to catch a
-// busy port before the server fails to bind at startup; dockerIngressArgs is
-// what decides whether to actually publish these via -p.
-func requiredHostPorts(config dockerContainerConfig) []requiredHostPort {
+// busy port before the server fails to bind at startup; ingressArgs is what
+// decides whether to actually publish these via -p.
+func requiredHostPorts(config containerConfig) []requiredHostPort {
 	httpHostPort := config.HTTPPort
 	if config.HostNetwork {
 		httpHostPort = 80
@@ -410,7 +424,7 @@ const (
 	portInUse
 	// portUndetermined means we couldn't tell — e.g. binding the port needs
 	// privileges we don't have. We let the install proceed and rely on the
-	// docker error backstop rather than blocking on a maybe.
+	// engine error backstop rather than blocking on a maybe.
 	portUndetermined
 )
 
@@ -481,8 +495,8 @@ func describePortListener(port int, proto string) string {
 // port we're about to publish is already taken, before any expensive setup
 // (volume creation, cloud registration). It's best-effort: binding a port we
 // lack privileges for returns portUndetermined and we proceed, relying on the
-// docker error backstop to catch what we couldn't test here.
-func preflightPortCheck(ctx *Context, config dockerContainerConfig) error {
+// engine error backstop to catch what we couldn't test here.
+func preflightPortCheck(ctx *Context, config containerConfig) error {
 	for _, p := range requiredHostPorts(config) {
 		if hostPortStatus(p) == portInUse {
 			return portConflict(ctx, p)
@@ -508,14 +522,14 @@ func portConflict(ctx *Context, p requiredHostPort) error {
 	case roleHTTP:
 		ctx.Printf("Miren publishes this port to serve your apps over HTTP and to answer\n")
 		ctx.Printf("HTTP-01 TLS challenges. Move it to a free port with:\n")
-		ctx.Printf("  %s\n\n", infoGray.Render("miren server docker install --http-port 8080"))
+		ctx.Printf("  %s\n\n", infoGray.Render("miren server container install --http-port 8080"))
 		ctx.Printf("Otherwise, free the port and re-run.\n")
 	case roleHTTPS:
 		ctx.Printf("Miren publishes port 443 to serve your apps with automatic HTTPS.\n\n")
 		ctx.Printf("If a TLS-terminating reverse proxy (tailscale serve, nginx, Caddy,\n")
 		ctx.Printf("Cloudflare Tunnel) already owns 443, run Miren behind it instead —\n")
 		ctx.Printf("Miren serves plain HTTP and the proxy handles TLS:\n")
-		ctx.Printf("  %s\n", infoGray.Render("miren server docker install --ingress-mode behind-proxy-http"))
+		ctx.Printf("  %s\n", infoGray.Render("miren server container install --ingress-mode behind-proxy-http"))
 		ctx.Printf("  %s\n\n", infoGray.Render(requiredPortsHelpURL))
 		ctx.Printf("Otherwise, free the port and re-run.\n")
 	case roleAPI:
@@ -546,24 +560,69 @@ func validateIngressMode(mode string) error {
 	}
 }
 
-// dockerPortConflictError is the backstop for conflicts the pre-flight check
+// rootlessRuntimeError explains why a rootless runtime can't run Miren workloads
+// and how to switch to a rootful one, returning a terse error to halt the
+// install. Overridable with --allow-rootless for control-plane-only testing.
+func rootlessRuntimeError(ctx *Context, rt containerRuntime) error {
+	ctx.Printf("\n%s Rootless %s detected.\n\n", infoRed.Render("✗"), rt.bin)
+	ctx.Printf("Miren's server will start, but it can't run app workloads under a rootless\n")
+	ctx.Printf("runtime yet: the sandbox runtime does privileged, nested containerization\n")
+	ctx.Printf("(its own containerd, per-sandbox namespaces and devices) that a rootless\n")
+	ctx.Printf("container can't provide. The control plane comes up; app deploys crash-loop.\n\n")
+	if rt.bin == "podman" {
+		ctx.Printf("Fix: switch Podman to rootful and reinstall:\n")
+		ctx.Printf("  %s\n", infoGray.Render("podman machine set --rootful     # macOS"))
+		ctx.Printf("  %s\n\n", infoGray.Render("# or run podman as root on Linux"))
+	}
+	ctx.Printf("Docker is rootful by default and works out of the box.\n\n")
+	ctx.Printf("To install anyway (control plane only), re-run with --allow-rootless.\n")
+	return fmt.Errorf("rootless %s is not supported for running app workloads", rt.bin)
+}
+
+// warnLowContainerMemory prints a heads-up (never blocks) when the runtime host
+// has less memory than Miren recommends. It reads the runtime's own view of
+// host memory (the VM on macOS/Windows), which is what the nested stack actually
+// runs within — not the machine's total. Silent when memory can't be detected.
+func warnLowContainerMemory(ctx *Context, rt containerRuntime) {
+	mem := rt.hostMemoryBytes()
+	if mem <= 0 {
+		return
+	}
+	switch {
+	case !meetsThreshold(mem, minMemoryBytes):
+		ctx.Warn("%s has %s of memory available to containers, below the %s minimum.",
+			rt.bin, formatBytes(mem), formatBytes(minMemoryBytes))
+		fmt.Println("  Miren runs containerd, etcd, and buildkit inside the container — ~600 MB")
+		fmt.Println("  at idle, spiking during builds — so deploys may fail under memory pressure.")
+		fmt.Printf("  Raise the %s VM's memory (macOS/Windows) or free host memory (Linux).\n", rt.bin)
+		fmt.Println("  More: https://miren.md/system-requirements")
+		fmt.Println()
+	case !meetsThreshold(mem, recommendedMemoryBytes):
+		ctx.Warn("%s has %s of memory available to containers — it'll work, but we recommend %s.",
+			rt.bin, formatBytes(mem), formatBytes(recommendedMemoryBytes))
+		fmt.Println()
+	}
+}
+
+// enginePortConflictError is the backstop for conflicts the pre-flight check
 // couldn't see — most often an unprivileged CLI that can't test-bind ports
-// below 1024 (binding returns EACCES, not EADDRINUSE), so docker is the first
-// to discover the clash. We match only docker's stable "port already taken"
-// phrasings (not the exact port, which is phrased differently across docker
-// versions and platforms) and turn them into friendly guidance. Returns
-// (nil, false) for any other error so the caller falls back to generic handling.
-func dockerPortConflictError(ctx *Context, err error) (error, bool) {
+// below 1024 (binding returns EACCES, not EADDRINUSE), so the engine is the
+// first to discover the clash. We match only the stable "port already taken"
+// phrasings shared by Docker and Podman (not the exact port, which is phrased
+// differently across versions and platforms) and turn them into friendly
+// guidance. Returns (nil, false) for any other error so the caller falls back
+// to generic handling.
+func enginePortConflictError(ctx *Context, err error) (error, bool) {
 	msg := err.Error()
 	if !strings.Contains(msg, "address already in use") && !strings.Contains(msg, "Ports are not available") {
 		return nil, false
 	}
 
-	// We don't parse the offending port out of the error: docker's bind-conflict
-	// phrasing varies across versions and rootful-vs-rootless, so the precise,
-	// per-port guidance lives in the pre-flight (portConflict). This fallback
-	// only fires when the pre-flight couldn't test-bind, so it stays generic and
-	// names both levers without guessing which port clashed.
+	// We don't parse the offending port out of the error: the engine's
+	// bind-conflict phrasing varies across versions and rootful-vs-rootless, so
+	// the precise, per-port guidance lives in the pre-flight (portConflict). This
+	// fallback only fires when the pre-flight couldn't test-bind, so it stays
+	// generic and names both levers without guessing which port clashed.
 	ctx.Printf("\n%s A host port Miren needs (80, 443, or %d) is already in use.\n\n", infoRed.Render("✗"), defaultAPIPort)
 	ctx.Printf("Free the port and re-run. If the conflict is on the HTTP port, move it\n")
 	ctx.Printf("with --http-port. If a TLS-terminating reverse proxy (tailscale serve,\n")
@@ -573,8 +632,8 @@ func dockerPortConflictError(ctx *Context, err error) (error, bool) {
 	return fmt.Errorf("a required host port is unavailable"), true
 }
 
-func dockerContainerExists(name string) (bool, error) {
-	cmd := exec.Command("docker", "ps", "-a", "-q", "-f", fmt.Sprintf("name=^%s$", name))
+func (r containerRuntime) containerExists(name string) (bool, error) {
+	cmd := r.command("ps", "-a", "-q", "-f", fmt.Sprintf("name=^%s$", name))
 	output, err := cmd.Output()
 	if err != nil {
 		return false, err
@@ -582,8 +641,8 @@ func dockerContainerExists(name string) (bool, error) {
 	return len(strings.TrimSpace(string(output))) > 0, nil
 }
 
-func dockerContainerIsRunning(name string) (bool, error) {
-	cmd := exec.Command("docker", "inspect", "-f", "{{.State.Running}}", name)
+func (r containerRuntime) containerIsRunning(name string) (bool, error) {
+	cmd := r.command("inspect", "-f", "{{.State.Running}}", name)
 	output, err := cmd.Output()
 	if err != nil {
 		return false, err
@@ -591,12 +650,12 @@ func dockerContainerIsRunning(name string) (bool, error) {
 	return strings.TrimSpace(string(output)) == "true", nil
 }
 
-// dockerIngressArgs builds the `docker run` arguments that publish ports and
-// configure the ingress mode. The published ports come straight from
-// requiredHostPorts so they can't drift from what the pre-flight check verified.
-// In behind-proxy modes the server otherwise binds its ingress to 127.0.0.1,
-// which docker's port publishing can't reach, so we pin it to 0.0.0.0 via env.
-func dockerIngressArgs(config dockerContainerConfig) []string {
+// ingressArgs builds the `run` arguments that publish ports and configure the
+// ingress mode. The published ports come straight from requiredHostPorts so
+// they can't drift from what the pre-flight check verified. In behind-proxy
+// modes the server otherwise binds its ingress to 127.0.0.1, which the engine's
+// port publishing can't reach, so we pin it to 0.0.0.0 via env.
+func ingressArgs(config containerConfig) []string {
 	var args []string
 
 	if config.HostNetwork {
@@ -623,7 +682,7 @@ func dockerIngressArgs(config dockerContainerConfig) []string {
 	return args
 }
 
-func dockerCreateContainer(name, image string, config dockerContainerConfig) (string, error) {
+func (r containerRuntime) createContainer(name, image string, config containerConfig) (string, error) {
 	args := []string{
 		"run", "-d",
 		"--name", name,
@@ -632,7 +691,7 @@ func dockerCreateContainer(name, image string, config dockerContainerConfig) (st
 		"--restart", "always",
 	}
 
-	args = append(args, dockerIngressArgs(config)...)
+	args = append(args, ingressArgs(config)...)
 
 	if len(config.Labs) > 0 {
 		args = append(args, "-e", fmt.Sprintf("MIREN_LABS=%s", strings.Join(config.Labs, ",")))
@@ -644,7 +703,7 @@ func dockerCreateContainer(name, image string, config dockerContainerConfig) (st
 		image,
 	)
 
-	cmd := exec.Command("docker", args...)
+	cmd := r.command(args...)
 	output, err := cmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
@@ -656,14 +715,12 @@ func dockerCreateContainer(name, image string, config dockerContainerConfig) (st
 	return strings.TrimSpace(string(output)), nil
 }
 
-func dockerStartContainer(name string) error {
-	cmd := exec.Command("docker", "start", name)
-	return cmd.Run()
+func (r containerRuntime) startContainer(name string) error {
+	return r.command("start", name).Run()
 }
 
-func dockerStopContainer(name string, timeout int) error {
-	args := []string{"stop", "-t", fmt.Sprintf("%d", timeout), name}
-	cmd := exec.Command("docker", args...)
+func (r containerRuntime) stopContainer(name string, timeout int) error {
+	cmd := r.command("stop", "-t", fmt.Sprintf("%d", timeout), name)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%w: %s", err, output)
@@ -671,14 +728,14 @@ func dockerStopContainer(name string, timeout int) error {
 	return nil
 }
 
-func dockerRemoveContainer(name string, force bool) error {
+func (r containerRuntime) removeContainer(name string, force bool) error {
 	// If force is requested, first try to stop gracefully, then force remove
 	if force {
 		// Check if container is running
-		isRunning, err := dockerContainerIsRunning(name)
+		isRunning, err := r.containerIsRunning(name)
 		if err == nil && isRunning {
 			// Try graceful stop first (30 second timeout)
-			_ = dockerStopContainer(name, 30)
+			_ = r.stopContainer(name, 30)
 		}
 	}
 
@@ -688,7 +745,7 @@ func dockerRemoveContainer(name string, force bool) error {
 	}
 	args = append(args, name)
 
-	cmd := exec.Command("docker", args...)
+	cmd := r.command(args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%w: %s", err, output)
@@ -696,8 +753,8 @@ func dockerRemoveContainer(name string, force bool) error {
 	return nil
 }
 
-func dockerRemoveVolume(name string) error {
-	cmd := exec.Command("docker", "volume", "rm", name)
+func (r containerRuntime) removeVolume(name string) error {
+	cmd := r.command("volume", "rm", name)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%w: %s", err, output)
@@ -705,9 +762,9 @@ func dockerRemoveVolume(name string) error {
 	return nil
 }
 
-func dockerExec(containerName string, command []string) (string, error) {
+func (r containerRuntime) exec(containerName string, command []string) (string, error) {
 	args := append([]string{"exec", containerName}, command...)
-	cmd := exec.Command("docker", args...)
+	cmd := r.command(args...)
 	output, err := cmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
@@ -778,13 +835,13 @@ func waitForServerReady(ctx *Context) error {
 	return fmt.Errorf("timeout waiting for server to start")
 }
 
-func copyClientConfig(ctx *Context, containerName string) error {
+func copyClientConfig(ctx *Context, rt containerRuntime, containerName string) error {
 	ctx.Log.Debug("generating client config", "host", "localhost")
 
 	// Generate client config by running miren auth generate
 	target := fmt.Sprintf("localhost:%d", defaultAPIPort)
-	ctx.Log.Debug("running auth generate", "target", target, "cluster", "docker")
-	output, err := dockerExec(containerName, []string{"miren", "auth", "generate", "-C", "docker", "-t", target, "-c", "-"})
+	ctx.Log.Debug("running auth generate", "target", target, "cluster", "local")
+	output, err := rt.exec(containerName, []string{"miren", "auth", "generate", "-C", "local", "-t", target, "-c", "-"})
 	if err != nil {
 		ctx.Log.Error("failed to generate client config", "error", err)
 		return fmt.Errorf("failed to generate client config: %w", err)
@@ -806,14 +863,16 @@ func copyClientConfig(ctx *Context, containerName string) error {
 
 	ctx.Log.Debug("parsed generated config", "clusters", len(generatedConfig.Clusters))
 
-	// Verify the docker cluster exists in the generated config
-	dockerCluster, ok := generatedConfig.Clusters["docker"]
+	// The cluster is named "local", matching the native install (server install)
+	// and the server's own default cluster name, so a container-hosted server
+	// looks the same to the client as a native one regardless of runtime.
+	localCluster, ok := generatedConfig.Clusters["local"]
 	if !ok {
-		ctx.Log.Error("docker cluster not found in generated config", "available_clusters", generatedConfig.Clusters)
-		return fmt.Errorf("docker cluster not found in generated config")
+		ctx.Log.Error("local cluster not found in generated config", "available_clusters", generatedConfig.Clusters)
+		return fmt.Errorf("local cluster not found in generated config")
 	}
 
-	ctx.Log.Debug("found docker cluster in config", "hostname", dockerCluster.Hostname)
+	ctx.Log.Debug("found local cluster in config", "hostname", localCluster.Hostname)
 
 	// Load existing user config
 	config, err := clientconfig.LoadConfig()
@@ -828,49 +887,98 @@ func copyClientConfig(ctx *Context, containerName string) error {
 		ctx.Log.Debug("loaded existing client config", "active_cluster", config.ActiveCluster())
 	}
 
-	// Create leaf config data with the docker cluster
+	// Create leaf config data with the local cluster (saved to
+	// clientconfig.d/50-local.yaml, same as the native install).
 	leafConfigData := &clientconfig.ConfigData{
 		Clusters: map[string]*clientconfig.ClusterConfig{
-			"docker": dockerCluster,
+			"local": localCluster,
 		},
 	}
+	ctx.Log.Debug("setting leaf config", "name", "50-local")
+	config.SetLeafConfig("50-local", leafConfigData)
 
-	// Add as a leaf config (this will be saved to clientconfig.d/50-docker.yaml)
-	ctx.Log.Debug("setting leaf config", "name", "50-docker")
-	config.SetLeafConfig("50-docker", leafConfigData)
-
-	// Set the active cluster to docker if none is set
-	if config.ActiveCluster() == "" {
-		ctx.Log.Debug("setting active cluster to docker")
-		config.SetActiveCluster("docker")
+	// Migrate off the old "docker" cluster name. Earlier container installs
+	// wrote a "docker" cluster (50-docker.yaml) and made it active. Point an
+	// unset-or-"docker" active cluster at "local", then drop the stale "docker"
+	// cluster so `-C docker` and its leaf don't linger. A user's own active
+	// cluster (e.g. a cloud cluster) is left untouched. Order matters:
+	// RemoveCluster refuses to remove the active cluster, so we re-point first.
+	if active := config.ActiveCluster(); active == "" || active == "docker" {
+		config.SetActiveCluster("local")
+	}
+	if config.HasCluster("docker") {
+		if err := config.RemoveCluster("docker"); err != nil {
+			ctx.Log.Warn("could not remove legacy docker cluster", "error", err)
+		}
 	}
 
 	// Save the config
 	ctx.Log.Debug("saving client config")
 	if err := config.Save(); err != nil {
-		ctx.Log.Error("failed to save docker cluster leaf config", "error", err)
-		return fmt.Errorf("failed to save docker cluster leaf config: %w", err)
+		ctx.Log.Error("failed to save local cluster leaf config", "error", err)
+		return fmt.Errorf("failed to save local cluster leaf config: %w", err)
 	}
 
-	ctx.Log.Info("wrote docker cluster config", "cluster", "docker", "address", dockerCluster.Hostname)
+	ctx.Log.Info("wrote local cluster config", "cluster", "local", "address", localCluster.Hostname)
 	return nil
 }
 
-type dockerRegistrationOptions struct {
+// removeInstalledClusters drops the client-config cluster a container install
+// created, so uninstall is symmetric with install and doesn't leave a dead
+// cluster pointing at a server that's gone. It removes the current "local" name
+// and the legacy "docker" name (from pre-rename installs). If one is the active
+// cluster, RemoveCluster would refuse it, so we clear the active pointer first.
+// Best-effort: client-config problems are warned, never fatal, so the container
+// uninstall itself still succeeds.
+func removeInstalledClusters(ctx *Context) {
+	config, err := clientconfig.LoadConfig()
+	if err != nil {
+		return
+	}
+
+	changed := false
+	activeCleared := false
+	for _, name := range []string{"local", "docker"} {
+		if !config.HasCluster(name) {
+			continue
+		}
+		if config.ActiveCluster() == name {
+			config.ClearActiveCluster()
+			activeCleared = true
+		}
+		if err := config.RemoveCluster(name); err != nil {
+			ctx.Log.Warn("could not remove cluster during uninstall", "cluster", name, "error", err)
+			continue
+		}
+		changed = true
+	}
+
+	if !changed {
+		return
+	}
+	if err := config.Save(); err != nil {
+		ctx.Log.Warn("could not save client config during uninstall", "error", err)
+		return
+	}
+	if activeCleared {
+		ctx.Info("The active cluster pointed at this server; cleared it. Select another with 'miren cluster switch <name>'.")
+	}
+}
+
+type containerRegistrationOptions struct {
 	ClusterName string
 	CloudURL    string
 	Tags        map[string]string
 }
 
-func dockerEnsureVolume(volumeName string) error {
+func (r containerRuntime) ensureVolume(volumeName string) error {
 	// Check if volume exists
-	cmd := exec.Command("docker", "volume", "inspect", volumeName)
-	if err := cmd.Run(); err == nil {
+	if err := r.command("volume", "inspect", volumeName).Run(); err == nil {
 		return nil
 	}
 
 	// Create volume
-	cmd = exec.Command("docker", "volume", "create", volumeName)
+	cmd := r.command("volume", "create", volumeName)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%w: %s", err, output)
@@ -878,7 +986,7 @@ func dockerEnsureVolume(volumeName string) error {
 	return nil
 }
 
-func performDockerRegistrationPreStart(ctx *Context, image, volumeName string, opts dockerRegistrationOptions) error {
+func performRegistrationPreStart(ctx *Context, rt containerRuntime, image, volumeName string, opts containerRegistrationOptions) error {
 	// Determine cluster name
 	clusterName := opts.ClusterName
 	if clusterName == "" {
@@ -912,17 +1020,26 @@ func performDockerRegistrationPreStart(ctx *Context, image, volumeName string, o
 		return fmt.Errorf("registration failed: %w", err)
 	}
 
-	// Copy registration files to the docker volume
-	// We use a temporary container to copy files into the volume
+	// Copy registration files to the volume. We use a temporary container to
+	// copy files into the volume.
 	registrationFile := filepath.Join(tempDir, "registration.json")
 	if _, err := os.Stat(registrationFile); err != nil {
 		return fmt.Errorf("registration file not found: %w", err)
 	}
 
-	ctx.Info("Copying registration to docker volume...")
+	ctx.Info("Copying registration to %s volume...", rt.bin)
 
 	// Create a temporary container to copy files
 	tempContainerName := fmt.Sprintf("miren-reg-copy-%d", time.Now().Unix())
+
+	// Register cleanup before the run: a non-zero exit inside the container
+	// still leaves the container object behind, so a failure below must not
+	// leak a miren-reg-copy-<ts> container on the host.
+	defer func() {
+		if err := rt.removeContainer(tempContainerName, true); err != nil {
+			ctx.Warn("Failed to remove temp container %s: %v", tempContainerName, err)
+		}
+	}()
 
 	// Run container to create the directory structure (override entrypoint)
 	runArgs := []string{
@@ -933,17 +1050,9 @@ func performDockerRegistrationPreStart(ctx *Context, image, volumeName string, o
 		"-p", "/var/lib/miren/server",
 	}
 
-	cmd := exec.Command("docker", runArgs...)
-	if output, err := cmd.CombinedOutput(); err != nil {
+	if output, err := rt.command(runArgs...).CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to create directory in volume: %w: %s", err, output)
 	}
-
-	// Ensure temp container is always cleaned up
-	defer func() {
-		if err := dockerRemoveContainer(tempContainerName, true); err != nil {
-			ctx.Warn("Failed to remove temp container %s: %v", tempContainerName, err)
-		}
-	}()
 
 	// Copy registration file to container
 	cpArgs := []string{
@@ -952,8 +1061,7 @@ func performDockerRegistrationPreStart(ctx *Context, image, volumeName string, o
 		fmt.Sprintf("%s:/var/lib/miren/server/registration.json", tempContainerName),
 	}
 
-	cmd = exec.Command("docker", cpArgs...)
-	if output, err := cmd.CombinedOutput(); err != nil {
+	if output, err := rt.command(cpArgs...).CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to copy registration file: %w: %s", err, output)
 	}
 

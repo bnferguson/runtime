@@ -83,7 +83,7 @@ Miren requires outbound internet access for several operations. Most cloud provi
 - **Go**: proxy.golang.org (and any private module sources)
 - **System packages**: debian/ubuntu apt repositories, Alpine apk repositories
 
-**Miren Cloud** connectivity is required for authentication (`miren login`) and cluster registration (`miren server install`, `miren server docker install`, `miren server register`). If you're running Miren in standalone mode without cloud features, this isn't required.
+**Miren Cloud** connectivity is required for authentication (`miren login`) and for cloud cluster registration (`miren server register`, or the `miren server install` / `miren server container install` commands when they register with cloud). Standalone installs (for example `miren server container install --without-cloud`) don't need it.
 
 ## Cloud Provider Considerations
 

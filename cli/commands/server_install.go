@@ -27,9 +27,9 @@ import (
 	"miren.dev/runtime/version"
 )
 
+// minMemoryBytes and recommendedMemoryBytes are shared with the container
+// install path and defined in install_requirements.go (untagged).
 const (
-	minMemoryBytes          = 4 * 1024 * 1024 * 1024   // 4 GB
-	recommendedMemoryBytes  = 8 * 1024 * 1024 * 1024   // 8 GB
 	minStorageBytes         = 50 * 1024 * 1024 * 1024  // 50 GB
 	recommendedStorageBytes = 100 * 1024 * 1024 * 1024 // 100 GB
 
@@ -99,7 +99,7 @@ func printSystemRequirementsGuidance(ctx *Context, reqs systemRequirements) bool
 
 	if reqs.memoryCheckFailed {
 		ctx.Warn("Couldn't detect system memory — we recommend at least %s.", formatBytes(minMemoryBytes))
-	} else if reqs.totalMemoryBytes < minMemoryBytes {
+	} else if !meetsThreshold(reqs.totalMemoryBytes, minMemoryBytes) {
 		belowMinimum = true
 		ctx.Warn("This machine has %s of memory, but Miren needs at least %s.",
 			formatBytes(reqs.totalMemoryBytes), formatBytes(minMemoryBytes))
@@ -107,7 +107,7 @@ func printSystemRequirementsGuidance(ctx *Context, reqs systemRequirements) bool
 		fmt.Println("  about 600 MB at idle and spike higher during builds. With this little memory,")
 		fmt.Println("  things will start failing when you deploy.")
 		fmt.Println()
-	} else if reqs.totalMemoryBytes < recommendedMemoryBytes {
+	} else if !meetsThreshold(reqs.totalMemoryBytes, recommendedMemoryBytes) {
 		ctx.Warn("This machine has %s of memory — it'll work, but we recommend %s.",
 			formatBytes(reqs.totalMemoryBytes), formatBytes(recommendedMemoryBytes))
 		fmt.Println("  You might run into trouble during builds for memory-hungry apps.")
@@ -116,14 +116,14 @@ func printSystemRequirementsGuidance(ctx *Context, reqs systemRequirements) bool
 
 	if reqs.storageCheckFailed {
 		ctx.Warn("Couldn't detect available disk space — we recommend at least %s.", formatBytes(minStorageBytes))
-	} else if reqs.availStorageBytes < minStorageBytes {
+	} else if !meetsThreshold(reqs.availStorageBytes, minStorageBytes) {
 		belowMinimum = true
 		ctx.Warn("Only %s of disk space available at %s, but Miren needs at least %s.",
 			formatBytes(reqs.availStorageBytes), reqs.storagePath, formatBytes(minStorageBytes))
 		fmt.Println("  Container images, build caches, and app data add up fast — a single deploy")
 		fmt.Println("  can use 15-20 GB between images, build cache, and the registry.")
 		fmt.Println()
-	} else if reqs.availStorageBytes < recommendedStorageBytes {
+	} else if !meetsThreshold(reqs.availStorageBytes, recommendedStorageBytes) {
 		ctx.Warn("Disk space is a bit tight: %s available at %s, we recommend %s.",
 			formatBytes(reqs.availStorageBytes), reqs.storagePath, formatBytes(recommendedStorageBytes))
 		fmt.Println("  With multiple apps and version history, storage fills up quicker than you'd expect.")
@@ -143,17 +143,18 @@ func printSystemRequirementsGuidance(ctx *Context, reqs systemRequirements) bool
 
 // installPrerequisites holds information about the system's readiness for installation
 type installPrerequisites struct {
-	hasRoot    bool
-	hasSystemd bool
-	hasDocker  bool
+	hasRoot             bool
+	hasSystemd          bool
+	hasContainerRuntime bool
 }
 
 // checkInstallPrerequisites checks all prerequisites and returns their status
 func checkInstallPrerequisites() installPrerequisites {
+	_, runtimeErr := resolveContainerRuntime("")
 	return installPrerequisites{
-		hasRoot:    os.Geteuid() == 0,
-		hasSystemd: checkSystemdAvailable(),
-		hasDocker:  checkDockerAvailable() == nil,
+		hasRoot:             os.Geteuid() == 0,
+		hasSystemd:          checkSystemdAvailable(),
+		hasContainerRuntime: runtimeErr == nil,
 	}
 }
 
@@ -189,17 +190,18 @@ func printInstallPrerequisiteGuidance(ctx *Context, prereqs installPrerequisites
 		ctx.Info("systemd is not available on this system.")
 		fmt.Println()
 
-		if prereqs.hasDocker {
-			ctx.Info("Docker is available! You can install using Docker instead:")
-			fmt.Println("  miren server docker install")
+		if prereqs.hasContainerRuntime {
+			ctx.Info("A container runtime is available! You can install in a container instead:")
+			fmt.Println("  miren server container install")
 			fmt.Println()
-			ctx.Info("This will run the miren server in a Docker container with automatic restarts.")
+			ctx.Info("This will run the miren server in a container with automatic restarts.")
 		} else {
 			ctx.Info("Alternative installation options:")
 			fmt.Println()
-			fmt.Println("  1. Install using Docker (recommended for non-systemd systems):")
-			fmt.Println("     First install Docker: https://docs.docker.com/get-docker/")
-			fmt.Println("     Then run: miren server docker install")
+			fmt.Println("  1. Install in a container (recommended for non-systemd systems):")
+			fmt.Println("     First install Docker (https://docs.docker.com/get-docker/)")
+			fmt.Println("     or Podman (https://podman.io/docs/installation)")
+			fmt.Println("     Then run: miren server container install")
 			fmt.Println()
 			fmt.Println("  2. Run the server directly (for testing or development):")
 			fmt.Println("     miren server")

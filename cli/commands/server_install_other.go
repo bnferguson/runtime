@@ -25,13 +25,14 @@ func ServerInstall(ctx *Context, opts struct {
 	fmt.Println()
 
 	if runtime.GOOS == "darwin" {
-		ctx.Info("On macOS, use Docker to run the miren server:")
-		fmt.Println("  miren server docker install")
+		ctx.Info("On macOS, run the miren server in a container (Docker or Podman):")
+		fmt.Println("  miren server container install")
 		fmt.Println()
-		ctx.Info("This will run the miren server in a Docker container with automatic restarts.")
+		ctx.Info("The container restarts automatically while your container runtime is up.")
+		fmt.Println("  On macOS, make sure Docker Desktop or the Podman machine starts at login.")
 	} else {
-		ctx.Info("Use Docker to run the miren server on this platform:")
-		fmt.Println("  miren server docker install")
+		ctx.Info("Run the miren server in a container (Docker or Podman) on this platform:")
+		fmt.Println("  miren server container install")
 	}
 
 	fmt.Println()
@@ -44,12 +45,12 @@ func ServerUninstall(ctx *Context, opts struct {
 	BackupDir  string `long:"backup-dir" description:"Directory to save backup tarball" default:"."`
 	SkipBackup bool   `long:"skip-backup" description:"Skip backup when removing data (dangerous)"`
 }) error {
-	return fmt.Errorf("server uninstall is only available on Linux; use 'miren server docker uninstall' instead")
+	return fmt.Errorf("server uninstall is only available on Linux; use 'miren server container uninstall' instead")
 }
 
 // ServerStatus is not supported on non-Linux platforms
 func ServerStatus(ctx *Context, opts struct {
 	Follow bool `short:"f" long:"follow" description:"Follow logs in real-time"`
 }) error {
-	return fmt.Errorf("server status is only available on Linux; use 'miren server docker status' instead")
+	return fmt.Errorf("server status is only available on Linux; use 'miren server container status' instead")
 }

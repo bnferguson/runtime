@@ -24,13 +24,14 @@ sudo miren server install
 
 By default, you will have full access to your new cluster. Permissions can be tweaked using RBAC rules if needed.
 
-### Miren Server Installation within Docker
+### Miren Server Installation within a Container
 
 If you're on a platform other than Linux (or a Linux platform without systemd available), you can install
-the server into a docker container:
+the server into a container. This works with either Docker or Podman (auto-detected, or select one with
+`--runtime`):
 
 ```bash
-miren server docker install
+miren server container install
 ```
 
 ### Install Standalone
