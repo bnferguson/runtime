@@ -21,6 +21,7 @@ miren runner [flags]
 - [`miren runner install`](/command/runner-install) — Install systemd service for miren runner
 - [`miren runner join`](/command/runner-join) — Join this machine to a coordinator as a runner
 - [`miren runner list`](/command/runner-list) — List all registered runners
+- [`miren runner reissue`](/command/runner-reissue) — Rotate this runner's certificate in place (requires a still-valid cert), keeping its identity
 - [`miren runner remove`](/command/runner-remove) — Remove a registered runner and clean up resources
 - [`miren runner service-status`](/command/runner-service-status) — Show miren-runner systemd service status
 - [`miren runner start`](/command/runner-start) — Start this machine as a distributed runner
