@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -8,7 +9,12 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
+
+// runtimeProbeTimeout bounds the `info` probes below so a hung or unresponsive
+// engine can't wedge the CLI waiting on it.
+const runtimeProbeTimeout = 10 * time.Second
 
 // containerRuntime is the container CLI Miren drives to run the server inside a
 // container — either Docker or Podman. Podman implements the subset of the
@@ -89,10 +95,21 @@ func (r containerRuntime) checkAvailable() error {
 	if _, err := exec.LookPath(r.bin); err != nil {
 		return fmt.Errorf("%s command not found", r.bin)
 	}
-	if err := r.command("info").Run(); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), runtimeProbeTimeout)
+	defer cancel()
+	if err := exec.CommandContext(ctx, r.bin, "info").Run(); err != nil {
 		return fmt.Errorf("%s is installed but not responding (is it running?)", r.bin)
 	}
 	return nil
+}
+
+// infoField runs `<bin> info --format <format>` with a bounded timeout and
+// returns the trimmed output.
+func (r containerRuntime) infoField(format string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), runtimeProbeTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, r.bin, "info", "--format", format).Output()
+	return strings.TrimSpace(string(out)), err
 }
 
 // availableContainerRuntimes returns every supported runtime that's currently
@@ -119,11 +136,11 @@ func availableContainerRuntimes() []containerRuntime {
 func (r containerRuntime) isRootless() bool {
 	switch r.bin {
 	case "podman":
-		out, err := r.command("info", "--format", "{{.Host.Security.Rootless}}").Output()
-		return err == nil && strings.TrimSpace(string(out)) == "true"
+		out, err := r.infoField("{{.Host.Security.Rootless}}")
+		return err == nil && out == "true"
 	case "docker":
-		out, err := r.command("info", "--format", "{{.SecurityOptions}}").Output()
-		return err == nil && strings.Contains(string(out), "rootless")
+		out, err := r.infoField("{{.SecurityOptions}}")
+		return err == nil && strings.Contains(out, "rootless")
 	}
 	return false
 }
@@ -141,11 +158,11 @@ func (r containerRuntime) hostMemoryBytes() int64 {
 	default:
 		return 0
 	}
-	out, err := r.command("info", "--format", format).Output()
+	out, err := r.infoField(format)
 	if err != nil {
 		return 0
 	}
-	n, err := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64)
+	n, err := strconv.ParseInt(out, 10, 64)
 	if err != nil {
 		return 0
 	}

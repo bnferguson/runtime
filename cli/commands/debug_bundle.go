@@ -92,17 +92,17 @@ func DebugBundle(ctx *Context, opts struct {
 	}
 
 	// Gather Docker container processes (if Docker container exists and is running)
-	dockerProcData := gatherDockerProcesses(opts.DockerContainer)
-	if len(dockerProcData) > 0 {
-		if err := writeToArchive(tw, "miren-debug/docker-processes.txt", dockerProcData); err != nil {
+	containerProcData := gatherContainerProcesses(opts.DockerContainer)
+	if len(containerProcData) > 0 {
+		if err := writeToArchive(tw, "miren-debug/docker-processes.txt", containerProcData); err != nil {
 			return fmt.Errorf("writing docker-processes.txt: %w", err)
 		}
 	}
 
 	// Gather Docker inspect output
-	dockerInspectData := gatherDockerInspect(opts.DockerContainer)
-	if len(dockerInspectData) > 0 {
-		if err := writeToArchive(tw, "miren-debug/docker-inspect.json", dockerInspectData); err != nil {
+	containerInspectData := gatherContainerInspect(opts.DockerContainer)
+	if len(containerInspectData) > 0 {
+		if err := writeToArchive(tw, "miren-debug/docker-inspect.json", containerInspectData); err != nil {
 			return fmt.Errorf("writing docker-inspect.json: %w", err)
 		}
 	}
@@ -242,15 +242,15 @@ func gatherServerLogs(since, dockerContainer string) ([]byte, error) {
 	}
 
 	// Check for miren running in Docker
-	dockerLogs := gatherDockerLogs(since, dockerContainer)
-	if len(dockerLogs) > 0 {
-		buf.Write(dockerLogs)
+	containerLogs := gatherContainerLogs(since, dockerContainer)
+	if len(containerLogs) > 0 {
+		buf.Write(containerLogs)
 	}
 
 	return buf.Bytes(), nil
 }
 
-type dockerContainerInfo struct {
+type containerInfo struct {
 	id     string
 	name   string
 	status string
@@ -259,12 +259,12 @@ type dockerContainerInfo struct {
 	rt containerRuntime
 }
 
-// findDockerContainers finds miren server containers matching containerName
+// findRuntimeContainers finds miren server containers matching containerName
 // across every available container runtime (Docker and/or Podman), tagging each
 // with the runtime it was found under. On a host with both, a container hosted
 // by either engine is picked up.
-func findDockerContainers(containerName string) []dockerContainerInfo {
-	var containers []dockerContainerInfo
+func findRuntimeContainers(containerName string) []containerInfo {
+	var containers []containerInfo
 
 	for _, rt := range availableContainerRuntimes() {
 		// Find containers matching the specified name (running or recently stopped)
@@ -283,7 +283,7 @@ func findDockerContainers(containerName string) []dockerContainerInfo {
 				continue
 			}
 
-			info := dockerContainerInfo{
+			info := containerInfo{
 				id:   parts[0],
 				name: parts[1],
 				rt:   rt,
@@ -298,8 +298,8 @@ func findDockerContainers(containerName string) []dockerContainerInfo {
 	return containers
 }
 
-func gatherDockerLogs(since, containerName string) []byte {
-	containers := findDockerContainers(containerName)
+func gatherContainerLogs(since, containerName string) []byte {
+	containers := findRuntimeContainers(containerName)
 	if len(containers) == 0 {
 		return nil
 	}
@@ -310,7 +310,7 @@ func gatherDockerLogs(since, containerName string) []byte {
 	var buf bytes.Buffer
 	for _, container := range containers {
 		fmt.Fprintf(&buf, "\n%s\n", strings.Repeat("=", 80))
-		fmt.Fprintf(&buf, "DOCKER LOGS: %s (%s)\n", container.name, container.status)
+		fmt.Fprintf(&buf, "%s LOGS: %s (%s)\n", strings.ToUpper(container.rt.bin), container.name, container.status)
 		fmt.Fprintf(&buf, "Container ID: %s\n", container.id)
 		fmt.Fprintf(&buf, "%s\n", strings.Repeat("=", 80))
 
@@ -373,8 +373,8 @@ func convertToDockerSince(since string) string {
 	return "24h"
 }
 
-func gatherDockerProcesses(containerName string) []byte {
-	containers := findDockerContainers(containerName)
+func gatherContainerProcesses(containerName string) []byte {
+	containers := findRuntimeContainers(containerName)
 	if len(containers) == 0 {
 		return nil
 	}
@@ -387,7 +387,7 @@ func gatherDockerProcesses(containerName string) []byte {
 		}
 
 		fmt.Fprintf(&buf, "\n%s\n", strings.Repeat("=", 80))
-		fmt.Fprintf(&buf, "DOCKER CONTAINER: %s\n", container.name)
+		fmt.Fprintf(&buf, "%s CONTAINER: %s\n", strings.ToUpper(container.rt.bin), container.name)
 		fmt.Fprintf(&buf, "Container ID: %s\n", container.id)
 		fmt.Fprintf(&buf, "%s\n", strings.Repeat("=", 80))
 
@@ -452,8 +452,8 @@ func gatherDockerProcesses(containerName string) []byte {
 	return buf.Bytes()
 }
 
-func gatherDockerInspect(containerName string) []byte {
-	containers := findDockerContainers(containerName)
+func gatherContainerInspect(containerName string) []byte {
+	containers := findRuntimeContainers(containerName)
 	if len(containers) == 0 {
 		return nil
 	}
@@ -469,39 +469,37 @@ func gatherDockerInspect(containerName string) []byte {
 		idsByRuntime[container.rt.bin] = append(idsByRuntime[container.rt.bin], container.id)
 	}
 
-	var out []byte
+	// Collect every container's inspect object into one slice so the result is a
+	// single valid JSON array even when more than one runtime matched (each
+	// `inspect` returns its own top-level array, and concatenating them would
+	// produce invalid "[...][...]" JSON).
+	var all []map[string]any
 	for _, bin := range order {
 		args := append([]string{"inspect"}, idsByRuntime[bin]...)
 		output, err := runWithTimeout(cmdTimeoutShort, bin, args...)
 		if err != nil {
 			continue
 		}
-		out = append(out, redactDockerInspect(output)...)
+		var parsed []map[string]any
+		if err := json.Unmarshal(output, &parsed); err != nil {
+			// Skip unparseable output rather than leak secrets or corrupt the JSON.
+			continue
+		}
+		all = append(all, parsed...)
 	}
 
-	if len(out) == 0 {
+	if len(all) == 0 {
 		return nil
 	}
-	return out
-}
 
-// redactDockerInspect strips secret values from docker inspect JSON output.
-// Environment variable values are replaced with [REDACTED] since they commonly
-// contain credentials, API keys, and other secrets.
-func redactDockerInspect(data []byte) []byte {
-	var parsed []map[string]any
-	if err := json.Unmarshal(data, &parsed); err != nil {
-		// If we can't parse the JSON, return nothing rather than leak secrets
-		return []byte("[error: could not parse docker inspect output for redaction]\n")
+	// Redact secrets (env vars commonly hold credentials) before encoding once.
+	for i := range all {
+		redactEnvVars(all[i])
 	}
 
-	for i := range parsed {
-		redactEnvVars(parsed[i])
-	}
-
-	out, err := json.MarshalIndent(parsed, "", "  ")
+	out, err := json.MarshalIndent(all, "", "  ")
 	if err != nil {
-		return []byte("[error: could not re-encode docker inspect output]\n")
+		return []byte("[error: could not encode container inspect output]\n")
 	}
 	return out
 }

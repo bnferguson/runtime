@@ -28,7 +28,8 @@ func ServerInstall(ctx *Context, opts struct {
 		ctx.Info("On macOS, run the miren server in a container (Docker or Podman):")
 		fmt.Println("  miren server container install")
 		fmt.Println()
-		ctx.Info("This will run the miren server in a container with automatic restarts.")
+		ctx.Info("The container restarts automatically while your container runtime is up.")
+		fmt.Println("  On macOS, make sure Docker Desktop or the Podman machine starts at login.")
 	} else {
 		ctx.Info("Run the miren server in a container (Docker or Podman) on this platform:")
 		fmt.Println("  miren server container install")
