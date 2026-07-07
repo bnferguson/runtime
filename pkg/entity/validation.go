@@ -148,12 +148,51 @@ func (v *Validator) ValidateEntity(ctx context.Context, entity *Entity) error {
 }
 
 func (v *Validator) ValidateAttributes(ctx context.Context, attrs []Attr) error {
+	return v.validateAttributes(ctx, attrs, nil)
+}
+
+// ValidateUpdate validates the merged attributes of an update or patch. It
+// behaves like ValidateAttributes but skips the reference-existence check for
+// any reference attribute whose value is unchanged from the original entity.
+//
+// A patch is only responsible for the references it sets. A reference that was
+// already present and valid, whose target has since been deleted out from under
+// the entity, must not block an unrelated change such as a status-only patch.
+// Otherwise an entity holding a now-dangling reference becomes impossible to
+// patch at all, and any controller reconciling it spins forever. See MIR-1320.
+func (v *Validator) ValidateUpdate(ctx context.Context, newAttrs, originalAttrs []Attr) error {
+	return v.validateAttributes(ctx, newAttrs, exemptUnchangedRefs(originalAttrs))
+}
+
+// refExemptFn reports whether the reference-existence check for a given
+// attribute should be skipped. A nil predicate checks every reference, which is
+// the correct behavior for creates.
+type refExemptFn func(attr Attr) bool
+
+// exemptUnchangedRefs returns a predicate that exempts reference attributes
+// appearing unchanged (same id and value) in the original attribute set.
+func exemptUnchangedRefs(original []Attr) refExemptFn {
+	byID := make(map[Id][]Attr, len(original))
+	for _, a := range original {
+		byID[a.ID] = append(byID[a.ID], a)
+	}
+	return func(attr Attr) bool {
+		for _, o := range byID[attr.ID] {
+			if o.Equal(attr) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+func (v *Validator) validateAttributes(ctx context.Context, attrs []Attr, exempt refExemptFn) error {
 	// Check them one-off...
 
 	count := make(map[Id]int)
 	for i, attr := range attrs {
 		count[attr.ID]++
-		if err := v.ValidateAttribute(ctx, &attr); err != nil {
+		if err := v.validateAttribute(ctx, &attr, exempt); err != nil {
 			return err
 		}
 
@@ -178,6 +217,10 @@ func (v *Validator) ValidateAttributes(ctx context.Context, attrs []Attr) error 
 
 // ValidateAttribute validates a single attribute against its schema
 func (v *Validator) ValidateAttribute(ctx context.Context, attr *Attr) error {
+	return v.validateAttribute(ctx, attr, nil)
+}
+
+func (v *Validator) validateAttribute(ctx context.Context, attr *Attr, exempt refExemptFn) error {
 	name := attr.ID
 
 	if name == DBId {
@@ -248,7 +291,7 @@ func (v *Validator) ValidateAttribute(ctx context.Context, attr *Attr) error {
 		if !ok {
 			return fmt.Errorf("attribute %s must be a string representing an entity ID", name)
 		}
-		if str != "" {
+		if str != "" && (exempt == nil || !exempt(*attr)) {
 			if _, err := v.store.GetEntity(ctx, str); err != nil {
 				return fmt.Errorf("attribute %s references a non-existent entity: %w", name, err)
 			}
@@ -284,8 +327,11 @@ func (v *Validator) ValidateAttribute(ctx context.Context, attr *Attr) error {
 			return fmt.Errorf("attribute %s must be an array", name)
 		}
 
+		// If the whole array attribute is unchanged, don't re-check the
+		// existence of the references it contains (see ValidateUpdate).
+		skipRefCheck := exempt != nil && exempt(*attr)
 		for i, elem := range tuple {
-			if err := v.validateToType(ctx, elem, schema.ElemType); err != nil {
+			if err := v.validateToType(ctx, elem, schema.ElemType, skipRefCheck); err != nil {
 				return fmt.Errorf("attribute %s[%d]: %w", name, i, err)
 			}
 		}
@@ -300,7 +346,15 @@ func (v *Validator) ValidateAttribute(ctx context.Context, attr *Attr) error {
 		}
 
 		comp := attr.Value.Component()
-		err := v.ValidateAttributes(ctx, comp.attrs)
+		// If the whole component attribute is unchanged, don't re-check the
+		// existence of the references nested inside it. The top-level exempt
+		// predicate is keyed on top-level attributes and never matches nested
+		// ones, so mirror the TypeArray handling and exempt the whole component.
+		compExempt := exempt
+		if exempt != nil && exempt(*attr) {
+			compExempt = func(Attr) bool { return true }
+		}
+		err := v.validateAttributes(ctx, comp.attrs, compExempt)
 		if err != nil {
 			return fmt.Errorf("attribute %s must be a valid component: %w", name, err)
 		}
@@ -355,8 +409,10 @@ func (v *Validator) ValidateAttribute(ctx context.Context, attr *Attr) error {
 	return nil
 }
 
-// ValidateAttribute validates a single attribute against its schema
-func (v *Validator) validateToType(ctx context.Context, val any, typ Id) error {
+// validateToType validates a single value against a type. skipRefCheck omits
+// the reference-existence check, used when the containing attribute is unchanged
+// on an update (see ValidateUpdate).
+func (v *Validator) validateToType(ctx context.Context, val any, typ Id, skipRefCheck bool) error {
 	// Validate value based on type
 	switch typ {
 	case TypeKeyword, TypeStr:
@@ -387,7 +443,7 @@ func (v *Validator) validateToType(ctx context.Context, val any, typ Id) error {
 		if !ok {
 			return fmt.Errorf("value must be a string representing an entity ID")
 		}
-		if str != "" {
+		if str != "" && !skipRefCheck {
 			if _, err := v.store.GetEntity(ctx, str); err != nil {
 				return fmt.Errorf("value references a non-existent entity: %w", err)
 			}
