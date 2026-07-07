@@ -269,6 +269,10 @@ func ServerUninstallContainer(ctx *Context, opts struct {
 			return fmt.Errorf("failed to remove container: %w", err)
 		}
 		ctx.Completed("Container removed")
+
+		// Drop the client-config cluster this install created so uninstall is
+		// symmetric with install and doesn't leave a dead cluster behind.
+		removeInstalledClusters(ctx)
 	}
 
 	// Remove volume if requested
@@ -836,8 +840,8 @@ func copyClientConfig(ctx *Context, rt containerRuntime, containerName string) e
 
 	// Generate client config by running miren auth generate
 	target := fmt.Sprintf("localhost:%d", defaultAPIPort)
-	ctx.Log.Debug("running auth generate", "target", target, "cluster", "docker")
-	output, err := rt.exec(containerName, []string{"miren", "auth", "generate", "-C", "docker", "-t", target, "-c", "-"})
+	ctx.Log.Debug("running auth generate", "target", target, "cluster", "local")
+	output, err := rt.exec(containerName, []string{"miren", "auth", "generate", "-C", "local", "-t", target, "-c", "-"})
 	if err != nil {
 		ctx.Log.Error("failed to generate client config", "error", err)
 		return fmt.Errorf("failed to generate client config: %w", err)
@@ -859,18 +863,16 @@ func copyClientConfig(ctx *Context, rt containerRuntime, containerName string) e
 
 	ctx.Log.Debug("parsed generated config", "clusters", len(generatedConfig.Clusters))
 
-	// Verify the docker cluster exists in the generated config. The cluster is
-	// named "docker" for historical reasons (the container-install path predates
-	// Podman support); we keep the name stable so existing installs' client
-	// configs and the 50-docker.yaml leaf keep resolving after an upgrade,
-	// regardless of which runtime now hosts the container.
-	dockerCluster, ok := generatedConfig.Clusters["docker"]
+	// The cluster is named "local", matching the native install (server install)
+	// and the server's own default cluster name, so a container-hosted server
+	// looks the same to the client as a native one regardless of runtime.
+	localCluster, ok := generatedConfig.Clusters["local"]
 	if !ok {
-		ctx.Log.Error("docker cluster not found in generated config", "available_clusters", generatedConfig.Clusters)
-		return fmt.Errorf("docker cluster not found in generated config")
+		ctx.Log.Error("local cluster not found in generated config", "available_clusters", generatedConfig.Clusters)
+		return fmt.Errorf("local cluster not found in generated config")
 	}
 
-	ctx.Log.Debug("found docker cluster in config", "hostname", dockerCluster.Hostname)
+	ctx.Log.Debug("found local cluster in config", "hostname", localCluster.Hostname)
 
 	// Load existing user config
 	config, err := clientconfig.LoadConfig()
@@ -885,32 +887,82 @@ func copyClientConfig(ctx *Context, rt containerRuntime, containerName string) e
 		ctx.Log.Debug("loaded existing client config", "active_cluster", config.ActiveCluster())
 	}
 
-	// Create leaf config data with the docker cluster
+	// Create leaf config data with the local cluster (saved to
+	// clientconfig.d/50-local.yaml, same as the native install).
 	leafConfigData := &clientconfig.ConfigData{
 		Clusters: map[string]*clientconfig.ClusterConfig{
-			"docker": dockerCluster,
+			"local": localCluster,
 		},
 	}
+	ctx.Log.Debug("setting leaf config", "name", "50-local")
+	config.SetLeafConfig("50-local", leafConfigData)
 
-	// Add as a leaf config (this will be saved to clientconfig.d/50-docker.yaml)
-	ctx.Log.Debug("setting leaf config", "name", "50-docker")
-	config.SetLeafConfig("50-docker", leafConfigData)
-
-	// Set the active cluster to docker if none is set
-	if config.ActiveCluster() == "" {
-		ctx.Log.Debug("setting active cluster to docker")
-		config.SetActiveCluster("docker")
+	// Migrate off the old "docker" cluster name. Earlier container installs
+	// wrote a "docker" cluster (50-docker.yaml) and made it active. Point an
+	// unset-or-"docker" active cluster at "local", then drop the stale "docker"
+	// cluster so `-C docker` and its leaf don't linger. A user's own active
+	// cluster (e.g. a cloud cluster) is left untouched. Order matters:
+	// RemoveCluster refuses to remove the active cluster, so we re-point first.
+	if active := config.ActiveCluster(); active == "" || active == "docker" {
+		config.SetActiveCluster("local")
+	}
+	if config.HasCluster("docker") {
+		if err := config.RemoveCluster("docker"); err != nil {
+			ctx.Log.Warn("could not remove legacy docker cluster", "error", err)
+		}
 	}
 
 	// Save the config
 	ctx.Log.Debug("saving client config")
 	if err := config.Save(); err != nil {
-		ctx.Log.Error("failed to save docker cluster leaf config", "error", err)
-		return fmt.Errorf("failed to save docker cluster leaf config: %w", err)
+		ctx.Log.Error("failed to save local cluster leaf config", "error", err)
+		return fmt.Errorf("failed to save local cluster leaf config: %w", err)
 	}
 
-	ctx.Log.Info("wrote docker cluster config", "cluster", "docker", "address", dockerCluster.Hostname)
+	ctx.Log.Info("wrote local cluster config", "cluster", "local", "address", localCluster.Hostname)
 	return nil
+}
+
+// removeInstalledClusters drops the client-config cluster a container install
+// created, so uninstall is symmetric with install and doesn't leave a dead
+// cluster pointing at a server that's gone. It removes the current "local" name
+// and the legacy "docker" name (from pre-rename installs). If one is the active
+// cluster, RemoveCluster would refuse it, so we clear the active pointer first.
+// Best-effort: client-config problems are warned, never fatal, so the container
+// uninstall itself still succeeds.
+func removeInstalledClusters(ctx *Context) {
+	config, err := clientconfig.LoadConfig()
+	if err != nil {
+		return
+	}
+
+	changed := false
+	activeCleared := false
+	for _, name := range []string{"local", "docker"} {
+		if !config.HasCluster(name) {
+			continue
+		}
+		if config.ActiveCluster() == name {
+			config.ClearActiveCluster()
+			activeCleared = true
+		}
+		if err := config.RemoveCluster(name); err != nil {
+			ctx.Log.Warn("could not remove cluster during uninstall", "cluster", name, "error", err)
+			continue
+		}
+		changed = true
+	}
+
+	if !changed {
+		return
+	}
+	if err := config.Save(); err != nil {
+		ctx.Log.Warn("could not save client config during uninstall", "error", err)
+		return
+	}
+	if activeCleared {
+		ctx.Info("The active cluster pointed at this server; cleared it. Select another with 'miren cluster switch <name>'.")
+	}
 }
 
 type containerRegistrationOptions struct {
@@ -980,6 +1032,15 @@ func performRegistrationPreStart(ctx *Context, rt containerRuntime, image, volum
 	// Create a temporary container to copy files
 	tempContainerName := fmt.Sprintf("miren-reg-copy-%d", time.Now().Unix())
 
+	// Register cleanup before the run: a non-zero exit inside the container
+	// still leaves the container object behind, so a failure below must not
+	// leak a miren-reg-copy-<ts> container on the host.
+	defer func() {
+		if err := rt.removeContainer(tempContainerName, true); err != nil {
+			ctx.Warn("Failed to remove temp container %s: %v", tempContainerName, err)
+		}
+	}()
+
 	// Run container to create the directory structure (override entrypoint)
 	runArgs := []string{
 		"run", "--name", tempContainerName,
@@ -992,13 +1053,6 @@ func performRegistrationPreStart(ctx *Context, rt containerRuntime, image, volum
 	if output, err := rt.command(runArgs...).CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to create directory in volume: %w: %s", err, output)
 	}
-
-	// Ensure temp container is always cleaned up
-	defer func() {
-		if err := rt.removeContainer(tempContainerName, true); err != nil {
-			ctx.Warn("Failed to remove temp container %s: %v", tempContainerName, err)
-		}
-	}()
 
 	// Copy registration file to container
 	cpArgs := []string{

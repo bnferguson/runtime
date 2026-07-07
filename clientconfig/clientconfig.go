@@ -390,6 +390,13 @@ func (c *Config) SetActiveCluster(name string) error {
 	return nil
 }
 
+// ClearActiveCluster unsets the active cluster, leaving no cluster active. This
+// is a valid state (used, for example, when the active cluster is being removed)
+// and callers must re-select one before commands that need a default cluster.
+func (c *Config) ClearActiveCluster() {
+	c.active = ""
+}
+
 // LoadConfig loads the configuration from disk
 func LoadConfig() (*Config, error) {
 	configPath, loadConfigD, err := getConfigPath()
@@ -604,6 +611,15 @@ func sanitizeLeafName(name string) string {
 	return name
 }
 
+// isEmptyConfigData reports whether a leaf config carries nothing worth
+// persisting, so its file can be removed instead of written as an empty "{}".
+func isEmptyConfigData(d *ConfigData) bool {
+	return d == nil || (d.Active == "" &&
+		len(d.Clusters) == 0 &&
+		len(d.Identities) == 0 &&
+		len(d.Keys) == 0)
+}
+
 // saveLeafConfigs saves all unsaved leaf configs to clientconfig.d/ directory
 func (c *Config) saveLeafConfigs(mainConfigPath string) error {
 	// Determine the config.d directory path based on the main config path
@@ -617,6 +633,16 @@ func (c *Config) saveLeafConfigs(mainConfigPath string) error {
 	// Save each unsaved leaf config
 	for name, configData := range c.unsavedLeafConfigs {
 		leafPath := filepath.Join(configDirPath, sanitizeLeafName(name)+".yaml")
+
+		// A leaf that's been emptied (all its clusters/identities/keys removed,
+		// e.g. via RemoveCluster) should have its file deleted rather than left
+		// behind as an empty "{}" document.
+		if isEmptyConfigData(configData) {
+			if err := os.Remove(leafPath); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("failed to remove emptied leaf config %s: %w", name, err)
+			}
+			continue
+		}
 
 		data, err := yaml.Marshal(configData)
 		if err != nil {

@@ -352,3 +352,55 @@ clusters:
 	assert.False(t, config2.HasCluster("main-cluster"), "Removed main cluster should not reappear")
 	assert.False(t, config2.HasCluster("other-main"), "Removed main cluster should not reappear")
 }
+
+// TestRemoveClusterDeletesEmptiedLeafFile verifies that removing the last
+// cluster from a leaf config deletes its file on save, rather than leaving an
+// empty "{}" document behind.
+func TestRemoveClusterDeletesEmptiedLeafFile(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	mainConfigPath := filepath.Join(tmpDir, "clientconfig.yaml")
+	mainConfig := "active_cluster: main\nclusters:\n  main:\n    hostname: main.example.com\n"
+	require.NoError(t, os.WriteFile(mainConfigPath, []byte(mainConfig), 0644))
+
+	configDirPath := filepath.Join(tmpDir, "clientconfig.d")
+	require.NoError(t, os.MkdirAll(configDirPath, 0755))
+	leafPath := filepath.Join(configDirPath, "50-local.yaml")
+	leafConfig := "clusters:\n  local:\n    hostname: localhost:8443\n"
+	require.NoError(t, os.WriteFile(leafPath, []byte(leafConfig), 0644))
+
+	oldEnv := os.Getenv(EnvConfigPath)
+	os.Setenv(EnvConfigPath, tmpDir)
+	defer os.Setenv(EnvConfigPath, oldEnv)
+
+	config, err := LoadConfig()
+	require.NoError(t, err)
+	require.True(t, config.HasCluster("local"))
+
+	// Removing the leaf's only cluster empties it; saving should delete the file.
+	require.NoError(t, config.RemoveCluster("local"))
+	require.NoError(t, config.Save())
+
+	_, statErr := os.Stat(leafPath)
+	assert.True(t, os.IsNotExist(statErr), "emptied leaf file should be removed, stat err was: %v", statErr)
+}
+
+// TestClearActiveClusterAllowsRemovingIt verifies that clearing the active
+// cluster unsets it and lets the formerly-active cluster be removed (which
+// RemoveCluster otherwise refuses). This is the sequence uninstall relies on.
+func TestClearActiveClusterAllowsRemovingIt(t *testing.T) {
+	config := NewConfig()
+	config.SetCluster("local", &ClusterConfig{Hostname: "localhost:8443"})
+	config.SetCluster("cloud", &ClusterConfig{Hostname: "cloud.example.com"})
+	require.NoError(t, config.SetActiveCluster("local"))
+
+	// RemoveCluster refuses to drop the active cluster.
+	require.Error(t, config.RemoveCluster("local"))
+
+	// After clearing active, it can be removed and no cluster is active.
+	config.ClearActiveCluster()
+	assert.Equal(t, "", config.ActiveCluster())
+	require.NoError(t, config.RemoveCluster("local"))
+	assert.False(t, config.HasCluster("local"))
+	assert.True(t, config.HasCluster("cloud"), "other clusters are untouched")
+}
