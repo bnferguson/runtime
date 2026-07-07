@@ -682,16 +682,24 @@ func autoConfigureCluster(ctx *Context, identityName, cloudURL string, keyPair *
 		return fmt.Errorf("failed to fetch available clusters: %w", err)
 	}
 
-	// Filter out clusters without API addresses
+	// Only clusters with a reachable address can be auto-configured.
 	var validClusters []ClusterResponse
 	for _, cluster := range clusters {
-		if len(cluster.APIAddresses) > 0 {
+		if cluster.hasReachableAddress() {
 			validClusters = append(validClusters, cluster)
 		}
 	}
 
 	if len(validClusters) == 0 {
-		ctx.Info("No clusters available for your account")
+		if len(clusters) == 0 {
+			ctx.Info("No clusters available for your account")
+		} else {
+			// Clusters exist but none advertise a reachable address — the common
+			// firewalled-inbound-port case. Say so honestly instead of implying the
+			// account has nothing, which sends users chasing an auth/org red
+			// herring. See MIR-1316.
+			printUnreachableClustersHelp(ctx, fmt.Sprintf("Found %d cluster(s), but none advertise a reachable address:", len(clusters)), clusters)
+		}
 		return ErrNoAutoConfigNeeded
 	}
 
