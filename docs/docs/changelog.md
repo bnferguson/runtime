@@ -11,6 +11,11 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *main*
 
+---
+
+## v0.11.1
+*2026-07-08*
+
 **Improvements**
 - **Podman support for containerized server installs** - `miren server docker install` is now `miren server container install`, working across both Docker and Podman (the old `server docker *` commands stay as deprecated aliases). Pick a runtime with `--runtime docker|podman` or let it auto-detect. Rootful Podman works end to end; rootless isn't supported for sandboxes, so the installer now stops up front with the fix rather than letting deploys crash-loop later. ([#894](https://github.com/mirendev/runtime/pull/894))
 - **CLI colors adapt to your terminal background** - On light-background terminals the output was washed out and hard to read. Miren now detects light vs. dark and picks a readable palette, with `NO_COLOR`/`FORCE_COLOR` and a `MIREN_THEME` override honored. Run `miren debug colors` to see what it detected. ([#893](https://github.com/mirendev/runtime/pull/893))
