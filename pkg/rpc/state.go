@@ -398,18 +398,13 @@ func (s *State) setupServerTls(so *stateOptions) error {
 		if so.requireClientCerts {
 			tlsCfg.ClientAuth = tls.RequireAndVerifyClientCert
 		} else {
-			tlsCfg.ClientAuth = tls.RequestClientCert
-		}
-		tlsCfg.VerifyConnection = func(cs tls.ConnectionState) error {
-			// Standard certificate validation only
-			// The authenticator can use r.TLS to access certificates later in ServeHTTP
-			/* Too noisy, disabled for now.
-			if len(cs.PeerCertificates) != 0 {
-				cert := cs.PeerCertificates[0]
-				s.log.Info("verified client connection", "subject", cert.Subject)
-			}
-			*/
-			return nil
+			// VerifyClientCertIfGiven: a client is not required to present a
+			// cert (JWT/OIDC callers authenticate via the Authorization header),
+			// but if one IS presented it MUST chain to ClientCAs. This ensures
+			// r.TLS.PeerCertificates only ever holds a cert that has been
+			// verified against the cluster CA, so authenticators that derive an
+			// identity from the cert cannot be fooled by a self-signed forgery.
+			tlsCfg.ClientAuth = tls.VerifyClientCertIfGiven
 		}
 	}
 
@@ -440,9 +435,9 @@ type connectionKey struct{}
 type CurrentConnectionInfo struct {
 	PeerSubject string
 	// PeerCertificate is the client certificate presented during the mTLS
-	// handshake, if any. The server is configured with tls.RequestClientCert,
-	// which requests but does not verify the cert, so handlers that rely on it
-	// for authorization must verify it (e.g. that it chains to the cluster CA).
+	// handshake, if any. When a CA is configured the server uses
+	// tls.VerifyClientCertIfGiven, so any cert present here has already been
+	// verified to chain to the cluster CA (r.TLS.VerifiedChains is non-empty).
 	PeerCertificate *x509.Certificate
 }
 

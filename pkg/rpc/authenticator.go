@@ -125,8 +125,11 @@ func (n *NoOpAuthenticator) Authenticate(ctx context.Context, r *http.Request) (
 type LocalOnlyAuthenticator struct{}
 
 func (l *LocalOnlyAuthenticator) Authenticate(ctx context.Context, r *http.Request) (*Identity, error) {
-	// Check for TLS client certificate
-	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+	// Check for TLS client certificate. Only trust a cert that the TLS layer
+	// verified against the cluster CA (VerifiedChains non-empty); a
+	// presented-but-unverified cert must never yield a cert identity, which
+	// grants RBAC-bypassing privileges in Authorize.
+	if r.TLS != nil && len(r.TLS.VerifiedChains) > 0 && len(r.TLS.PeerCertificates) > 0 {
 		cert := r.TLS.PeerCertificates[0]
 		return &Identity{
 			Subject: cert.Subject.CommonName,

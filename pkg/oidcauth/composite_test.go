@@ -127,7 +127,14 @@ func TestCompositeAuthorizer_CertBypass(t *testing.T) {
 		Method:  rpc.AuthMethodCert,
 	}
 
-	// Cert auth should bypass all checks, even for unknown resources
+	// A cert-method identity bypasses all RBAC checks. This is only safe
+	// because an AuthMethodCert identity is produced upstream ONLY for a client
+	// cert that the TLS layer verified against the cluster CA -- see the
+	// VerifiedChains gate in Authenticate (pkg/rpc/authenticator.go,
+	// pkg/cloudauth/rpc_authenticator.go) and the verifying listener config
+	// (pkg/rpc/state.go). Weakening either of those turns this blanket bypass
+	// back into the client-cert auth bypass. Do not treat "cert = superuser" as
+	// harmless in isolation.
 	err := comp.Authorize(context.Background(), identity, "anything", "anything")
 	if err != nil {
 		t.Errorf("cert auth should bypass all checks: %v", err)
