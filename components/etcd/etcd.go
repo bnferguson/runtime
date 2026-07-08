@@ -43,7 +43,9 @@ type etcdState struct {
 
 // currentConfigVersion should be bumped whenever the container spec changes
 // (new env vars, different args, etc.) so that upgrades recreate the container.
-const currentConfigVersion = 1
+//
+// v2: memory auto-tuning — etcd flags/env are now scaled to system RAM.
+const currentConfigVersion = 2
 
 // TLSConfig holds TLS certificate paths for etcd mTLS.
 // When configured, etcd will require client certificate authentication.
@@ -369,6 +371,21 @@ func (e *EtcdComponent) createContainer(ctx context.Context, image containerd.Im
 		scheme = "https"
 	}
 
+	// Scale etcd's memory-related config to the size of the node it runs on so it
+	// behaves as a ~10%-of-RAM co-tenant rather than growing to fill the node.
+	tuning := computeTuning(detectSystemRAMBytes())
+	e.Log.Info("etcd memory auto-tuning",
+		"system_ram_bytes", tuning.SystemRAMBytes,
+		"budget_bytes", tuning.BudgetBytes,
+		"quota_backend_bytes", tuning.QuotaBackendBytes,
+		"gomemlimit_bytes", tuning.GoMemLimitBytes,
+		"gogc", tuning.GOGC,
+		"auto_compaction_retention", tuning.AutoCompactionReten,
+		"snapshot_count", tuning.SnapshotCount,
+		"snapshot_catchup_entries", tuning.SnapshotCatchupEntries,
+		"max_concurrent_streams", tuning.MaxConcurrentStreams,
+		"compaction_batch_limit", tuning.CompactionBatchLimit)
+
 	args := []string{
 		"/usr/local/bin/etcd",
 		"--name", config.Name,
@@ -381,6 +398,8 @@ func (e *EtcdComponent) createContainer(ctx context.Context, image containerd.Im
 		"--initial-cluster", fmt.Sprintf("%s=http://localhost:%d", config.Name, config.PeerPort),
 		"--initial-cluster-state", config.ClusterState,
 	}
+
+	args = append(args, tuning.args()...)
 
 	if config.InitialToken != "" {
 		args = append(args, "--initial-cluster-token", config.InitialToken)
@@ -423,11 +442,7 @@ func (e *EtcdComponent) createContainer(ctx context.Context, image containerd.Im
 		oci.WithHostHostsFile,
 		oci.WithHostResolvconf,
 		oci.WithProcessArgs(args...),
-		oci.WithEnv([]string{
-			"ETCD_AUTO_COMPACTION_MODE=periodic",
-			"ETCD_AUTO_COMPACTION_RETENTION=1h",
-			"ETCD_EXPERIMENTAL_BACKEND_BBOLT_FREELIST_TYPE=map",
-		}),
+		oci.WithEnv(tuning.envVars()),
 		oci.WithMounts(mounts),
 	}
 
