@@ -32,6 +32,40 @@ type ClusterResponse struct {
 	OrganizationName  string                 `json:"organization_name"`
 }
 
+// hasReachableAddress reports whether the cloud advertised at least one API
+// address for this cluster. A cluster with none can't be dialed by any client,
+// so it would otherwise be silently hidden from `miren cluster add`. The most
+// common cause is a firewalled inbound port: miren connects over QUIC (UDP
+// 8443), and when the cloud's netcheck can't reach that port it drops the
+// discovered public IP, leaving the cluster advertising nothing. See MIR-1316.
+func (c ClusterResponse) hasReachableAddress() bool {
+	return len(c.APIAddresses) > 0
+}
+
+const (
+	// unreachableAddressNote is the short, inline note shown in listings next to
+	// a cluster that advertised no reachable API address.
+	unreachableAddressNote = "no reachable address"
+
+	// unreachableAddressHelp is the one-line remediation shown alongside that
+	// note. It names UDP 8443 specifically (miren dials over QUIC, so the UDP
+	// port is what's necessary and sufficient, not TCP) and points at the
+	// on-host diagnostic that reproduces the exact decision.
+	unreachableAddressHelp = "open UDP 8443 (QUIC) on the host or set additional_ips, then restart miren; run 'miren debug advertise' on the host to see why"
+)
+
+// printUnreachableClustersHelp prints a warning header, a bulleted list of the
+// given clusters, and the standard remediation guidance. Shared between the
+// cluster-add picker and login's auto-config so the two messages can't drift.
+func printUnreachableClustersHelp(ctx *Context, header string, clusters []ClusterResponse) {
+	ctx.Warn(header)
+	for _, cluster := range clusters {
+		ctx.Info("  • %s (%s)", cluster.Name, cluster.OrganizationName)
+	}
+	ctx.Info("")
+	ctx.Info("To connect: %s", unreachableAddressHelp)
+}
+
 // formatAddressWithGrayPort formats an address with the port portion grayed out
 func formatAddressWithGrayPort(address string) string {
 	host, port, err := net.SplitHostPort(address)
@@ -229,58 +263,37 @@ func fetchAvailableClusters(ctx *Context, config *clientconfig.Config, identity 
 	return response.Clusters, nil
 }
 
-// selectClusterFromList presents an interactive list of clusters for selection and prompts for local name
-// Returns the selected cluster and the local name to use
-func selectClusterFromList(ctx *Context, clusters []ClusterResponse) (*ClusterResponse, string, error) {
-	// Check if we can run interactive mode
-	if !ui.IsInteractive() {
-		// Non-interactive mode - list clusters and exit
-		ctx.Printf("Available clusters:\n\n")
-		clusterNum := 1
-		for _, cluster := range clusters {
-			if len(cluster.APIAddresses) == 0 {
-				continue // Skip clusters without API addresses
-			}
-
-			ctx.Printf("%d. Cluster: %s\n", clusterNum, cluster.Name)
-			ctx.Printf("   Organization: %s\n", cluster.OrganizationName)
-			if cluster.Description != "" {
-				ctx.Printf("   Description: %s\n", cluster.Description)
-			}
-			ctx.Printf("   API Addresses:\n")
-			for _, addr := range cluster.APIAddresses {
-				ctx.Printf("     - %s\n", addr)
-			}
-			if cluster.CACertFingerprint != "" {
-				ctx.Printf("   Certificate Fingerprint: %s\n", cluster.CACertFingerprint)
-			}
-			ctx.Printf("\n")
-			clusterNum++
-		}
-		ctx.Printf("Re-run with --cluster and --address flags to select a specific cluster\n")
-		return nil, "", fmt.Errorf("interactive mode not available")
-	}
-
-	// Create table picker items
-	items := make([]ui.PickerItem, 0, len(clusters))
-	clusterMap := make(map[string]*ClusterResponse)
+// buildClusterPickerItems turns the fetched clusters into picker rows. Every
+// cluster gets a row: reachable ones show their primary address (sorted so a
+// public address wins) and are selectable; unreachable ones (no advertised
+// address) show the reason inline and are marked disabled so the picker greys
+// them out and blocks selection. It returns the rows, a map from row ID back to
+// the source cluster, the set of disabled row IDs, and the count of selectable
+// (reachable) clusters. Kept pure so the classification is unit-testable
+// without standing up a TUI. See MIR-1316.
+func buildClusterPickerItems(clusters []ClusterResponse) (items []ui.PickerItem, clusterMap map[string]*ClusterResponse, disabled map[string]bool, reachableCount int) {
+	items = make([]ui.PickerItem, 0, len(clusters))
+	clusterMap = make(map[string]*ClusterResponse)
+	disabled = make(map[string]bool)
 
 	for i, cluster := range clusters {
-		if len(cluster.APIAddresses) == 0 {
-			continue // Skip clusters without API addresses
-		}
-
-		// Sort addresses to put localhost/0.0.0.0 last
-		addresses := sortAddresses(cluster.APIAddresses)
-
-		// Format primary address with grayed port
-		address := formatAddressWithGrayPort(addresses[0])
-		if len(addresses) > 1 {
-			address = fmt.Sprintf("%s (+%d)", address, len(addresses)-1)
-		}
-
-		// Create table item
 		itemID := fmt.Sprintf("cluster_%d", i)
+
+		var address string
+		if cluster.hasReachableAddress() {
+			reachableCount++
+			// Sort addresses to put localhost/0.0.0.0 last, then format the
+			// primary one with a grayed port.
+			addresses := sortAddresses(cluster.APIAddresses)
+			address = formatAddressWithGrayPort(addresses[0])
+			if len(addresses) > 1 {
+				address = fmt.Sprintf("%s (+%d)", address, len(addresses)-1)
+			}
+		} else {
+			address = unreachableAddressNote
+			disabled[itemID] = true
+		}
+
 		items = append(items, ui.TablePickerItem{
 			Columns: []string{
 				cluster.Name,
@@ -292,10 +305,63 @@ func selectClusterFromList(ctx *Context, clusters []ClusterResponse) (*ClusterRe
 		clusterMap[itemID] = &clusters[i]
 	}
 
+	return items, clusterMap, disabled, reachableCount
+}
+
+// selectClusterFromList presents an interactive list of clusters for selection and prompts for local name
+// Returns the selected cluster and the local name to use
+func selectClusterFromList(ctx *Context, clusters []ClusterResponse) (*ClusterResponse, string, error) {
+	// Check if we can run interactive mode
+	if !ui.IsInteractive() {
+		// Non-interactive mode - list clusters and exit. We list clusters with no
+		// reachable address too (annotated), rather than hiding them: a silently
+		// missing cluster reads as an auth/org problem and sends users chasing
+		// the wrong thing. See MIR-1316.
+		ctx.Printf("Available clusters:\n\n")
+		for clusterNum, cluster := range clusters {
+			ctx.Printf("%d. Cluster: %s\n", clusterNum+1, cluster.Name)
+			ctx.Printf("   Organization: %s\n", cluster.OrganizationName)
+			if cluster.Description != "" {
+				ctx.Printf("   Description: %s\n", cluster.Description)
+			}
+			if cluster.hasReachableAddress() {
+				ctx.Printf("   API Addresses:\n")
+				for _, addr := range cluster.APIAddresses {
+					ctx.Printf("     - %s\n", addr)
+				}
+				if cluster.CACertFingerprint != "" {
+					ctx.Printf("   Certificate Fingerprint: %s\n", cluster.CACertFingerprint)
+				}
+			} else {
+				ctx.Printf("   Status: %s — %s\n", unreachableAddressNote, unreachableAddressHelp)
+			}
+			ctx.Printf("\n")
+		}
+		ctx.Printf("Re-run with --cluster and --address flags to select a specific cluster\n")
+		return nil, "", fmt.Errorf("interactive mode not available")
+	}
+
+	// Build the picker rows. Clusters with no reachable address are listed too,
+	// but disabled (greyed out, not selectable) with the reason inline, rather
+	// than hidden — a silently missing cluster reads as an auth/org problem and
+	// sends users chasing the wrong thing. See MIR-1316.
+	items, clusterMap, disabled, reachableCount := buildClusterPickerItems(clusters)
+
+	// If nothing is selectable, a picker is a dead end. Print the clusters with
+	// their reason and return a clear error instead of trapping the user in a
+	// list where Enter does nothing.
+	if reachableCount == 0 {
+		printUnreachableClustersHelp(ctx, "None of your clusters advertise a reachable address:", clusters)
+		return nil, "", fmt.Errorf("no clusters with a reachable address")
+	}
+
 	// Run the table picker
 	selected, err := ui.RunPicker(items,
 		ui.WithTitle("Select a cluster to bind:"),
 		ui.WithHeaders([]string{"NAME", "ORGANIZATION", "ADDRESS"}),
+		ui.WithDisabledCheck(func(item ui.PickerItem) bool {
+			return disabled[item.ID()]
+		}, unreachableAddressHelp),
 	)
 
 	if err != nil {
