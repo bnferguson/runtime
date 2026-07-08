@@ -11,6 +11,15 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *main*
 
+**Improvements**
+- **Podman support for containerized server installs** - `miren server docker install` is now `miren server container install`, working across both Docker and Podman (the old `server docker *` commands stay as deprecated aliases). Pick a runtime with `--runtime docker|podman` or let it auto-detect. Rootful Podman works end to end; rootless isn't supported for sandboxes, so the installer now stops up front with the fix rather than letting deploys crash-loop later. ([#894](https://github.com/mirendev/runtime/pull/894))
+- **CLI colors adapt to your terminal background** - On light-background terminals the output was washed out and hard to read. Miren now detects light vs. dark and picks a readable palette, with `NO_COLOR`/`FORCE_COLOR` and a `MIREN_THEME` override honored. Run `miren debug colors` to see what it detected. ([#893](https://github.com/mirendev/runtime/pull/893))
+- **Memory metrics for the control process** - The coordinator now reports its own memory and goroutine counts to the bundled metrics stack (under `entity="miren/control"`), so a growing control-plane heap is finally visible instead of invisible. A localhost pprof endpoint lets you grab a live heap profile during an incident. ([#892](https://github.com/mirendev/runtime/pull/892))
+- **Install warnings stop nagging correctly-sized hosts** - A host provisioned at a nominal 8GB/100GB reports slightly less and used to trip the memory and disk warnings anyway. A 10% tolerance fixes it. ([#894](https://github.com/mirendev/runtime/pull/894))
+
+**Bug Fixes**
+- **Fixed an authentication bypass in the RPC control plane** ([GHSA-8fh7-7q4q-cq52](https://github.com/mirendev/runtime/security/advisories/GHSA-8fh7-7q4q-cq52)) - The RPC listener on `:8443` asked for a TLS client certificate but never checked it chained to the cluster CA, and a certificate identity gets full privileges. Anyone able to reach the port could present a forged cert and act as a cluster superuser. Certificates are now verified against the CA before they're trusted. Upgrade and restart the server to pick up the fix.
+
 ---
 
 ## v0.11.0
