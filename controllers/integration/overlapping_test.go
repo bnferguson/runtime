@@ -23,8 +23,8 @@ import (
 // mount reaches a terminal non-mounted state, the lease must revert to
 // PENDING so a new mount is created.
 //
-// Scenario: NBD handler crashes → mount cleanup transitions the mount
-// entity to MNT_DETACHED, but the lease wasn't updated. The lease
+// Scenario: the device backend crashes → mount cleanup transitions the
+// mount entity to MNT_DETACHED, but the lease wasn't updated. The lease
 // controller should detect the dead mount and trigger recovery.
 //
 // Bug: handleBoundLease only checks for nil mount (→ PENDING) and

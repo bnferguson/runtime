@@ -66,10 +66,7 @@ type MountState struct {
 	// VolumeId is the ID of the disk_volume entity
 	VolumeId string `json:"volume_id"`
 
-	// NbdIndex is the NBD device index (legacy, kept for state file compatibility)
-	NbdIndex uint32 `json:"nbd_index"`
-
-	// DevicePath is the path to the loop/NBD device node
+	// DevicePath is the path to the loop device node
 	DevicePath string `json:"device_path"`
 
 	// MountPath is where the volume is mounted

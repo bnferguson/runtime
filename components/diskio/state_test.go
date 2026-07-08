@@ -48,8 +48,7 @@ func TestStateSaveAndLoad(t *testing.T) {
 	state.SetMount("mount-1", &MountState{
 		EntityId:   "mount-1",
 		VolumeId:   "vol-1",
-		NbdIndex:   1,
-		DevicePath: "/dev/nbd1",
+		DevicePath: "/dev/loop1",
 		MountPath:  "/mnt/data",
 		Mounted:    true,
 		ReadOnly:   false,
@@ -86,8 +85,7 @@ func TestStateSaveAndLoad(t *testing.T) {
 	require.NotNil(t, mnt)
 	assert.Equal(t, "mount-1", mnt.EntityId)
 	assert.Equal(t, "vol-1", mnt.VolumeId)
-	assert.Equal(t, uint32(1), mnt.NbdIndex)
-	assert.Equal(t, "/dev/nbd1", mnt.DevicePath)
+	assert.Equal(t, "/dev/loop1", mnt.DevicePath)
 	assert.Equal(t, "/mnt/data", mnt.MountPath)
 	assert.True(t, mnt.Mounted)
 	assert.False(t, mnt.ReadOnly)
