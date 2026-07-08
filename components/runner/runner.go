@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
@@ -278,115 +277,6 @@ func (r *Runner) Drain(ctx context.Context) error {
 
 func (r *Runner) ContainerdNamespace() string {
 	return r.namespace
-}
-
-// stopUserContainers stops all running user workload containers so their file
-// descriptors to disk images are released before migration. Containers with
-// IDs starting with "miren-" are infrastructure (etcd, etc.) and are left
-// running. The sandbox controller will recreate stopped containers during its
-// subsequent reconciliation.
-func (r *Runner) stopUserContainers(ctx context.Context, log *slog.Logger) {
-	cc := r.deps.CC
-	containers, err := cc.Containers(ctx)
-	if err != nil {
-		log.Warn("failed to list containers for stop", "error", err)
-		return
-	}
-
-	// Collect tasks to stop and set up wait channels before sending signals
-	type pendingStop struct {
-		id     string
-		task   containerd.Task
-		exitCh <-chan containerd.ExitStatus
-	}
-
-	var pending []pendingStop
-	for _, c := range containers {
-		if strings.HasPrefix(c.ID(), "miren-") {
-			continue
-		}
-
-		task, err := c.Task(ctx, nil)
-		if err != nil {
-			continue
-		}
-
-		status, err := task.Status(ctx)
-		if err != nil || status.Status == containerd.Stopped {
-			continue
-		}
-
-		exitCh, err := task.Wait(ctx)
-		if err != nil {
-			continue
-		}
-
-		log.Info("sending SIGTERM to container for disk migration", "id", c.ID())
-		if err := task.Kill(ctx, syscall.SIGTERM); err != nil {
-			log.Warn("failed to send SIGTERM, migration will proceed anyway", "id", c.ID(), "error", err)
-			continue
-		}
-
-		pending = append(pending, pendingStop{id: c.ID(), task: task, exitCh: exitCh})
-	}
-
-	if len(pending) == 0 {
-		return
-	}
-
-	// Wait for all containers in parallel with a shared 10s deadline
-	timer := time.NewTimer(10 * time.Second)
-	defer timer.Stop()
-
-	remaining := make(map[int]struct{})
-	for i := range pending {
-		remaining[i] = struct{}{}
-	}
-
-	for len(remaining) > 0 {
-		select {
-		case <-timer.C:
-			// Timeout — SIGKILL everything still running
-			for i := range remaining {
-				p := &pending[i]
-				log.Warn("container did not exit in 10s, sending SIGKILL", "id", p.id)
-				_ = p.task.Kill(ctx, syscall.SIGKILL)
-			}
-			// Wait briefly for SIGKILL to take effect
-			for i := range remaining {
-				p := &pending[i]
-				killCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-				select {
-				case <-p.exitCh:
-				case <-killCtx.Done():
-				}
-				cancel()
-				if _, err := p.task.Delete(ctx); err != nil {
-					log.Warn("failed to delete task after kill", "id", p.id, "error", err)
-				}
-			}
-			remaining = nil
-		case <-ctx.Done():
-			return
-		default:
-			// Poll all remaining exit channels without blocking
-			for i := range remaining {
-				select {
-				case <-pending[i].exitCh:
-					if _, err := pending[i].task.Delete(ctx); err != nil {
-						log.Warn("failed to delete task after stop", "id", pending[i].id, "error", err)
-					}
-					delete(remaining, i)
-				default:
-				}
-			}
-			if len(remaining) > 0 {
-				time.Sleep(50 * time.Millisecond)
-			}
-		}
-	}
-
-	log.Info("stopped containers for disk migration", "count", len(pending))
 }
 
 func (r *Runner) ContainerdContainerForSandbox(ctx context.Context, id entity.Id) (containerd.Container, error) {
@@ -840,11 +730,6 @@ func (r *Runner) SetupControllers(
 		workers = DefaulWorkers
 	}
 
-	// Stop any orphaned lsvd-server process left over from a previous version.
-	// Before universal mode, the lsvd-server ran as an outboard process; during
-	// upgrade it must be stopped since the new code no longer manages it.
-	stopOrphanedLSVDServer(log, r.DataPath)
-
 	// Initialize disk I/O controllers for universal mode (loop devices)
 	dataPath := filepath.Join(r.DataPath, "disk-data")
 	err = os.MkdirAll(dataPath, 0700)
@@ -877,13 +762,6 @@ func (r *Runner) SetupControllers(
 
 	if err := r.dvc.Init(ctx); err != nil {
 		return nil, fmt.Errorf("disk volume controller init: %w", err)
-	}
-
-	// If LSVD migration is pending, stop user containers so their file
-	// descriptors to disk images are released before migration. The sandbox
-	// controller will recreate them during its subsequent reconciliation.
-	if r.dvc.HasPendingMigration(ctx) {
-		r.stopUserContainers(ctx, log)
 	}
 
 	// Reconcile volumes with entity server on startup to re-mount any

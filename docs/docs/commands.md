@@ -293,7 +293,6 @@ These commands are intended for advanced debugging and troubleshooting. They may
 | [`miren debug disk lease-release`](/command/debug-disk-lease-release) | Release a disk lease |
 | [`miren debug disk lease-status`](/command/debug-disk-lease-status) | Show detailed status of a disk lease |
 | [`miren debug disk list`](/command/debug-disk-list) | List all disk entities |
-| [`miren debug disk migrate`](/command/debug-disk-migrate) | Migrate LSVD volume to raw disk image |
 | [`miren debug disk mounts`](/command/debug-disk-mounts) | List all mounted disks from /proc/mounts |
 | [`miren debug disk status`](/command/debug-disk-status) | Show status of a disk entity |
 | [`miren debug entity`](/command/debug-entity) | Entity store debug commands |

@@ -195,7 +195,6 @@ This is the **Miren Runtime** - a container orchestration system built on contai
 - `components/` - Core runtime components (scheduler, runner, etc.)
 - `servers/` - RPC servers for various services
 - `pkg/` - Shared libraries and utilities
-- `lsvd/` - Custom log-structured virtual disk implementation
 - `hack/` - Build scripts and development utilities
 
 ### Development Environment Setup

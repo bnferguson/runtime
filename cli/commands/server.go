@@ -46,7 +46,6 @@ import (
 	"miren.dev/runtime/pkg/grunge"
 	"miren.dev/runtime/pkg/ipdiscovery"
 	"miren.dev/runtime/pkg/labs"
-	"miren.dev/runtime/pkg/nbd"
 	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/registration"
 	"miren.dev/runtime/pkg/rpc"
@@ -255,12 +254,6 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		ctx.UILog.Info("running in distributed mode")
 	default:
 		return fmt.Errorf("unknown mode: %s (valid modes: standalone, distributed)", cfg.GetMode())
-	}
-
-	// Initialize NBD kernel module for disk provisioning
-	if err := nbd.InitializeNBDModule(ctx.Log); err != nil {
-		ctx.Log.Warn("Failed to initialize NBD module (disk provisioning may not work)", "error", err)
-		// Don't fail server startup if NBD isn't available
 	}
 
 	// Determine containerd socket path

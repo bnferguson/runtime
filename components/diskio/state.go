@@ -11,7 +11,6 @@ import (
 )
 
 const stateFileName = "diskio-state.json"
-const legacyStateFileName = "lsvd-state.json"
 
 // State represents the persisted state of disk volumes and mounts
 type State struct {
@@ -67,10 +66,7 @@ type MountState struct {
 	// VolumeId is the ID of the disk_volume entity
 	VolumeId string `json:"volume_id"`
 
-	// NbdIndex is the NBD device index (legacy, kept for state file compatibility)
-	NbdIndex uint32 `json:"nbd_index"`
-
-	// DevicePath is the path to the loop/NBD device node
+	// DevicePath is the path to the loop device node
 	DevicePath string `json:"device_path"`
 
 	// MountPath is where the volume is mounted
@@ -97,18 +93,11 @@ func NewState() *State {
 	}
 }
 
-// LoadState loads state from the data path. It tries the current filename
-// first, then falls back to the legacy name for backward compatibility.
+// LoadState loads state from the data path.
 func LoadState(dataPath string) (*State, error) {
 	path := filepath.Join(dataPath, stateFileName)
 
 	data, err := os.ReadFile(path)
-	if err != nil && os.IsNotExist(err) {
-		// Try legacy filename — loaded data will be saved under the new name
-		legacyPath := filepath.Join(dataPath, legacyStateFileName)
-		data, err = os.ReadFile(legacyPath)
-	}
-
 	if err != nil {
 		if os.IsNotExist(err) {
 			state := NewState()

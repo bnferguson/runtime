@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 
 # Usage: ./hack/run <package> <test-pattern> [additional go test flags...]
-# Example: ./hack/run miren.dev/runtime/lsvd TestTortureQuick -torture.seed=12345
 
 pkg="$1"
 pattern="$2"

@@ -125,7 +125,6 @@
       "command/debug-disk-lease-release",
       "command/debug-disk-lease-status",
       "command/debug-disk-list",
-      "command/debug-disk-migrate",
       "command/debug-disk-mounts",
       "command/debug-disk-status",
       "command/debug-entity",

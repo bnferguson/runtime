@@ -11,6 +11,9 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *main*
 
+**Breaking Changes**
+- **LSVD disk volumes are no longer supported** - The legacy LSVD/NBD disk backend has been removed entirely, along with the one-time migration that converted LSVD volumes to the Universal (loop-device) format. That automatic migration shipped in **v0.6.0** and has run on first boot of every release since. If a node still holds un-migrated LSVD volume data when it reaches this release, that data can no longer be converted and the volume will not come back. Before upgrading to this version, upgrade to **at least v0.6.0** and boot it once so every LSVD volume is migrated first.
+
 ---
 
 ## v0.11.1

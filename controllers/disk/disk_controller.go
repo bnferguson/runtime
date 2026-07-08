@@ -250,14 +250,7 @@ func (d *DiskController) handleProvisioning(ctx context.Context, disk *storage_v
 		NodeId:       myNodeId,
 	}
 
-	// When migrating from LSVD, set MountId to the LSVD volume UUID so the
-	// mount path matches the old one.
 	volumeId := idgen.GenNS("disk-vol")
-	if disk.LsvdVolumeId != "" {
-		if lsvdVolId := d.findLSVDVolumeId(ctx, disk.ID); lsvdVolId != "" {
-			diskVolume.MountId = lsvdVolId
-		}
-	}
 
 	d.Log.Info("creating disk_volume entity",
 		"disk", disk.ID,
@@ -376,30 +369,6 @@ func (d *DiskController) handleDeletion(ctx context.Context, disk *storage_v1alp
 	}
 
 	return nil
-}
-
-// findLSVDVolumeId looks up the lsvd_volume entity for a disk and returns
-// the VolumeId (UUID used as the old mount point name).
-func (d *DiskController) findLSVDVolumeId(ctx context.Context, diskId entity.Id) string {
-	if d.EAC == nil {
-		return ""
-	}
-
-	resp, err := d.EAC.List(ctx, entity.Ref(storage_v1alpha.LsvdVolumeDiskIdId, diskId))
-	if err != nil {
-		d.Log.Debug("failed to list lsvd_volume for disk", "disk", diskId, "error", err)
-		return ""
-	}
-
-	values := resp.Values()
-	if len(values) == 0 {
-		return ""
-	}
-
-	var lsvdVol storage_v1alpha.LsvdVolume
-	lsvdVol.Decode(values[0].Entity())
-
-	return lsvdVol.VolumeId
 }
 
 // getDiskVolumeForDisk finds the disk_volume entity for a disk. When more
