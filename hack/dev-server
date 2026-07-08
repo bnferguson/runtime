@@ -114,7 +114,7 @@ case "${1:-}" in
     ;;
 
   restart)
-    # Use SIGUSR1 for restart to preserve outboard processes (like lsvd-server)
+    # Use SIGUSR1 for restart to preserve outboard processes
     if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
       PID=$(cat "$PIDFILE")
       echo "Sending SIGUSR1 to server (PID $PID) for graceful restart..."
