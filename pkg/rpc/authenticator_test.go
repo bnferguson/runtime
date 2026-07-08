@@ -71,16 +71,28 @@ func TestLocalOnlyAuthenticator(t *testing.T) {
 	tests := []struct {
 		name           string
 		hasCert        bool
+		verifiedChain  bool
 		expectIdentity bool
 		expectSubject  string
 		expectMethod   AuthMethod
 	}{
 		{
-			name:           "with certificate returns identity",
+			name:           "verified certificate returns identity",
 			hasCert:        true,
+			verifiedChain:  true,
 			expectIdentity: true,
 			expectSubject:  "test-client",
 			expectMethod:   AuthMethodCert,
+		},
+		{
+			// Regression test for the RPC auth bypass: a client cert that was
+			// presented but not verified against the cluster CA (empty
+			// VerifiedChains) must NOT yield a cert identity, otherwise a
+			// self-signed forgery would be granted superuser access.
+			name:           "unverified certificate returns nil",
+			hasCert:        true,
+			verifiedChain:  false,
+			expectIdentity: false,
 		},
 		{
 			name:           "without certificate returns nil",
@@ -106,6 +118,9 @@ func TestLocalOnlyAuthenticator(t *testing.T) {
 			if tt.hasCert {
 				req.TLS = &tls.ConnectionState{
 					PeerCertificates: []*x509.Certificate{mockCert},
+				}
+				if tt.verifiedChain {
+					req.TLS.VerifiedChains = [][]*x509.Certificate{{mockCert}}
 				}
 			} else if tt.name == "TLS without peer certs returns nil" {
 				// TLS connection but no peer certificates
@@ -178,4 +193,52 @@ func TestIdentityContext(t *testing.T) {
 			t.Errorf("expected nil identity, got %+v", retrieved)
 		}
 	})
+}
+
+// TestServerTLSVerifiesClientCertsWhenCAConfigured is a configuration tripwire
+// for the RPC client-cert auth bypass. When a cluster CA is configured, the
+// listener must verify presented client certs against it. tls.RequestClientCert
+// requests a client cert but never verifies it -- the exact misconfiguration
+// behind the historical bypass -- so it must never be selected here. This is a
+// cheap guard that fails the moment someone flips the mode back.
+func TestServerTLSVerifiesClientCertsWhenCAConfigured(t *testing.T) {
+	// A non-nil CA is all that's needed to drive the ClientAuth selection; the
+	// bytes need not be a parseable cert for this branch.
+	dummyCA := []byte("-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----\n")
+
+	tests := []struct {
+		name     string
+		opts     []StateOption
+		wantAuth tls.ClientAuthType
+	}{
+		{
+			name:     "CA configured verifies presented certs",
+			opts:     []StateOption{WithCertificateVerification(dummyCA)},
+			wantAuth: tls.VerifyClientCertIfGiven,
+		},
+		{
+			name:     "CA configured with required client certs",
+			opts:     []StateOption{WithCertificateVerification(dummyCA), WithRequireClientCerts},
+			wantAuth: tls.RequireAndVerifyClientCert,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, err := NewState(t.Context(), tt.opts...)
+			if err != nil {
+				t.Fatalf("NewState: %v", err)
+			}
+			defer s.Close()
+
+			got := s.serverTlsCfg.ClientAuth
+			if got == tls.RequestClientCert {
+				t.Fatal("listener uses tls.RequestClientCert with a CA configured; " +
+					"presented client certs are not verified against the CA (auth bypass)")
+			}
+			if got != tt.wantAuth {
+				t.Fatalf("ClientAuth = %v, want %v", got, tt.wantAuth)
+			}
+		})
+	}
 }

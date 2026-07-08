@@ -123,8 +123,11 @@ func (a *RPCAuthenticator) Authenticate(ctx context.Context, r *http.Request) (*
 		// Invalid JWT format, fall through to cert check
 	}
 
-	// Fall back to TLS client certificate
-	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+	// Fall back to TLS client certificate. Only trust a cert that the TLS
+	// layer verified against the cluster CA (VerifiedChains non-empty); a
+	// presented-but-unverified cert must never yield a cert identity, which
+	// grants RBAC-bypassing privileges in Authorize.
+	if r.TLS != nil && len(r.TLS.VerifiedChains) > 0 && len(r.TLS.PeerCertificates) > 0 {
 		cert := r.TLS.PeerCertificates[0]
 		return &rpc.Identity{
 			Subject: cert.Subject.CommonName,
