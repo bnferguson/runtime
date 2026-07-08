@@ -88,7 +88,7 @@ func TestDiskAndLeaseIntegration(t *testing.T) {
 	})
 }
 
-func TestDiskControllerUpgradeLSVDToUniversal(t *testing.T) {
+func TestDiskControllerUpgradeProvisionedToUniversal(t *testing.T) {
 	t.Run("provisioned disk with no disk_volume creates one in single cycle", func(t *testing.T) {
 		ctx := t.Context()
 		log := testutils.TestLogger(t)
@@ -99,15 +99,14 @@ func TestDiskControllerUpgradeLSVDToUniversal(t *testing.T) {
 		dc := NewDiskController(log, es.EAC, "test-node-1", "", true)
 		dc.ForceUniversalMode()
 
-		// Create a disk entity that looks like it was provisioned under the old LSVD system:
-		// Status=PROVISIONED, LsvdVolumeId set, VolumeId empty
+		// Create a disk entity that was provisioned under an older system:
+		// Status=PROVISIONED but VolumeId empty and no disk_volume entity.
 		disk := &storage_v1alpha.Disk{
-			ID:           "disk/old-lsvd-disk",
-			Name:         "my-data",
-			SizeGb:       10,
-			Filesystem:   storage_v1alpha.EXT4,
-			Status:       storage_v1alpha.PROVISIONED,
-			LsvdVolumeId: "some-lsvd-vol-id",
+			ID:         "disk/old-provisioned-disk",
+			Name:       "my-data",
+			SizeGb:     10,
+			Filesystem: storage_v1alpha.EXT4,
+			Status:     storage_v1alpha.PROVISIONED,
 		}
 
 		_, err := es.EAC.Create(ctx, entity.New(

@@ -1051,7 +1051,6 @@ Warning: These commands are intended for advanced users and developers. They may
 	d.Dispatch("debug disk lease-delete", Infer("debug disk lease-delete", "Delete a disk lease entity", DebugDiskLeaseDelete))
 	d.Dispatch("debug disk lease-status", Infer("debug disk lease-status", "Show detailed status of a disk lease", DebugDiskLeaseStatus))
 	d.Dispatch("debug disk mounts", Infer("debug disk mounts", "List all mounted disks from /proc/mounts", DebugDiskMounts))
-	d.Dispatch("debug disk migrate", Infer("debug disk migrate", "Migrate LSVD volume to raw disk image", DiskMigrate))
 
 	// Debug netdb commands
 	d.Dispatch("debug netdb", Section("debug netdb", "Network database debug commands", ""))

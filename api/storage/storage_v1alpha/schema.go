@@ -13,7 +13,6 @@ const (
 	DiskFilesystemExt4Id     = entity.Id("dev.miren.storage/filesystem.ext4")
 	DiskFilesystemXfsId      = entity.Id("dev.miren.storage/filesystem.xfs")
 	DiskFilesystemBtrfsId    = entity.Id("dev.miren.storage/filesystem.btrfs")
-	DiskLsvdVolumeIdId       = entity.Id("dev.miren.storage/disk.lsvd_volume_id")
 	DiskModeId               = entity.Id("dev.miren.storage/disk.mode")
 	DiskModeUniversalId      = entity.Id("dev.miren.storage/mode.universal")
 	DiskModeAcceleratorId    = entity.Id("dev.miren.storage/mode.accelerator")
@@ -32,16 +31,15 @@ const (
 )
 
 type Disk struct {
-	ID           entity.Id      `json:"id"`
-	CreatedBy    entity.Id      `cbor:"created_by,omitempty" json:"created_by,omitempty"`
-	Filesystem   DiskFilesystem `cbor:"filesystem,omitempty" json:"filesystem,omitempty"`
-	LsvdVolumeId string         `cbor:"lsvd_volume_id,omitempty" json:"lsvd_volume_id,omitempty"`
-	Mode         DiskMode       `cbor:"mode,omitempty" json:"mode,omitempty"`
-	Name         string         `cbor:"name" json:"name"`
-	RemoteOnly   bool           `cbor:"remote_only,omitempty" json:"remote_only,omitempty"`
-	SizeGb       int64          `cbor:"size_gb" json:"size_gb"`
-	Status       DiskStatus     `cbor:"status,omitempty" json:"status,omitempty"`
-	VolumeId     string         `cbor:"volume_id,omitempty" json:"volume_id,omitempty"`
+	ID         entity.Id      `json:"id"`
+	CreatedBy  entity.Id      `cbor:"created_by,omitempty" json:"created_by,omitempty"`
+	Filesystem DiskFilesystem `cbor:"filesystem,omitempty" json:"filesystem,omitempty"`
+	Mode       DiskMode       `cbor:"mode,omitempty" json:"mode,omitempty"`
+	Name       string         `cbor:"name" json:"name"`
+	RemoteOnly bool           `cbor:"remote_only,omitempty" json:"remote_only,omitempty"`
+	SizeGb     int64          `cbor:"size_gb" json:"size_gb"`
+	Status     DiskStatus     `cbor:"status,omitempty" json:"status,omitempty"`
+	VolumeId   string         `cbor:"volume_id,omitempty" json:"volume_id,omitempty"`
 }
 
 type DiskFilesystem string
@@ -88,9 +86,6 @@ func (o *Disk) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(DiskFilesystemId); ok && a.Value.Kind() == entity.KindId {
 		o.Filesystem = diskfilesystemFromId[a.Value.Id()]
 	}
-	if a, ok := e.Get(DiskLsvdVolumeIdId); ok && a.Value.Kind() == entity.KindString {
-		o.LsvdVolumeId = a.Value.String()
-	}
 	if a, ok := e.Get(DiskModeId); ok && a.Value.Kind() == entity.KindId {
 		o.Mode = diskmodeFromId[a.Value.Id()]
 	}
@@ -134,9 +129,6 @@ func (o *Disk) Encode() (attrs []entity.Attr) {
 	if a, ok := diskfilesystemToId[o.Filesystem]; ok {
 		attrs = append(attrs, entity.Ref(DiskFilesystemId, a))
 	}
-	if !entity.Empty(o.LsvdVolumeId) {
-		attrs = append(attrs, entity.String(DiskLsvdVolumeIdId, o.LsvdVolumeId))
-	}
 	if a, ok := diskmodeToId[o.Mode]; ok {
 		attrs = append(attrs, entity.Ref(DiskModeId, a))
 	}
@@ -160,9 +152,6 @@ func (o *Disk) Empty() bool {
 		return false
 	}
 	if o.Filesystem != "" {
-		return false
-	}
-	if !entity.Empty(o.LsvdVolumeId) {
 		return false
 	}
 	if o.Mode != "" {
@@ -192,7 +181,6 @@ func (o *Disk) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Singleton("dev.miren.storage/filesystem.xfs")
 	sb.Singleton("dev.miren.storage/filesystem.btrfs")
 	sb.Ref("filesystem", "dev.miren.storage/disk.filesystem", schema.Doc("Filesystem type for the disk"), schema.Choices(DiskFilesystemExt4Id, DiskFilesystemXfsId, DiskFilesystemBtrfsId))
-	sb.String("lsvd_volume_id", "dev.miren.storage/disk.lsvd_volume_id", schema.Doc("LSVD backend volume identifier"), schema.Indexed)
 	sb.Singleton("dev.miren.storage/mode.universal")
 	sb.Singleton("dev.miren.storage/mode.accelerator")
 	sb.Ref("mode", "dev.miren.storage/disk.mode", schema.Doc("Disk I/O mode"), schema.Indexed, schema.Choices(DiskModeUniversalId, DiskModeAcceleratorId))
@@ -861,207 +849,11 @@ func (o *DiskVolume) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Ref("volume_mode", "dev.miren.storage/disk_volume.volume_mode", schema.Doc("Disk I/O mode"), schema.Choices(DiskVolumeVolumeModeVmUniversalId, DiskVolumeVolumeModeVmAcceleratorId))
 }
 
-const (
-	LsvdVolumeActualStateId            = entity.Id("dev.miren.storage/lsvd_volume.actual_state")
-	LsvdVolumeActualStateVolPendingId  = entity.Id("dev.miren.storage/actual_state.vol_pending")
-	LsvdVolumeActualStateVolCreatingId = entity.Id("dev.miren.storage/actual_state.vol_creating")
-	LsvdVolumeActualStateVolReadyId    = entity.Id("dev.miren.storage/actual_state.vol_ready")
-	LsvdVolumeActualStateVolDeletingId = entity.Id("dev.miren.storage/actual_state.vol_deleting")
-	LsvdVolumeActualStateVolDeletedId  = entity.Id("dev.miren.storage/actual_state.vol_deleted")
-	LsvdVolumeActualStateVolErrorId    = entity.Id("dev.miren.storage/actual_state.vol_error")
-	LsvdVolumeDesiredStateId           = entity.Id("dev.miren.storage/lsvd_volume.desired_state")
-	LsvdVolumeDesiredStateVolPresentId = entity.Id("dev.miren.storage/desired_state.vol_present")
-	LsvdVolumeDesiredStateVolAbsentId  = entity.Id("dev.miren.storage/desired_state.vol_absent")
-	LsvdVolumeDiskIdId                 = entity.Id("dev.miren.storage/lsvd_volume.disk_id")
-	LsvdVolumeErrorMessageId           = entity.Id("dev.miren.storage/lsvd_volume.error_message")
-	LsvdVolumeFilesystemId             = entity.Id("dev.miren.storage/lsvd_volume.filesystem")
-	LsvdVolumeNameId                   = entity.Id("dev.miren.storage/lsvd_volume.name")
-	LsvdVolumeNodeIdId                 = entity.Id("dev.miren.storage/lsvd_volume.node_id")
-	LsvdVolumeRemoteOnlyId             = entity.Id("dev.miren.storage/lsvd_volume.remote_only")
-	LsvdVolumeSizeGbId                 = entity.Id("dev.miren.storage/lsvd_volume.size_gb")
-	LsvdVolumeVolumeIdId               = entity.Id("dev.miren.storage/lsvd_volume.volume_id")
-)
-
-type LsvdVolume struct {
-	ID           entity.Id              `json:"id"`
-	ActualState  LsvdVolumeActualState  `cbor:"actual_state,omitempty" json:"actual_state,omitempty"`
-	DesiredState LsvdVolumeDesiredState `cbor:"desired_state,omitempty" json:"desired_state,omitempty"`
-	DiskId       entity.Id              `cbor:"disk_id" json:"disk_id"`
-	ErrorMessage string                 `cbor:"error_message,omitempty" json:"error_message,omitempty"`
-	Filesystem   string                 `cbor:"filesystem,omitempty" json:"filesystem,omitempty"`
-	Name         string                 `cbor:"name,omitempty" json:"name,omitempty"`
-	NodeId       entity.Id              `cbor:"node_id" json:"node_id"`
-	RemoteOnly   bool                   `cbor:"remote_only,omitempty" json:"remote_only,omitempty"`
-	SizeGb       int64                  `cbor:"size_gb" json:"size_gb"`
-	VolumeId     string                 `cbor:"volume_id,omitempty" json:"volume_id,omitempty"`
-}
-
-type LsvdVolumeActualState string
-
-const (
-	VOL_PENDING  LsvdVolumeActualState = "actual_state.vol_pending"
-	VOL_CREATING LsvdVolumeActualState = "actual_state.vol_creating"
-	VOL_READY    LsvdVolumeActualState = "actual_state.vol_ready"
-	VOL_DELETING LsvdVolumeActualState = "actual_state.vol_deleting"
-	VOL_DELETED  LsvdVolumeActualState = "actual_state.vol_deleted"
-	VOL_ERROR    LsvdVolumeActualState = "actual_state.vol_error"
-)
-
-var lsvd_volumeactual_stateFromId = map[entity.Id]LsvdVolumeActualState{LsvdVolumeActualStateVolPendingId: VOL_PENDING, LsvdVolumeActualStateVolCreatingId: VOL_CREATING, LsvdVolumeActualStateVolReadyId: VOL_READY, LsvdVolumeActualStateVolDeletingId: VOL_DELETING, LsvdVolumeActualStateVolDeletedId: VOL_DELETED, LsvdVolumeActualStateVolErrorId: VOL_ERROR}
-var lsvd_volumeactual_stateToId = map[LsvdVolumeActualState]entity.Id{VOL_PENDING: LsvdVolumeActualStateVolPendingId, VOL_CREATING: LsvdVolumeActualStateVolCreatingId, VOL_READY: LsvdVolumeActualStateVolReadyId, VOL_DELETING: LsvdVolumeActualStateVolDeletingId, VOL_DELETED: LsvdVolumeActualStateVolDeletedId, VOL_ERROR: LsvdVolumeActualStateVolErrorId}
-
-type LsvdVolumeDesiredState string
-
-const (
-	VOL_PRESENT LsvdVolumeDesiredState = "desired_state.vol_present"
-	VOL_ABSENT  LsvdVolumeDesiredState = "desired_state.vol_absent"
-)
-
-var lsvd_volumedesired_stateFromId = map[entity.Id]LsvdVolumeDesiredState{LsvdVolumeDesiredStateVolPresentId: VOL_PRESENT, LsvdVolumeDesiredStateVolAbsentId: VOL_ABSENT}
-var lsvd_volumedesired_stateToId = map[LsvdVolumeDesiredState]entity.Id{VOL_PRESENT: LsvdVolumeDesiredStateVolPresentId, VOL_ABSENT: LsvdVolumeDesiredStateVolAbsentId}
-
-func (o *LsvdVolume) Decode(e entity.AttrGetter) {
-	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
-	if a, ok := e.Get(LsvdVolumeActualStateId); ok && a.Value.Kind() == entity.KindId {
-		o.ActualState = lsvd_volumeactual_stateFromId[a.Value.Id()]
-	}
-	if a, ok := e.Get(LsvdVolumeDesiredStateId); ok && a.Value.Kind() == entity.KindId {
-		o.DesiredState = lsvd_volumedesired_stateFromId[a.Value.Id()]
-	}
-	if a, ok := e.Get(LsvdVolumeDiskIdId); ok && a.Value.Kind() == entity.KindId {
-		o.DiskId = a.Value.Id()
-	}
-	if a, ok := e.Get(LsvdVolumeErrorMessageId); ok && a.Value.Kind() == entity.KindString {
-		o.ErrorMessage = a.Value.String()
-	}
-	if a, ok := e.Get(LsvdVolumeFilesystemId); ok && a.Value.Kind() == entity.KindString {
-		o.Filesystem = a.Value.String()
-	}
-	if a, ok := e.Get(LsvdVolumeNameId); ok && a.Value.Kind() == entity.KindString {
-		o.Name = a.Value.String()
-	}
-	if a, ok := e.Get(LsvdVolumeNodeIdId); ok && a.Value.Kind() == entity.KindId {
-		o.NodeId = a.Value.Id()
-	}
-	if a, ok := e.Get(LsvdVolumeRemoteOnlyId); ok && a.Value.Kind() == entity.KindBool {
-		o.RemoteOnly = a.Value.Bool()
-	}
-	if a, ok := e.Get(LsvdVolumeSizeGbId); ok && a.Value.Kind() == entity.KindInt64 {
-		o.SizeGb = a.Value.Int64()
-	}
-	if a, ok := e.Get(LsvdVolumeVolumeIdId); ok && a.Value.Kind() == entity.KindString {
-		o.VolumeId = a.Value.String()
-	}
-}
-
-func (o *LsvdVolume) Is(e entity.AttrGetter) bool {
-	return entity.Is(e, KindLsvdVolume)
-}
-
-func (o *LsvdVolume) ShortKind() string {
-	return "lsvd_volume"
-}
-
-func (o *LsvdVolume) Kind() entity.Id {
-	return KindLsvdVolume
-}
-
-func (o *LsvdVolume) EntityId() entity.Id {
-	return o.ID
-}
-
-func (o *LsvdVolume) Encode() (attrs []entity.Attr) {
-	if a, ok := lsvd_volumeactual_stateToId[o.ActualState]; ok {
-		attrs = append(attrs, entity.Ref(LsvdVolumeActualStateId, a))
-	}
-	if a, ok := lsvd_volumedesired_stateToId[o.DesiredState]; ok {
-		attrs = append(attrs, entity.Ref(LsvdVolumeDesiredStateId, a))
-	}
-	if !entity.Empty(o.DiskId) {
-		attrs = append(attrs, entity.Ref(LsvdVolumeDiskIdId, o.DiskId))
-	}
-	if !entity.Empty(o.ErrorMessage) {
-		attrs = append(attrs, entity.String(LsvdVolumeErrorMessageId, o.ErrorMessage))
-	}
-	if !entity.Empty(o.Filesystem) {
-		attrs = append(attrs, entity.String(LsvdVolumeFilesystemId, o.Filesystem))
-	}
-	if !entity.Empty(o.Name) {
-		attrs = append(attrs, entity.String(LsvdVolumeNameId, o.Name))
-	}
-	if !entity.Empty(o.NodeId) {
-		attrs = append(attrs, entity.Ref(LsvdVolumeNodeIdId, o.NodeId))
-	}
-	attrs = append(attrs, entity.Bool(LsvdVolumeRemoteOnlyId, o.RemoteOnly))
-	attrs = append(attrs, entity.Int64(LsvdVolumeSizeGbId, o.SizeGb))
-	if !entity.Empty(o.VolumeId) {
-		attrs = append(attrs, entity.String(LsvdVolumeVolumeIdId, o.VolumeId))
-	}
-	attrs = append(attrs, entity.Ref(entity.EntityKind, KindLsvdVolume))
-	return
-}
-
-func (o *LsvdVolume) Empty() bool {
-	if o.ActualState != "" {
-		return false
-	}
-	if o.DesiredState != "" {
-		return false
-	}
-	if !entity.Empty(o.DiskId) {
-		return false
-	}
-	if !entity.Empty(o.ErrorMessage) {
-		return false
-	}
-	if !entity.Empty(o.Filesystem) {
-		return false
-	}
-	if !entity.Empty(o.Name) {
-		return false
-	}
-	if !entity.Empty(o.NodeId) {
-		return false
-	}
-	if !entity.Empty(o.RemoteOnly) {
-		return false
-	}
-	if !entity.Empty(o.SizeGb) {
-		return false
-	}
-	if !entity.Empty(o.VolumeId) {
-		return false
-	}
-	return true
-}
-
-func (o *LsvdVolume) InitSchema(sb *schema.SchemaBuilder) {
-	sb.Singleton("dev.miren.storage/actual_state.vol_pending")
-	sb.Singleton("dev.miren.storage/actual_state.vol_creating")
-	sb.Singleton("dev.miren.storage/actual_state.vol_ready")
-	sb.Singleton("dev.miren.storage/actual_state.vol_deleting")
-	sb.Singleton("dev.miren.storage/actual_state.vol_deleted")
-	sb.Singleton("dev.miren.storage/actual_state.vol_error")
-	sb.Ref("actual_state", "dev.miren.storage/lsvd_volume.actual_state", schema.Doc("Current state of the volume (set by lsvd-server)"), schema.Indexed, schema.Choices(LsvdVolumeActualStateVolPendingId, LsvdVolumeActualStateVolCreatingId, LsvdVolumeActualStateVolReadyId, LsvdVolumeActualStateVolDeletingId, LsvdVolumeActualStateVolDeletedId, LsvdVolumeActualStateVolErrorId))
-	sb.Singleton("dev.miren.storage/desired_state.vol_present")
-	sb.Singleton("dev.miren.storage/desired_state.vol_absent")
-	sb.Ref("desired_state", "dev.miren.storage/lsvd_volume.desired_state", schema.Doc("What state should this volume be in"), schema.Indexed, schema.Choices(LsvdVolumeDesiredStateVolPresentId, LsvdVolumeDesiredStateVolAbsentId))
-	sb.Ref("disk_id", "dev.miren.storage/lsvd_volume.disk_id", schema.Doc("Reference to the parent Disk entity"), schema.Required, schema.Indexed)
-	sb.String("error_message", "dev.miren.storage/lsvd_volume.error_message", schema.Doc("Error details if actual_state is error"))
-	sb.String("filesystem", "dev.miren.storage/lsvd_volume.filesystem", schema.Doc("Filesystem type (ext4, xfs, btrfs)"))
-	sb.String("name", "dev.miren.storage/lsvd_volume.name", schema.Doc("Human-readable name for the volume (from parent disk)"))
-	sb.Ref("node_id", "dev.miren.storage/lsvd_volume.node_id", schema.Doc("Node where this volume should be provisioned"), schema.Required, schema.Indexed)
-	sb.Bool("remote_only", "dev.miren.storage/lsvd_volume.remote_only", schema.Doc("If true, use only remote storage"))
-	sb.Int64("size_gb", "dev.miren.storage/lsvd_volume.size_gb", schema.Doc("Volume size in gigabytes"), schema.Required)
-	sb.String("volume_id", "dev.miren.storage/lsvd_volume.volume_id", schema.Doc("The LSVD volume identifier (generated by lsvd-server)"), schema.Indexed)
-}
-
 var (
 	KindDisk       = entity.Id("dev.miren.storage/kind.disk")
 	KindDiskLease  = entity.Id("dev.miren.storage/kind.disk_lease")
 	KindDiskMount  = entity.Id("dev.miren.storage/kind.disk_mount")
 	KindDiskVolume = entity.Id("dev.miren.storage/kind.disk_volume")
-	KindLsvdVolume = entity.Id("dev.miren.storage/kind.lsvd_volume")
 	Schema         = entity.Id("dev.miren.storage/schema.v1alpha")
 )
 
@@ -1071,7 +863,6 @@ func init() {
 		(&DiskLease{}).InitSchema(sb)
 		(&DiskMount{}).InitSchema(sb)
 		(&DiskVolume{}).InitSchema(sb)
-		(&LsvdVolume{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.storage", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xacYY\x8e\xeb\xb6\x16\\\xc8{\x99\xe7\x01\xba\xb8@\xf6#\xd0\xe6\x91L\x8b\x83[\xa4\x15w~\xf3\x93\x04YE\xbas\x83l0\xdf\x01\x0f\a\xd12E\xd1\xce\xfdi\x88RU\x89\xc3a\x95\xcc~\xa5\x92\bx\xa205\x82\x8d \x1bm\xd4Hz\x80\x81I\xaa\xff\xbc\xfc\xef\xe6\xc9\x1b\xfb\xa4\xa1L\x0f\xef\x90;\xdd\"\xecC'\xf0OG\x95 L\u07be\xa0\xeb\x18p\xaa\x7f}\xd91z\xf9$\xaf\xd1\xecG \x06h\xbb{\xc6W\x1d\x93\xb6y>\xc1\x8e\xd1\xd7\x12\xbdc\x1c\xf4\xb36 \x1c=i[:\x05y\x16\x83\xfd\xd3N\x84\x9fA\xbf\xec/\x9d\xbe||\xab6\x13\x9bK\xa7)\\\xcc\x0f\xb9\x97&0\v\x81\x9d\x19;}\xf9\xb4\bD\fN\xc2\x17+\xa3\xe0z\xa2\xed\xa4\xf8Y@\xcb(\x8eD.\xee\xd9\xd1tڌL\xf68!\x99UC)\xa1(\xa0\x00ū\xec$\xfc\xc1ΒM0j\xc2sSa\x89MD\fd\xbf\a\x0e#1j\xcc\r\x14\xd1\t\xe6\xa5\xd4;\xec\xd8\xfc'\x19\x14\xd22\xf2H\x1bA(\x03\xad\x92\xdcUɐ\xde\xc0!\xee\x94\xe2(\xf1ኄf?A\xdb\xef\x90އ\x86\xa5\xee\x9948\xa3\x1f\xac1\r1g\x8d\xc4\xce_gg\xf5/\x80qTc\xae\a\x8e\xd6\xe0\xf3\x031\x86\xec\x0f\x90\xadi\x0f\f\x90\x03\x05\x0e\x86ɾ\x80\r\x90\x03\x85M\xdd\x00a#\xd8'V83\xe5\x1e\x1c1\xc3iT\x13\xd3LI\xa0\x97\xcfW\xf1\t\x8a\xc7k\xfb\x8aL\xd5/)\xa1\x002Ոkp\xbd7Xv[\xf4\xb6^\x99\x92\xfd\xf4\x96\xf0Ӂ\xf0\xd3\xc8\x04\x19\x9f[kS\xd4\xca\xe4f&Z]ˁhp\x86w\xf9\x7f\xbe\x1f\x0eS\xe9{\xbf\xe0\x88\xbe.)5d\xfftf#Ж\x18W\xd8\xe9\r\xac2\xc3\x04\xa0\xd0ge\xa1\xd3)\xccN篽}\"9\xb3j\t\x19/=\xbb\x0f\x8d\x94\xfem\x91\x8ee\xdd\nК\xf4nc\x8b\xeb[K\xefZ\xd9\xe6^N\xa8\xb3t\xb3\x01\xee\xd2\xd2\xd9^\x89\x93\x92 \xcd|\xe5\xd7\xeaV\xadY\xaaU\xae\xd8\xcf8؏r\x1ew\x96\xa6Q'ÔtNЇ\xc6\xd2\xc22\x95\xe3\xd8'b\x0e\xce\xf5\xf0j\xc9˔\xa6\xe3\x8d@\xe8\xec|lnF\xdf+\x16\xbe\x9bÊ\"\x90\x8a\xc6\rևFZ\x04_\x15\xe9\x9aH\xbaS\x97\xa0pL\xdai\x8e\x97\xab\xb8\xd6j_a\xa7\xce2k\xf6\xdeY\xf0y\xd7\x11\xc6!\xbb\xa2\x1e\xe6\x00\xfd\t$\xb5N\x95\xb1\x9f\xe0T\x0eq\x18\x01{Z2\xd9\x00).\xcbq\x1euٕp\xf96\\\xe9\x9e\x1a\xff\r\x97ᛒRC\xf6\xe6Lxk\xc7\xe3\xf63\xbf\xba\x93]\x92\xbf\x0fT\xb4.\x003\x85\x92\xf2\x9b\x00<RỞ\xedВ㡖\x15֫\x82\xe5\xa1\x03\x15m\fތ\x9d-i\x01ky1X+x\x01;\x84\x0e\xdbnV\xf0\x02\x96\xc7w[\xe2w\xb5\x1d\xf5L\xf7\xf6Jf\x04\v*ڳ\x8c\xbd\xfd~\x9b:\xa3_K\xf1ઉ\x82\xc6D\x9b\xcbI\\\xdf\xca\x7f\xa3**\xda\x1f\x894\xb1D\xdedޒ\xea4\v\xc2Sh\xfb\xde\x02\xbd\xbc\xad\x95\x88\x94b\x86\x87\xf1Ml\x0fm\xf4\xf7!\xbd\xb1\xb4\xf9\x8d\xa9\x8a\xa6\x10|T\\ߪ\te'uO(W\f\x92+uj\xdd\xc0\xdc \xd3\x1bK\xa9\xb5\xa4pR\xf8w\x9e\xaec\xd2^\n\xad%\x96\x13\xdaL\xac/\x8b\xf4\xed`\xad\x10)~\x98\xeeXM\b\xa0P\xee\x9bh\x0e\x01'\xebS`\xe5w\x8a\aU\xc6\xc0\xefō\xeb\xa4\x1eʁw\a:\xd5\xe6\x80\aZ\x86\x9d\xfd\xe7\x1a\x06\x02\x8ftj\xf1wOMrD\xa8eU'\xc74'\xc7\xd4\xe2\xa1D\x95\x93\xcf\xd8!\xbc\xb8\x92\x17\xb0\xb80\x19\xfbN\x17\xe6AKetj\xc9N\x834\xd9\x0f\x80k'\fP\x9c\xb5\x11\x90\x95\xab\x97%\xcbcK\xe7\x1dq\x18[\xbf;6\xa6\xe1\xbdy\x9c\xd7\xdb8L\xbaC\x89\t\xd2'\x91pL\xdaK\xa55\x7f\xf1J\xce\x1d\xfd$\x1db\xab\xf2\xe4$\xa8l\x9c\xbbl\xacӦ\xd1n\xf0\x8bg/\xc5\xc4\xf0\x025?\xff\x8bߵ\xd7:\xf1\x8clHo\xe4\xf7\f\x9f\xec\xe7N8-\xcbl\x80D\xa2I\xb1r\x12mzt\x96\xf9\xacZP\x13t16\x86dH\xab\xb9\x91\x1c\x1f\xae\xe7F\x02\xba\xeb\xe7Cf\x1a\x12\xa9\xc7rî\xaa\x0f\x8e\xcc\xe6\xbarˈD\x8e\x8b\x8e\x1a\x0e\"\xed\x9a\xc7\xf0\xd8\xf2\xe5\x04\x8b\xbc\x10\x1f5<\x8f\xe5\xf6:\x06\xc8\xd6wy\n\xe6\xf1\xed\xb5̭\fI\x17\xe9\xc1\f9\xda\xf7\xf8\x10ٌ\x83\x19\xebf\xcf\xc7H\xce\xd6ox\x1b9r5\x94\ar$忏\x1cI\xf5\xeeȑ\xcc\xf6M\x95\xee\xf7\xed+\xf6\x96og\xec2\xe5\xdfq\xec\xbeѓ\x87\x12 \x15\xf8\xcf\a\xc0C\xa2\xb6\x04\x0e\xfa\xa0FӺ\xff\x87\xb9\x93\xe2\xd2?Ū\xcfn\x10\x92~\xe4o\x9f\xf4Ty{\x82I\x87U\x93\x05\xff\x02\x00\x00\xff\xff\x01\x00\x00\xff\xffHt\xaa[\r\x1c\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.storage", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xacXݮ\xac&\x14~\x90\xfe\xff\xffƓ\x93\xf4}\f3,\x95Q\xc0\rhݽ\xedM\xd3\xf4)\xba'\xa7\xe9\v\xf6\xbaa\x01\xca8\f\xb2O\u038d\x11\xfc\xbe\xcf\x05,\xbe\xa5\\\xa9 \x1c\x9e(\xcc\x15g\nD\xa5\x8dT\xa4\x05虠\xfa\xba|t\xf7\xe4\x8d}RQ\xa6\xfbwȝ\xef\x11\xf6\xa1\x13\xf8\xaf\xa1\x92\x13&\xee_\xd04\f\x06\xaa\xffx91\xba|\x91֨\xce\n\x88\x01Z\x9f\x9e\xf1U\x97\xa8m\x9eG81z\xcd\xd1\x1b6\x80~\xd6\x06\xb8\xa3GmK\xa7 &\xde\xdbK=\x93a\x02\xfdr^\x1a\xbd|~\xaf\xb6\x11\xab\xa5\xd1\x14\x16\xf3K\xea\xa5\x11\xccB\xe0dT\xa3\x97/\xb3@\xc4\xe0(\x12S\x8d\xa3\xe0\x92\x02\xc6O\xf1.\x19\xf9\xdfl\x12l\x06\xa5ɐ\x8a\xdf\x12\xab\x15ѓ\xf3\x19\x06P\xc4H\x95\x8a\x0e\xd1\x11\xe6%\x17\x1d\x06\xb6]lt\x8d6\x8a\x89\x16i\ty\xa4)\xe0\xd2@-\xc5\xe0\x96\xb6\x8f;p\x88')\a\x94\xf8\xf4\x81\x84f\xbfAݞ\x90ކ\x86\xa5\x9e\x9908\xa3\x9f<b\x1ab&\x8d\xc4\xc6\xdf'g\xf5\x1f\x00\xa5\xa4JE\xe0h\x15>\xef\x881\xe4\xdcA2\x11=0@:\n\x03\x18&\xda\f6@:\n\x87\xba\x01\xc2\x14\xd8'V81\xe5\x1e\xbcb\xfaQəi&\x05\xd0\xe5\xeb\x87\xf8\b5\xac\xf7\xf6\x15\xdf\x1cSB\x02$\xb2\x11\xd7`\x96\xc3ġf\x14\x97\x81m\xcd(\x83Z\x9b\xafL\x8av~K\x86\xb1#è\x18'깶\xdeB\xadLjfV\x7f\xaa\a \x1a\x9cK-\x1f\xa7\xe3p\x98W\x99\xd5\xf79\xa5\x8a\x9c\x9f&\xa6\x80\xd6ĸĎ;0\xcb\f\xe3\x80B_\xe5\x85\xc61\xccN\xe3\xef\xbd\xe7!9\xb1j\x11\x19o=\xbb\r\x8d\x98\xfec\x96\x8ei]sК\xb4nc\xf3ۮh\x91\xae\x99m\xee帜\x84\x9b\rp\xb7\x96\xceΒ\x8fR\x800\u06dd_\xab{\xb5j\xafV\xb8b\xbf\xe3`?Ky\xdc$L%GäpNІ\xc6\xde\xc2\x12\x99\xe3\xd8#1\x9ds=\xbc\xdb\xf3\x12\xa9\xe9x\n\bݜ\x8fm\xcd\xd5\xf7\xb2\x89\xef\xe6\xb0 \t\x84\xa4\xeb\x06kC#N\x82\xef\xb2tM\x04=\xc9%(\\\xa2v\\|\xf3Y\\j\xb5W8\xc9I$\xcd\xde;\v>o\x1a\xc2\x06H\xae\xa8\x879@;\x82\xa0֩\x12\xf6\x13\x9c\xca!:\x05\x18i\xced\x03$\xbb,\x97m\xd4yW\xc2\xe5;p\xa5\xd7\xe4\xf8\x9f\xb8\f?\xe4\x94*r6\x13\x19j;\x1e\xb7\x9f\x87\x9b\x9e\xe4\x92\xfc\xdbQ^\xbb\x02\x98H\x94\x98_\x05\xe0\x85r\x1fz2\xa0=\xc7C-+\xacW\x01\xcbC{\xca\xeb\xb5\xf0&\xeclO\vX\xcb[\vk\x01/`\xfb\x10\xb0\r\xb3\x80\x17\xb0\xc3\xfanK\xfc\xa94P\xcfto/d\xae`Ny=\x895ڟ\x8f\xa9\x1b\xfa\x9a+\x0f.\x9b(h\xach[:\xf1ۮ\xf47\xaa\xa4\xbc\xfe\x95\b\xb3\xa6ț\xc4[b\x9djGx\nm\x1f-\xd0\xe5m\xa9\xc4J\xc9\xd6\xf00\xbe\x99\x9d\xa1^\xfd\xbd\x8f;\xf66\x7f0U\xab)\x04\x1f\xe5\xb7]%E\xd9I\xbd\xa6(\x17\fr\x90r\xac\xdd\xc0\xdc ㎽ԣJ\xe1\xa4\xf0\xbaM\xd7%j\xef\x85\x1eU,'tX\xb1\xbe\xcdҏ\vk\x81H\xf6\xc3\xf4\xc4J\x8a\x00\n\xa5\xbe\x89\xb6\"\xe0d}\x15x\xf0\x9f\xe2A\x85e\xe0\xaf\xec\xc6uR\xefU\a\xdeut.\xad\x03\x1eh\x19v\xf6\x9fK\x18\b\xbcй\xc6\xff\x9e\x92ʱB-\xab\xb8r\xcc[\xe5\x98k<I(r\xf2\rۇ\x17\x17\xf2\x02\x16\x17&a\xdf\xf1¼\xa7\xa52:\xd7\xe4\xa4A\x98\xe4\a\xc0\xad\x13\x06(Κ\x02d\xa5\xf2e\xcf\xf2X\xdc;\x89?\xbf\x9ba\x1c\xfdw\x1cL\xc3\a\xf38\xafwp\x02\xf4\n%\xc6I\x1b\x95\x84K\xd4\xde+=\xf2\x17\xaf\xe4\xdc\xd1OR\xb7\xb6\nON\x82\xca\xc1\xb9\xcb\xc1:\x1d\x1a\xed\x01?{\xf6\x92\xad\x18^\xa0\xe4\xf7?\xfb]{\xab\xb3\x9e\x91\xf5qGz\xcf\f\xb3\xfd\xdc\t\xa7e\x89\r\x10IT1V̼\x8e\x8f\xce\x12\x9fU;j\x84Ζ\x8d>\x1a\xd2\x1e\xd8\xebN*S\xbb\xf3Xw\xe8\x91;\x94-\xfe\rAH\\\xaf\x8e\x7fZ\xe20K\xca\xdb\xff\x00\x00\x00\xff\xff\x01\x00\x00\xff\xff\x8d\xae\x81\xb0]\x16\x00\x00"))
 }
