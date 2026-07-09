@@ -37,8 +37,9 @@ var (
 // etcdState tracks the configuration state of the etcd container.
 // This is persisted to detect when configuration changes require container recreation.
 type etcdState struct {
-	TLSEnabled    bool `json:"tls_enabled"`
-	ConfigVersion int  `json:"config_version"`
+	TLSEnabled      bool   `json:"tls_enabled"`
+	ConfigVersion   int    `json:"config_version"`
+	TuningSignature string `json:"tuning_signature,omitempty"`
 }
 
 // currentConfigVersion should be bumped whenever the container spec changes
@@ -155,6 +156,11 @@ func (e *EtcdComponent) Start(ctx context.Context, config EtcdConfig) error {
 		return fmt.Errorf("failed to create data directory: %w", err)
 	}
 
+	// Scale etcd's memory-related config to the size of the node it runs on so it
+	// behaves as a ~10%-of-RAM co-tenant rather than growing to fill the node.
+	tuning := computeTuning(detectSystemRAMBytes())
+	tuningSignature := tuning.signature()
+
 	// Check if the container config has changed since last start. If so, we
 	// must recreate the container since env vars and args are baked into the spec.
 	requestedTLSEnabled := config.TLS != nil
@@ -167,7 +173,8 @@ func (e *EtcdComponent) Start(ctx context.Context, config EtcdConfig) error {
 		configChanged = requestedTLSEnabled
 	} else {
 		configChanged = prevState.TLSEnabled != requestedTLSEnabled ||
-			prevState.ConfigVersion != currentConfigVersion
+			prevState.ConfigVersion != currentConfigVersion ||
+			prevState.TuningSignature != tuningSignature
 	}
 
 	// Check if container already exists
@@ -183,7 +190,8 @@ func (e *EtcdComponent) Start(ctx context.Context, config EtcdConfig) error {
 					}
 					return 0
 				}(),
-				"current_config_version", currentConfigVersion)
+				"current_config_version", currentConfigVersion,
+				"tuning_changed", prevState != nil && prevState.TuningSignature != tuningSignature)
 			e.CleanupExistingContainer(ctx, existingContainer)
 		} else {
 			e.Log.Info("found existing etcd container, attempting restart", "container_id", existingContainer.ID())
@@ -227,7 +235,7 @@ func (e *EtcdComponent) Start(ctx context.Context, config EtcdConfig) error {
 	e.Log.Info("starting etcd with host networking", "client_port", config.ClientPort, "peer_port", config.PeerPort, "tls", e.tlsEnabled)
 
 	// Create container
-	container, err := e.createContainer(ctx, image, config)
+	container, err := e.createContainer(ctx, image, config, tuning)
 	if err != nil {
 		return fmt.Errorf("failed to create etcd container: %w", err)
 	}
@@ -262,8 +270,13 @@ func (e *EtcdComponent) Start(ctx context.Context, config EtcdConfig) error {
 	// Start periodic maintenance (health logging + auto-defrag)
 	e.StartMaintenanceLoop(ctx)
 
-	// Persist the TLS state so we can detect config changes on restart
-	if err := e.saveState(&etcdState{TLSEnabled: e.tlsEnabled, ConfigVersion: currentConfigVersion}); err != nil {
+	// Persist the TLS state and tuning signature so we can detect config changes
+	// (including a node RAM change that alters tuning) on restart.
+	if err := e.saveState(&etcdState{
+		TLSEnabled:      e.tlsEnabled,
+		ConfigVersion:   currentConfigVersion,
+		TuningSignature: tuningSignature,
+	}); err != nil {
 		e.Log.Warn("failed to save etcd state", "error", err)
 	}
 
@@ -362,7 +375,7 @@ func (e *EtcdComponent) restartExistingContainer(ctx context.Context, container 
 	return nil
 }
 
-func (e *EtcdComponent) createContainer(ctx context.Context, image containerd.Image, config EtcdConfig) (containerd.Container, error) {
+func (e *EtcdComponent) createContainer(ctx context.Context, image containerd.Image, config EtcdConfig, tuning etcdTuning) (containerd.Container, error) {
 	dataPath := filepath.Join(e.DataPath, "etcd")
 
 	// Determine URL scheme based on TLS config
@@ -371,9 +384,6 @@ func (e *EtcdComponent) createContainer(ctx context.Context, image containerd.Im
 		scheme = "https"
 	}
 
-	// Scale etcd's memory-related config to the size of the node it runs on so it
-	// behaves as a ~10%-of-RAM co-tenant rather than growing to fill the node.
-	tuning := computeTuning(detectSystemRAMBytes())
 	e.Log.Info("etcd memory auto-tuning",
 		"system_ram_bytes", tuning.SystemRAMBytes,
 		"budget_bytes", tuning.BudgetBytes,

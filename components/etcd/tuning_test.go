@@ -137,6 +137,30 @@ func TestTuningEnvVars(t *testing.T) {
 	}
 }
 
+func TestTuningSignature(t *testing.T) {
+	// Same RAM yields a stable, non-empty signature.
+	sig := computeTuning(8 * gib).signature()
+	if sig == "" {
+		t.Fatal("signature is empty")
+	}
+	if again := computeTuning(8 * gib).signature(); again != sig {
+		t.Errorf("signature not stable for equal RAM: %q != %q", sig, again)
+	}
+
+	// A RAM change that moves the node to a different tier changes the signature,
+	// which is what forces the container to be recreated on restart.
+	if other := computeTuning(32 * gib).signature(); other == sig {
+		t.Errorf("signature did not change across tiers: %q", sig)
+	}
+
+	// A RAM change that stays within the same tier (5 GiB and 8 GiB are both the
+	// medium tier) but alters the continuous formulas (quota/GOMEMLIMIT/streams)
+	// also changes the signature.
+	if other := computeTuning(5 * gib).signature(); other == sig {
+		t.Errorf("signature did not change for a within-tier RAM change: %q", sig)
+	}
+}
+
 func TestTuningArgs(t *testing.T) {
 	args := computeTuning(8 * gib).args()
 

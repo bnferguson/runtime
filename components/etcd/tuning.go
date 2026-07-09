@@ -151,6 +151,13 @@ func (t etcdTuning) envVars() []string {
 	}
 }
 
+// signature is a stable fingerprint of the tuning-derived spec (env + args). It is
+// persisted in etcdState so a restart on a node whose RAM has changed regenerates the
+// container instead of reusing a spec built for the old budget.
+func (t etcdTuning) signature() string {
+	return strings.Join(append(t.envVars(), t.args()...), " ")
+}
+
 // args renders the etcd command-line flags for the tuning. Flag names target etcd v3.5,
 // where snapshot-catchup-entries and compaction-batch-limit are experimental-prefixed
 // (both graduated to stable names in 3.6).
