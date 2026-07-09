@@ -55,6 +55,7 @@ func Deploy(ctx *Context, opts struct {
 	Sensitive     []string `short:"s" long:"sensitive" description:"Set sensitive environment variable (masked in output)"`
 	Ephemeral     string   `long:"ephemeral" description:"Deploy as ephemeral preview with this label (e.g. feat-login)"`
 	TTL           string   `long:"ttl" description:"TTL for ephemeral version (e.g. 48h)" default:"24h"`
+	SummaryJSON   string   `long:"summary-json" description:"Write a JSON summary of the deploy result (deploy id, version, and route URLs) to this path"`
 }) error {
 	name := opts.App
 	dir := opts.ResolvedDir()
@@ -225,6 +226,13 @@ func Deploy(ctx *Context, opts struct {
 					displayDeployVersionAccessInfo(ctx, name, result.AccessInfo())
 				}
 			}
+
+			// dep.Id() is empty for ephemeral deploys (no deployment record).
+			var summaryURLs []string
+			if result.HasAccessInfo() && result.AccessInfo() != nil {
+				summaryURLs = deployURLs(ctx, result.AccessInfo(), ephemeralLabel)
+			}
+			writeDeploySummary(ctx, opts.SummaryJSON, dep.Id(), deployedVersion, summaryURLs)
 		}
 		return nil
 	}
@@ -994,6 +1002,13 @@ func Deploy(ctx *Context, opts struct {
 	// know the app is actually up.
 	displayAccessInfo(ctx, name, results)
 
+	// deploymentId is empty for ephemeral deploys (no deployment record).
+	var summaryURLs []string
+	if results.HasAccessInfo() && results.AccessInfo() != nil {
+		summaryURLs = deployURLs(ctx, results.AccessInfo(), ephemeralLabel)
+	}
+	writeDeploySummary(ctx, opts.SummaryJSON, deploymentId, appVersionId, summaryURLs)
+
 	return nil
 }
 
@@ -1257,6 +1272,100 @@ func buildStepsSummary(count int) string {
 		return "1 step completed"
 	}
 	return fmt.Sprintf("%d steps completed", count)
+}
+
+// deploySummary is the machine-readable result written by --summary-json. It's
+// a side artifact for CI and tooling (e.g. the mirendev/actions deploy action),
+// giving consumers the values that are otherwise awkward to recover after a
+// deploy without re-parsing human output. deploy_id is empty for ephemeral
+// deploys, which have no deployment record.
+type deploySummary struct {
+	DeployID   string   `json:"deploy_id"`
+	AppVersion string   `json:"app_version"`
+	URLs       []string `json:"urls"`
+}
+
+// accessInfoLike is the subset of the generated AccessInfo types shared by the
+// build and deployment flavors, letting deployURLs serve both deploy paths.
+type accessInfoLike interface {
+	HasHostnames() bool
+	Hostnames() *[]string
+	DefaultRoute() bool
+	ClusterHostname() string
+}
+
+// deployURLs derives the app's reachable https URLs from the server-provided
+// access info, mirroring what the human-readable deploy output prints. It is the
+// authoritative source for route URLs, so tooling doesn't have to scrape the
+// deploy log or reconcile a separate `route list` call.
+func deployURLs(ctx *Context, accessInfo accessInfoLike, ephemeralLabel string) []string {
+	if accessInfo == nil {
+		return nil
+	}
+
+	var urls []string
+	seen := map[string]bool{}
+	add := func(u string) {
+		if u != "" && !seen[u] {
+			seen[u] = true
+			urls = append(urls, u)
+		}
+	}
+
+	if accessInfo.HasHostnames() && accessInfo.Hostnames() != nil {
+		for _, h := range *accessInfo.Hostnames() {
+			if h != "" {
+				add("https://" + h)
+			}
+		}
+	}
+
+	if ephemeralLabel != "" {
+		// Ephemeral previews are additionally reachable at <label>.<cluster-host>.
+		if accessInfo.ClusterHostname() != "" {
+			add("https://" + ephemeralLabel + "." + accessInfo.ClusterHostname())
+		}
+	} else if len(urls) == 0 && accessInfo.DefaultRoute() {
+		// A stable deploy with no explicit route is the default route, reachable
+		// at the cluster hostname.
+		addr := accessInfo.ClusterHostname()
+		if addr == "" && ctx.ClusterConfig != nil {
+			addr = stripPort(ctx.ClusterConfig.Hostname)
+		}
+		if addr != "" {
+			add("https://" + addr)
+		}
+	}
+
+	return urls
+}
+
+// writeDeploySummary writes the deploy summary to path (a no-op if path is
+// empty). It runs after the deploy has already succeeded, so a failure here must
+// never fail the command: it is logged and swallowed.
+func writeDeploySummary(ctx *Context, path, deployID, appVersion string, urls []string) {
+	if path == "" {
+		return
+	}
+	// Keep urls a stable array (never JSON null) so consumers see a fixed schema.
+	if urls == nil {
+		urls = []string{}
+	}
+	summary := deploySummary{
+		DeployID:   deployID,
+		AppVersion: appVersion,
+		URLs:       urls,
+	}
+	data, err := json.MarshalIndent(summary, "", "  ")
+	if err != nil {
+		ctx.Log.Error("Failed to marshal deploy summary", "error", err)
+		return
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
+		ctx.Log.Error("Failed to write deploy summary", "path", path, "error", err)
+		return
+	}
+	ctx.Log.Debug("Wrote deploy summary", "path", path, "deploy_id", deployID, "app_version", appVersion, "urls", urls)
 }
 
 // deployAccessInfo provides access to build result access info for display purposes.
