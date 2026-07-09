@@ -61,7 +61,7 @@ sudo miren server install --without-cloud
 
 ### Using Our Demo Cluster
 
-Ask for access to our demo cluster in #miren-club on [Discord](https://miren.dev/discord). Once you have access, log in and add the cluster:
+Ask for access to our demo cluster, [Miren Club](/miren-club), in #miren-club on [Discord](https://miren.dev/discord). Once you have access, log in and add the cluster:
 
 <CliCommand context="client">
 ```miren
