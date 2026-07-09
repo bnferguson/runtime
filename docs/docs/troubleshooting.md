@@ -117,7 +117,7 @@ docker logs -f miren   # or: podman logs -f miren
 ```
 </CliCommand>
 
-:::note Podman and restart-on-reboot
+:::note[Podman and restart-on-reboot]
 Docker's daemon restarts the miren container automatically after a reboot.
 Podman is daemonless, so `--restart always` only covers crashes while the
 machine is up — it won't bring the container back after a reboot on its own.
@@ -149,7 +149,7 @@ sudo miren debug bundle
 
 This creates a `miren-debug.tar.gz` archive containing system info, container state, process lists, and server logs.
 
-:::warning Review bundles before sharing
+:::warning[Review bundles before sharing]
 Debug bundles collect diagnostic data that may include sensitive information:
 
 - **Process command lines** — arguments passed to running processes may contain tokens or credentials
@@ -158,7 +158,7 @@ Debug bundles collect diagnostic data that may include sensitive information:
 Environment variable values are automatically redacted from container inspect output, but logs and process arguments are included as-is. Review the bundle contents and remove anything sensitive before sharing, especially in public channels like GitHub Issues.
 :::
 
-:::tip Use sudo for a complete bundle
+:::tip[Use sudo for a complete bundle]
 Without sudo, the command still runs but produces a partial bundle. Root access is needed for:
 - **Containerd socket** — the primary source of container state
 - **System journal** — miren server logs via journalctl

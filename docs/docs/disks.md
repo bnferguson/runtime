@@ -74,7 +74,7 @@ If any of your environment variables reference `/miren/data/local`, Miren will a
 
 ## Miren Disks
 
-:::note Backups
+:::note[Backups]
 Miren Disks live on your server. Back up important data with `miren disk backup` and restore it with `miren disk restore`. Cloud backup is on the [roadmap](#roadmap-cloud-backup--sync).
 :::
 
@@ -183,7 +183,11 @@ If you deploy an app with a `name` that matches an existing disk, Miren will att
 
 #### Deletion
 
-Disks are **not** automatically deleted when you delete an app. This is intentional - your data is precious. To delete a disk:
+:::warning[Disks survive app deletion]
+Disks are **not** automatically deleted when you delete an app. This is intentional - your data is precious.
+:::
+
+To delete a disk:
 
 <CliCommand context="client">
 ```miren
@@ -238,7 +242,9 @@ Disks use exclusive leasing - only one app instance can mount a disk at a time. 
 - **ext4**: Best general-purpose choice, widely compatible
 - **xfs**: Better for large files and high-throughput workloads
 
-**NOTE:** Your server must have the mkfs tools to format the disk types.
+:::note
+Your server must have the mkfs tools to format the disk types.
+:::
 
 ### Roadmap: Cloud Backup & Sync
 

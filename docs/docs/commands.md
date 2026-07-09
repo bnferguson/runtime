@@ -271,7 +271,7 @@ Complete reference for all `miren` CLI commands.
 
 ## Advanced / Debug Commands
 
-:::caution
+:::warning
 These commands are intended for advanced debugging and troubleshooting. They may change without notice.
 :::
 

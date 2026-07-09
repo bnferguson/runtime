@@ -200,7 +200,7 @@ These addons currently offer only the dedicated `small` variant — each app get
 
 If no variant is specified, the default (`small`) is used.
 
-:::note Changing variants
+:::note[Changing variants]
 There is currently no way to migrate between variants (e.g. upgrading from `shared` to `small`). If you need to switch, you would need to back up your data, destroy the addon, recreate it with the new variant, and restore. We plan to add in-place variant upgrades in a future release.
 :::
 
@@ -218,7 +218,9 @@ When you deploy an app with addons or run `addon create`, Miren:
 
 Provisioning typically takes 1–2 minutes for a new dedicated server (longer if the PostgreSQL image needs to be pulled for the first time).
 
+:::note
 Your app won't start until addon provisioning completes — Miren holds off launching your app's processes until all addons reach active status.
+:::
 
 ### Checking Status
 
@@ -295,7 +297,7 @@ Miren provisions PostgreSQL, injects `DATABASE_URL`, and starts your app once th
 
 ## Backing Up and Restoring
 
-:::info Early Version
+:::info[Early version]
 Addon backup and restore uses the general-purpose disk backup system. We plan to add addon-aware backup commands in a future release that will simplify this workflow. For now, the steps below work reliably for PostgreSQL addon data.
 
 The `disk backup` and `disk restore` commands must be run directly on the server (via SSH or `miren ssh`), not from your local machine. Remote backup support is planned.

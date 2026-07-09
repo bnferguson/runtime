@@ -170,7 +170,9 @@ miren deploy cancel -d <deployment-id>
 
 Get the deployment ID from `miren app history --detailed`. If a CLI session is watching that deployment, it'll detect the cancellation and exit cleanly.
 
+:::warning[One deployment at a time]
 Only one deployment can run per app at a time. If you attempt to deploy while another is in progress, Miren tells you who started it and when. You can wait for it to finish or cancel it and start a new one.
+:::
 
 ## Git Provenance
 

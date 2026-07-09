@@ -8,7 +8,7 @@ import CliCommand from '@site/src/components/CliCommand';
 
 # Protecting Routes
 
-:::tip Looking for CI/CD OIDC?
+:::tip[Looking for CI/CD OIDC?]
 If you want to **deploy from GitHub Actions or other CI systems** using OIDC tokens (no stored secrets), see [CI/CD Deployment with OIDC](/ci-deploy). This page covers a different feature: protecting your app's HTTP routes with a login.
 :::
 

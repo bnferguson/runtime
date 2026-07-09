@@ -105,7 +105,9 @@ Selects the deployment shape for Miren's HTTP/HTTPS ingress. The mode determines
 
 The `behind-proxy-*` modes default to localhost to keep accidental misconfigurations from quietly exposing an internal endpoint to the network. Set `ingress.address = "0.0.0.0:80"` (or similar) explicitly when the proxy is on a different host.
 
+:::info
 `unix:/path` is reserved for a future release and rejected today with a clear error.
+:::
 
 ## `[tls]` — TLS Settings {#tls}
 

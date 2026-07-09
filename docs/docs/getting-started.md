@@ -129,7 +129,7 @@ Then open the URL in your browser to see the demo app.
 
 ![The demo app running in a browser](/img/demo-app-browser.png)
 
-:::note Not publicly accessible?
+:::note[Not publicly accessible?]
 If your server is behind a firewall or on a private network, `miren route set` will still configure the route, but you won't be able to reach it from outside. You can verify your app is running with `miren app list` and `miren logs` instead. See [Firewall](/firewall) for details on making your cluster reachable.
 :::
 
