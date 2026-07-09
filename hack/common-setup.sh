@@ -62,6 +62,19 @@ start_containerd() {
 
     mkdir -p "$(dirname "$socket_path")"
 
+    # iso run reuses the persistent session container, so a containerd started by
+    # an earlier run is still alive. Reuse it rather than launching a second one
+    # on the same --root/--state, which would conflict on the metadata lock.
+    if ctr --address "$socket_path" version >/dev/null 2>&1; then
+        return
+    fi
+
+    # No healthy daemon answering. Reap any instance wedged mid-startup and clear
+    # its stale socket before starting fresh, mirroring the buildkitd path. -x
+    # matches the daemon exactly so we don't reap its containerd-shim children.
+    pkill -9 -x containerd 2>/dev/null || true
+    rm -f "$socket_path"
+
     if [ "$log_dest" = "/dev/null" ]; then
         containerd --root /data --state /data/state --address "$socket_path" -l trace >/dev/null 2>&1 &
     else
@@ -74,8 +87,20 @@ start_containerd() {
 start_buildkitd() {
     local log_dest="${1:-/dev/null}"
 
-    # Since our buildkit dir is cached across runs, there might be a stale lockfile
-    # sitting around that should be safe to kill
+    # iso run reuses the persistent session container, so a buildkitd started by
+    # an earlier run is still alive and holding the lock on --root. Reuse it when
+    # it's healthy: starting a second buildkitd on the same --root deadlocks on
+    # the buildkit state lock and never becomes ready ("Timeout waiting for
+    # buildkitd").
+    if buildctl debug info >/dev/null 2>&1; then
+        return
+    fi
+
+    # No healthy daemon answering. Reap any instance stuck mid-startup (e.g. one
+    # wedged on the lock from a killed run) and clear its stale lockfile, then
+    # start fresh. -x matches the daemon exactly (no unrelated children exist for
+    # buildkitd today, but keeps it symmetric with the containerd path).
+    pkill -9 -x buildkitd 2>/dev/null || true
     rm -f /data/buildkit/buildkitd.lock
 
     if [ "$log_dest" = "/dev/null" ]; then
