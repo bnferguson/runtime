@@ -13,10 +13,15 @@ import (
 //
 //	B = max(0.10 * system_RAM, 100 MiB)
 //
-// and scale etcd's advisory config (Go GC pressure via GOMEMLIMIT/GOGC, backend quota,
-// compaction/snapshot cadence, concurrent streams) off it. These are advisory only:
-// no cgroup limit is imposed, so etcd is never OOM-killed by us; GOMEMLIMIT simply
-// drives the Go runtime to GC harder as it approaches the budget.
+// and scale etcd's soft config (Go GC pressure via GOMEMLIMIT/GOGC, compaction/snapshot
+// cadence, concurrent streams) off it. These are advisory only: no cgroup limit is
+// imposed, so etcd is never OOM-killed by us; GOMEMLIMIT simply drives the Go runtime to
+// GC harder as it approaches the budget.
+//
+// The one exception is --quota-backend-bytes, a hard knob whose breach takes etcd
+// read-only cluster-wide. It is NOT scaled down by RAM: it is floored at etcd's 2 GiB
+// default (see quotaFloorBytes) so the tuning only ever adds backend headroom on large
+// nodes, never removes it on small ones.
 const (
 	kib = 1024
 	mib = 1024 * 1024
@@ -26,7 +31,16 @@ const (
 	// hold a working keyspace, so the budget never drops under this even on tiny nodes.
 	memoryFloorBytes = 100 * mib
 
-	// quotaCapBytes caps the backend quota regardless of how large the node is.
+	// quotaFloorBytes is etcd's built-in default backend quota (2 GiB). We never set a
+	// quota below it: --quota-backend-bytes is the one hard knob whose breach raises a
+	// cluster-wide NOSPACE alarm (etcd goes read-only until a manual compact/defrag/
+	// disarm), and keyspace tracks workload rather than the RAM of the node etcd
+	// co-tenants on. Flooring here keeps the tuning purely additive headroom on large
+	// nodes and never a write-outage regression on small ones.
+	quotaFloorBytes = 2 * gib
+
+	// quotaCapBytes caps the backend quota regardless of how large the node is. This is
+	// etcd's own maximum supported backend size.
 	quotaCapBytes = 8 * gib
 
 	// Tier boundaries, expressed against the budget B. They line up with the standard
@@ -87,6 +101,9 @@ func computeTuning(systemRAMBytes int64) etcdTuning {
 	}
 
 	quota := budget * 30 / 100
+	if quota < quotaFloorBytes {
+		quota = quotaFloorBytes
+	}
 	if quota > quotaCapBytes {
 		quota = quotaCapBytes
 	}

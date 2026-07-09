@@ -16,7 +16,7 @@ func TestComputeTuning(t *testing.T) {
 			name:   "1GB",
 			ramGiB: 1,
 			want: etcdTuning{
-				BudgetBytes: 107374182, QuotaBackendBytes: 32212254, GoMemLimitBytes: 69793218,
+				BudgetBytes: 107374182, QuotaBackendBytes: 2147483648, GoMemLimitBytes: 69793218,
 				GOGC: 25, AutoCompactionReten: "30m", SnapshotCount: 1000,
 				SnapshotCatchupEntries: 500, MaxConcurrentStreams: 51, CompactionBatchLimit: 100,
 			},
@@ -25,7 +25,7 @@ func TestComputeTuning(t *testing.T) {
 			name:   "2GB",
 			ramGiB: 2,
 			want: etcdTuning{
-				BudgetBytes: 214748364, QuotaBackendBytes: 64424509, GoMemLimitBytes: 139586436,
+				BudgetBytes: 214748364, QuotaBackendBytes: 2147483648, GoMemLimitBytes: 139586436,
 				GOGC: 25, AutoCompactionReten: "30m", SnapshotCount: 1000,
 				SnapshotCatchupEntries: 500, MaxConcurrentStreams: 102, CompactionBatchLimit: 100,
 			},
@@ -34,7 +34,7 @@ func TestComputeTuning(t *testing.T) {
 			name:   "4GB",
 			ramGiB: 4,
 			want: etcdTuning{
-				BudgetBytes: 429496729, QuotaBackendBytes: 128849018, GoMemLimitBytes: 279172873,
+				BudgetBytes: 429496729, QuotaBackendBytes: 2147483648, GoMemLimitBytes: 279172873,
 				GOGC: 50, AutoCompactionReten: "1h", SnapshotCount: 5000,
 				SnapshotCatchupEntries: 2500, MaxConcurrentStreams: 204, CompactionBatchLimit: 500,
 			},
@@ -43,7 +43,7 @@ func TestComputeTuning(t *testing.T) {
 			name:   "8GB",
 			ramGiB: 8,
 			want: etcdTuning{
-				BudgetBytes: 858993459, QuotaBackendBytes: 257698037, GoMemLimitBytes: 558345748,
+				BudgetBytes: 858993459, QuotaBackendBytes: 2147483648, GoMemLimitBytes: 558345748,
 				GOGC: 50, AutoCompactionReten: "1h", SnapshotCount: 5000,
 				SnapshotCatchupEntries: 2500, MaxConcurrentStreams: 409, CompactionBatchLimit: 500,
 			},
@@ -52,7 +52,7 @@ func TestComputeTuning(t *testing.T) {
 			name:   "16GB",
 			ramGiB: 16,
 			want: etcdTuning{
-				BudgetBytes: 1717986918, QuotaBackendBytes: 515396075, GoMemLimitBytes: 1116691496,
+				BudgetBytes: 1717986918, QuotaBackendBytes: 2147483648, GoMemLimitBytes: 1116691496,
 				GOGC: 75, AutoCompactionReten: "2h", SnapshotCount: 10000,
 				SnapshotCatchupEntries: 5000, MaxConcurrentStreams: 819, CompactionBatchLimit: 1000,
 			},
@@ -61,7 +61,7 @@ func TestComputeTuning(t *testing.T) {
 			name:   "32GB",
 			ramGiB: 32,
 			want: etcdTuning{
-				BudgetBytes: 3435973836, QuotaBackendBytes: 1030792150, GoMemLimitBytes: 2233382993,
+				BudgetBytes: 3435973836, QuotaBackendBytes: 2147483648, GoMemLimitBytes: 2233382993,
 				GOGC: 100, AutoCompactionReten: "3h", SnapshotCount: 10000,
 				SnapshotCatchupEntries: 5000, MaxConcurrentStreams: 1638, CompactionBatchLimit: 1000,
 			},
@@ -70,7 +70,7 @@ func TestComputeTuning(t *testing.T) {
 			name:   "64GB",
 			ramGiB: 64,
 			want: etcdTuning{
-				BudgetBytes: 6871947673, QuotaBackendBytes: 2061584301, GoMemLimitBytes: 4466765987,
+				BudgetBytes: 6871947673, QuotaBackendBytes: 2147483648, GoMemLimitBytes: 4466765987,
 				GOGC: 100, AutoCompactionReten: "3h", SnapshotCount: 10000,
 				SnapshotCatchupEntries: 5000, MaxConcurrentStreams: 3276, CompactionBatchLimit: 1000,
 			},
@@ -79,7 +79,7 @@ func TestComputeTuning(t *testing.T) {
 			name:   "sub-1GB floors to 100MiB",
 			ramGiB: 0.5,
 			want: etcdTuning{
-				BudgetBytes: 104857600, QuotaBackendBytes: 31457280, GoMemLimitBytes: 68157440,
+				BudgetBytes: 104857600, QuotaBackendBytes: 2147483648, GoMemLimitBytes: 68157440,
 				GOGC: 25, AutoCompactionReten: "30m", SnapshotCount: 1000,
 				SnapshotCatchupEntries: 500, MaxConcurrentStreams: 50, CompactionBatchLimit: 100,
 			},
@@ -98,6 +98,28 @@ func TestComputeTuning(t *testing.T) {
 				t.Errorf("computeTuning(%d):\n got  %+v\n want %+v", ram, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestQuotaFloorAndCap(t *testing.T) {
+	// quota-backend-bytes is never set below etcd's 2 GiB default, so the tuning is
+	// purely additive backend headroom and never a NOSPACE write-outage regression.
+	// For every node up to 64 GB, 3% of RAM is under 2 GiB, so the floor applies.
+	for _, ramGiB := range []int64{1, 2, 4, 8, 16, 32, 64} {
+		got := computeTuning(ramGiB * gib).QuotaBackendBytes
+		if got != quotaFloorBytes {
+			t.Errorf("%d GiB: quota = %d, want floor %d", ramGiB, got, quotaFloorBytes)
+		}
+	}
+
+	// A very large node (3% of RAM above 2 GiB) gets the RAM-scaled quota.
+	if got := computeTuning(100 * gib).QuotaBackendBytes; got != 100*gib/10*30/100 {
+		t.Errorf("100 GiB: quota = %d, want RAM-scaled %d", got, 100*gib/10*30/100)
+	}
+
+	// An enormous node is capped at etcd's 8 GiB maximum.
+	if got := computeTuning(300 * gib).QuotaBackendBytes; got != quotaCapBytes {
+		t.Errorf("300 GiB: quota = %d, want cap %d", got, quotaCapBytes)
 	}
 }
 
@@ -154,8 +176,8 @@ func TestTuningSignature(t *testing.T) {
 	}
 
 	// A RAM change that stays within the same tier (5 GiB and 8 GiB are both the
-	// medium tier) but alters the continuous formulas (quota/GOMEMLIMIT/streams)
-	// also changes the signature.
+	// medium tier) but alters the continuous soft knobs (GOMEMLIMIT/streams) also
+	// changes the signature.
 	if other := computeTuning(5 * gib).signature(); other == sig {
 		t.Errorf("signature did not change for a within-tier RAM change: %q", sig)
 	}
@@ -165,7 +187,7 @@ func TestTuningArgs(t *testing.T) {
 	args := computeTuning(8 * gib).args()
 
 	want := []string{
-		"--quota-backend-bytes", "257698037",
+		"--quota-backend-bytes", "2147483648",
 		"--snapshot-count", "5000",
 		"--experimental-snapshot-catchup-entries", "2500",
 		"--max-concurrent-streams", "409",
