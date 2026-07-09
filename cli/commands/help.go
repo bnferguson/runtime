@@ -44,11 +44,17 @@ func Section(name, desc, help string, opts ...SectionOption) mflags.Command {
 		desc = help
 	}
 
+	fs := mflags.NewFlagSet(name)
+	// Sections declare no flags of their own, but users routinely place global
+	// flags (e.g. -C/--cluster) before a section name. Tolerate unknown flags so
+	// the section still renders its sub-command help instead of failing to parse.
+	fs.AllowUnknownFlags(true)
+
 	s := &section{
 		name: name,
 		desc: desc,
 		help: help,
-		fs:   mflags.NewFlagSet(name),
+		fs:   fs,
 	}
 
 	for _, o := range opts {

@@ -1989,8 +1989,8 @@ miren.dev/jsonrpc3/go/jsonrpc3 v0.0.0-20260106052505-c98e2702b093 h1:Sd+M5HSUati
 miren.dev/jsonrpc3/go/jsonrpc3 v0.0.0-20260106052505-c98e2702b093/go.mod h1:B4A3wSzkcSZQw6Y5opU+rk1+1lEuCWIWkAiN7TkltGE=
 miren.dev/lbd v0.0.0-20260224020427-8914d8db2233 h1:9DxH7Dhnmu7hn1OA2JC5fHpLuVgAqBySws9GLNssLl4=
 miren.dev/lbd v0.0.0-20260224020427-8914d8db2233/go.mod h1:+x9fy2p45csBnGUJdqxCUmzlUTCipoVDbv6zIapTgDA=
-miren.dev/mflags v0.0.0-20260518222642-0ca7adc28461 h1:ETSN/0nBy1Dqpu43INesvPWoipOaC5+pfKzRjngkeO0=
-miren.dev/mflags v0.0.0-20260518222642-0ca7adc28461/go.mod h1:G1eQ/upWVdO6BGT6dlh5Yqjt+9ncH5RUAKX6UKi1F9Q=
+miren.dev/mflags v0.0.0-20260709231109-a397dcbc98df h1:4fo71OveODliBgU9sv2M/uepiRNAwQPJ7YTPuNffQNc=
+miren.dev/mflags v0.0.0-20260709231109-a397dcbc98df/go.mod h1:G1eQ/upWVdO6BGT6dlh5Yqjt+9ncH5RUAKX6UKi1F9Q=
 modernc.org/libc v1.67.6 h1:eVOQvpModVLKOdT+LvBPjdQqfrZq+pC39BygcT+E7OI=
 modernc.org/libc v1.67.6/go.mod h1:JAhxUVlolfYDErnwiqaLvUqc8nfb2r6S6slAgZOnaiE=
 modernc.org/mathutil v1.7.1 h1:GCZVGXdaN8gTqB1Mf/usp1Y/hSqgI2vAGGP4jZMCxOU=
