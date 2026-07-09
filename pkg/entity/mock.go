@@ -163,6 +163,12 @@ func (m *MockStore) CreateEntity(ctx context.Context, entity *Entity, opts ...En
 		return nil, err
 	}
 
+	// Mirror EtcdStore.CreateEntity (store.go:171): allocate an ID before
+	// storing. This also makes mock-backed tests fail loudly on a mistyped
+	// db/id, the same way production does, instead of silently keying the
+	// entity under an empty ID.
+	entity.ForceID()
+
 	// Set CreatedAt if not already set (store manages this timestamp)
 	if entity.GetCreatedAt().IsZero() {
 		entity.SetCreatedAt(m.Now())
