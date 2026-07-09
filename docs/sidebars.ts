@@ -106,6 +106,7 @@ const sidebars: SidebarsConfig = {
       label: 'Resources',
       collapsed: false,
       items: [
+        'miren-club',
         'agent-skills',
         'troubleshooting',
         'terminology',
