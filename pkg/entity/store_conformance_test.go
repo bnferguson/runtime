@@ -223,6 +223,25 @@ func TestStoreConformance_CreateEntity(t *testing.T) {
 	})
 }
 
+// TestStoreConformance_CreateRejectsMistypedDBId pins the MIR-601 contract: a
+// db/id supplied with the wrong value kind (a bare string, KindString, rather
+// than an entity.Id, KindId) must fail loudly on every backend instead of
+// silently minting a fresh auto-id and discarding the caller's id. This is the
+// mistake that surfaced in MIR-600, where createDiskLease passed a plain string
+// for db/id. Before MIR-601, MockStore.CreateEntity skipped ForceID entirely,
+// so the divergence hid here: production regenerated the id, but mock-backed
+// tests keyed the entity under an empty id without complaint.
+func TestStoreConformance_CreateRejectsMistypedDBId(t *testing.T) {
+	runStoreConformance(t, func(t *testing.T, store Store) {
+		assert.Panics(t, func() {
+			_, _ = store.CreateEntity(t.Context(), New(
+				DBId, "conf-mistyped-id",
+				Any(Doc, "wrong kind"),
+			))
+		}, "a mistyped db/id (KindString) must fail loudly, not silently regenerate the id")
+	})
+}
+
 // TestStoreConformance_EnsureEntity pins the create-if-absent contract that
 // saga storage depends on: the first Ensure creates and reports created=true;
 // a second Ensure with the same id returns the existing entity with
