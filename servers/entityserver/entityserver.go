@@ -552,12 +552,16 @@ func (e *EntityServer) WatchIndex(ctx context.Context, req *entityserver_v1alpha
 					op.SetEntityId(string(entityId))
 					op.SetPrevious(event.PrevKv.ModRevision)
 
-					// Try to fetch the entity data for the delete event.
-					// Index entries are deleted before the entity key, so the entity
-					// may still exist. Fall back to a revision-based read if not.
+					// Try to fetch the entity data for the delete event. When only
+					// an index entry is dropped (e.g. a session lease expiring) the
+					// entity itself may still exist, so try a current read first.
+					// When the entity was deleted via DeleteEntity, the index entry
+					// and the entity key are removed together in one atomic txn, so
+					// the entity is already gone at this event's revision; read it at
+					// the prior revision to recover what was deleted.
 					en, err := e.Store.GetEntity(ctx, entityId)
 					if err != nil {
-						en, err = e.Store.GetEntityAtRevision(ctx, entityId, event.Kv.ModRevision)
+						en, err = e.Store.GetEntityAtRevision(ctx, entityId, event.Kv.ModRevision-1)
 					}
 					if err != nil {
 						e.Log.Error("failed to get entity for delete event", "error", err, "id", entityId)

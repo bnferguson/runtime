@@ -1322,61 +1322,97 @@ func (s *EtcdStore) EnsureEntity(
 	return entity, true, nil
 }
 
-// DeleteEntity implements Store interface
+// deleteEntityRaceHook is a test seam. When non-nil, DeleteEntity invokes it
+// after reading the entity but before committing the guarded delete transaction,
+// letting a white-box test deterministically interleave a concurrent write into
+// the revision-guard window. It is always nil in production.
+var deleteEntityRaceHook func()
+
+// DeleteEntity implements Store interface.
+//
+// The delete is atomic: the entity key, its index (collection) entries, and its
+// unique-value keys are all removed in a single revision-guarded transaction. If
+// they were removed separately (as they once were, with the index deletes issued
+// as immediate unconditional Deletes before the entity-key txn), a concurrent
+// no-OCC patch could slip into the gap and re-add index entries after the entity
+// was gone, leaking a stale index entry (MIR-1334).
+//
+// Because the txn is guarded on the entity's ModRevision, a concurrent write that
+// bumps the revision between our read and the txn makes it fail. Pools are patched
+// on every reconcile tick via the no-OCC path, so a single-shot delete could lose
+// that race repeatedly; we re-read and retry a bounded number of times so the
+// delete wins against a busy reconcile loop instead of spuriously reporting the
+// entity as already gone.
 func (s *EtcdStore) DeleteEntity(ctx context.Context, id Id) error {
-	entity, err := s.GetEntity(ctx, id)
-	if err != nil {
-		if errors.Is(err, cond.ErrNotFound{}) {
-			return nil
+	const maxDeleteRetries = 3
+	for attempt := 0; ; attempt++ {
+		entity, err := s.GetEntity(ctx, id)
+		if err != nil {
+			if errors.Is(err, cond.ErrNotFound{}) {
+				return nil
+			}
+			return err
 		}
-		return err
-	}
 
-	// Collect all indexed attributes including nested ones within components
-	indexedAttrs, err := s.collectIndexedAttributes(ctx, entity.attrs)
-	if err != nil {
-		return err
-	}
+		// Collect all indexed attributes including nested ones within components
+		indexedAttrs, err := s.collectIndexedAttributes(ctx, entity.attrs)
+		if err != nil {
+			return err
+		}
 
-	// Delete all index entries for this entity
-	for _, attrs := range indexedAttrs {
-		for _, attr := range attrs {
-			// TODO: Batch this as an op into the below txn
-			err := s.deleteFromCollection(entity, attr.CAS())
-			if err != nil {
-				return fmt.Errorf("failed to delete entity from collection: %w", err)
+		// Test seam: exercise the read-before-txn window deterministically. This
+		// is the exact gap a concurrent no-OCC patch could slip into (MIR-1334),
+		// so a test can inject one here to prove the delete stays atomic. Always
+		// nil in production.
+		if deleteEntityRaceHook != nil {
+			deleteEntityRaceHook()
+		}
+
+		key := s.buildKey(id)
+
+		// Build all delete operations: entity key + index entries + unique-value
+		// keys, so the whole delete commits (or fails) as one guarded txn.
+		ops := []clientv3.Op{clientv3.OpDelete(key)}
+
+		for _, attrs := range indexedAttrs {
+			for _, attr := range attrs {
+				ops = append(ops, s.deleteFromCollectionOp(entity, attr.CAS()))
 			}
 		}
+
+		uniqueAttrs, err := s.collectUniqueAttrs(ctx, entity)
+		if err != nil {
+			return err
+		}
+		for _, attr := range uniqueAttrs {
+			ops = append(ops, s.deleteUniqueOp(attr))
+		}
+
+		// Guard on the entity's ModRevision so the delete is all-or-nothing and
+		// can't interleave with a concurrent patch.
+		txnResp, err := s.client.Txn(ctx).
+			If(clientv3.Compare(clientv3.ModRevision(key), "=", entity.GetRevision())).
+			Then(ops...).
+			Commit()
+
+		if err != nil {
+			return fmt.Errorf("failed to delete entity from etcd: %w", err)
+		}
+
+		if txnResp.Succeeded {
+			return nil
+		}
+
+		// The guard failed: either the entity was concurrently deleted, or a
+		// concurrent write bumped its revision. Re-read and retry; GetEntity
+		// returning NotFound on the next pass resolves the former.
+		if attempt >= maxDeleteRetries {
+			s.log.Error("delete lost revision race after retries", "id", id)
+			return cond.Conflict("entity", id)
+		}
+		s.log.Info("delete revision race, re-reading and retrying",
+			"id", id, "attempt", attempt+1)
 	}
-
-	key := s.buildKey(id)
-
-	// Build delete operations: entity key + unique-value keys
-	ops := []clientv3.Op{clientv3.OpDelete(key)}
-
-	uniqueAttrs, err := s.collectUniqueAttrs(ctx, entity)
-	if err != nil {
-		return err
-	}
-	for _, attr := range uniqueAttrs {
-		ops = append(ops, s.deleteUniqueOp(attr))
-	}
-
-	// Use Txn to check that the key exists before deleting
-	txnResp, err := s.client.Txn(ctx).
-		If(clientv3.Compare(clientv3.ModRevision(key), "=", entity.GetRevision())).
-		Then(ops...).
-		Commit()
-
-	if err != nil {
-		return fmt.Errorf("failed to delete entity from etcd: %w", err)
-	}
-
-	if !txnResp.Succeeded {
-		return cond.NotFound("entity", id)
-	}
-
-	return nil
 }
 
 // ClearSchemaCache clears the in-memory schema cache, forcing subsequent
@@ -1463,17 +1499,6 @@ func (s *EtcdStore) deleteFromCollectionOp(entity *Entity, collection string) cl
 	key = fmt.Sprintf("%s/collections/%s/%s", s.prefix, colKey, key)
 
 	return clientv3.OpDelete(key)
-}
-
-func (s *EtcdStore) deleteFromCollection(entity *Entity, collection string) error {
-	key := base58.Encode([]byte(entity.Id()))
-	colKey := tr.Replace(collection)
-
-	ctx := context.Background()
-	key = fmt.Sprintf("%s/collections/%s/%s", s.prefix, colKey, key)
-
-	_, err := s.client.Delete(ctx, key)
-	return err
 }
 
 func (s *EtcdStore) ListIndex(ctx context.Context, attr Attr) ([]Id, error) {

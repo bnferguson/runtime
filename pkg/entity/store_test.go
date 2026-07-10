@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -2703,4 +2704,279 @@ func TestEtcdStore_PatchToleratesDanglingRefInComponent(t *testing.T) {
 		String(Id("test/status"), "released"),
 	))
 	r.NoError(err, "status patch must tolerate a dangling ref nested in an unchanged component")
+}
+
+// expectedIndexKey rebuilds the etcd collection key that addToCollectionOp would
+// write for the given entity id + indexed attribute, so a test can check whether
+// that specific index entry survives a delete.
+func expectedIndexKey(prefix string, id Id, attr Attr) string {
+	return fmt.Sprintf("%s/collections/%s/%s", prefix, tr.Replace(attr.CAS()), base58.Encode([]byte(id)))
+}
+
+// TestEtcdStore_DeleteRemovesAllIndexEntries reproduces the MIR-1320 "pool"
+// leak. A durable (unleased) kinded entity must have EVERY index entry removed
+// by DeleteEntity, including the system-managed entity/kind and db/short-id
+// indexes. On garden, deleted pool entities deterministically leaked exactly
+// those two index entries — 63% of the cluster's stale index.
+func TestEtcdStore_DeleteRemovesAllIndexEntries(t *testing.T) {
+	store, client := setupTestEtcdStore(t)
+	ctx := t.Context()
+	r := require.New(t)
+
+	// A kind entity to reference (entity/kind is a validated ref).
+	k, err := store.CreateEntity(ctx, New(Any(Ident, KeywordValue("test/pool-kind"))))
+	r.NoError(err)
+
+	// A domain indexed attribute, for contrast with the system indexes.
+	_, err = store.CreateEntity(ctx, New(
+		Ident, "test/region",
+		Doc, "a region",
+		Cardinality, CardinalityOne,
+		Type, TypeStr,
+		Index, true,
+	))
+	r.NoError(err)
+
+	// A durable, kinded entity like a pool: entity/kind (indexed) triggers a
+	// db/short-id allocation (also indexed), plus a domain indexed attr.
+	pool, err := store.CreateEntity(ctx, New(
+		Any(Ident, KeywordValue("pool/thing-1")),
+		Ref(EntityKind, k.Id()),
+		String(Id("test/region"), "us-central1"),
+	))
+	r.NoError(err)
+
+	// Read the stored form to recover the system attrs (short-id is allocated
+	// by the store) and compute their expected index keys.
+	stored, err := store.GetEntity(ctx, pool.Id())
+	r.NoError(err)
+	kindAttrs := stored.GetAll(EntityKind)
+	r.NotEmpty(kindAttrs, "stored entity must carry entity/kind")
+	shortIDAttr, ok := stored.Get(DBShortId)
+	r.True(ok, "kinded entity must have a db/short-id")
+
+	kindKey := expectedIndexKey(store.Prefix(), pool.Id(), kindAttrs[0])
+	shortIDKey := expectedIndexKey(store.Prefix(), pool.Id(), shortIDAttr)
+
+	before := collectionKVsForEntity(t, client, store.Prefix(), pool.Id())
+	r.NotEmpty(before, "kinded entity must have index entries")
+	t.Logf("index entries before delete: %d", len(before))
+
+	r.NoError(store.DeleteEntity(ctx, pool.Id()))
+
+	after := collectionKVsForEntity(t, client, store.Prefix(), pool.Id())
+	var leakedKind, leakedShortID bool
+	for _, kv := range after {
+		key := string(kv.Key)
+		label := "domain"
+		switch key {
+		case kindKey:
+			label = "entity/kind"
+			leakedKind = true
+		case shortIDKey:
+			label = "db/short-id"
+			leakedShortID = true
+		}
+		t.Logf("LEAKED after delete [%s]: %s", label, key)
+	}
+	t.Logf("leaked entity/kind index: %v   leaked db/short-id index: %v", leakedKind, leakedShortID)
+
+	r.Empty(after, "DeleteEntity must remove every index entry (MIR-1320 pool leak)")
+}
+
+// TestEtcdStore_PatchThenDeleteRemovesAllIndexEntries checks the realistic pool
+// lifecycle: a kinded entity is patched (no-OCC, like a reconcile status write,
+// including an indexed-value change) and then deleted. Every index entry — the
+// old and new value of the changed attr, plus the system indexes — must be gone.
+// If a sequential patch-then-delete leaks, the pool bug is an update-path gap;
+// if it's clean, the garden leak must be the concurrent delete-vs-patch race.
+func TestEtcdStore_PatchThenDeleteRemovesAllIndexEntries(t *testing.T) {
+	store, client := setupTestEtcdStore(t)
+	ctx := t.Context()
+	r := require.New(t)
+
+	k, err := store.CreateEntity(ctx, New(Any(Ident, KeywordValue("test/pool-kind"))))
+	r.NoError(err)
+	_, err = store.CreateEntity(ctx, New(
+		Ident, "test/region",
+		Doc, "a region",
+		Cardinality, CardinalityOne,
+		Type, TypeStr,
+		Index, true,
+	))
+	r.NoError(err)
+
+	pool, err := store.CreateEntity(ctx, New(
+		Any(Ident, KeywordValue("pool/thing-2")),
+		Ref(EntityKind, k.Id()),
+		String(Id("test/region"), "us-central1"),
+	))
+	r.NoError(err)
+
+	// No-OCC patch that changes the indexed region value (exercises old-value
+	// index cleanup) — mimics a reconcile tick rewriting the entity.
+	_, err = store.PatchEntity(ctx, New(
+		DBId, pool.Id(),
+		String(Id("test/region"), "us-east1"),
+	))
+	r.NoError(err)
+
+	// The old region value must no longer be indexed.
+	oldIdx, err := store.ListIndex(ctx, String(Id("test/region"), "us-central1"))
+	r.NoError(err)
+	r.NotContains(oldIdx, pool.Id(), "old indexed value must be removed by patch")
+
+	r.NoError(store.DeleteEntity(ctx, pool.Id()))
+
+	after := collectionKVsForEntity(t, client, store.Prefix(), pool.Id())
+	for _, kv := range after {
+		t.Logf("LEAKED after patch+delete: %s", kv.Key)
+	}
+	r.Empty(after, "patch-then-delete must leave no index entry (MIR-1320 pool leak)")
+}
+
+// TestEtcdStore_ConcurrentDeleteVsPatchNoStaleIndex is a stress smoke test for
+// the MIR-1334 scenario: it hammers no-OCC patches (the reconcile status-write
+// path) against a concurrent DeleteEntity on a high-churn, pool-like entity and
+// asserts the store never settles into an index/entity desync.
+//
+// The invariant every store mutation preserves is index ⟺ entity: an index
+// (collection) entry exists iff the entity it points at exists. This test drives
+// the real concurrent path (and guards against panics/deadlocks/gross breakage
+// under it), but it is NOT a reliable regression guard for the atomicity bug on
+// its own: the race window is narrow and concurrent patches tend to re-add the
+// index before the quiescence check, so the old non-atomic delete can pass here.
+// TestEtcdStore_DeleteIsAtomicUnderConcurrentPatch pins the atomicity guarantee
+// deterministically via a test seam; this one exercises it at volume.
+func TestEtcdStore_ConcurrentDeleteVsPatchNoStaleIndex(t *testing.T) {
+	store, client := setupTestEtcdStore(t)
+	ctx := t.Context()
+	r := require.New(t)
+
+	k, err := store.CreateEntity(ctx, New(Any(Ident, KeywordValue("test/pool-kind"))))
+	r.NoError(err)
+	_, err = store.CreateEntity(ctx, New(
+		Ident, "test/region",
+		Doc, "a region",
+		Cardinality, CardinalityOne,
+		Type, TypeStr,
+		Index, true,
+	))
+	r.NoError(err)
+
+	const iterations = 40
+	const patchesPerIter = 15
+
+	for i := range iterations {
+		pool, err := store.CreateEntity(ctx, New(
+			Any(Ident, KeywordValue(fmt.Sprintf("pool/churn-%d", i))),
+			Ref(EntityKind, k.Id()),
+			String(Id("test/region"), "us-central1"),
+		))
+		r.NoError(err)
+		id := pool.Id()
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+
+		// Patcher: hammer no-OCC status patches (cas=0), rotating an indexed
+		// value so old-value index cleanup runs too. Errors are expected once
+		// the deleter wins (the entity is gone), so they're ignored.
+		go func() {
+			defer wg.Done()
+			for j := range patchesPerIter {
+				_, _ = store.PatchEntity(ctx, New(
+					DBId, id,
+					String(Id("test/region"), fmt.Sprintf("region-%d", j)),
+				))
+			}
+		}()
+
+		// Deleter: race a single delete against the patch storm.
+		go func() {
+			defer wg.Done()
+			_ = store.DeleteEntity(ctx, id)
+		}()
+
+		wg.Wait()
+
+		// At quiescence, index and entity must agree.
+		_, getErr := store.GetEntity(ctx, id)
+		kvs := collectionKVsForEntity(t, client, store.Prefix(), id)
+		if getErr != nil {
+			r.Empty(kvs, "iter %d: entity is gone but index entries survive (stale index, MIR-1334)", i)
+		} else {
+			r.NotEmpty(kvs, "iter %d: entity exists but its index entries are missing (index desync)", i)
+		}
+
+		// Ensure the entity is actually removed before the next iteration so a
+		// lingering (resurrected) entity doesn't mask a later leak.
+		r.NoError(store.DeleteEntity(ctx, id))
+		r.Empty(collectionKVsForEntity(t, client, store.Prefix(), id),
+			"iter %d: cleanup delete must leave no index entry", i)
+	}
+}
+
+// TestEtcdStore_DeleteIsAtomicUnderConcurrentPatch is the deterministic MIR-1334
+// regression test. It uses the deleteEntityRaceHook seam to inject exactly one
+// no-OCC patch into DeleteEntity's read-before-txn window — the precise gap a
+// reconcile status write could land in — and asserts the delete still leaves the
+// index and entity in agreement.
+//
+// With the atomic delete, the injected patch bumps the revision, the guarded txn
+// fails, and the bounded retry re-reads at the new revision and removes the
+// entity and every index entry together. With the old non-atomic delete (index
+// removed by unconditional Deletes before the txn), the injected patch re-adds
+// the index, the unconditional delete wipes it, and the entity txn then fails on
+// the now-stale revision — leaving the entity alive with its index gone. This
+// test forbids that disagreement, so it fails against the old delete and passes
+// against the fix.
+func TestEtcdStore_DeleteIsAtomicUnderConcurrentPatch(t *testing.T) {
+	store, client := setupTestEtcdStore(t)
+	ctx := t.Context()
+	r := require.New(t)
+
+	k, err := store.CreateEntity(ctx, New(Any(Ident, KeywordValue("test/pool-kind"))))
+	r.NoError(err)
+	_, err = store.CreateEntity(ctx, New(
+		Ident, "test/region",
+		Doc, "a region",
+		Cardinality, CardinalityOne,
+		Type, TypeStr,
+		Index, true,
+	))
+	r.NoError(err)
+
+	pool, err := store.CreateEntity(ctx, New(
+		Any(Ident, KeywordValue("pool/race-1")),
+		Ref(EntityKind, k.Id()),
+		String(Id("test/region"), "us-central1"),
+	))
+	r.NoError(err)
+
+	// Fire one no-OCC patch inside the delete's read-before-txn window. sync.Once
+	// keeps it to a single injection so the atomic delete's retry can re-read past
+	// the revision bump and win; firing on every attempt would just be an infinite
+	// patch storm that no delete could beat.
+	var once sync.Once
+	deleteEntityRaceHook = func() {
+		once.Do(func() {
+			_, perr := store.PatchEntity(ctx, New(
+				DBId, pool.Id(),
+				String(Id("test/region"), "us-east1"),
+			))
+			r.NoError(perr, "injected concurrent patch must succeed")
+		})
+	}
+	t.Cleanup(func() { deleteEntityRaceHook = nil })
+
+	// The atomic delete loses the guard on the first attempt (revision bumped by
+	// the injected patch) and wins on the retry.
+	r.NoError(store.DeleteEntity(ctx, pool.Id()))
+
+	// Entity and index must agree: both gone.
+	_, getErr := store.GetEntity(ctx, pool.Id())
+	r.Error(getErr, "entity must be deleted after DeleteEntity returns")
+	r.Empty(collectionKVsForEntity(t, client, store.Prefix(), pool.Id()),
+		"no index entry may survive a delete that raced a patch (MIR-1334)")
 }
