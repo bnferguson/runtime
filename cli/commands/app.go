@@ -2,11 +2,9 @@ package commands
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -164,8 +162,6 @@ func App(ctx *Context, opts struct {
 	FormatOptions
 	Watch bool `short:"w" long:"watch" description:"Watch the app stats"`
 	Graph bool `short:"g" long:"graph" description:"Graph the app stats"`
-
-	ConfigOnly bool `long:"config-only" description:"Only show the configuration"`
 }) error {
 	crudcl, err := ctx.RPCClient("dev.miren.runtime/app")
 	if err != nil {
@@ -177,16 +173,6 @@ func App(ctx *Context, opts struct {
 	cfgres, err := crud.GetConfiguration(ctx, opts.App)
 	if err != nil {
 		ctx.Printf("unknown application: %s\n", opts.App)
-		return nil
-	}
-
-	if opts.ConfigOnly {
-		data, err := json.MarshalIndent(cfgres.Configuration(), "", "  ")
-		if err != nil {
-			return err
-		}
-
-		ctx.Printf("%s\n", data)
 		return nil
 	}
 
@@ -205,7 +191,7 @@ func App(ctx *Context, opts struct {
 	status := res.Status()
 
 	if opts.IsJSON() {
-		return printAppJSON(status, cfgres.Configuration())
+		return printAppJSON(status)
 	}
 
 	//spew.Dump(status)
@@ -399,20 +385,6 @@ func (m Model) View() string {
 				m.status.ActiveVersion(),
 			))
 	}
-
-	envvars := []string{}
-
-	if m.cfg != nil {
-		for _, v := range m.cfg.EnvVars() {
-			if v.Sensitive() {
-				envvars = append(envvars, fmt.Sprintf("%s=****", v.Key()))
-			} else {
-				envvars = append(envvars, fmt.Sprintf("%s=%s", v.Key(), v.Value()))
-			}
-		}
-	}
-
-	sort.Strings(envvars)
 
 	hdr := fmt.Sprintf("       name: %s\nlast update: %s %s\n",
 		bold.Render(m.status.Name()),
@@ -646,16 +618,11 @@ func (m Model) View() string {
 	return frame
 }
 
-func printAppJSON(status *app_v1alpha.ApplicationStatus, cfg *app_v1alpha.Configuration) error {
+func printAppJSON(status *app_v1alpha.ApplicationStatus) error {
 	type poolJSON struct {
 		Name      string `json:"name"`
 		Instances int    `json:"instances"`
 		Idle      int32  `json:"idle"`
-	}
-
-	type envVarJSON struct {
-		Key   string `json:"key"`
-		Value string `json:"value"`
 	}
 
 	type requestStatJSON struct {
@@ -688,7 +655,6 @@ func printAppJSON(status *app_v1alpha.ApplicationStatus, cfg *app_v1alpha.Config
 		LastMinCPU        float64              `json:"last_min_cpu,omitempty"`
 		LastHourCPU       float64              `json:"last_hour_cpu,omitempty"`
 		Pools             []poolJSON           `json:"pools,omitempty"`
-		EnvVars           []envVarJSON         `json:"env_vars,omitempty"`
 		RequestStats      []requestStatJSON    `json:"request_stats,omitempty"`
 		TopPaths          []pathStatJSON       `json:"top_paths,omitempty"`
 		ErrorBreakdown    []errorBreakdownJSON `json:"error_breakdown,omitempty"`
@@ -726,21 +692,6 @@ func printAppJSON(status *app_v1alpha.ApplicationStatus, cfg *app_v1alpha.Config
 			Name:      ps.Name(),
 			Instances: len(ps.Windows()),
 			Idle:      ps.Idle(),
-		})
-	}
-
-	if cfg != nil && cfg.HasEnvVars() {
-		for _, v := range cfg.EnvVars() {
-			value := v.Value()
-			if v.Sensitive() {
-				value = "****"
-			} else if isSensitiveKey(v.Key()) && len(value) > 0 {
-				value = value[:1] + strings.Repeat("*", len(value)-1)
-			}
-			o.EnvVars = append(o.EnvVars, envVarJSON{Key: v.Key(), Value: value})
-		}
-		sort.Slice(o.EnvVars, func(i, j int) bool {
-			return o.EnvVars[i].Key < o.EnvVars[j].Key
 		})
 	}
 
