@@ -23,6 +23,7 @@ miren deploy [flags]
 - `--explain-format` — Explain format (default: `auto`) (choices: `auto`, `plain`, `tty`, `rawjson`)
 - `--force, -f` — Skip confirmation prompt
 - `--sensitive, -s` — Set sensitive environment variable (masked in output)
+- `--summary-json` — Write a JSON summary of the deploy result (deploy id, version, and route URLs) to this path
 - `--ttl` — TTL for ephemeral version (e.g. 48h) (default: `24h`)
 - `--version, -V` — Deploy an existing version (skip build)
 
