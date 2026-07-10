@@ -32,6 +32,23 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: 'category',
+      label: 'Language Guides',
+      collapsed: false,
+      link: {
+        type: 'doc',
+        id: 'guides/index',
+      },
+      items: [
+        'guides/python',
+        'guides/javascript',
+        'guides/go',
+        'guides/ruby',
+        'guides/elixir',
+        'guides/gleam',
+      ],
+    },
+    {
+      type: 'category',
       label: 'Data & Storage',
       collapsed: false,
       items: [
