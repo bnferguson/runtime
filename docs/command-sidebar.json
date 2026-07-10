@@ -270,6 +270,7 @@
       "command/runner-install",
       "command/runner-join",
       "command/runner-list",
+      "command/runner-reissue",
       "command/runner-remove",
       "command/runner-service-status",
       "command/runner-start",

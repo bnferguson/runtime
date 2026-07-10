@@ -198,6 +198,7 @@ Complete reference for all `miren` CLI commands.
 | [`miren runner install`](/command/runner-install) | Install systemd service for miren runner _(`distributedrunners`)_ |
 | [`miren runner join`](/command/runner-join) | Join this machine to a coordinator as a runner _(`distributedrunners`)_ |
 | [`miren runner list`](/command/runner-list) | List all registered runners _(`distributedrunners`)_ |
+| [`miren runner reissue`](/command/runner-reissue) | Rotate this runner's certificate in place (requires a still-valid cert), keeping its identity _(`distributedrunners`)_ |
 | [`miren runner remove`](/command/runner-remove) | Remove a registered runner and clean up resources _(`distributedrunners`)_ |
 | [`miren runner service-status`](/command/runner-service-status) | Show miren-runner systemd service status _(`distributedrunners`)_ |
 | [`miren runner start`](/command/runner-start) | Start this machine as a distributed runner _(`distributedrunners`)_ |

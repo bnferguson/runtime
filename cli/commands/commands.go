@@ -673,6 +673,13 @@ miren deploy --analyze
 				Body: "miren runner join mren_... --coordinator 10.0.0.5:8443",
 			}),
 		))
+		d.Dispatch("runner reissue", Infer("runner reissue", "Rotate this runner's certificate in place (requires a still-valid cert), keeping its identity", RunnerReissue,
+			WithLabsFeature(labs.FeatureDistributedRunners),
+			WithExample(mflags.Example{
+				Name: "Rotate this runner's certificate",
+				Body: "miren runner reissue",
+			}),
+		))
 		d.Dispatch("runner start", Infer("runner start", "Start this machine as a distributed runner", RunnerStart,
 			WithLabsFeature(labs.FeatureDistributedRunners),
 			WithExample(mflags.Example{

@@ -63,12 +63,12 @@ func RunnerStart(ctx *Context, opts struct {
 	}
 
 	// The runner's certificate is persisted in the config (often on a disk that
-	// outlives the VM). If the listen address has changed since the cert was
-	// issued, the persisted cert no longer covers our IP and clients (e.g.
-	// sandbox exec) will fail TLS verification. Re-issue the cert before we use
-	// it to serve. Refreshing is fatal when the address isn't covered: serving a
-	// stale cert would leave the runner silently unreachable.
-	if err := ensureRunnerCertificate(ctx, cfg, opts.ConfigPath, listenAddr); err != nil {
+	// outlives the VM). Before serving, reconcile it: refresh it if the listen
+	// address isn't covered (fatal — a stale cert leaves the runner unreachable),
+	// proactively rotate it if it's past its renewal threshold, and warn if its
+	// CommonName has drifted from the runner_id. Rotation takes effect on this
+	// start; the cert baked into the serving stack below is the reconciled one.
+	if err := reconcileRunnerCertificate(ctx, cfg, opts.ConfigPath, listenAddr); err != nil {
 		return err
 	}
 
@@ -315,28 +315,78 @@ func RunnerStart(ctx *Context, opts struct {
 	return nil
 }
 
-// ensureRunnerCertificate re-issues the runner's server certificate when the
-// current listen address is not covered by the persisted certificate's SANs.
-// This happens when a VM is recreated with a new IP but a persistent disk keeps
-// the old config (cert + runner ID). The refreshed cert is written back to the
-// config so it survives subsequent restarts. A required-but-failed refresh is
-// fatal: serving a stale cert would leave the runner silently unreachable.
-func ensureRunnerCertificate(ctx *Context, cfg *runnerconfig.Config, configPath, listenAddr string) error {
+// certRenewalFraction is the fraction of a certificate's total validity after
+// which the runner proactively rotates it. Rotating at two-thirds of the lifetime
+// leaves roughly a third of the validity as runway to authenticate the renewal
+// (which uses the still-valid current cert), keeping the runner clear of the hard
+// expiry cliff where it can no longer refresh itself.
+const certRenewalFraction = 2.0 / 3.0
+
+// reconcileRunnerCertificate inspects the persisted runner certificate at startup
+// and brings it into a good state before the runner serves. It handles three
+// conditions: a listen address the cert's SANs don't cover (refresh, fatal on
+// failure because a stale cert leaves the runner unreachable), a cert past its
+// renewal threshold (proactive rotation, best-effort since a still-valid cert
+// isn't worth failing startup over), and a CommonName that has drifted from the
+// runner_id (warn — workload tokens will be denied until the runner is
+// re-provisioned).
+//
+// An already-expired certificate is fatal: it can't be refreshed (the expired
+// cert is what would authenticate the refresh), so the runner can't recover in
+// place and must be re-provisioned. Rotation and refresh use RefreshCertificate,
+// which preserves the cert's CommonName, so a drifted CommonName can't be repaired
+// here either and is surfaced as a warning.
+func reconcileRunnerCertificate(ctx *Context, cfg *runnerconfig.Config, configPath, listenAddr string) error {
 	if cfg.ClientCert == "" {
 		return nil
+	}
+
+	warnIfCertCommonNameDrifted(ctx, cfg)
+
+	expired, err := certExpired(cfg.ClientCert)
+	if err != nil {
+		return fmt.Errorf("failed to inspect runner certificate: %w", err)
+	}
+	if expired {
+		return fmt.Errorf("runner certificate has expired and cannot be rotated in place; "+
+			"re-provision with 'miren runner remove' then 'miren runner join --runner-id %s'", cfg.RunnerID)
 	}
 
 	covered, err := certCoversListenAddr(cfg.ClientCert, listenAddr)
 	if err != nil {
 		return fmt.Errorf("failed to inspect runner certificate: %w", err)
 	}
-	if covered {
-		return nil
+
+	if !covered {
+		ctx.Log.Info("runner certificate does not cover listen address; refreshing",
+			"listen_addr", listenAddr)
+		// Fatal on failure: serving a cert that doesn't cover our address leaves
+		// the runner silently unreachable.
+		return refreshRunnerCertificate(ctx, cfg, configPath, listenAddr)
 	}
 
-	ctx.Log.Info("runner certificate does not cover listen address; refreshing",
-		"listen_addr", listenAddr)
+	needsRotation, err := certPastRenewalThreshold(cfg.ClientCert)
+	if err != nil {
+		ctx.Log.Warn("could not evaluate runner certificate expiry; skipping rotation", "error", err)
+		return nil
+	}
+	if needsRotation {
+		ctx.Log.Info("runner certificate is past its renewal threshold; rotating",
+			"listen_addr", listenAddr)
+		// Best-effort: the cert is still valid, so a momentarily unavailable
+		// coordinator shouldn't block startup. We'll try again on the next start.
+		if err := refreshRunnerCertificate(ctx, cfg, configPath, listenAddr); err != nil {
+			ctx.Log.Warn("proactive certificate rotation failed; will retry on next start", "error", err)
+		}
+	}
 
+	return nil
+}
+
+// refreshRunnerCertificate asks the coordinator to re-issue the runner's
+// certificate (preserving its CommonName) with SANs for listenAddr, then writes
+// the new material back to the config so it survives restarts.
+func refreshRunnerCertificate(ctx *Context, cfg *runnerconfig.Config, configPath, listenAddr string) error {
 	cs, err := rpc.NewState(ctx,
 		rpc.WithLogger(ctx.Log),
 		rpc.WithBindAddr("[::]:0"),
@@ -380,6 +430,82 @@ func ensureRunnerCertificate(ctx *Context, cfg *runnerconfig.Config, configPath,
 	return nil
 }
 
+// parseLeafCertificate decodes the first PEM block in certPEM and returns the
+// parsed leaf certificate.
+func parseLeafCertificate(certPEM string) (*x509.Certificate, error) {
+	block, _ := pem.Decode([]byte(certPEM))
+	if block == nil {
+		return nil, fmt.Errorf("no PEM block found in certificate")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("parsing certificate: %w", err)
+	}
+	return cert, nil
+}
+
+// certExpired reports whether the leaf certificate in certPEM is past its
+// NotAfter. An expired cert can't authenticate a refresh, so the runner can't
+// recover it in place.
+func certExpired(certPEM string) (bool, error) {
+	cert, err := parseLeafCertificate(certPEM)
+	if err != nil {
+		return false, err
+	}
+	return time.Now().After(cert.NotAfter), nil
+}
+
+// certPastRenewalThreshold reports whether the leaf certificate in certPEM is past
+// certRenewalFraction of its total validity and should be proactively rotated.
+func certPastRenewalThreshold(certPEM string) (bool, error) {
+	cert, err := parseLeafCertificate(certPEM)
+	if err != nil {
+		return false, err
+	}
+
+	lifetime := cert.NotAfter.Sub(cert.NotBefore)
+	if lifetime <= 0 {
+		return false, nil
+	}
+	renewAfter := cert.NotBefore.Add(time.Duration(float64(lifetime) * certRenewalFraction))
+	return time.Now().After(renewAfter), nil
+}
+
+// warnIfCertCommonNameDrifted logs a loud warning when the persisted certificate's
+// CommonName no longer matches runner-<runner_id>. This is the state that silently
+// broke workload identity on older runners (MIR-1228): the coordinator authorizes
+// workload-token requests by the cert CommonName, so a drifted name is denied.
+// In-place rotation preserves the CommonName and so can't repair a drifted one, so
+// we direct the operator to re-provision the runner, which mints a fresh cert with
+// the current naming scheme while keeping the same runner_id.
+func warnIfCertCommonNameDrifted(ctx *Context, cfg *runnerconfig.Config) {
+	if cfg.RunnerID == "" {
+		return
+	}
+	cn, err := certCommonName(cfg.ClientCert)
+	if err != nil {
+		return
+	}
+
+	// Mirrors the coordinator's runnerCertName scheme (runner-<full runner_id>).
+	want := "runner-" + cfg.RunnerID
+	if cn != want {
+		ctx.Log.Warn("runner certificate CommonName does not match runner_id; workload identity tokens will be denied. Re-provision this runner ('miren runner remove' then 'miren runner join' reusing its runner_id) to mint a cert with the current naming scheme.",
+			"cert_common_name", cn,
+			"expected_common_name", want,
+			"runner_id", cfg.RunnerID)
+	}
+}
+
+// certCommonName returns the CommonName of the leaf certificate in certPEM.
+func certCommonName(certPEM string) (string, error) {
+	cert, err := parseLeafCertificate(certPEM)
+	if err != nil {
+		return "", err
+	}
+	return cert.Subject.CommonName, nil
+}
+
 // certCoversListenAddr reports whether the leaf certificate in certPEM carries a
 // SAN matching the host of listenAddr: an IP SAN for an IP host, or a DNS SAN
 // for a hostname. This mirrors how the coordinator builds the certificate's SANs
@@ -393,13 +519,9 @@ func certCoversListenAddr(certPEM, listenAddr string) (bool, error) {
 		return true, nil
 	}
 
-	block, _ := pem.Decode([]byte(certPEM))
-	if block == nil {
-		return false, fmt.Errorf("no PEM block found in certificate")
-	}
-	cert, err := x509.ParseCertificate(block.Bytes)
+	cert, err := parseLeafCertificate(certPEM)
 	if err != nil {
-		return false, fmt.Errorf("parsing certificate: %w", err)
+		return false, err
 	}
 
 	if ip := net.ParseIP(host); ip != nil {
