@@ -106,7 +106,7 @@ require (
 	k8s.io/klog/v2 v2.130.1
 	miren.dev/jsonrpc3/go/jsonrpc3 v0.0.0-20260106052505-c98e2702b093
 	miren.dev/lbd v0.0.0-20260224020427-8914d8db2233
-	miren.dev/mflags v0.0.0-20260518222642-0ca7adc28461
+	miren.dev/mflags v0.0.0-20260709231109-a397dcbc98df
 	sigs.k8s.io/knftables v0.0.21
 )
 
