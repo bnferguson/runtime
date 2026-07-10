@@ -34,6 +34,7 @@
 """audit-exposure: post-incident review helper for GHSA-8fh7-7q4q-cq52."""
 import argparse
 import datetime as dt
+import math
 import re
 import subprocess
 import sys
@@ -177,6 +178,167 @@ def sensitive_var_keys(lines):
     return keys
 
 
+# -- Unmarked-secret heuristics (Section C2) --------------------------------
+# Section C lists only variables explicitly flagged sensitive:true. But that
+# flag is display-only (a reader saw every value regardless), and people forget
+# to set it constantly -- so unflagged-but-secret config is a silent hole in
+# the rotation list. This pass re-scans ALL variables and flags ones that look
+# secret but were NOT marked sensitive, by two independent signals: the key
+# NAME, and the VALUE shape (which catches misnamed secrets a name check would
+# miss). Values are inspected to compute a signal but, as everywhere else in
+# this tool, never printed -- output is key name + reason only. It's a review
+# list, not an assertion: entropy heuristics have false positives, so an
+# operator confirms, then rotates AND sets sensitive:true.
+
+# Key names that read as secret-bearing...
+UNMARKED_NAME_RE = re.compile(
+    r"(secret|password|passwd|token|api[_-]?key|private[_-]?key|credential|"
+    r"access[_-]?key|client[_-]?secret|passphrase|bearer|signing[_-]?key|"
+    r"encryption[_-]?key|_key$|_dsn$)", re.I)
+# ...minus names that merely reference a secret without being one: public keys,
+# ids (client_id, key_id), endpoints/urls, file paths, usernames, toggles.
+NAME_DENY_RE = re.compile(
+    r"(public|client[_-]?id|_id$|_url$|_uri$|_endpoint$|_host$|_name$|"
+    r"_file$|_path$|_user$|_username$|_enabled$|_timeout$|_ttl$|_sid$|"
+    r"_count$|key_id)", re.I)
+# Identifier-ish keys whose values are high-entropy but not secret (account /
+# org / billing / rule IDs, SIDs). Suppresses ONLY the weak entropy signal for
+# these; a strong shape (PEM/JWT/url-creds/provider-prefix) still fires.
+ENTROPY_KEY_DENY_RE = re.compile(
+    r"(_id$|_sid$|_uid$|_guid$|_number$|account|organization|billing)", re.I)
+
+# Strong value shapes: unambiguous credential material.
+PROVIDER_TOKEN_RE = re.compile(
+    r"(gh[opsu]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|"
+    r"xox[baprs]-[A-Za-z0-9-]{10,}|sk_(live|test)_[A-Za-z0-9]{16,}|"
+    r"AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_\-]{35}|glpat-[A-Za-z0-9_\-]{16,}|"
+    r"dop_v1_[a-f0-9]{40,}|SG\.[A-Za-z0-9_\-]{16,})")
+URL_CRED_RE = re.compile(r"://[^/\s:@]+:[^/\s@]+@")
+JWT_RE = re.compile(r"^eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]+$")
+HIGH_ENTROPY_CHARSET_RE = re.compile(r"^[A-Za-z0-9+/=_\-.]{24,}$")
+
+
+def _looks_non_secret(v):
+    """Cheap excluders so the entropy check doesn't flag urls/emails/numbers/hosts/paths."""
+    return bool(
+        re.match(r"^https?://", v)
+        or re.match(r"^[\w.+-]+@[\w-]+\.[\w.-]+$", v)          # email
+        or re.match(r"^-?\d+(\.\d+)?$", v)                      # number
+        or re.match(r"^\d{4}-\d\d-\d\d[T ]", v)                # timestamp
+        or re.match(r"^([A-Za-z0-9-]+\.){2,}[A-Za-z]{2,}$", v)  # dotted hostname
+        or v.startswith("/")                                    # path
+    )
+
+
+def _shannon(s):
+    counts = {}
+    for c in s:
+        counts[c] = counts.get(c, 0) + 1
+    n = len(s)
+    return -sum((k / n) * math.log2(k / n) for k in counts.values()) if n else 0.0
+
+
+def value_signal(v):
+    """Reason string if a value LOOKS like a credential, else None. Never emits the value."""
+    if v is None:
+        return None
+    v = v.strip().strip('"').strip("'")
+    if not v:
+        return None
+    if "-----BEGIN" in v:
+        return "PEM/key material"
+    if JWT_RE.match(v):
+        return "JWT-shaped value"
+    if URL_CRED_RE.search(v):
+        return "URL with embedded credentials"
+    if PROVIDER_TOKEN_RE.search(v):
+        return "known provider token prefix"
+    if HIGH_ENTROPY_CHARSET_RE.match(v) and not _looks_non_secret(v) and _shannon(v) >= 3.8:
+        return "high-entropy value"
+    return None
+
+
+def name_signal(key):
+    if NAME_DENY_RE.search(key):
+        return None
+    return "name looks secret" if UNMARKED_NAME_RE.search(key) else None
+
+
+def iter_vars(spec_lines):
+    """Yield (key, sensitive_bool, values) for each config variable / service env entry
+    in a config_version spec. `values` is the list of every non-None value seen for that
+    key (a key can recur across services' env with different values, and any one of them
+    could be the secret, so we keep them all rather than collapsing to the first).
+    Line-based like the rest of this scraper; relies on `key:` preceding `sensitive:`/
+    `value:` within an item, which holds in the CLI output. A `value: |` block scalar
+    (e.g. a PEM) is captured (for shape-testing only, never printed)."""
+    items, cur = [], None
+    block_capture, block_indent = False, None
+    for raw in spec_lines:
+        stripped = raw.strip()
+        indent = len(raw) - len(raw.lstrip())
+        if block_capture:
+            if stripped and indent > block_indent:
+                cur["value"] = (cur["value"] or "") + "\n" + stripped
+                continue
+            block_capture = False
+        km = re.match(r"-?\s*key:\s*(\S+)\s*$", stripped)
+        if km:
+            if cur:
+                items.append(cur)
+            cur = {"key": km.group(1), "sensitive": False, "value": None}
+            continue
+        if cur is None:
+            continue
+        sm = re.match(r"sensitive:\s*(true|false)\s*$", stripped)
+        if sm:
+            cur["sensitive"] = sm.group(1) == "true"
+            continue
+        vm = re.match(r"value:\s?(.*)$", stripped)
+        if vm:
+            rest = vm.group(1).strip()
+            if rest in ("|", "|-", "|+", ">", ">-", ">+", ""):
+                cur["value"], block_capture, block_indent = "", True, indent
+            else:
+                cur["value"] = rest
+    if cur:
+        items.append(cur)
+    # A key can recur across services' env; merge sensitive as OR (marked anywhere ->
+    # treated sensitive) and keep every value so all of them get shape-tested.
+    merged = {}
+    for it in items:
+        k = it["key"]
+        m = merged.setdefault(k, {"key": k, "sensitive": False, "values": []})
+        m["sensitive"] = m["sensitive"] or it["sensitive"]
+        if it["value"] is not None:
+            m["values"].append(it["value"])
+    return [(m["key"], m["sensitive"], m["values"]) for m in merged.values()]
+
+
+def unmarked_candidates(record):
+    """(key, reasons, strong) for vars NOT flagged sensitive that look secret.
+    strong=True means a value-shape signal fired (high confidence)."""
+    out = []
+    for key, sensitive, values in iter_vars(spec_block(record)):
+        if sensitive:
+            continue
+        reasons, strong = [], False
+        for value in values:  # any one of a key's values could be the secret
+            vs = value_signal(value)
+            if vs == "high-entropy value" and ENTROPY_KEY_DENY_RE.search(key):
+                vs = None  # identifier, not a credential -- drop the weak signal
+            if vs:
+                reasons.append(vs)
+                strong = True
+                break
+        ns = name_signal(key)
+        if ns:
+            reasons.append(ns)
+        if reasons:
+            out.append((key, reasons, strong))
+    return out
+
+
 def record_app(lines):
     for l in lines:
         m = re.match(r"\s+app:\s*(app/\S+)", l)
@@ -316,10 +478,16 @@ def main():
         failures.append("config_version")
         print("\n  ! FAILED to query config_version -- rotation list is INCOMPLETE")
     else:
+        unmarked = {}  # app -> {key: (reasons, strong)}
         for r in split_records(cfg_text):
+            app = record_app(r)
             keys = sensitive_var_keys(r)
             if keys:
-                by_app.setdefault(record_app(r), set()).update(keys)
+                by_app.setdefault(app, set()).update(keys)
+            for key, reasons, strong in unmarked_candidates(r):
+                slot = unmarked.setdefault(app, {})
+                prev_reasons, prev_strong = slot.get(key, ([], False))
+                slot[key] = (sorted(set(prev_reasons + reasons)), prev_strong or strong)
         if by_app:
             print("\n  app env vars flagged sensitive (rotate these):\n")
             for app in sorted(by_app):
@@ -328,6 +496,25 @@ def main():
                     print(f"      - {k}")
         else:
             print("\n  (no variables flagged sensitive found)")
+
+        # C2: variables that look secret but were NOT flagged sensitive. Heuristic
+        # review list (values never printed). '!' marks a value-shape hit (high
+        # confidence); an unmarked line means a name-only hit (worth a glance).
+        print("\n  MAYBE-MISSED SECRETS -- these look like secrets but nobody marked")
+        print("  them sensitive, so the list above skipped them. Look at each one:")
+        print("  if it really is a secret, rotate it too (and mark it sensitive so")
+        print("  it's not missed next time). A \"!\" means the value itself looks like")
+        print("  a credential; otherwise it's the name that looks secret. As always,")
+        print("  the actual values are never shown.")
+        if unmarked:
+            for app in sorted(unmarked):
+                rows = unmarked[app]
+                print(f"\n  {app}")
+                for key in sorted(rows, key=lambda k: (not rows[k][1], k)):
+                    reasons, strong = rows[key]
+                    print(f"    {'!' if strong else ' '} {key}  ({', '.join(reasons)})")
+        else:
+            print("\n  (none detected)")
     print("\n  ALSO rotate (stored readable in the entity store, see Section A):")
     print("    - oidc_provider client_secret(s)")
     print("    - password_provider password_hash(es)")
