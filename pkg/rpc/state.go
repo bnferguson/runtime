@@ -80,6 +80,11 @@ type StateCommon struct {
 	top context.Context
 	log *slog.Logger
 
+	// auditLog is the security audit trail, pinned at an Info floor and tagged
+	// module=audit so it stays legible and volume-bounded regardless of the
+	// server's -v verbosity. See newAuditLogger.
+	auditLog *slog.Logger
+
 	opts *stateOptions
 
 	serverTlsCfg *tls.Config
@@ -93,6 +98,15 @@ type StateCommon struct {
 	pubkey  ed25519.PublicKey
 
 	qc quic.Config
+}
+
+// audit returns the security audit logger, falling back to the general logger
+// if one was not wired up (e.g. a hand-constructed StateCommon in a test).
+func (s *StateCommon) audit() *slog.Logger {
+	if s.auditLog != nil {
+		return s.auditLog
+	}
+	return s.log
 }
 
 type State struct {
@@ -322,6 +336,7 @@ func NewState(ctx context.Context, opts ...StateOption) (*State, error) {
 		StateCommon: &StateCommon{
 			top:           ctx,
 			log:           so.log,
+			auditLog:      newAuditLogger(so.log),
 			opts:          &so,
 			clientTlsCfg:  tlsCfg,
 			privkey:       priv,
