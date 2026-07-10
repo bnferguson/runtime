@@ -32,11 +32,24 @@ agent works from. See [Agent Skills](/agent-skills) for setup.
 | [Crystal](/guides/crystal) | No | `Dockerfile.miren` |
 | [Zig](/guides/zig) | No | `Dockerfile.miren` |
 | [Deno](/guides/deno) | No | `Dockerfile.miren` |
+| [Nim](/guides/nim) | No | `Dockerfile.miren` |
 | [.NET / C#](/guides/dotnet) | No | `Dockerfile.miren` |
+| [F#](/guides/fsharp) | No | `Dockerfile.miren` |
 | [Java / JVM](/guides/java) | No | `Dockerfile.miren` |
+| [Kotlin](/guides/kotlin) | No | `Dockerfile.miren` |
+| [Scala](/guides/scala) | No | `Dockerfile.miren` |
+| [Clojure](/guides/clojure) | No | `Dockerfile.miren` |
+| [Erlang](/guides/erlang) | No | `Dockerfile.miren` |
 | [PHP](/guides/php) | No | `Dockerfile.miren` |
+| [Perl](/guides/perl) | No | `Dockerfile.miren` |
 | [OCaml](/guides/ocaml) | No | `Dockerfile.miren` |
 | [Haskell](/guides/haskell) | No | `Dockerfile.miren` |
+| [Swift](/guides/swift) | No | `Dockerfile.miren` |
+| [Dart](/guides/dart) | No | `Dockerfile.miren` |
+| [Julia](/guides/julia) | No | `Dockerfile.miren` |
+| [R](/guides/r) | No | `Dockerfile.miren` |
+| [Common Lisp](/guides/commonlisp) | No | `Dockerfile.miren` |
+| [COBOL](/guides/cobol) | No | `Dockerfile.miren` |
 | [Static sites & SPAs](/guides/static) | No | `Dockerfile.miren` |
 
 ## Auto-detected vs. Dockerfile
@@ -46,9 +59,8 @@ container image for you — **no Dockerfile required**. You run `miren init` onc
 `miren deploy`, and Miren figures out the rest. See [Supported Languages](/languages)
 for exactly what's detected and how.
 
-The other languages here (Elixir, Gleam, Crystal, Zig, Deno, .NET, Java, PHP, OCaml,
-Haskell, and static sites) aren't auto-detected, so their guides show you a
-`Dockerfile.miren` you
+Every other language here — from Elixir and Gleam to Kotlin, Swift, Julia, and even
+COBOL — isn't auto-detected, so its guide shows you a `Dockerfile.miren` you
 can drop into your project. Miren builds from that Dockerfile instead of guessing. This
 is the same escape hatch available to every language when you need full control over the
 build — see [Using Dockerfile.miren](/languages#using-dockerfilemiren).
