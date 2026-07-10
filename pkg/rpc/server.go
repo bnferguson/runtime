@@ -329,6 +329,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if identity != nil {
 		ctx = ContextWithIdentity(ctx, identity)
 		r = r.WithContext(ctx)
+
+		// Audit successful cert-method auth. See logCertAuth for why this only
+		// ever records legitimate (internal) mTLS and never an attacker.
+		if identity.Method == AuthMethodCert {
+			logCertAuth(ctx, s.state.audit(), r)
+		}
 	}
 
 	// For RPC paths, let the method-level check in handleCalls decide based on public flag
@@ -784,27 +790,27 @@ func (s *Server) authRequest(r *http.Request, w http.ResponseWriter, oid OID) (e
 	ts := r.Header.Get("rpc-timestamp")
 
 	if ts == "" {
-		s.state.log.Warn("No timestamp provided for authentication")
+		logAuthReject(s.state.audit(), r, oid, "no timestamp provided")
 		http.Error(w, "no timestamp provided", http.StatusForbidden)
 		return nil, false
 	}
 
 	t, err := time.Parse(time.RFC3339Nano, ts)
 	if err != nil {
-		s.state.log.Warn("Failed to parse timestamp", "error", err)
+		logAuthReject(s.state.audit(), r, oid, "malformed timestamp")
 		http.Error(w, "failed to parse timestamp", http.StatusForbidden)
 		return nil, false
 	}
 
 	if time.Since(t) > 10*time.Minute {
-		s.state.log.Warn("Timestamp too old", "timestamp", t)
+		logAuthReject(s.state.audit(), r, oid, "timestamp too old")
 		http.Error(w, "timestamp too old", http.StatusForbidden)
 		return nil, false
 	}
 
 	sign := r.Header.Get("rpc-signature")
 	if sign == "" {
-		s.state.log.Warn("No signature provided")
+		logAuthReject(s.state.audit(), r, oid, "no signature provided")
 		http.Error(w, "no signature provided", http.StatusForbidden)
 		return nil, false
 	}
@@ -826,19 +832,19 @@ func (s *Server) authRequest(r *http.Request, w http.ResponseWriter, oid OID) (e
 
 	bsign, err := base58.Decode(sign)
 	if err != nil {
-		s.state.log.Warn("Failed to decode signature", "error", err)
+		logAuthReject(s.state.audit(), r, oid, "malformed signature")
 		http.Error(w, "failed to decode signature", http.StatusForbidden)
 		return nil, false
 	}
 
 	if len(capa.pub) != ed25519.PublicKeySize {
-		s.state.log.Warn("Invalid public key size", "size", len(capa.pub))
+		logAuthReject(s.state.audit(), r, oid, "invalid capability public key")
 		http.Error(w, "invalid public key size", http.StatusForbidden)
 		return nil, false
 	}
 
 	if !ed25519.Verify(capa.pub, buf.Bytes(), bsign) {
-		s.state.log.Warn("Failed to verify signature")
+		logAuthReject(s.state.audit(), r, oid, "signature verification failed")
 		http.Error(w, "failed to verify signature", http.StatusForbidden)
 		return nil, false
 	}
@@ -917,8 +923,7 @@ func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
 	if !mm.Public {
 		identity := IdentityFromContext(ctx)
 		if identity == nil {
-			s.state.log.Warn("authentication required for non-public method",
-				"method", method, "interface", mm.InterfaceName)
+			logAccess(ctx, s.state.audit(), r, mm, "unauthorized")
 			w.Header().Add("rpc-status", "unauthorized")
 			w.Header().Add("rpc-error", "authentication required")
 			w.WriteHeader(http.StatusUnauthorized)
@@ -930,14 +935,15 @@ func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
 			resource := strings.ToLower(mm.InterfaceName)
 			action := strings.ToLower(mm.Name)
 			if err := s.state.authorizer.Authorize(ctx, identity, resource, action); err != nil {
-				s.state.log.Warn("authorization denied",
-					"resource", resource, "action", action, "subject", identity.Subject, "error", err)
+				logAccess(ctx, s.state.audit(), r, mm, "forbidden", "error", err)
 				w.Header().Add("rpc-status", "forbidden")
 				w.Header().Add("rpc-error", err.Error())
 				w.WriteHeader(http.StatusForbidden)
 				return
 			}
 		}
+
+		logAccess(ctx, s.state.audit(), r, mm, "ok")
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -1076,8 +1082,7 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 		if !mm.Public {
 			identity := IdentityFromContext(ctx)
 			if identity == nil {
-				s.state.log.Warn("authentication required for non-public method",
-					"method", method, "interface", mm.InterfaceName)
+				logAccess(ctx, s.state.audit(), r, mm, "unauthorized")
 				w.Header().Add("rpc-status", "unauthorized")
 				w.Header().Add("rpc-error", "authentication required")
 				w.WriteHeader(http.StatusUnauthorized)
@@ -1089,14 +1094,15 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 				resource := strings.ToLower(mm.InterfaceName)
 				action := strings.ToLower(mm.Name)
 				if err := s.state.authorizer.Authorize(ctx, identity, resource, action); err != nil {
-					s.state.log.Warn("authorization denied",
-						"resource", resource, "action", action, "subject", identity.Subject, "error", err)
+					logAccess(ctx, s.state.audit(), r, mm, "forbidden", "error", err)
 					w.Header().Add("rpc-status", "forbidden")
 					w.Header().Add("rpc-error", err.Error())
 					w.WriteHeader(http.StatusForbidden)
 					return
 				}
 			}
+
+			logAccess(ctx, s.state.audit(), r, mm, "ok")
 		}
 
 		w.WriteHeader(http.StatusOK)
