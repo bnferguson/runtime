@@ -103,7 +103,7 @@ port = 8000
 
 Miren sets `PORT=8000` and routes traffic there.
 
-:::tip Binding the wrong port
+:::tip[Binding the wrong port]
 The most common deploy snag when porting an existing app is a hardcoded port that ignores `$PORT`. If your app listens on, say, `:8080` while Miren expects `:3000`, Miren now notices the mismatch: when the configured port never comes up but the app is clearly listening somewhere else, it routes to the port the app actually bound and logs a note on the sandbox (`miren logs sandbox <id>`) telling you which port that was. It's a safety net, not a substitute for config — set `port` (or read `$PORT`) so the expected and actual ports line up.
 
 Two things still trip this up. If your app binds to `127.0.0.1` instead of `0.0.0.0`, Miren can't reach it from outside the container no matter the port, so bind to all interfaces. And if the app opens several ports and none of them is the configured one, Miren won't guess which to route to — it fails with a message naming the candidates so you can pick the right one in `app.toml`.
@@ -206,7 +206,9 @@ When using the `ports` array, Miren sets `PORT` to:
 1. The first port with `type = "http"`, if one exists
 2. Otherwise, the first port in the array
 
+:::warning[PORT is managed by Miren]
 `PORT` is managed by Miren and can't be overridden.
+:::
 
 ## Service-to-Service Communication
 
@@ -232,7 +234,7 @@ num_instances = 1
 
 Internal traffic goes directly between containers — it doesn't pass through Miren's routing layer. Services connect on their standard ports (5432 for PostgreSQL, 6379 for Redis) without any Miren port configuration needed.
 
-:::note
+:::note[Internal DNS scope]
 Internal DNS only works between services in the same app. Cross-app communication is not currently supported.
 :::
 
@@ -253,11 +255,13 @@ port_type = "http"
 | `port_name` | Name for the port | Service name |
 | `port_type` | `"http"` or `"tcp"` | `"http"` |
 
+:::warning[Port field restrictions]
 You can't mix these fields with the `ports` array on the same service.
+:::
 
 ## How It Works Under the Hood
 
-:::info
+:::info[For the curious]
 You don't need to understand these details to use Miren. This section is for the curious.
 :::
 

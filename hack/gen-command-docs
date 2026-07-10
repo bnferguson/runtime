@@ -369,7 +369,7 @@ generate_commands_index() {
       echo ""
       echo "## Advanced / Debug Commands"
       echo ""
-      echo ":::caution"
+      echo ":::warning"
       echo "These commands are intended for advanced debugging and troubleshooting. They may change without notice."
       echo ":::"
       echo ""

@@ -160,7 +160,7 @@ Error responses:
 
 When you run `miren admin --list`, Miren sends a JSON-RPC request with the reserved method name `$methods` to your admin endpoint. If your app handles this method, it should return an array of objects describing the available admin methods. This is optional — if your app doesn't handle `$methods`, the `--list` command will report an error, but regular method calls still work.
 
-:::note Reserved method names
+:::note[Reserved method names]
 Names beginning with `$` are reserved for the runtime. The CLI currently uses `$methods` for discovery and filters both `$methods` and `$type` out of `--list` output, so don't expose business logic under those names.
 :::
 

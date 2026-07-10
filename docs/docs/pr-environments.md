@@ -51,13 +51,17 @@ Open the URL — your preview is live. TLS provisions on first request.
 
 ## What Runs in an Ephemeral Version
 
-**Only the `web` service runs.** Workers, background jobs, scheduled tasks, and any other services defined in `.miren/app.toml` aren't started for ephemeral versions — HTTP traffic to the subdomain is the only thing wired up. If reviewing your PR requires a worker too, use a separate staging app instead.
+:::warning[Only the web service runs]
+Workers, background jobs, scheduled tasks, and any other services defined in `.miren/app.toml` aren't started for ephemeral versions — HTTP traffic to the subdomain is the only thing wired up. If reviewing your PR requires a worker too, use a separate staging app instead.
+:::
 
-**Configuration is shared with the active version.** Env vars, secrets, addons, and build config all come from the app's current settings. There's no per-ephemeral override:
+:::warning[Configuration is shared with the active version]
+Env vars, secrets, addons, and build config all come from the app's current settings. There's no per-ephemeral override:
 
 - Your preview connects to the same database, queues, and external services as production.
 - You can't change `RAILS_ENV`, feature flags, or service URLs just for the preview.
 - Updates to app config (via `miren config set`, addons, etc.) affect both active and ephemeral versions.
+:::
 
 If you need isolation from production data, run ephemeral deploys against a separate staging app.
 
@@ -129,7 +133,9 @@ miren deploy --ephemeral "$(git rev-parse --abbrev-ref HEAD)"
 ```
 </CliCommand>
 
-**Redeploying with the same label replaces the prior version.** Push a new commit, redeploy with `--ephemeral pr-123`, and the previous `pr-123` version is deleted before the new one becomes reachable. The TTL resets on each deploy.
+:::info[Redeploying with the same label replaces the prior version]
+Push a new commit, redeploy with `--ephemeral pr-123`, and the previous `pr-123` version is deleted before the new one becomes reachable. The TTL resets on each deploy.
+:::
 
 ## TTL and Cleanup
 

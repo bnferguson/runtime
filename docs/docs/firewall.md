@@ -8,7 +8,7 @@ import CliCommand from '@site/src/components/CliCommand';
 
 # Firewall Configuration
 
-:::info
+:::info[Automatic configuration]
 Miren automatically configures firewall rules during setup. Most users won't need to think about firewalls at all. This page is primarily useful for troubleshooting networking issues or understanding what Miren does under the hood.
 :::
 

@@ -12,7 +12,7 @@ Miren includes a built-in WAF that filters malicious HTTP requests before they r
 
 WAF is configured per route. Enable it and all requests to that route are inspected — malicious requests get a `403 Forbidden` response, clean requests pass through normally. No changes to your app are needed.
 
-:::note What this doesn't cover
+:::note[What this doesn't cover]
 The WAF inspects request content for attack payloads (SQL injection, XSS, command injection, path traversal). It does **not** rate-limit, fingerprint bots, or block reconnaissance scans (e.g., probes for `/wp-admin/` or `/xmlrpc.php` on non-WordPress sites). For that kind of filtering, use an upstream proxy like Cloudflare in front of your route.
 :::
 
@@ -114,7 +114,9 @@ WAF inspection runs in the HTTP ingress layer, before any other middleware (incl
 
 Miren uses [Coraza](https://coraza.io/), an open-source WAF engine compatible with ModSecurity rules, with the full OWASP Core Rule Set embedded. WAF engines are created per paranoia level and cached — there's no per-request initialization overhead.
 
+:::warning[Request body size limit]
 Request bodies up to 10 MB are inspected. Requests with bodies exceeding this limit are rejected with HTTP 413.
+:::
 
 ## See Also
 

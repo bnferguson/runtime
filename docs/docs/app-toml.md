@@ -97,7 +97,7 @@ description = "Used for session signing"
 | `sensitive` | bool | Mask value in CLI output and logs | `false` |
 | `description` | string | Human-readable explanation of this variable | — |
 
-:::note Validation
+:::note[Validation]
 Every env entry must have a non-empty `key`. If `required` is `true` and `value` is empty at deploy time, the deploy fails.
 :::
 
@@ -148,7 +148,7 @@ image = "postgres:16"
 | `concurrency` | [concurrency](#concurrency) | Scaling configuration | See defaults below |
 | `disks` | [[disk]](#disks) | Persistent disk attachments | — |
 
-:::note
+:::note[Validation]
 You cannot mix the single-port fields (`port`, `port_name`, `port_type`) with the `ports` array on the same service.
 :::
 
@@ -183,7 +183,7 @@ shutdown_timeout = "10s"
 | `num_instances` | int | Exact number of instances to run (fixed mode only) | `1` |
 | `shutdown_timeout` | duration | Time to wait for graceful shutdown during redeploy | `"10s"` |
 
-:::note Validation
+:::note[Validation]
 - `mode` must be `"auto"` or `"fixed"`.
 - In **auto** mode: `requests_per_instance` must be non-negative, `scale_down_delay` must be a valid Go duration, and `num_instances` must not be set.
 - In **fixed** mode: `num_instances` must be at least 1, and `requests_per_instance` / `scale_down_delay` must not be set.
@@ -214,7 +214,7 @@ node_port = 7000
 | `type` | string | `"http"` for web traffic, `"tcp"` for raw TCP, `"udp"` for UDP | `"http"` |
 | `node_port` | int | Port to expose on the host machine (1–65535) | (none) |
 
-:::note Validation
+:::note[Validation]
 - `port` must be between 1 and 65535.
 - `name` is required and must be unique within the service.
 - `type` must be `"http"`, `"tcp"`, or `"udp"`.
@@ -251,7 +251,7 @@ filesystem = "ext4"
 | `read_only` | bool | Mount as read-only | `false` |
 | `lease_timeout` | duration | How long to wait when acquiring the exclusive disk lease (miren disks only) | — |
 
-:::note Validation
+:::note[Validation]
 - `name` and `mount_path` are required.
 - `provider` must be `"miren"` (default) or `"local"`.
 - For miren disks: `filesystem` must be `ext4`, `xfs`, or `btrfs`; `size_gb` must be non-negative; services **must** use `mode = "fixed"` and `num_instances = 1`.
@@ -306,7 +306,7 @@ Then `miren x tail` and `miren x console` work as shortcuts.
 
 Any extra arguments you pass after the alias name are appended to the expanded command.
 
-:::note Validation
+:::note[Validation]
 - Each word in the alias name must start with a lowercase letter and contain only lowercase letters, numbers, dashes, and underscores.
 - The command string must not be empty.
 - Alias names must not shadow built-in commands (e.g. you cannot define an alias named `version` or `app list`).

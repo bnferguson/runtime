@@ -112,7 +112,7 @@ command = "celery -A myapp beat --loglevel=info"
 
 ### Different Images
 
-:::tip Use addons for databases
+:::tip[Use addons for databases]
 If you just need a PostgreSQL database, consider using an [addon](/addons) instead of running it as a service. Addons are fully managed — Miren provisions the database, injects credentials, and handles cleanup. Use a service when you need full control over the database configuration.
 :::
 
@@ -325,7 +325,11 @@ mode = "fixed"
 num_instances = 1
 ```
 
-The `PGDATA` environment variable tells PostgreSQL where to store its data. Using a subdirectory (`pgdata`) under `/miren/data/local` is required because PostgreSQL expects to own its data directory.
+The `PGDATA` environment variable tells PostgreSQL where to store its data.
+
+:::warning[PostgreSQL data directory]
+Using a subdirectory (`pgdata`) under `/miren/data/local` is required because PostgreSQL expects to own its data directory.
+:::
 
 For cloud-synced storage that travels with your app, see [Miren Disks](/disks#miren-disks) (experimental).
 

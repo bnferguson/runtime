@@ -10,7 +10,7 @@ You shouldn't have to context-switch out of your editor to deploy an app or chec
 
 The skills work with [Claude Code](https://claude.ai/code), [Codex](https://github.com/openai/codex), [Amp](https://ampcode.com), [Pi](https://pi.dev), and [OpenCode](https://github.com/opencode-ai/opencode). Source and setup instructions are at [github.com/mirendev/miren-skills](https://github.com/mirendev/miren-skills).
 
-:::note
+:::note[Docs are the source of truth]
 Skills make these docs faster to act on — your agent can read a page about scaling and immediately run the commands — but the docs remain the authoritative reference. When in doubt, the docs are the source of truth.
 :::
 
