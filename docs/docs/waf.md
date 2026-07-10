@@ -114,7 +114,7 @@ WAF inspection runs in the HTTP ingress layer, before any other middleware (incl
 
 Miren uses [Coraza](https://coraza.io/), an open-source WAF engine compatible with ModSecurity rules, with the full OWASP Core Rule Set embedded. WAF engines are created per paranoia level and cached — there's no per-request initialization overhead.
 
-:::warning
+:::warning[Request body size limit]
 Request bodies up to 10 MB are inspected. Requests with bodies exceeding this limit are rejected with HTTP 413.
 :::
 

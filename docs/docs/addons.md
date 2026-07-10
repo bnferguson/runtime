@@ -218,7 +218,7 @@ When you deploy an app with addons or run `addon create`, Miren:
 
 Provisioning typically takes 1–2 minutes for a new dedicated server (longer if the PostgreSQL image needs to be pulled for the first time).
 
-:::note
+:::note[Provisioning blocks startup]
 Your app won't start until addon provisioning completes — Miren holds off launching your app's processes until all addons reach active status.
 :::
 
@@ -242,7 +242,7 @@ miren addon destroy miren-postgresql -a myapp
 ```
 </CliCommand>
 
-:::warning
+:::danger[Destroying an addon is permanent]
 Destroying an addon permanently deletes the database and all its data. This cannot be undone.
 :::
 

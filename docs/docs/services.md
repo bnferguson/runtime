@@ -327,7 +327,7 @@ num_instances = 1
 
 The `PGDATA` environment variable tells PostgreSQL where to store its data.
 
-:::warning
+:::warning[PostgreSQL data directory]
 Using a subdirectory (`pgdata`) under `/miren/data/local` is required because PostgreSQL expects to own its data directory.
 :::
 

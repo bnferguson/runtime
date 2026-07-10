@@ -206,7 +206,7 @@ When using the `ports` array, Miren sets `PORT` to:
 1. The first port with `type = "http"`, if one exists
 2. Otherwise, the first port in the array
 
-:::warning
+:::warning[PORT is managed by Miren]
 `PORT` is managed by Miren and can't be overridden.
 :::
 
@@ -234,7 +234,7 @@ num_instances = 1
 
 Internal traffic goes directly between containers — it doesn't pass through Miren's routing layer. Services connect on their standard ports (5432 for PostgreSQL, 6379 for Redis) without any Miren port configuration needed.
 
-:::note
+:::note[Internal DNS scope]
 Internal DNS only works between services in the same app. Cross-app communication is not currently supported.
 :::
 
@@ -255,13 +255,13 @@ port_type = "http"
 | `port_name` | Name for the port | Service name |
 | `port_type` | `"http"` or `"tcp"` | `"http"` |
 
-:::warning
+:::warning[Port field restrictions]
 You can't mix these fields with the `ports` array on the same service.
 :::
 
 ## How It Works Under the Hood
 
-:::info
+:::info[For the curious]
 You don't need to understand these details to use Miren. This section is for the curious.
 :::
 

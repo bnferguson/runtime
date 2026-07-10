@@ -29,10 +29,11 @@ not use it):
 
 Rules:
 
-1. Give titles in bracket syntax, sentence case: `:::warning[Review before
-   sharing]` (capitalize only the first word and proper nouns). The legacy
-   space form (`:::warning Review before sharing`) is not used here. Titles are
-   optional but improve scannability.
+1. Every admonition has a title, in bracket syntax and sentence case:
+   `:::warning[Review before sharing]` (capitalize only the first word and
+   proper nouns). The legacy space form (`:::warning Review before sharing`) is
+   not used here. A short, descriptive title makes callouts scannable and gives
+   agents a stable anchor for retrieval.
 2. One concept per admonition; keep the body concise — the type tag already
    carries the "importance" signal. Don't nest admonitions.
 3. Always close with `:::` on its own line.

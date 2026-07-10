@@ -148,7 +148,7 @@ image = "postgres:16"
 | `concurrency` | [concurrency](#concurrency) | Scaling configuration | See defaults below |
 | `disks` | [[disk]](#disks) | Persistent disk attachments | — |
 
-:::note
+:::note[Validation]
 You cannot mix the single-port fields (`port`, `port_name`, `port_type`) with the `ports` array on the same service.
 :::
 

@@ -16,7 +16,7 @@ Miren Cloud is a central control plane that connects and manages your Miren clus
 
 When you run `miren server install`, it will automatically register a new cluster to Miren Cloud and redirect you to create your miren.cloud organization and account:
 
-:::note
+:::note[Systemd required]
 The install requires systemd at present.
 :::
 
@@ -72,7 +72,7 @@ miren server register -n my-cluster
 
 This registers your cluster and enables cloud features.
 
-:::note
+:::note[Automatic registration]
 By default, servers are already registered when doing `miren server install`.
 :::
 

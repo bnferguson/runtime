@@ -10,7 +10,7 @@ Every sandbox running on Miren automatically receives a signed OIDC identity tok
 
 It works the same way GitHub Actions' OIDC tokens do: the platform (here, your Miren cluster) acts as an OpenID Connect issuer, signs a short-lived JWT describing the workload, and publishes the public keys so anyone can verify it.
 
-:::info[Workload Identity vs. CI/CD OIDC]
+:::info[Workload identity vs. CI/CD OIDC]
 These are two sides of the same OIDC machinery, pointed in opposite directions:
 
 - **Workload Identity** (this page) — your cluster issues tokens **for** the sandboxes running on it, so your *running app* can call out to AWS, GCP, etc.

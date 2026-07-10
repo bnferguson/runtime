@@ -14,7 +14,7 @@ Miren automatically provisions TLS certificates for your applications using [Let
 
 When a request arrives for a hostname with a configured route, Miren provisions a TLS certificate from Let's Encrypt using the ACME protocol. Certificates are cached on disk and renewed automatically before they expire.
 
-:::warning
+:::warning[Unrouted hostnames]
 Hostnames without a configured route are served with a self-signed fallback certificate (browsers will show a warning).
 :::
 

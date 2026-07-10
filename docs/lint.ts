@@ -113,22 +113,45 @@ if (missing.length > 0) {
 
 const ALLOWED_ADMONITIONS = new Set(['note', 'tip', 'info', 'warning', 'danger']);
 
-// A line that starts with a bold admonition keyword acting as a label,
-// e.g. **NOTE:**, **Warning**:, **Important:** — these should be real admonitions.
+// A line whose first non-list-marker content is a bold admonition keyword acting
+// as a label, e.g. **NOTE:**, **Warning**:, - **important:** — these masquerade
+// as admonitions and should be real ::: blocks. Case-insensitive, and tolerant of
+// leading indentation and list/blockquote markers.
 const INLINE_CALLOUT =
-  /^\*\*(NOTE|Note|WARNING|Warning|IMPORTANT|Important|TIP|Tip|CAUTION|Caution|DANGER|Danger|INFO|Info)(\*\*)?:/;
+  /^\s*(?:[-*+]\s+|\d+\.\s+|>\s*)*\*\*(note|warning|important|tip|caution|danger|info)(\*\*)?:/i;
+
+// Opening code fence: >=3 backticks or tildes, optionally indented, optional info string.
+const FENCE = /^(\s*)(`{3,}|~{3,})(.*)$/;
+// Admonition opener (":::note[...]") and bare closer (":::" alone on the line).
+const ADMONITION_OPEN = /^\s*:::([a-zA-Z]+)(.*)$/;
+const ADMONITION_CLOSE = /^\s*:::\s*$/;
 
 for (const id of fsIds) {
   if (isGenerated(id)) continue;
   const lines = readFileSync(join(docsDir, `${id}.md`), 'utf-8').split('\n');
+
+  let fenceChar = '';
+  let fenceLen = 0;
   let inFence = false;
+  let openAdmonition: string | null = null; // loc of an admonition awaiting its close
+
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const loc = `docs/${id}.md:${i + 1}`;
 
-    // Track fenced code blocks so we don't lint example markup.
-    if (/^\s*(```|~~~)/.test(line)) {
-      inFence = !inFence;
+    // Track fenced code blocks so we don't lint example markup. Close only on a
+    // matching delimiter (same char, at least as long) so a stray or shorter
+    // marker inside a longer fence can't end the block early.
+    const fence = line.match(FENCE);
+    if (fence) {
+      const marker = fence[2];
+      if (!inFence) {
+        inFence = true;
+        fenceChar = marker[0];
+        fenceLen = marker.length;
+      } else if (marker[0] === fenceChar && marker.length >= fenceLen && fence[3].trim() === '') {
+        inFence = false;
+      }
       continue;
     }
     if (inFence) continue;
@@ -140,8 +163,7 @@ for (const id of fsIds) {
       );
     }
 
-    // Admonition opener: ":::" followed by a type word (a bare "::: " closer won't match).
-    const opener = line.match(/^:::([a-zA-Z]+)(.*)$/);
+    const opener = line.match(ADMONITION_OPEN);
     if (opener) {
       const type = opener[1].toLowerCase();
       const rest = opener[2];
@@ -151,13 +173,33 @@ for (const id of fsIds) {
           `ERROR: ${loc} — "${type}" is not an allowed admonition type; ` +
             `use note, tip, info, warning, or danger${hint}`,
         );
-      } else if (/^\s+\S/.test(rest)) {
-        fail(
-          `ERROR: ${loc} — space-form admonition title; ` +
-            `use bracket syntax ":::${type}[${rest.trim()}]"`,
-        );
+      } else if (!/^\[[^\]]+\]\s*$/.test(rest)) {
+        // Require a bracketed title. Distinguish the failure modes for a clearer message.
+        if (rest.trim() === '') {
+          fail(`ERROR: ${loc} — admonition ":::${type}" needs a bracketed title, e.g. ":::${type}[Title]"`);
+        } else if (rest.trimStart().startsWith('[')) {
+          fail(`ERROR: ${loc} — malformed admonition title "${rest.trim()}"; use ":::${type}[Title]"`);
+        } else {
+          fail(
+            `ERROR: ${loc} — space-form admonition title; ` +
+              `use bracket syntax ":::${type}[${rest.trim()}]"`,
+          );
+        }
       }
+      if (openAdmonition) {
+        fail(`ERROR: ${openAdmonition} — admonition is missing its closing ":::"`);
+      }
+      openAdmonition = loc;
+      continue;
     }
+
+    if (ADMONITION_CLOSE.test(line)) {
+      openAdmonition = null;
+    }
+  }
+
+  if (openAdmonition) {
+    fail(`ERROR: ${openAdmonition} — admonition is missing its closing ":::"`);
   }
 }
 

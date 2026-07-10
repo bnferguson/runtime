@@ -242,7 +242,7 @@ Disks use exclusive leasing - only one app instance can mount a disk at a time. 
 - **ext4**: Best general-purpose choice, widely compatible
 - **xfs**: Better for large files and high-throughput workloads
 
-:::note
+:::note[mkfs tools required]
 Your server must have the mkfs tools to format the disk types.
 :::
 
