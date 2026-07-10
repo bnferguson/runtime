@@ -55,6 +55,17 @@ sensitive, by name, plus the provider secrets stored in the entity store.
 These were readable via the bypass, so rotate them. Values are never printed,
 only names.
 
+Section C also flags **maybe-missed secrets**. The `sensitive` flag is
+display-only and easy to forget, so the checklist runs a second pass for
+variables that *weren't* marked sensitive but still look like secrets, judged
+by the key name and by the shape of the value (a PEM block, a `user:pass@host`
+URL, a known token prefix, or a high-entropy string). A `!` marks a value that
+looks like a credential; otherwise it's the name that looks secret. This is a
+review list, not a verdict, so expect the occasional false positive (an ID or
+a hash) — confirm each one, rotate the real ones, and mark them sensitive so
+they stop hiding. Values are inspected to make the guess but, as everywhere
+else, never printed.
+
 If a query fails, the affected section says so and the whole run is flagged
 INCOMPLETE, so a partial scan is never mistaken for a clean one.
 
