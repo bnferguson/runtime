@@ -1,7 +1,7 @@
 ---
 title: Objective-C on Miren
-description: Deploy an Objective-C program as a web service on Miren with a Dockerfile.miren using GNUstep.
-keywords: [objective-c, objc, gnustep, foundation, dockerfile, deploy]
+description: Deploy an Objective-C web app on Miren with a Dockerfile.miren using GNUstep and SOPE.
+keywords: [objective-c, objc, gnustep, sope, webobjects, ngobjweb, dockerfile, deploy]
 ---
 
 import CliCommand from '@site/src/components/CliCommand';
@@ -9,9 +9,10 @@ import CliCommand from '@site/src/components/CliCommand';
 # Objective-C on Miren
 
 Objective-C isn't auto-detected, so you deploy it with a `Dockerfile.miren` that
-compiles your program with [GNUstep](https://www.gnustep.org) (the Foundation framework
-on Linux) and runs the binary. This guide uses Foundation for the response and POSIX
-sockets to serve it.
+compiles your app with [GNUstep](https://www.gnustep.org). This guide uses
+[SOPE](https://github.com/inverse-inc/sope) (the SKYRiX Object Publishing Environment —
+the Objective-C web framework that SOGo is built on), whose `WOApplication` and
+`WOHttpAdaptor` give you a real HTTP server, WebObjects-style.
 
 :::tip[Let your agent do this]
 Ask your AI coding agent to "set up this Objective-C app on Miren" after installing the
@@ -24,97 +25,84 @@ and deploys — using this page as its reference.
 Yes. Add a `Dockerfile.miren` to your project root. Miren builds from it instead of
 guessing the stack — see [Using Dockerfile.miren](/languages#using-dockerfilemiren).
 
-## Bind to the injected port
+## The app
 
-Miren injects `PORT` and routes traffic to it. Read `PORT`, build the response with
-Foundation, and serve it on `0.0.0.0`:
+Subclass `WOApplication` and override `dispatchRequest:` to return a `WOResponse`.
+`WOApplicationMain` starts the app and its built-in HTTP adaptor:
 
 ```objc
-#import <Foundation/Foundation.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <arpa/inet.h>
+#import <NGObjWeb/WOApplication.h>
+#import <NGObjWeb/WOResponse.h>
+#import <NGObjWeb/WORequest.h>
+#import <NGObjWeb/WOCoreApplication.h>
 
-int main(void) {
-    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+@interface HelloApp : WOApplication
+@end
 
-    const char *portEnv = getenv("PORT");
-    int port = portEnv ? atoi(portEnv) : 8080;
+@implementation HelloApp
+- (WOResponse *)dispatchRequest:(WORequest *)_request {
+    WOResponse *r = [WOResponse responseWithRequest:_request];
+    [r setStatus:200];
+    [r setHeader:@"text/plain" forKey:@"content-type"];
+    [r appendContentString:@"Hello from Objective-C on Miren!\n"];
+    return r;
+}
+@end
 
-    NSString *body = @"Hello from Objective-C on Miren!\n";
-    NSString *response = [NSString stringWithFormat:
-        @"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n%@", body];
-    const char *resp = [response UTF8String];
-
-    int sock = socket(AF_INET, SOCK_STREAM, 0);
-    int opt = 1;
-    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY;
-    addr.sin_port = htons(port);
-
-    if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) { perror("bind"); return 1; }
-    listen(sock, 16);
-    NSLog(@"listening on 0.0.0.0:%d", port);
-
-    for (;;) {
-        int client = accept(sock, NULL, NULL);
-        if (client < 0) continue;
-        char buf[1024];
-        (void)read(client, buf, sizeof(buf));
-        write(client, resp, strlen(resp));
-        close(client);
-    }
-
-    [pool release];
-    return 0;
+int main(int argc, const char *argv[]) {
+    return WOApplicationMain(@"HelloApp", argc, argv);
 }
 ```
 
-:::warning[Use `NSAutoreleasePool`, not `@autoreleasepool`]
-GNUstep on Linux compiles with GCC's Objective-C runtime, which is the classic runtime —
-it doesn't support the ObjC 2.0 `@autoreleasepool { … }` syntax and fails with
-`stray '@' in program`. Use `[[NSAutoreleasePool alloc] init]` / `[pool release]` instead.
+## Bind to the injected port
+
+SOPE's HTTP adaptor takes its listen address from the `WOPort` default, which you pass
+on the command line. Miren injects `PORT`, so start the app with
+`-WOPort 0.0.0.0:$PORT`:
+
+```procfile
+web: sh -c '. /usr/share/GNUstep/Makefiles/GNUstep.sh && exec /app/obj/app -WOPort 0.0.0.0:$PORT'
+```
+
+:::warning[Give WOPort an explicit `0.0.0.0`]
+`-WOPort 8080` alone makes the adaptor bind the wildcard address (`*:8080`), which fails
+on this stack with `NGCouldNotBindSocketException … Address family not supported`. Pass
+the address explicitly — `-WOPort 0.0.0.0:$PORT` — so it binds IPv4 on all interfaces.
+The `sh -c '. GNUstep.sh && exec …'` wrapper sources the GNUstep environment so the app
+finds its frameworks at runtime.
 :::
 
 ## The Dockerfile
 
-Build with GNUstep's makefile system (install `make` — `gnustep-make` provides only the
-makefiles, not GNU make itself):
+Build with GNUstep's makefile system. `gnustep-make` provides only the makefiles, so
+install GNU `make` too; `libsope-dev` provides SOPE's headers and libraries. A
+single-stage image keeps the GNUstep runtime and SOPE libraries available at run time:
 
 ```dockerfile
-# ----- Build stage -----
-FROM debian:12 AS build
+FROM debian:12
 RUN apt-get update -y \
-    && apt-get install -y make gobjc gnustep-make gnustep-base-runtime libgnustep-base-dev \
+    && apt-get install -y make gobjc gnustep-make gnustep-base-runtime libgnustep-base-dev libsope-dev libsope1 \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY main.m GNUmakefile ./
 RUN . /usr/share/GNUstep/Makefiles/GNUstep.sh && make
-RUN cp ./obj/app /app/app.bin
-
-# ----- Runtime stage -----
-FROM debian:12-slim
-RUN apt-get update -y && apt-get install -y gnustep-base-runtime && rm -rf /var/lib/apt/lists/*
-COPY --from=build /app/app.bin /usr/local/bin/app
 EXPOSE 8080
-CMD ["app"]
 ```
 
-The `GNUmakefile`:
+The `GNUmakefile` builds a plain tool linked against the SOPE libraries (SOPE's own
+`woapp.make` bundle fragment is too old for current gnustep-make, so link them directly):
 
 ```makefile
 include $(GNUSTEP_MAKEFILES)/common.make
 
 TOOL_NAME = app
 app_OBJC_FILES = main.m
+app_TOOL_LIBS += -lNGObjWeb -lNGExtensions -lEOControl -lNGStreams -lNGMime -lSaxObjC -lDOM
 
 include $(GNUSTEP_MAKEFILES)/tool.make
 ```
+
+The compiled binary lands at `obj/app`.
 
 ### .dockerignore
 
@@ -137,21 +125,18 @@ miren deploy
 </CliCommand>
 
 :::note[The Procfile is required]
-Even with a `Dockerfile.miren`, Miren needs at least one service defined:
-
-```procfile
-web: /usr/local/bin/app
-```
+Even with a `Dockerfile.miren`, Miren needs at least one service defined — the `web:`
+line above. Without it the deploy stops with `no services defined`.
 :::
 
 ## Agent quick reference
 
 - **Detection:** none — requires `Dockerfile.miren`
-- **Build:** GNUstep makefiles — install `make gobjc gnustep-make libgnustep-base-dev`; `make` outputs `obj/<tool>`
-- **Classic runtime:** use `NSAutoreleasePool` (not `@autoreleasepool`); GCC's ObjC runtime is the classic one
-- **Runtime lib:** `gnustep-base-runtime` on `debian-slim`
-- **Service is required:** `Procfile` `web: /usr/local/bin/app` — the image `CMD` is not used
-- **Port:** `getenv("PORT")`; bind `INADDR_ANY` (`0.0.0.0`)
+- **Framework:** SOPE (`libsope-dev`) — `WOApplication` + `WOHttpAdaptor`; override `dispatchRequest:`
+- **Build:** GNUstep makefiles as a plain tool linking `-lNGObjWeb …` (install `make`); binary at `obj/app`
+- **Port:** `-WOPort 0.0.0.0:$PORT` — the explicit `0.0.0.0` avoids a wildcard bind failure
+- **Runtime:** source `GNUstep.sh` before exec so the app finds its frameworks
+- **Service is required:** the `web:` Procfile line — the image `CMD` is not used
 
 ## Next steps
 
