@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -12,6 +13,83 @@ import (
 	"miren.dev/runtime/pkg/theme"
 	"miren.dev/runtime/pkg/ui"
 )
+
+// envRedacted is the fixed-width placeholder shown for redacted env var values.
+// It deliberately reveals neither the length nor any character of the value.
+const envRedacted = "••••••••••"
+
+// urlUserinfoRe matches the userinfo (user:pass@) component of a URL-shaped
+// value: a scheme, "://", everything up to the first "@", then "@". Requiring a
+// scheme avoids matching bare email addresses in non-URL values.
+var urlUserinfoRe = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)[^/?#@]+@`)
+
+// maskURLUserinfo redacts embedded credentials in URL-shaped values so secrets
+// like the password in a DATABASE_URL don't leak even when the key name gave no
+// hint and nothing marked the var sensitive. Non-URL values pass through.
+func maskURLUserinfo(value string) string {
+	return urlUserinfoRe.ReplaceAllString(value, "${1}"+envRedacted+"@")
+}
+
+// maskEnvValue is the single source of truth for how an env-var value is
+// displayed anywhere in the CLI (env list/get, deploy analysis, and any future
+// surface). Sensitivity is decided by EVIDENCE, in tiers, and this function
+// honors that evidence — it does not guess:
+//
+//   - Declared: the `sensitive` flag. Set by the user (-s / app.toml) or by the
+//     producer that minted the credential (addons stamp their generated
+//     DATABASE_URL/passwords). This is the authority; when set, we fully redact.
+//   - Structural: even when the flag is unset, URL userinfo (user:pass@) is
+//     redacted, because that is by definition a credential slot — provable
+//     syntax, not a guess. This is the last-line invariant against unmarked
+//     leaks like a hand-set DATABASE_URL.
+//
+// Deliberately absent: key-name matching. A name like "SECRET" is a *guess*,
+// and a guess that silently fails at display time is exactly how DATABASE_URL
+// leaked (MIR-1356). Name heuristics belong only at set-time as a *suggestion*
+// the user can override (see looksLikeSensitive), never here. If a new leak
+// shape appears (e.g. a JDBC "Password=..." string), the fix is to teach the
+// producer to set `sensitive`, NOT to grow this function into a pile of
+// format matchers. Hold this surface small.
+//
+// The unmask toggle (behind an explicit --unmask flag) means "give me the
+// literal bytes" — no masking, no escaping — for copying or scripting.
+// Without it, the value is rendered display-safe: control/ANSI sequences are
+// escaped so a malicious value can't corrupt terminal or CI output.
+func maskEnvValue(value string, sensitive, unmask bool) string {
+	if unmask {
+		return value
+	}
+	if sensitive {
+		return envRedacted
+	}
+	return escapeForDisplay(maskURLUserinfo(value))
+}
+
+// escapeForDisplay replaces ASCII control characters (including ESC used for
+// ANSI sequences, newlines, and carriage returns) with their Go-quoted form so
+// a malicious env value can't break out of a log line or spoof CLI/CI output.
+func escapeForDisplay(s string) string {
+	if s == "" {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case r == '\n':
+			b.WriteString(`\n`)
+		case r == '\r':
+			b.WriteString(`\r`)
+		case r == '\t':
+			b.WriteString(`\t`)
+		case r < 0x20 || r == 0x7f:
+			fmt.Fprintf(&b, `\x%02x`, r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
 
 // EnvVarSpec represents a parsed environment variable specification
 type EnvVarSpec struct {
@@ -225,15 +303,7 @@ func EnvGet(ctx *Context, opts struct {
 		}
 	}
 
-	if found.Sensitive() {
-		if opts.Unmask {
-			ctx.Printf("%s\n", found.Value())
-		} else {
-			ctx.Printf("••••••••••\n")
-		}
-	} else {
-		ctx.Printf("%s\n", found.Value())
-	}
+	ctx.Printf("%s\n", maskEnvValue(found.Value(), found.Sensitive(), opts.Unmask))
 	return nil
 }
 
@@ -319,19 +389,15 @@ func EnvList(ctx *Context, opts struct {
 
 		var vars []EnvVar
 		for _, entry := range entries {
-			ev := EnvVar{
+			vars = append(vars, EnvVar{
 				Name:        entry.nv.Key(),
+				Value:       maskEnvValue(entry.nv.Value(), entry.nv.Sensitive(), false),
 				Sensitive:   entry.nv.Sensitive(),
 				Service:     entry.service,
 				Source:      entry.nv.Source(),
 				Required:    entry.nv.Required(),
 				Description: entry.nv.Description(),
-			}
-			// Only include value for non-sensitive variables in JSON
-			if !entry.nv.Sensitive() {
-				ev.Value = entry.nv.Value()
-			}
-			vars = append(vars, ev)
+			})
 		}
 		return PrintJSON(vars)
 	}
@@ -434,20 +500,20 @@ func EnvDelete(ctx *Context, opts struct {
 	return nil
 }
 
-// printEnvTable prints a formatted table of environment variables
+// printEnvTable prints a formatted table of environment variables. Values are
+// always masked; there is deliberately no bulk-reveal flag — revealing a value
+// is a single-secret, explicit operation via `miren env get <key> --unmask`.
 func printEnvTable(ctx *Context, entries []envVarEntry) {
-	// Create a gray style for sensitive values
+	// Create a gray style for masked values
 	grayStyle := lipgloss.NewStyle().Foreground(theme.Muted)
 
 	// Build rows
 	var rows []ui.Row
 	for _, entry := range entries {
-		var value string
-
-		if entry.nv.Sensitive() {
-			value = grayStyle.Render("••••••••••")
-		} else {
-			value = entry.nv.Value()
+		value := maskEnvValue(entry.nv.Value(), entry.nv.Sensitive(), false)
+		// Gray out values we masked so it's clear the redaction is intentional.
+		if value != entry.nv.Value() {
+			value = grayStyle.Render(value)
 		}
 
 		// Get source with backward compatibility
