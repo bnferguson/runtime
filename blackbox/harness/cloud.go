@@ -184,11 +184,18 @@ func (env *CloudEnv) buildBinaries(t *testing.T, cloudRepo string) {
 
 	binDir := filepath.Join(env.m.cluster.RepoRoot, "bin")
 
+	// GOTOOLCHAIN=auto lets these builds fetch whatever toolchain the cloud
+	// repo's go.mod requires, decoupling it from runtime's Go version. CI's
+	// setup-go exports GOTOOLCHAIN=local job-wide, which would otherwise pin
+	// the cloud build to runtime's toolchain and fail whenever cloud requires
+	// a newer Go. Appended last so it wins over the inherited value.
+	buildEnv := append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOTOOLCHAIN=auto")
+
 	// Build cloud binary
 	t.Log("building cloud binary...")
 	cmd := exec.Command("go", "build", "-o", filepath.Join(binDir, "bb-cloud"), "./cmd/cloud")
 	cmd.Dir = cloudRepo
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux")
+	cmd.Env = buildEnv
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("failed to build cloud binary: %v\n%s", err, out)
 	}
@@ -197,7 +204,7 @@ func (env *CloudEnv) buildBinaries(t *testing.T, cloudRepo string) {
 	t.Log("building POP binary...")
 	cmd = exec.Command("go", "build", "-o", filepath.Join(binDir, "bb-pop"), "./cmd/pop")
 	cmd.Dir = cloudRepo
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux")
+	cmd.Env = buildEnv
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("failed to build POP binary: %v\n%s", err, out)
 	}
