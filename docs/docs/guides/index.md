@@ -55,6 +55,7 @@ agent works from. See [Agent Skills](/agent-skills) for setup.
 | [Julia](/guides/julia) | No | `Dockerfile.miren` |
 | [R](/guides/r) | No | `Dockerfile.miren` |
 | [Lua](/guides/lua) | No | `Dockerfile.miren` |
+| [Klong (K)](/guides/klong) | No | `Dockerfile.miren` |
 | [Common Lisp](/guides/commonlisp) | No | `Dockerfile.miren` |
 | [COBOL](/guides/cobol) | No | `Dockerfile.miren` |
 | [Bash](/guides/bash) | No | `Dockerfile.miren` |

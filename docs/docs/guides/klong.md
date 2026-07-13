@@ -1,0 +1,109 @@
+---
+title: Klong (K) on Miren
+description: Deploy the K-like array language Klong on Miren with a Dockerfile.miren using KlongPy and socat.
+keywords: [klong, k, array language, klongpy, apl, socat, dockerfile, deploy]
+---
+
+import CliCommand from '@site/src/components/CliCommand';
+
+# Klong (K) on Miren
+
+[Klong](https://t3x.org/klong/) is an open-source array language in the K/APL family.
+Array languages don't ship HTTP servers, so — as with [COBOL](/guides/cobol) and
+[Bash](/guides/bash) — this guide has the Klong program print an HTTP response and puts
+`socat` in front of it to own the socket. It uses [KlongPy](https://klongpy.org), a
+pip-installable Klong implementation.
+
+:::tip[Let your agent do this]
+Ask your AI coding agent to "set up this Klong app on Miren" after installing the
+[Miren agent skills](/agent-skills). It adds the `Dockerfile.miren` and the socket
+front-end, and deploys — using this page as its reference.
+:::
+
+## Do you need a Dockerfile?
+
+Yes. Add a `Dockerfile.miren` to your project root. Miren builds from it instead of
+guessing the stack — see [Using Dockerfile.miren](/languages#using-dockerfilemiren).
+
+## The program
+
+`.d` writes a string to standard output verbatim. Put a complete HTTP response —
+status line, headers, a blank line, then the body — in `hello.kg`:
+
+```klong
+.d("HTTP/1.1 200 OK
+Content-Type: text/plain
+Connection: close
+
+Hello from Klong on Miren!
+")
+```
+
+:::note[Run Klong from a file for clean output]
+Run the program as a **file** (`kgpy hello.kg`), not with `-e` or over a pipe — those
+start the REPL and echo the expression result (`"…"` with quotes) alongside your
+output. In file mode only your `.d` bytes are written.
+:::
+
+## The socket front-end
+
+The program doesn't bind a port — `socat` does. Miren injects `PORT`, and `socat`'s
+`TCP-LISTEN` binds all interfaces; `fork` runs Klong once per connection:
+
+```procfile
+web: socat TCP-LISTEN:$PORT,reuseaddr,fork EXEC:'kgpy /app/hello.kg'
+```
+
+## The Dockerfile
+
+Create `Dockerfile.miren` in your project root. KlongPy installs from PyPI (it also needs
+`colorama` for its CLI), and `socat` comes from apt:
+
+```dockerfile
+FROM python:3.12-slim
+RUN pip install --no-cache-dir klongpy colorama \
+    && apt-get update -y && apt-get install -y socat && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY hello.kg /app/
+EXPOSE 8080
+```
+
+### .dockerignore
+
+```text
+.git
+```
+
+## Deploy
+
+Create `.miren/app.toml` naming your app and deploy from your project root:
+
+```toml
+name = "klong-bench"
+```
+
+<CliCommand context="client">
+```miren
+miren deploy
+```
+</CliCommand>
+
+:::note[The Procfile is required]
+Even with a `Dockerfile.miren`, Miren needs at least one service defined — the `web:`
+line above. Without it the deploy stops with `no services defined`.
+:::
+
+## Agent quick reference
+
+- **Detection:** none — requires `Dockerfile.miren`
+- **Runtime:** KlongPy (`pip install klongpy colorama`) on `python:3.12-slim`
+- **Serving:** the Klong program `.d`-prints a full HTTP response; `socat` owns the socket
+- **Run from a file:** `kgpy hello.kg` (file mode) — `-e`/pipe modes echo the result too
+- **Service is required:** `Procfile` `web: socat TCP-LISTEN:$PORT,reuseaddr,fork EXEC:'kgpy /app/hello.kg'`
+- **Port:** `socat TCP-LISTEN:$PORT` binds `0.0.0.0`
+
+## Next steps
+
+- [COBOL on Miren](/guides/cobol) and [Bash on Miren](/guides/bash) — the same `socat` pattern
+- [Using Dockerfile.miren](/languages#using-dockerfilemiren) — how custom builds work
+- [Deployment](/deployment) — how deploys build and activate

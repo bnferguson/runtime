@@ -72,6 +72,7 @@ const sidebars: SidebarsConfig = {
         'guides/julia',
         'guides/r',
         'guides/lua',
+        'guides/klong',
         'guides/commonlisp',
         'guides/cobol',
         'guides/bash',
