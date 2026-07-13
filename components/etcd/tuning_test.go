@@ -113,9 +113,11 @@ func TestQuotaFloorAndCap(t *testing.T) {
 	}
 
 	// A very large node (3% of RAM above the 4 GiB floor) gets the RAM-scaled quota.
-	// 200 GiB → budget 20 GiB → 30% = 6 GiB, between floor and cap.
-	if got := computeTuning(200*gib, 0).QuotaBackendBytes; got != 200*gib/10*30/100 {
-		t.Errorf("200 GiB: quota = %d, want RAM-scaled %d", got, 200*gib/10*30/100)
+	// 200 GiB → budget 20 GiB → 30% = 6 GiB, between floor and cap. Hardcoded golden
+	// value rather than restating computeTuning's formula.
+	const wantScaledQuota = 6442450944 // 6 GiB = 3% of 200 GiB
+	if got := computeTuning(200*gib, 0).QuotaBackendBytes; got != wantScaledQuota {
+		t.Errorf("200 GiB: quota = %d, want RAM-scaled %d", got, int64(wantScaledQuota))
 	}
 
 	// An enormous node is capped at etcd's 8 GiB maximum.

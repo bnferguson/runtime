@@ -342,6 +342,9 @@ configs:
           port: true
 
       quota_backend_bytes:
+        # int is 64-bit on the amd64/arm64 targets miren builds for, so byte counts up
+        # to the 8 GiB cap fit; the config generator has no int64 type. Negatives are
+        # rejected so a bad value fails early rather than silently auto-sizing.
         type: int
         default: 0
         cli:
@@ -349,6 +352,8 @@ configs:
           description: Etcd backend quota in bytes (0 = auto-size from system RAM)
         env: MIREN_ETCD_QUOTA_BACKEND_BYTES
         toml: quota_backend_bytes
+        validation:
+          min: 0
 
   VictoriaLogsConfig:
     description: VictoriaLogs configuration

@@ -101,6 +101,11 @@ func (c *EtcdConfig) Validate() error {
 		return fmt.Errorf("peer_port must be between 1 and 65535, got %d", *c.PeerPort)
 	}
 
+	// Validate quota_backend_bytes minimum
+	if c.QuotaBackendBytes != nil && *c.QuotaBackendBytes < 0 {
+		return fmt.Errorf("quota_backend_bytes must be at least 0, got %d", *c.QuotaBackendBytes)
+	}
+
 	// Check for port conflicts in EtcdConfig
 	seen := make(map[int]bool)
 	if c.ClientPort != nil {

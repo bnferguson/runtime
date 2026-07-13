@@ -38,21 +38,32 @@ const (
 type maintenanceAction int
 
 const (
-	actionNone    maintenanceAction = iota // healthy: nothing to do
-	actionDefrag                           // bloated (ratio): defrag to return free pages to the OS
-	actionReclaim                          // near quota: compact-to-head + defrag to shrink the file
-	actionRecover                          // NOSPACE armed: reclaim + disarm the alarm
+	actionNone     maintenanceAction = iota // healthy: nothing to do
+	actionDefrag                            // bloated (ratio): defrag to return free pages to the OS
+	actionReclaim                           // near quota with reclaimable bloat: compact-to-head + defrag
+	actionWarnFull                          // near quota but mostly live data: defrag can't help — warn
+	actionRecover                           // NOSPACE armed: reclaim + disarm the alarm
 )
 
 // decideMaintenance picks the remediation for the observed backend state. NOSPACE
 // recovery takes precedence, then the absolute near-quota trigger (physical dbSize vs
 // quota), then the bloat-ratio backstop.
+//
+// The near-quota branch only reclaims when compact+defrag can actually pull the physical
+// file back under the high-water — i.e. the live data (dbSizeInUse) is itself below the
+// high-water, so the excess is reclaimable bloat. If the live data is already over the
+// high-water, defrag cannot shrink it and re-running compact+defrag every tick would
+// thrash without progress; we surface a "raise the quota / shed keyspace" warning instead.
 func decideMaintenance(dbSize, dbSizeInUse, quota int64, noSpace bool) maintenanceAction {
+	highWater := quotaHighWaterFraction * float64(quota)
 	switch {
 	case noSpace:
 		return actionRecover
-	case quota > 0 && float64(dbSize) > quotaHighWaterFraction*float64(quota):
-		return actionReclaim
+	case quota > 0 && float64(dbSize) > highWater:
+		if float64(dbSizeInUse) < highWater {
+			return actionReclaim
+		}
+		return actionWarnFull
 	case dbSizeInUse > 0 && dbSize > int64(defragBloatRatio*float64(dbSizeInUse)):
 		return actionDefrag
 	default:
@@ -202,8 +213,11 @@ func (e *EtcdComponent) runMaintenanceCheck(ctx context.Context, client *clientv
 		e.recoverFromNoSpace(ctx, client, endpoint, resp.Header.Revision, dbSize, alarmedMembers)
 	case actionReclaim:
 		e.Log.Warn("etcd backend near quota, reclaiming space",
-			"db_size_bytes", dbSize, "quota_bytes", e.quotaBackendBytes)
+			"db_size_bytes", dbSize, "db_size_in_use_bytes", dbSizeInUse, "quota_bytes", e.quotaBackendBytes)
 		e.reclaimSpace(ctx, client, endpoint, resp.Header.Revision, dbSize)
+	case actionWarnFull:
+		e.Log.Error("etcd backend near quota and mostly live data; compaction/defrag cannot reclaim enough space — raise --quota-backend-bytes or reduce the keyspace",
+			"db_size_bytes", dbSize, "db_size_in_use_bytes", dbSizeInUse, "quota_bytes", e.quotaBackendBytes)
 	case actionDefrag:
 		e.defragment(ctx, client, endpoint, dbSize)
 	case actionNone:

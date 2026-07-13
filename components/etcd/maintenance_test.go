@@ -22,9 +22,14 @@ func TestDecideMaintenance(t *testing.T) {
 			want: actionDefrag,
 		},
 		{
-			name:   "near quota: above 80% high-water, low bloat",
-			dbSize: 7 * gib, dbSizeInUse: 6900 * mib, quota: quota,
+			name:   "near quota with reclaimable bloat: live data under high-water",
+			dbSize: 7 * gib, dbSizeInUse: 5 * gib, quota: quota, // high-water 6.4 GiB
 			want: actionReclaim,
+		},
+		{
+			name:   "near quota but mostly live data: defrag cannot help, warn",
+			dbSize: 7 * gib, dbSizeInUse: 6900 * mib, quota: quota, // in-use 6.7 GiB > 6.4 GiB high-water
+			want: actionWarnFull,
 		},
 		{
 			name:   "near quota takes precedence over bloat ratio",
@@ -70,13 +75,18 @@ func TestDecideMaintenance(t *testing.T) {
 }
 
 func TestDecideMaintenanceHighWaterBoundary(t *testing.T) {
-	const quota = 10 * gib // 80% = 8 GiB exactly
+	const quota = 10 * gib // 80% high-water = 8 GiB exactly
 
-	// Strictly above the high-water reclaims; at/below does not (assuming low bloat).
-	if got := decideMaintenance(8*gib+1, 8*gib, quota, false); got != actionReclaim {
-		t.Errorf("just above high-water: got %d, want actionReclaim", got)
+	// Strictly above the high-water, with live data under it, reclaims.
+	if got := decideMaintenance(8*gib+1, 4*gib, quota, false); got != actionReclaim {
+		t.Errorf("just above high-water with reclaimable bloat: got %d, want actionReclaim", got)
 	}
-	if got := decideMaintenance(8*gib, 7*gib+900*mib, quota, false); got == actionReclaim {
-		t.Errorf("exactly at high-water should not reclaim, got actionReclaim")
+	// Exactly at the high-water (not strictly above) does not trigger the near-quota path.
+	if got := decideMaintenance(8*gib, 4*gib, quota, false); got == actionReclaim || got == actionWarnFull {
+		t.Errorf("exactly at high-water should not trigger near-quota path, got %d", got)
+	}
+	// Above the high-water but live data also above it warns instead of thrashing.
+	if got := decideMaintenance(9*gib, 8*gib+1, quota, false); got != actionWarnFull {
+		t.Errorf("near quota, live data over high-water: got %d, want actionWarnFull", got)
 	}
 }
