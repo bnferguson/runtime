@@ -341,18 +341,23 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	// etcdTLSSetup holds etcd TLS configuration when distributed runners is enabled
 	var etcdTLSSetup *coordinate.EtcdTLSSetupResult
 
+	// etcdComponent is hoisted so the metrics writer can be attached later, once the
+	// metrics subsystem is initialized (which happens after etcd has started).
+	var etcdComponent *etcd.EtcdComponent
+
 	// Start embedded etcd server if requested
 	if cfg.Etcd.GetStartEmbedded() {
 		ctx.Log.Info("starting embedded etcd server", "client-port", cfg.Etcd.GetClientPort(), "peer-port", cfg.Etcd.GetPeerPort())
 
-		etcdComponent := etcd.NewEtcdComponent(ctx.Log, ctx.ServerState.CC, ctx.ServerState.Namespace, cfg.Server.GetDataPath())
+		etcdComponent = etcd.NewEtcdComponent(ctx.Log, ctx.ServerState.CC, ctx.ServerState.Namespace, cfg.Server.GetDataPath())
 
 		etcdConfig := etcd.EtcdConfig{
-			Name:           "miren-etcd",
-			ClientPort:     cfg.Etcd.GetClientPort(),
-			HTTPClientPort: cfg.Etcd.GetHTTPClientPort(),
-			PeerPort:       cfg.Etcd.GetPeerPort(),
-			ClusterState:   "new",
+			Name:              "miren-etcd",
+			ClientPort:        cfg.Etcd.GetClientPort(),
+			HTTPClientPort:    cfg.Etcd.GetHTTPClientPort(),
+			PeerPort:          cfg.Etcd.GetPeerPort(),
+			ClusterState:      "new",
+			QuotaBackendBytes: int64(cfg.Etcd.GetQuotaBackendBytes()),
 		}
 
 		// Set up etcd TLS when distributed runners feature is enabled
@@ -554,6 +559,13 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	// Initialize metrics components via ServerState
 	ctx.ServerState.InitMetricsWriter(ctx.Log)
 	ctx.ServerState.InitMetricsReader(ctx.Log)
+
+	// The metrics writer only exists now (it needs the VictoriaMetrics address), after
+	// etcd and its maintenance loop have already started; attach it so the loop can emit
+	// etcd health gauges. The loop reads the writer atomically each tick.
+	if etcdComponent != nil {
+		etcdComponent.SetMetricsWriter(ctx.ServerState.Writer)
+	}
 
 	// Create CPU and memory usage monitors
 	cpu := metrics.NewCPUUsage(ctx.Log, ctx.ServerState.Writer, ctx.ServerState.Reader)

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
@@ -17,6 +18,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"miren.dev/runtime/components/base"
+	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/pkg/imagerefs"
 	"miren.dev/runtime/pkg/slogout"
 )
@@ -63,6 +65,10 @@ type EtcdConfig struct {
 	InitialToken   string
 	ClusterState   string
 	TLS            *TLSConfig // If set, enables mTLS for client connections
+
+	// QuotaBackendBytes, when > 0, sets --quota-backend-bytes explicitly. When 0 the
+	// value is auto-derived from system RAM (see computeTuning).
+	QuotaBackendBytes int64
 }
 
 type EtcdComponent struct {
@@ -72,6 +78,21 @@ type EtcdComponent struct {
 	peerPort   int
 	tlsEnabled bool
 	config     EtcdConfig
+
+	// quotaBackendBytes is the effective backend quota the container was started with;
+	// the maintenance loop uses it for the near-quota reclaim trigger.
+	quotaBackendBytes int64
+
+	// writer, when set, receives etcd health gauges from the maintenance loop. It is set
+	// via SetMetricsWriter after the metrics subsystem comes up (which happens after etcd
+	// and its maintenance loop have already started), so access is atomic. Nil-safe.
+	writer atomic.Pointer[metrics.VictoriaMetricsWriter]
+}
+
+// SetMetricsWriter configures the metrics sink for the maintenance loop's health gauges.
+// Safe to call with nil or at any time (the maintenance loop reads it atomically each tick).
+func (e *EtcdComponent) SetMetricsWriter(w *metrics.VictoriaMetricsWriter) {
+	e.writer.Store(w)
 }
 
 func NewEtcdComponent(log *slog.Logger, cc *containerd.Client, namespace, dataPath string) *EtcdComponent {
@@ -157,9 +178,11 @@ func (e *EtcdComponent) Start(ctx context.Context, config EtcdConfig) error {
 	}
 
 	// Scale etcd's memory-related config to the size of the node it runs on so it
-	// behaves as a ~10%-of-RAM co-tenant rather than growing to fill the node.
-	tuning := computeTuning(detectSystemRAMBytes())
+	// behaves as a ~10%-of-RAM co-tenant rather than growing to fill the node. The
+	// backend quota honors an explicit config override when set.
+	tuning := computeTuning(detectSystemRAMBytes(), config.QuotaBackendBytes)
 	tuningSignature := tuning.signature()
+	e.quotaBackendBytes = tuning.QuotaBackendBytes
 
 	// Check if the container config has changed since last start. If so, we
 	// must recreate the container since env vars and args are baked into the spec.

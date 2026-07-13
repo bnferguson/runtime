@@ -19,9 +19,9 @@ import (
 // GC harder as it approaches the budget.
 //
 // The one exception is --quota-backend-bytes, a hard knob whose breach takes etcd
-// read-only cluster-wide. It is NOT scaled down by RAM: it is floored at etcd's 2 GiB
-// default (see quotaFloorBytes) so the tuning only ever adds backend headroom on large
-// nodes, never removes it on small ones.
+// read-only cluster-wide. It is NOT scaled down by RAM: it is floored well above realistic
+// keyspaces (see quotaFloorBytes) so the tuning only ever adds backend headroom on large
+// nodes, never removes it on small ones. Operators can override it explicitly.
 const (
 	kib = 1024
 	mib = 1024 * 1024
@@ -31,13 +31,14 @@ const (
 	// hold a working keyspace, so the budget never drops under this even on tiny nodes.
 	memoryFloorBytes = 100 * mib
 
-	// quotaFloorBytes is etcd's built-in default backend quota (2 GiB). We never set a
-	// quota below it: --quota-backend-bytes is the one hard knob whose breach raises a
-	// cluster-wide NOSPACE alarm (etcd goes read-only until a manual compact/defrag/
-	// disarm), and keyspace tracks workload rather than the RAM of the node etcd
-	// co-tenants on. Flooring here keeps the tuning purely additive headroom on large
-	// nodes and never a write-outage regression on small ones.
-	quotaFloorBytes = 2 * gib
+	// quotaFloorBytes is the minimum backend quota we ever set. --quota-backend-bytes is the
+	// one hard knob whose breach raises a cluster-wide NOSPACE alarm (etcd goes read-only
+	// until a manual compact/defrag/disarm), and keyspace tracks workload rather than the RAM
+	// of the node etcd co-tenants on. etcd's built-in default (2 GiB) proved too small in
+	// production — a ~711 MB live keyspace bloated to 2.1 GB and hit the quota — so we floor
+	// at 4 GiB (~5.6x that live size, ~2x the bloated file). Flooring keeps the tuning purely
+	// additive headroom on large nodes and never a write-outage regression on small ones.
+	quotaFloorBytes = 4 * gib
 
 	// quotaCapBytes caps the backend quota regardless of how large the node is. This is
 	// etcd's own maximum supported backend size.
@@ -93,19 +94,24 @@ func detectSystemRAMBytes() int64 {
 }
 
 // computeTuning derives etcd config from the node's RAM. A systemRAMBytes of 0 (unknown)
-// yields the smallest tier via the budget floor.
-func computeTuning(systemRAMBytes int64) etcdTuning {
+// yields the smallest tier via the budget floor. quotaOverride, when > 0, sets
+// --quota-backend-bytes explicitly (operator-configured); otherwise the quota is the
+// RAM-scaled value clamped to [quotaFloorBytes, quotaCapBytes].
+func computeTuning(systemRAMBytes int64, quotaOverride int64) etcdTuning {
 	budget := systemRAMBytes / 10
 	if budget < memoryFloorBytes {
 		budget = memoryFloorBytes
 	}
 
-	quota := budget * 30 / 100
-	if quota < quotaFloorBytes {
-		quota = quotaFloorBytes
-	}
-	if quota > quotaCapBytes {
-		quota = quotaCapBytes
+	quota := quotaOverride
+	if quota <= 0 {
+		quota = budget * 30 / 100
+		if quota < quotaFloorBytes {
+			quota = quotaFloorBytes
+		}
+		if quota > quotaCapBytes {
+			quota = quotaCapBytes
+		}
 	}
 
 	streams := budget / (2 * mib)
