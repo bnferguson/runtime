@@ -2,6 +2,7 @@ package diskio
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -10,8 +11,23 @@ import (
 
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 )
+
+// OrphanMountSweepGracePeriod is how old a disk_mount must be before the orphan
+// sweeper will delete it for a missing backing volume. It guards against a race
+// where a mount has just been created but its volume entity hasn't been
+// observed yet.
+const OrphanMountSweepGracePeriod = 2 * time.Minute
+
+// writeTracker records revisions written directly by this controller so the
+// owning ReconcileController's watch can skip its own events. It is satisfied
+// by *controller.ReconcileController; declared locally to keep diskio decoupled
+// from pkg/controller.
+type writeTracker interface {
+	RecordWrite(revision int64)
+}
 
 // DiskMountController watches disk_mount entities and manages loop-device mounts.
 type DiskMountController struct {
@@ -24,6 +40,11 @@ type DiskMountController struct {
 
 	// Cloud client for lease management and segment replay (nil when cloud not configured)
 	cloudClient CloudDiskClient
+
+	// writeTracker records revisions this controller writes directly via eac,
+	// so the reconcile watch skips the resulting self-generated events instead
+	// of re-triggering reconcile in a tight loop. nil in unit tests.
+	writeTracker writeTracker
 
 	// keepMounts, when true, causes Shutdown to skip unmounting.
 	// Set during reload so the new process can pick up existing mounts.
@@ -47,6 +68,13 @@ func (c *DiskMountController) SetEAC(eac *entityserver_v1alpha.EntityAccessClien
 // SetCloudClient sets the cloud client for lease management and segment replay.
 func (c *DiskMountController) SetCloudClient(client CloudDiskClient) {
 	c.cloudClient = client
+}
+
+// SetWriteTracker wires the reconcile controller's write tracker so that entity
+// writes this controller makes directly (via updateMountState) are recorded and
+// their watch events are skipped, preventing a self-retriggering reconcile loop.
+func (c *DiskMountController) SetWriteTracker(wt writeTracker) {
+	c.writeTracker = wt
 }
 
 // SetKeepMounts tells the controller to skip unmounting during Shutdown.
@@ -655,8 +683,20 @@ func (c *DiskMountController) updateMountState(ctx context.Context, id entity.Id
 		attrs = append(attrs, entity.String(storage_v1alpha.DiskMountErrorMessageId, *errorMsg))
 	}
 
-	_, err := c.eac.Patch(ctx, attrs, 0)
-	return err
+	result, err := c.eac.Patch(ctx, attrs, 0)
+	if err != nil {
+		return err
+	}
+
+	// Record the revision we just wrote so the reconcile watch skips this
+	// self-generated event rather than re-enqueuing the same entity — the
+	// mechanism that stops a stuck mount from self-retriggering at full
+	// throughput (MIR-1345).
+	if c.writeTracker != nil && result != nil && result.HasRevision() {
+		c.writeTracker.RecordWrite(result.Revision())
+	}
+
+	return nil
 }
 
 func (c *DiskMountController) setMountError(ctx context.Context, id entity.Id, errorMsg string) {
@@ -713,39 +753,7 @@ func (c *DiskMountController) ReconcileWithEntities(ctx context.Context) error {
 		}
 
 		c.log.Info("cleaning up orphaned disk mount", "entity_id", mountState.EntityId)
-
-		// For alwaysMount volumes, skip actual unmount/detach — volume controller owns those
-		if alwaysMount(mountState.Mode) {
-			c.state.DeleteMount(mountState.EntityId)
-			orphanCleaned = true
-			continue
-		}
-
-		if mountState.Mounted && mountState.MountPath != "" {
-			if err := c.ops.Unmount(mountState.MountPath); err != nil {
-				c.log.Warn("failed to unmount orphaned mount", "entity_id", mountState.EntityId, "error", err)
-			}
-		}
-
-		if mountState.DevicePath != "" {
-			if mountState.Mode == storage_v1alpha.VM_ACCELERATOR {
-				if err := c.ops.LbdDetach(ctx, mountState.DevicePath); err != nil {
-					c.log.Warn("failed to detach lbd for orphaned mount", "entity_id", mountState.EntityId, "error", err)
-				}
-			} else {
-				if err := c.ops.LoopDetach(mountState.DevicePath); err != nil {
-					c.log.Warn("failed to detach loop for orphaned mount", "entity_id", mountState.EntityId, "error", err)
-				}
-			}
-		}
-
-		if mountState.LeaseNonce != "" && c.cloudClient != nil {
-			if err := c.cloudClient.ReleaseLease(ctx, mountState.VolumeId, mountState.LeaseNonce); err != nil {
-				c.log.Warn("failed to release lease for orphaned mount", "entity_id", mountState.EntityId, "error", err)
-			}
-		}
-
-		c.state.DeleteMount(mountState.EntityId)
+		c.teardownLocalMount(ctx, mountState)
 		orphanCleaned = true
 	}
 
@@ -753,6 +761,123 @@ func (c *DiskMountController) ReconcileWithEntities(ctx context.Context) error {
 		if err := c.state.Save(); err != nil {
 			c.log.Warn("failed to save state after orphan cleanup", "error", err)
 		}
+	}
+
+	return nil
+}
+
+// teardownLocalMount unmounts, detaches, and releases the lease for a locally
+// tracked mount, then removes it from local state. It does not touch the entity
+// or persist state (callers batch the Save). alwaysMount volumes are owned by
+// the volume controller, so their mount/detach is skipped.
+func (c *DiskMountController) teardownLocalMount(ctx context.Context, mountState *MountState) {
+	if alwaysMount(mountState.Mode) {
+		c.state.DeleteMount(mountState.EntityId)
+		return
+	}
+
+	if mountState.Mounted && mountState.MountPath != "" {
+		if err := c.ops.Unmount(mountState.MountPath); err != nil {
+			c.log.Warn("failed to unmount orphaned mount", "entity_id", mountState.EntityId, "error", err)
+		}
+	}
+
+	if mountState.DevicePath != "" {
+		if mountState.Mode == storage_v1alpha.VM_ACCELERATOR {
+			if err := c.ops.LbdDetach(ctx, mountState.DevicePath); err != nil {
+				c.log.Warn("failed to detach lbd for orphaned mount", "entity_id", mountState.EntityId, "error", err)
+			}
+		} else {
+			if err := c.ops.LoopDetach(mountState.DevicePath); err != nil {
+				c.log.Warn("failed to detach loop for orphaned mount", "entity_id", mountState.EntityId, "error", err)
+			}
+		}
+	}
+
+	if mountState.LeaseNonce != "" && c.cloudClient != nil {
+		if err := c.cloudClient.ReleaseLease(ctx, mountState.VolumeId, mountState.LeaseNonce); err != nil {
+			c.log.Warn("failed to release lease for orphaned mount", "entity_id", mountState.EntityId, "error", err)
+		}
+	}
+
+	c.state.DeleteMount(mountState.EntityId)
+}
+
+// ReconcileOrphanMounts deletes disk_mount entities on this node whose backing
+// disk_volume no longer exists. Such a mount can never reach its desired state
+// and, before writes are deduped, self-retriggers reconcile indefinitely
+// (MIR-1345). Deleting the entity via the entity server also removes its
+// secondary-index keys, which a raw etcd delete would leave dangling.
+//
+// minMountAge guards against deleting a just-created mount whose volume entity
+// hasn't been observed yet; pass OrphanMountSweepGracePeriod in production.
+func (c *DiskMountController) ReconcileOrphanMounts(ctx context.Context, minMountAge time.Duration) error {
+	if c.eac == nil {
+		return fmt.Errorf("entity access client not set; call SetEAC before reconciling")
+	}
+
+	resp, err := c.eac.List(ctx, c.Index())
+	if err != nil {
+		return fmt.Errorf("list disk_mount entities: %w", err)
+	}
+
+	now := time.Now()
+	var deleted, localCleaned int
+	for _, e := range resp.Values() {
+		var mount storage_v1alpha.DiskMount
+		mount.Decode(e.Entity())
+
+		if mount.VolumeId == "" {
+			continue
+		}
+
+		// Leave young mounts alone so a mount created before its volume was
+		// observed doesn't get swept in a race.
+		if minMountAge > 0 && now.Sub(e.Entity().GetCreatedAt()) < minMountAge {
+			continue
+		}
+
+		// Is the backing volume gone? Only a definitive not-found counts as
+		// orphaned; transient errors are skipped so we fail safe.
+		_, verr := c.eac.Get(ctx, string(mount.VolumeId))
+		if verr == nil {
+			continue
+		}
+		if !errors.Is(verr, cond.ErrNotFound{}) {
+			c.log.Warn("orphan mount sweep: failed to load backing volume",
+				"entity_id", mount.ID, "volume_id", mount.VolumeId, "error", verr)
+			continue
+		}
+
+		c.log.Info("orphan mount sweep: deleting mount with missing backing volume",
+			"entity_id", mount.ID,
+			"volume_id", mount.VolumeId,
+			"disk_lease_id", mount.DiskLeaseId,
+			"actual_state", mount.ActualState,
+		)
+
+		// Best-effort local teardown before removing the entity.
+		if mountState := c.state.GetMount(string(mount.ID)); mountState != nil {
+			c.teardownLocalMount(ctx, mountState)
+			localCleaned++
+		}
+
+		if _, derr := c.eac.Delete(ctx, string(mount.ID)); derr != nil {
+			c.log.Warn("orphan mount sweep: failed to delete mount entity",
+				"entity_id", mount.ID, "error", derr)
+			continue
+		}
+		deleted++
+	}
+
+	if localCleaned > 0 {
+		if err := c.state.Save(); err != nil {
+			c.log.Warn("failed to save state after orphan mount sweep", "error", err)
+		}
+	}
+
+	if deleted > 0 {
+		c.log.Info("orphan mount sweep complete", "deleted", deleted)
 	}
 
 	return nil
