@@ -26,6 +26,7 @@ const (
 	certEncKey           = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	dbURL                = "postgres://cloud:cloud@postgres:5432/cloud?sslmode=disable"
 	valkeyAddr           = "valkey:6379"
+	metricsPassword      = "test-metrics-password"
 )
 
 // CloudEnv manages a cloud+POP test environment for global router blackbox tests.
@@ -276,6 +277,7 @@ func (env *CloudEnv) startCloud(t *testing.T) {
 		"POP_CERT_ENCRYPTION_KEY": certEncKey,
 		"CHALLENGE_SIGNING_KEY":   base64.StdEncoding.EncodeToString(sigKey),
 		"DEV_LOGIN":               "true",
+		"METRICS_PASSWORD":        metricsPassword,
 	}, "/src/bin/bb-cloud", "-mode=all")
 
 	// Wait for cloud to be ready, with process liveness checks
