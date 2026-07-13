@@ -32,6 +32,38 @@ type StatusReport struct {
 	LastRBACSync      *time.Time        `json:"last_rbac_sync,omitempty"`
 	APIAddresses      []string          `json:"api_addresses,omitempty"`
 	CACertFingerprint string            `json:"ca_cert_fingerprint,omitempty"`
+	// Reachability, when non-nil, carries the agent's verdict on whether the
+	// cluster's public address is reachable from the internet and, if not,
+	// which ports failed. Omitted (nil) when netcheck never produced a usable
+	// public source address, so old agents and pre-netcheck reports simply
+	// don't send it and cloud falls back to its generic copy.
+	Reachability *ReachabilityVerdict `json:"reachability,omitempty"`
+}
+
+// ReachabilityVerdict is a compact, agent-computed explanation of the
+// cluster's inbound reachability, synthesized from the netcheck trace at
+// report time. It exists so the dashboard can name the culprit ("found
+// 159.195.16.123 but UDP 8443 (QUIC) unreachable") instead of showing a
+// generic "Not reachable" with static guess-at-the-fix copy.
+type ReachabilityVerdict struct {
+	// Reachable is true when netcheck confirmed at least one reachable port
+	// on a public source address. Deliberately no omitempty: a false value is
+	// the interesting case and must travel on the wire.
+	Reachable bool `json:"reachable"`
+	// PublicAddress is the public source address netcheck observed (the IP the
+	// cluster appears as from the internet), e.g. "159.195.16.123".
+	PublicAddress string `json:"public_address,omitempty"`
+	// UnreachablePorts lists the ports that failed the check, present only
+	// when Reachable is false.
+	UnreachablePorts []UnreachablePort `json:"unreachable_ports,omitempty"`
+}
+
+// UnreachablePort names a single port/protocol that netcheck could not reach,
+// with its transport spelled out so the dashboard can say "UDP 8443 (QUIC)".
+type UnreachablePort struct {
+	Port      int    `json:"port"`
+	Protocol  string `json:"protocol"`  // "http3", "https", "http"
+	Transport string `json:"transport"` // "UDP" (QUIC/http3) or "TCP"
 }
 
 // ReportClusterStatus sends a status report for the specified cluster

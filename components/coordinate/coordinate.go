@@ -1426,6 +1426,18 @@ func (c *Coordinator) apiAddresses() []string {
 	return final
 }
 
+// reachabilityVerdict synthesizes the agent's inbound-reachability verdict from
+// the cached netcheck result, for reporting to cloud. Returns nil when netcheck
+// has produced no usable public source address, so the field is simply omitted
+// from the report and cloud falls back to its generic copy.
+func (c *Coordinator) reachabilityVerdict() *cloudauth.ReachabilityVerdict {
+	c.netcheckMu.RLock()
+	netcheck := c.netcheckResult
+	c.netcheckMu.RUnlock()
+
+	return netcheck.ReachabilityVerdict()
+}
+
 // ReportStatus reports the current cluster status to miren.cloud
 func (c *Coordinator) ReportStartupStatus(ctx context.Context) error {
 	if c.authClient == nil {
@@ -1459,6 +1471,7 @@ func (c *Coordinator) ReportStartupStatus(ctx context.Context) error {
 		ClusterID:         c.CloudAuth.ClusterID,
 		APIAddresses:      c.apiAddresses(),
 		CACertFingerprint: caFingerprint,
+		Reachability:      c.reachabilityVerdict(),
 	}
 
 	return c.authClient.ReportClusterStatus(ctx, status)
@@ -1506,6 +1519,7 @@ func (c *Coordinator) ReportStatus(ctx context.Context) error {
 		WorkloadCount: workloadCount,
 		ResourceUsage: resourceUsage,
 		APIAddresses:  c.apiAddresses(),
+		Reachability:  c.reachabilityVerdict(),
 	}
 
 	return c.authClient.ReportClusterStatus(ctx, status)
