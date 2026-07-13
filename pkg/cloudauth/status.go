@@ -38,6 +38,14 @@ type StatusReport struct {
 	// public source address, so old agents and pre-netcheck reports simply
 	// don't send it and cloud falls back to its generic copy.
 	Reachability *ReachabilityVerdict `json:"reachability,omitempty"`
+
+	// Containerized reports whether the miren server is running inside a
+	// container (Docker, Podman, or a Kubernetes pod). A containerized server is
+	// effectively never reachable directly from the internet, so miren.cloud
+	// uses this to keep Miren Anywhere (POP routing) forced on for the cluster.
+	// Sent unconditionally (no omitempty) so an explicit false keeps cloud in
+	// sync if a cluster ever moves off a container.
+	Containerized bool `json:"containerized"`
 }
 
 // ReachabilityVerdict is a compact, agent-computed explanation of the

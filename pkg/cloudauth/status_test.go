@@ -103,6 +103,25 @@ func TestReportClusterStatus(t *testing.T) {
 	assert.Equal(t, "Bearer test-jwt-token", authToken)
 }
 
+func TestStatusReport_ContainerizedMarshaling(t *testing.T) {
+	// containerized has no omitempty: cloud relies on it to force Miren Anywhere
+	// on, so both true and an explicit false must always be transmitted.
+	for _, containerized := range []bool{true, false} {
+		body, err := json.Marshal(&StatusReport{
+			ClusterID:     "test-cluster",
+			Containerized: containerized,
+		})
+		require.NoError(t, err)
+
+		var decoded map[string]any
+		require.NoError(t, json.Unmarshal(body, &decoded))
+
+		val, present := decoded["containerized"]
+		require.True(t, present, "containerized key must always be present, got %s", body)
+		assert.Equal(t, containerized, val)
+	}
+}
+
 func TestReportClusterStatus_Validation(t *testing.T) {
 	// Create a test key pair
 	keyPair, err := GenerateKeyPair()
