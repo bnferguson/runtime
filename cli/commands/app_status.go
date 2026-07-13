@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -97,20 +98,22 @@ func AppStatus(ctx *Context, opts struct {
 			ctx.Printf("  Concurrency: %d\n", appConfig.Concurrency())
 		}
 
-		// Environment variables
+		// Environment variables: show keys only. Values live behind the one
+		// masked surface, 'miren env'. See MIR-1356.
 		if appConfig.HasEnvVars() && len(appConfig.EnvVars()) > 0 {
-			ctx.Printf("\n%s\n", labelStyle.Render("Environment Variables:"))
+			var keys []string
 			for _, kv := range appConfig.EnvVars() {
-				if kv.HasKey() && kv.HasValue() {
-					// Mask sensitive values
-					value := kv.Value()
-					key := kv.Key()
-					if isSensitiveKey(key) && len(value) > 0 {
-						value = value[:1] + strings.Repeat("*", len(value)-1)
-					}
-					ctx.Printf("  %s=%s\n", key, value)
+				if kv.HasKey() {
+					keys = append(keys, kv.Key())
 				}
 			}
+			sort.Strings(keys)
+
+			ctx.Printf("\n%s (%d)\n", labelStyle.Render("Environment Variables:"), len(keys))
+			for _, key := range keys {
+				ctx.Printf("  %s\n", key)
+			}
+			ctx.Printf("  %s\n", labelStyle.Render(fmt.Sprintf("Run 'miren env list -a %s' to view values", opts.App)))
 		}
 	}
 
@@ -279,10 +282,6 @@ func printAppStatusJSON(
 	recentResult *deployment_v1alpha.DeploymentClientListDeploymentsResults,
 	app, cluster string,
 ) error {
-	type envVar struct {
-		Key   string `json:"key"`
-		Value string `json:"value"`
-	}
 	type gitInfo struct {
 		Sha               string `json:"sha,omitempty"`
 		Branch            string `json:"branch,omitempty"`
@@ -294,7 +293,7 @@ func printAppStatusJSON(
 	}
 	type configuration struct {
 		Concurrency int32    `json:"concurrency,omitempty"`
-		EnvVars     []envVar `json:"env_vars,omitempty"`
+		EnvVars     []string `json:"env_vars,omitempty"`
 	}
 	type deploymentJSON struct {
 		ID           string   `json:"id"`
@@ -399,17 +398,11 @@ func printAppStatusJSON(
 		}
 		if appConfig.HasEnvVars() && len(appConfig.EnvVars()) > 0 {
 			for _, kv := range appConfig.EnvVars() {
-				if kv.HasKey() && kv.HasValue() {
-					value := kv.Value()
-					key := kv.Key()
-					if kv.Sensitive() {
-						value = "****"
-					} else if isSensitiveKey(key) && len(value) > 0 {
-						value = value[:1] + strings.Repeat("*", len(value)-1)
-					}
-					cfg.EnvVars = append(cfg.EnvVars, envVar{Key: key, Value: value})
+				if kv.HasKey() {
+					cfg.EnvVars = append(cfg.EnvVars, kv.Key())
 				}
 			}
+			sort.Strings(cfg.EnvVars)
 		}
 		if cfg.Concurrency > 0 || len(cfg.EnvVars) > 0 {
 			output.Configuration = cfg
@@ -428,23 +421,4 @@ func printAppStatusJSON(
 	}
 
 	return PrintJSON(output)
-}
-
-// isSensitiveKey checks if an environment variable key might contain sensitive data
-func isSensitiveKey(key string) bool {
-	lowerKey := strings.ToLower(key)
-	sensitivePatterns := []string{
-		"password", "passwd", "pwd",
-		"secret", "token", "key",
-		"api_key", "apikey",
-		"auth", "credential",
-		"private",
-	}
-
-	for _, pattern := range sensitivePatterns {
-		if strings.Contains(lowerKey, pattern) {
-			return true
-		}
-	}
-	return false
 }

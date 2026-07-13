@@ -1,7 +1,6 @@
 package commands
 
 import (
-	"fmt"
 	"os"
 	"sort"
 	"strings"
@@ -293,7 +292,13 @@ func looksLikeAppEnvVar(key string) bool {
 	return false
 }
 
-// looksLikeSensitive checks if an env var name suggests it contains sensitive data
+// looksLikeSensitive guesses, from a key NAME alone, whether a var is likely a
+// secret. This is a tier-3 heuristic (a guess), and its only sanctioned use is
+// as a set-time *suggestion* the user can override — e.g. proposing a default
+// `sensitive` flag for locally-detected vars during deploy analysis. It must
+// never be the sole authority for masking at display time: that is what
+// maskEnvValue (flag + structural URL invariant) is for, and it backstops any
+// miss here. See the maskEnvValue doc comment for the full evidence-tier rule.
 func looksLikeSensitive(key string) bool {
 	upperKey := strings.ToUpper(key)
 	for _, pattern := range sensitivePatterns {
@@ -314,48 +319,4 @@ func looksLikeSensitive(key string) bool {
 		}
 	}
 	return false
-}
-
-// MaskValue masks a sensitive value for display, escaping any control or
-// ANSI-escape sequences so they cannot corrupt or spoof terminal/CI output.
-func MaskValue(value string, sensitive bool) string {
-	if !sensitive {
-		return escapeForDisplay(value)
-	}
-	if value == "" {
-		return ""
-	}
-	if len(value) > 8 {
-		// Show a short prefix to help the user identify which value this is
-		// without revealing the full secret. Escape it the same way so a
-		// secret beginning with an ANSI escape can't break the layout.
-		return escapeForDisplay(value[:2]) + "••••••••"
-	}
-	return "••••••••"
-}
-
-// escapeForDisplay replaces ASCII control characters (including ESC used for
-// ANSI sequences, newlines, and carriage returns) with their Go-quoted form
-// so a malicious env value can't break out of a log line.
-func escapeForDisplay(s string) string {
-	if s == "" {
-		return s
-	}
-	var b strings.Builder
-	b.Grow(len(s))
-	for _, r := range s {
-		switch {
-		case r == '\n':
-			b.WriteString(`\n`)
-		case r == '\r':
-			b.WriteString(`\r`)
-		case r == '\t':
-			b.WriteString(`\t`)
-		case r < 0x20 || r == 0x7f:
-			fmt.Fprintf(&b, `\x%02x`, r)
-		default:
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
 }

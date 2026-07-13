@@ -212,10 +212,6 @@ miren deploy --analyze
 			Name: "Watch app stats in real time",
 			Body: "miren app --watch",
 		}),
-		WithExample(mflags.Example{
-			Name: "Show only the app configuration",
-			Body: "miren app --config-only",
-		}),
 	))
 	d.Dispatch("app list", Infer("app list", "List all applications", AppList,
 		WithExample(mflags.Example{

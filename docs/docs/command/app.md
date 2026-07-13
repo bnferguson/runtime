@@ -16,7 +16,6 @@ miren app [flags]
 
 ## Flags
 
-- `--config-only` — Only show the configuration
 - `--format` — Output format (text, json) (default: `text`)
 - `--graph, -g` — Graph the app stats
 - `--json` — Shorthand for --format json
@@ -56,12 +55,6 @@ miren app -a myapp
 
 ```bash
 miren app --watch
-```
-
-**Show only the app configuration:**
-
-```bash
-miren app --config-only
 ```
 
 ## Subcommands
