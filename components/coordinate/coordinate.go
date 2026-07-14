@@ -45,6 +45,7 @@ import (
 	certctrl "miren.dev/runtime/controllers/certificate"
 	deploymentctrl "miren.dev/runtime/controllers/deployment"
 	ephemeralctrl "miren.dev/runtime/controllers/ephemeral"
+	indexgcctrl "miren.dev/runtime/controllers/indexgc"
 	nodehealthctrl "miren.dev/runtime/controllers/nodehealth"
 	"miren.dev/runtime/controllers/sandboxpool"
 	schedulerctrl "miren.dev/runtime/controllers/scheduler"
@@ -351,6 +352,7 @@ type Coordinator struct {
 	artifactGC    *artifactctrl.GCController
 	ephemeralGC   *ephemeralctrl.GCController
 	versionGC     *versionctrl.GCController
+	indexGC       *indexgcctrl.GCController
 	hs            *httpingress.Server
 
 	authority *caauth.Authority
@@ -417,6 +419,9 @@ func (c *Coordinator) Stop() {
 	}
 	if c.versionGC != nil {
 		c.versionGC.Stop()
+	}
+	if c.indexGC != nil {
+		c.indexGC.Stop()
 	}
 	if c.debugServer != nil {
 		if err := c.debugServer.Close(); err != nil {
@@ -1153,6 +1158,16 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		Config: versionGCConfig,
 	}
 	c.versionGC.Start(ctx)
+
+	// Start the stale index GC controller. It deletes stale index entries in the
+	// background so clusters self-heal; the manual `miren debug reindex` stays
+	// available as the immediate big hammer.
+	c.indexGC = &indexgcctrl.GCController{
+		Log:    c.Log.With("module", "index-gc"),
+		Store:  etcdStore,
+		Config: indexgcctrl.DefaultGCConfig(),
+	}
+	c.indexGC.Start(ctx)
 
 	eps := execproxy.NewServer(c.Log, eac, rs)
 	server.ExposeValue("dev.miren.runtime/exec", exec_v1alpha.AdaptSandboxExec(eps))
