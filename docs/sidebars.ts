@@ -74,6 +74,7 @@ const sidebars: SidebarsConfig = {
           label: 'Overview',
         },
         'miren-cloud/subdomains',
+        'miren-cloud/connectivity',
         {
           type: 'doc',
           id: 'miren-cloud/cloud-updates',
