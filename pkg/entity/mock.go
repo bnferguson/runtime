@@ -3,6 +3,7 @@ package entity
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -163,6 +164,11 @@ func (m *MockStore) CreateEntity(ctx context.Context, entity *Entity, opts ...En
 		return nil, err
 	}
 
+	var o entityOpts
+	for _, opt := range opts {
+		opt(&o)
+	}
+
 	// Mirror EtcdStore.CreateEntity (store.go:171): allocate an ID before
 	// storing. This also makes mock-backed tests fail loudly on a mistyped
 	// db/id, the same way production does, instead of silently keying the
@@ -177,6 +183,21 @@ func (m *MockStore) CreateEntity(ctx context.Context, entity *Entity, opts ...En
 	entity.SetRevision(1)
 
 	m.mu.Lock()
+	// Mirror EtcdStore.CreateEntity (store.go:281-326): create is put-if-absent.
+	// A create against an already-existing id is a conflict, not a silent
+	// overwrite, unless WithOverwrite was passed. An idempotent re-create with
+	// byte-identical attrs returns the existing entity. Without this, mock-backed
+	// tests would diverge from production, which enforces uniqueness via an etcd
+	// CreateRevision==0 transaction, masking bugs (e.g. duplicate runner_id
+	// joins) that production actually rejects.
+	if existing, ok := m.Entities[entity.Id()]; ok && !o.overwrite {
+		if slices.EqualFunc(existing.attrs, entity.attrs, func(a, b Attr) bool { return a.Equal(b) }) {
+			m.mu.Unlock()
+			return existing, nil
+		}
+		m.mu.Unlock()
+		return nil, cond.Conflict("entity", entity.Id())
+	}
 	if err := m.ensureShortIdLocked(entity); err != nil {
 		m.mu.Unlock()
 		return nil, err
