@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/mr-tron/base58"
-	clientv3 "go.etcd.io/etcd/client/v3"
 	"miren.dev/runtime/pkg/cond"
 )
 
@@ -43,11 +42,6 @@ func (s *EtcdStore) Reindex(ctx context.Context, log *slog.Logger, opts ReindexO
 
 	log.Info("reindex: found entities", "count", len(allEntityIDs))
 
-	validEntityIDs := make(map[Id]bool, len(allEntityIDs))
-	for _, id := range allEntityIDs {
-		validEntityIDs[id] = true
-	}
-
 	log.Info("reindex: rebuilding indexes for current entities")
 	for i, id := range allEntityIDs {
 		select {
@@ -59,7 +53,6 @@ func (s *EtcdStore) Reindex(ctx context.Context, log *slog.Logger, opts ReindexO
 		ent, err := s.GetEntity(ctx, id)
 		if err != nil {
 			if errors.Is(err, cond.ErrNotFound{}) {
-				delete(validEntityIDs, id)
 				continue
 			}
 			log.Warn("reindex: failed to get entity", "id", id, "error", err)
@@ -90,66 +83,20 @@ func (s *EtcdStore) Reindex(ctx context.Context, log *slog.Logger, opts ReindexO
 		}
 	}
 
-	// Phase 2: Clean up stale index entries (optional)
+	// Phase 2: Clean up stale index entries (optional). Delegates to the shared,
+	// CAS-guarded cleanup used by the background sweeper so both paths remove
+	// orphans the same safe way. Manual reindex is the "big hammer": unbounded
+	// deletes, no pacing.
 	if opts.CleanupStale {
 		log.Info("reindex: cleaning up stale index entries")
-		collectionPrefix := s.prefix + "/collections/"
-
-		kvs, err := s.scanPaged(ctx, collectionPrefix)
+		cleanup, err := s.CleanupStaleCollectionEntries(ctx, log, CleanupOptions{DryRun: opts.DryRun})
 		if err != nil {
-			log.Warn("reindex: failed to list collection entries", "error", err)
-		} else {
-			stats.CollectionEntriesScanned = int64(len(kvs))
-
-			var staleKeys []string
-			for _, kv := range kvs {
-				select {
-				case <-ctx.Done():
-					return stats, ctx.Err()
-				default:
-				}
-
-				entityID := Id(kv.Value)
-				if !validEntityIDs[entityID] {
-					if _, err := s.GetEntity(ctx, entityID); err != nil {
-						if errors.Is(err, cond.ErrNotFound{}) {
-							staleKeys = append(staleKeys, string(kv.Key))
-						} else {
-							log.Warn("reindex: could not verify entity existence",
-								"entity_id", entityID,
-								"key", string(kv.Key),
-								"error", err)
-						}
-					}
-				}
-			}
-
-			stats.StaleEntriesFound = int64(len(staleKeys))
-
-			if !opts.DryRun && len(staleKeys) > 0 {
-				log.Info("reindex: removing stale entries", "count", len(staleKeys))
-				for i := 0; i < len(staleKeys); i += 100 {
-					end := i + 100
-					if end > len(staleKeys) {
-						end = len(staleKeys)
-					}
-					batch := staleKeys[i:end]
-
-					var ops []clientv3.Op
-					for _, key := range batch {
-						ops = append(ops, clientv3.OpDelete(key))
-					}
-
-					if len(ops) > 0 {
-						_, err := s.client.Txn(ctx).Then(ops...).Commit()
-						if err != nil {
-							log.Warn("reindex: failed to delete stale entries", "error", err)
-						} else {
-							stats.StaleEntriesRemoved += int64(len(ops))
-						}
-					}
-				}
-			}
+			log.Warn("reindex: stale cleanup failed", "error", err)
+		}
+		if cleanup != nil {
+			stats.CollectionEntriesScanned = cleanup.CollectionEntriesScanned
+			stats.StaleEntriesFound = cleanup.StaleEntriesFound
+			stats.StaleEntriesRemoved = cleanup.StaleEntriesRemoved
 		}
 	}
 
