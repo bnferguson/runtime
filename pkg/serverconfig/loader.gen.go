@@ -222,6 +222,10 @@ func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 		cfg.Etcd.Prefix = flags.EtcdConfigPrefix
 	}
 
+	if flags.EtcdConfigQuotaBackendBytes != nil {
+		cfg.Etcd.QuotaBackendBytes = flags.EtcdConfigQuotaBackendBytes
+	}
+
 	if flags.EtcdConfigStartEmbedded != nil {
 		cfg.Etcd.StartEmbedded = flags.EtcdConfigStartEmbedded
 	}

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
@@ -17,6 +18,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"miren.dev/runtime/components/base"
+	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/pkg/imagerefs"
 	"miren.dev/runtime/pkg/slogout"
 )
@@ -37,13 +39,16 @@ var (
 // etcdState tracks the configuration state of the etcd container.
 // This is persisted to detect when configuration changes require container recreation.
 type etcdState struct {
-	TLSEnabled    bool `json:"tls_enabled"`
-	ConfigVersion int  `json:"config_version"`
+	TLSEnabled      bool   `json:"tls_enabled"`
+	ConfigVersion   int    `json:"config_version"`
+	TuningSignature string `json:"tuning_signature,omitempty"`
 }
 
 // currentConfigVersion should be bumped whenever the container spec changes
 // (new env vars, different args, etc.) so that upgrades recreate the container.
-const currentConfigVersion = 1
+//
+// v2: memory auto-tuning — etcd flags/env are now scaled to system RAM.
+const currentConfigVersion = 2
 
 // TLSConfig holds TLS certificate paths for etcd mTLS.
 // When configured, etcd will require client certificate authentication.
@@ -60,6 +65,10 @@ type EtcdConfig struct {
 	InitialToken   string
 	ClusterState   string
 	TLS            *TLSConfig // If set, enables mTLS for client connections
+
+	// QuotaBackendBytes, when > 0, sets --quota-backend-bytes explicitly. When 0 the
+	// value is auto-derived from system RAM (see computeTuning).
+	QuotaBackendBytes int64
 }
 
 type EtcdComponent struct {
@@ -69,6 +78,21 @@ type EtcdComponent struct {
 	peerPort   int
 	tlsEnabled bool
 	config     EtcdConfig
+
+	// quotaBackendBytes is the effective backend quota the container was started with;
+	// the maintenance loop uses it for the near-quota reclaim trigger.
+	quotaBackendBytes int64
+
+	// writer, when set, receives etcd health gauges from the maintenance loop. It is set
+	// via SetMetricsWriter after the metrics subsystem comes up (which happens after etcd
+	// and its maintenance loop have already started), so access is atomic. Nil-safe.
+	writer atomic.Pointer[metrics.VictoriaMetricsWriter]
+}
+
+// SetMetricsWriter configures the metrics sink for the maintenance loop's health gauges.
+// Safe to call with nil or at any time (the maintenance loop reads it atomically each tick).
+func (e *EtcdComponent) SetMetricsWriter(w *metrics.VictoriaMetricsWriter) {
+	e.writer.Store(w)
 }
 
 func NewEtcdComponent(log *slog.Logger, cc *containerd.Client, namespace, dataPath string) *EtcdComponent {
@@ -153,6 +177,13 @@ func (e *EtcdComponent) Start(ctx context.Context, config EtcdConfig) error {
 		return fmt.Errorf("failed to create data directory: %w", err)
 	}
 
+	// Scale etcd's memory-related config to the size of the node it runs on so it
+	// behaves as a ~10%-of-RAM co-tenant rather than growing to fill the node. The
+	// backend quota honors an explicit config override when set.
+	tuning := computeTuning(detectSystemRAMBytes(), config.QuotaBackendBytes)
+	tuningSignature := tuning.signature()
+	e.quotaBackendBytes = tuning.QuotaBackendBytes
+
 	// Check if the container config has changed since last start. If so, we
 	// must recreate the container since env vars and args are baked into the spec.
 	requestedTLSEnabled := config.TLS != nil
@@ -165,7 +196,8 @@ func (e *EtcdComponent) Start(ctx context.Context, config EtcdConfig) error {
 		configChanged = requestedTLSEnabled
 	} else {
 		configChanged = prevState.TLSEnabled != requestedTLSEnabled ||
-			prevState.ConfigVersion != currentConfigVersion
+			prevState.ConfigVersion != currentConfigVersion ||
+			prevState.TuningSignature != tuningSignature
 	}
 
 	// Check if container already exists
@@ -181,7 +213,8 @@ func (e *EtcdComponent) Start(ctx context.Context, config EtcdConfig) error {
 					}
 					return 0
 				}(),
-				"current_config_version", currentConfigVersion)
+				"current_config_version", currentConfigVersion,
+				"tuning_changed", prevState != nil && prevState.TuningSignature != tuningSignature)
 			e.CleanupExistingContainer(ctx, existingContainer)
 		} else {
 			e.Log.Info("found existing etcd container, attempting restart", "container_id", existingContainer.ID())
@@ -225,7 +258,7 @@ func (e *EtcdComponent) Start(ctx context.Context, config EtcdConfig) error {
 	e.Log.Info("starting etcd with host networking", "client_port", config.ClientPort, "peer_port", config.PeerPort, "tls", e.tlsEnabled)
 
 	// Create container
-	container, err := e.createContainer(ctx, image, config)
+	container, err := e.createContainer(ctx, image, config, tuning)
 	if err != nil {
 		return fmt.Errorf("failed to create etcd container: %w", err)
 	}
@@ -260,8 +293,13 @@ func (e *EtcdComponent) Start(ctx context.Context, config EtcdConfig) error {
 	// Start periodic maintenance (health logging + auto-defrag)
 	e.StartMaintenanceLoop(ctx)
 
-	// Persist the TLS state so we can detect config changes on restart
-	if err := e.saveState(&etcdState{TLSEnabled: e.tlsEnabled, ConfigVersion: currentConfigVersion}); err != nil {
+	// Persist the TLS state and tuning signature so we can detect config changes
+	// (including a node RAM change that alters tuning) on restart.
+	if err := e.saveState(&etcdState{
+		TLSEnabled:      e.tlsEnabled,
+		ConfigVersion:   currentConfigVersion,
+		TuningSignature: tuningSignature,
+	}); err != nil {
 		e.Log.Warn("failed to save etcd state", "error", err)
 	}
 
@@ -360,7 +398,7 @@ func (e *EtcdComponent) restartExistingContainer(ctx context.Context, container 
 	return nil
 }
 
-func (e *EtcdComponent) createContainer(ctx context.Context, image containerd.Image, config EtcdConfig) (containerd.Container, error) {
+func (e *EtcdComponent) createContainer(ctx context.Context, image containerd.Image, config EtcdConfig, tuning etcdTuning) (containerd.Container, error) {
 	dataPath := filepath.Join(e.DataPath, "etcd")
 
 	// Determine URL scheme based on TLS config
@@ -368,6 +406,18 @@ func (e *EtcdComponent) createContainer(ctx context.Context, image containerd.Im
 	if config.TLS != nil {
 		scheme = "https"
 	}
+
+	e.Log.Info("etcd memory auto-tuning",
+		"system_ram_bytes", tuning.SystemRAMBytes,
+		"budget_bytes", tuning.BudgetBytes,
+		"quota_backend_bytes", tuning.QuotaBackendBytes,
+		"gomemlimit_bytes", tuning.GoMemLimitBytes,
+		"gogc", tuning.GOGC,
+		"auto_compaction_retention", tuning.AutoCompactionReten,
+		"snapshot_count", tuning.SnapshotCount,
+		"snapshot_catchup_entries", tuning.SnapshotCatchupEntries,
+		"max_concurrent_streams", tuning.MaxConcurrentStreams,
+		"compaction_batch_limit", tuning.CompactionBatchLimit)
 
 	args := []string{
 		"/usr/local/bin/etcd",
@@ -381,6 +431,8 @@ func (e *EtcdComponent) createContainer(ctx context.Context, image containerd.Im
 		"--initial-cluster", fmt.Sprintf("%s=http://localhost:%d", config.Name, config.PeerPort),
 		"--initial-cluster-state", config.ClusterState,
 	}
+
+	args = append(args, tuning.args()...)
 
 	if config.InitialToken != "" {
 		args = append(args, "--initial-cluster-token", config.InitialToken)
@@ -423,11 +475,7 @@ func (e *EtcdComponent) createContainer(ctx context.Context, image containerd.Im
 		oci.WithHostHostsFile,
 		oci.WithHostResolvconf,
 		oci.WithProcessArgs(args...),
-		oci.WithEnv([]string{
-			"ETCD_AUTO_COMPACTION_MODE=periodic",
-			"ETCD_AUTO_COMPACTION_RETENTION=1h",
-			"ETCD_EXPERIMENTAL_BACKEND_BBOLT_FREELIST_TYPE=map",
-		}),
+		oci.WithEnv(tuning.envVars()),
 		oci.WithMounts(mounts),
 	}
 
