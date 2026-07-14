@@ -81,6 +81,14 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: 'category',
+      label: 'Examples',
+      collapsed: false,
+      items: [
+        'examples/hermes-agent',
+      ],
+    },
+    {
+      type: 'category',
       label: 'Data & Storage',
       collapsed: false,
       items: [
