@@ -848,9 +848,22 @@ func (r *Runner) SetupControllers(
 	))
 
 	mntHandler := controller.AdaptReconcileController[storage_v1alpha.DiskMount](r.dmc)
-	cm.AddController(controller.NewReconcileController(
+	mntController := controller.NewReconcileController(
 		"disk-mount", log, r.dmc.Index(), eas, mntHandler, 5*time.Minute, workers,
-	))
+	)
+	// Record the mount controller's direct entity writes so the watch skips its
+	// own events instead of self-retriggering reconcile in a tight loop (MIR-1345).
+	r.dmc.SetWriteTracker(mntController.WriteTracker())
+	// Periodically delete mounts whose backing volume is gone. Such a mount can
+	// never reach its desired state; sweeping bounds how long an orphan lingers
+	// and re-attempts a failing reconcile (MIR-1345).
+	mntController.SetPeriodic(5*time.Minute, func(ctx context.Context) error {
+		if err := r.dmc.ReconcileOrphanMounts(ctx, diskio.OrphanMountSweepGracePeriod); err != nil {
+			log.Warn("periodic orphan mount sweep failed", "error", err)
+		}
+		return nil
+	})
+	cm.AddController(mntController)
 
 	// Use entity mode controllers
 	diskController := disk.NewDiskController(log, eas, r.Id, r.DiskMode, r.deps.IsCoordinator)
