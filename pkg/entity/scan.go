@@ -39,6 +39,24 @@ func withPageSize(n int64) scanOption {
 // bounded and predictable regardless of store size, so every full-keyspace read
 // should route through here instead of open-coding Get(WithPrefix()).
 func scanPaged(ctx context.Context, client *clientv3.Client, prefix string, opts ...scanOption) ([]*mvccpb.KeyValue, error) {
+	var kvs []*mvccpb.KeyValue
+	err := scanPagedFunc(ctx, client, prefix, func(kv *mvccpb.KeyValue) error {
+		kvs = append(kvs, kv)
+		return nil
+	}, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return kvs, nil
+}
+
+// scanPagedFunc reads every key/value under prefix in ascending key order,
+// invoking fn once per key/value as pages arrive rather than materializing the
+// whole keyspace. It has the same paging and revision-pinning semantics as
+// scanPaged; prefer it when the caller can process (and discard) entries
+// incrementally, so memory stays bounded by a single page regardless of store
+// size. If fn returns an error the scan stops and returns it.
+func scanPagedFunc(ctx context.Context, client *clientv3.Client, prefix string, fn func(kv *mvccpb.KeyValue) error, opts ...scanOption) error {
 	cfg := scanConfig{pageSize: defaultScanPageSize}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -54,13 +72,11 @@ func scanPaged(ctx context.Context, client *clientv3.Client, prefix string, opts
 	}
 
 	next := prefix
-
-	var kvs []*mvccpb.KeyValue
 	first := true
 	for {
 		resp, err := client.Get(ctx, next, getOpts...)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		// Pin every page after the first to the revision the scan opened at, so
@@ -72,7 +88,11 @@ func scanPaged(ctx context.Context, client *clientv3.Client, prefix string, opts
 			first = false
 		}
 
-		kvs = append(kvs, resp.Kvs...)
+		for _, kv := range resp.Kvs {
+			if err := fn(kv); err != nil {
+				return err
+			}
+		}
 
 		// An empty page can't advance the cursor; stop rather than index
 		// Kvs[-1]. Unreachable while WithLimit > 0, but keeps the loop safe if
@@ -85,7 +105,7 @@ func scanPaged(ctx context.Context, client *clientv3.Client, prefix string, opts
 		next = string(resp.Kvs[len(resp.Kvs)-1].Key) + "\x00"
 	}
 
-	return kvs, nil
+	return nil
 }
 
 // scanPaged reads every key/value under prefix from the store's etcd client in

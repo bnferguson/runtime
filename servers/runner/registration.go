@@ -216,6 +216,30 @@ func (s *RegistrationServer) Join(ctx context.Context, req *runner_v1alpha.Runne
 		return nil
 	}
 
+	// Enforce runner_id uniqueness before claiming the invite or minting a
+	// certificate. A runner_id maps directly to the mTLS certificate CommonName
+	// (runner-<id>) that authorizes per-runner actions like minting workload
+	// identity tokens for a sandbox, so a caller who could join as an id that
+	// already backs a live runner would impersonate it. Only a client-supplied
+	// id needs checking; a server-generated UUID is fresh by construction. The
+	// node write below is create-only (its ident collapses to db/id node/<id>,
+	// and CreateEntity is a put-if-absent), which is the atomic backstop against
+	// a concurrent join racing this check. This read makes the rejection
+	// explicit, keeps us from burning a one-time invite or issuing a cert on a
+	// duplicate, and returns a clear, actionable error.
+	if args.RunnerId() != "" {
+		registered, err := s.runnerIDRegistered(ctx, runnerID)
+		if err != nil {
+			s.Log.Error("Failed to check for existing runner", "error", err, "runner_id", runnerID)
+			results.SetError("failed to validate runner id")
+			return nil
+		}
+		if registered {
+			results.SetError(fmt.Sprintf("runner id %s is already registered; remove it first with 'miren runner remove %s'", runnerID, runnerID))
+			return nil
+		}
+	}
+
 	listenAddr := ""
 	if args.HasListenAddr() {
 		listenAddr = args.ListenAddr()
@@ -1103,6 +1127,27 @@ func (s *RegistrationServer) resolveSandboxApp(ctx context.Context, sandboxID st
 	var appMeta core_v1alpha.Metadata
 	appMeta.Decode(appResp.Entity().Entity())
 	return appMeta.Name
+}
+
+// runnerIDRegistered reports whether a node is already registered with the
+// given runner_id. Unlike findNodeByQuery, it matches only the exact RunnerId,
+// never a node name, entity id, or short id. runner_id is the value that maps
+// to the authorizing certificate CommonName (runner-<id>), so it is the
+// property Join must keep unique; a node whose human name happens to equal an
+// incoming UUID must not be mistaken for a duplicate.
+func (s *RegistrationServer) runnerIDRegistered(ctx context.Context, runnerID string) (bool, error) {
+	listResp, err := s.EAC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindNode))
+	if err != nil {
+		return false, err
+	}
+	for _, e := range listResp.Values() {
+		var node compute_v1alpha.Node
+		decodeEntity(e, &node)
+		if node.RunnerId == runnerID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // findNodeByQuery looks up a node entity by name, runner ID, entity ID, or short ID prefix.

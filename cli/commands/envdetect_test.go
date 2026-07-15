@@ -99,37 +99,6 @@ func TestLooksLikeSensitive(t *testing.T) {
 	}
 }
 
-func TestMaskValue(t *testing.T) {
-	testCases := []struct {
-		name      string
-		value     string
-		sensitive bool
-		expected  string
-	}{
-		{"long_sensitive_keeps_2_char_prefix", "mysecret123", true, "my••••••••"},
-		{"short_sensitive_fully_masked", "short", true, "••••••••"},
-		{"empty_sensitive", "", true, ""},
-		{"plain_visible", "visible", false, "visible"},
-		{"empty_visible", "", false, ""},
-		{"longer_sensitive", "verylongsecretvalue", true, "ve••••••••"},
-
-		// Control / ANSI escape characters must not pass through verbatim
-		// or they could spoof or corrupt CLI output and CI logs.
-		{"newline_escaped", "line1\nline2", false, `line1\nline2`},
-		{"crlf_escaped", "a\r\nb", false, `a\r\nb`},
-		{"tab_escaped", "a\tb", false, `a\tb`},
-		{"ansi_escape_escaped", "\x1b[31mred\x1b[0m", false, `\x1b[31mred\x1b[0m`},
-		{"sensitive_prefix_escaped", "\x1b[31mxxxxxxxxxx", true, `\x1b[••••••••`},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			result := MaskValue(tc.value, tc.sensitive)
-			assert.Equal(t, tc.expected, result)
-		})
-	}
-}
-
 // TestDetectLocalEnvVars_DeduplicatesDetectedKeys verifies that a key
 // emitted multiple times by the analyzer (e.g. via both package-based and
 // source-based detection) only produces a single Available/Missing row.

@@ -45,6 +45,75 @@ type NetcheckDualStackResult struct {
 	IPv6 *NetcheckResponse
 }
 
+// transportForProtocol maps a netcheck protocol to the transport the dashboard
+// should name. QUIC (http3) rides on UDP; plain http/https are TCP.
+func transportForProtocol(protocol string) string {
+	if protocol == "http3" {
+		return "UDP"
+	}
+	return "TCP"
+}
+
+// ReachabilityVerdict synthesizes a compact reachability verdict from a
+// netcheck result, for reporting to cloud. It returns nil when netcheck
+// produced no usable public source address for either family (nil result,
+// missing responses, or a private/invalid source) — in that case there is
+// nothing proven to report and cloud should fall back to its generic copy.
+//
+// When a public source address is present, the verdict names it. If any port
+// on that source was reachable, Reachable is true and no ports are listed;
+// otherwise Reachable is false and every failed port is listed with its
+// transport so the dashboard can say "UDP 8443 (QUIC) unreachable".
+func (r *NetcheckDualStackResult) ReachabilityVerdict() *ReachabilityVerdict {
+	if r == nil {
+		return nil
+	}
+
+	// A reachable port on either family means the cluster is reachable, so we
+	// scan both families before concluding otherwise. If none is reachable, the
+	// first family with a usable public source becomes the not-reachable verdict.
+	var notReachable *ReachabilityVerdict
+	for _, resp := range []*NetcheckResponse{r.IPv4, r.IPv6} {
+		if resp == nil {
+			continue
+		}
+		src := net.ParseIP(resp.SourceAddress)
+		if src == nil || !src.IsGlobalUnicast() || src.IsPrivate() {
+			continue
+		}
+
+		var unreachable []UnreachablePort
+		reachable := false
+		for _, res := range resp.Results {
+			if res.Reachable {
+				reachable = true
+				continue
+			}
+			unreachable = append(unreachable, UnreachablePort{
+				Port:      res.Port,
+				Protocol:  res.Protocol,
+				Transport: transportForProtocol(res.Protocol),
+			})
+		}
+
+		if reachable {
+			return &ReachabilityVerdict{
+				Reachable:     true,
+				PublicAddress: resp.SourceAddress,
+			}
+		}
+		if notReachable == nil {
+			notReachable = &ReachabilityVerdict{
+				Reachable:        false,
+				PublicAddress:    resp.SourceAddress,
+				UnreachablePorts: unreachable,
+			}
+		}
+	}
+
+	return notReachable
+}
+
 // ErrPrivateAddress is returned when the cloud rejects the request
 // because the cluster's IP is private/loopback/link-local.
 var ErrPrivateAddress = errors.New("client IP is not a public address")

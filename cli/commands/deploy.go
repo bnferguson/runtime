@@ -1648,7 +1648,7 @@ func analyzeApp(ctx *Context, bc *build_v1alpha.BuilderClient, dir string) error
 			if len(localDetection.Available) > 0 {
 				ctx.Printf("  %s\n", lipgloss.NewStyle().Foreground(theme.Success).Render("Available locally:"))
 				for _, ev := range localDetection.Available {
-					valueDisplay := MaskValue(ev.Value, ev.Sensitive)
+					valueDisplay := maskEnvValue(ev.Value, ev.Sensitive, false)
 					if ev.Sensitive {
 						ctx.Printf("    %s %s=%s\n",
 							lipgloss.NewStyle().Foreground(theme.Success).Render("✓"),
@@ -1677,7 +1677,7 @@ func analyzeApp(ctx *Context, bc *build_v1alpha.BuilderClient, dir string) error
 			if len(localDetection.Additional) > 0 {
 				ctx.Printf("  %s\n", lipgloss.NewStyle().Foreground(theme.Info).Render("Also found locally (may be relevant):"))
 				for _, ev := range localDetection.Additional {
-					valueDisplay := MaskValue(ev.Value, ev.Sensitive)
+					valueDisplay := maskEnvValue(ev.Value, ev.Sensitive, false)
 					if ev.Sensitive {
 						ctx.Printf("    %s %s=%s\n",
 							lipgloss.NewStyle().Foreground(theme.Info).Render("?"),
@@ -1699,7 +1699,7 @@ func analyzeApp(ctx *Context, bc *build_v1alpha.BuilderClient, dir string) error
 			ctx.Printf("\n%s\n", analyzeTitleStyle.Render("Environment Variables"))
 			ctx.Printf("  %s\n", lipgloss.NewStyle().Foreground(theme.Info).Render("Found locally (may be relevant):"))
 			for _, ev := range localDetection.Additional {
-				valueDisplay := MaskValue(ev.Value, ev.Sensitive)
+				valueDisplay := maskEnvValue(ev.Value, ev.Sensitive, false)
 				if ev.Sensitive {
 					ctx.Printf("    %s %s=%s\n",
 						lipgloss.NewStyle().Foreground(theme.Info).Render("?"),

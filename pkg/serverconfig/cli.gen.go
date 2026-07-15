@@ -23,6 +23,7 @@ type CLIFlags struct {
 	EtcdConfigHTTPClientPort             *int     `long:"etcd-http-client-port" description:"Etcd HTTP client port" env:"MIREN_ETCD_HTTP_CLIENT_PORT"`
 	EtcdConfigPeerPort                   *int     `long:"etcd-peer-port" description:"Etcd peer port" env:"MIREN_ETCD_PEER_PORT"`
 	EtcdConfigPrefix                     *string  `long:"etcd-prefix" short:"p" description:"Etcd prefix" env:"MIREN_ETCD_PREFIX"`
+	EtcdConfigQuotaBackendBytes          *int     `long:"etcd-quota-backend-bytes" description:"Etcd backend quota in bytes (0 = auto-size from system RAM)" env:"MIREN_ETCD_QUOTA_BACKEND_BYTES"`
 	EtcdConfigStartEmbedded              *bool    `long:"start-etcd" description:"Start embedded etcd server" env:"MIREN_ETCD_START_EMBEDDED"`
 	IngressConfigAddress                 *string  `long:"ingress-address" description:"Optional bind override. Replaces the mode's default bind entirely (interface and port). Rejected by validation in tls-autoprovision (where :443 + :80 is structural). Reserved unix:/path prefix is not yet supported." env:"MIREN_INGRESS_ADDRESS"`
 	IngressConfigMode                    *string  `long:"ingress-mode" description:"Ingress mode: tls-autoprovision (default, :443 + :80 with ACME or self-signed), behind-proxy-http (plain HTTP for use behind a TLS-terminating proxy), behind-proxy-https (TLS terminated by Miren; certs come from self-signed or DNS-01 ACME, since :80 isn't bound for HTTP-01)" env:"MIREN_INGRESS_MODE"`

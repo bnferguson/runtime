@@ -5,8 +5,135 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 )
+
+func TestReachabilityVerdict(t *testing.T) {
+	tests := []struct {
+		name   string
+		result *NetcheckDualStackResult
+		want   *ReachabilityVerdict
+	}{
+		{
+			name:   "nil result reports nothing",
+			result: nil,
+			want:   nil,
+		},
+		{
+			name:   "no families reports nothing",
+			result: &NetcheckDualStackResult{},
+			want:   nil,
+		},
+		{
+			name: "private source is not a usable verdict",
+			result: &NetcheckDualStackResult{
+				IPv4: &NetcheckResponse{
+					SourceAddress: "192.168.1.10",
+					Results:       []NetcheckResult{{Port: 8443, Protocol: "http3", Reachable: false}},
+				},
+			},
+			want: nil,
+		},
+		{
+			name: "reachable port names the public address, no ports listed",
+			result: &NetcheckDualStackResult{
+				IPv4: &NetcheckResponse{
+					SourceAddress: "159.195.16.123",
+					Results: []NetcheckResult{
+						{Port: 8443, Protocol: "https", Reachable: true},
+						{Port: 8443, Protocol: "http3", Reachable: false},
+					},
+				},
+			},
+			want: &ReachabilityVerdict{
+				Reachable:     true,
+				PublicAddress: "159.195.16.123",
+			},
+		},
+		{
+			name: "firewalled QUIC names the culprit with UDP transport",
+			result: &NetcheckDualStackResult{
+				IPv4: &NetcheckResponse{
+					SourceAddress: "159.195.16.123",
+					Results: []NetcheckResult{
+						{Port: 8443, Protocol: "http3", Reachable: false, Error: "timeout"},
+					},
+				},
+			},
+			want: &ReachabilityVerdict{
+				Reachable:     false,
+				PublicAddress: "159.195.16.123",
+				UnreachablePorts: []UnreachablePort{
+					{Port: 8443, Protocol: "http3", Transport: "UDP"},
+				},
+			},
+		},
+		{
+			name: "all-unreachable lists every failed port with transport",
+			result: &NetcheckDualStackResult{
+				IPv4: &NetcheckResponse{
+					SourceAddress: "159.195.16.123",
+					Results: []NetcheckResult{
+						{Port: 8443, Protocol: "https", Reachable: false},
+						{Port: 8443, Protocol: "http3", Reachable: false},
+					},
+				},
+			},
+			want: &ReachabilityVerdict{
+				Reachable:     false,
+				PublicAddress: "159.195.16.123",
+				UnreachablePorts: []UnreachablePort{
+					{Port: 8443, Protocol: "https", Transport: "TCP"},
+					{Port: 8443, Protocol: "http3", Transport: "UDP"},
+				},
+			},
+		},
+		{
+			name: "falls through invalid ipv4 source to reachable ipv6",
+			result: &NetcheckDualStackResult{
+				IPv4: &NetcheckResponse{
+					SourceAddress: "10.0.0.1",
+					Results:       []NetcheckResult{{Port: 8443, Protocol: "http3", Reachable: false}},
+				},
+				IPv6: &NetcheckResponse{
+					SourceAddress: "2606:4700:4700::1111",
+					Results:       []NetcheckResult{{Port: 8443, Protocol: "https", Reachable: true}},
+				},
+			},
+			want: &ReachabilityVerdict{
+				Reachable:     true,
+				PublicAddress: "2606:4700:4700::1111",
+			},
+		},
+		{
+			name: "a firewalled public ipv4 does not mask a reachable ipv6",
+			result: &NetcheckDualStackResult{
+				IPv4: &NetcheckResponse{
+					SourceAddress: "159.195.16.123",
+					Results:       []NetcheckResult{{Port: 8443, Protocol: "http3", Reachable: false}},
+				},
+				IPv6: &NetcheckResponse{
+					SourceAddress: "2606:4700:4700::1111",
+					Results:       []NetcheckResult{{Port: 8443, Protocol: "http3", Reachable: true}},
+				},
+			},
+			want: &ReachabilityVerdict{
+				Reachable:     true,
+				PublicAddress: "2606:4700:4700::1111",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.result.ReachabilityVerdict()
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("ReachabilityVerdict() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
 
 func TestNetcheck(t *testing.T) {
 	t.Run("success with reachable ports", func(t *testing.T) {

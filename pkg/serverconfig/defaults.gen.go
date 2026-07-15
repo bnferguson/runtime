@@ -55,12 +55,13 @@ func DefaultContainerdConfig() ContainerdConfig {
 // DefaultEtcdConfig returns default EtcdConfig
 func DefaultEtcdConfig() EtcdConfig {
 	return EtcdConfig{
-		ClientPort:     intPtr(12379),
-		Endpoints:      []string{},
-		HTTPClientPort: intPtr(12381),
-		PeerPort:       intPtr(12380),
-		Prefix:         strPtr("/miren"),
-		StartEmbedded:  nil,
+		ClientPort:        intPtr(12379),
+		Endpoints:         []string{},
+		HTTPClientPort:    intPtr(12381),
+		PeerPort:          intPtr(12380),
+		Prefix:            strPtr("/miren"),
+		QuotaBackendBytes: intPtr(0),
+		StartEmbedded:     nil,
 	}
 }
 

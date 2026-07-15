@@ -242,6 +242,44 @@ func TestStoreConformance_CreateRejectsMistypedDBId(t *testing.T) {
 	})
 }
 
+// TestStoreConformance_CreateRejectsDuplicateId pins that CreateEntity is
+// put-if-absent: a second create against an id that already exists (with
+// different attributes) must fail with a conflict rather than silently
+// overwrite the existing entity. Production (EtcdStore) enforces this with an
+// etcd CreateRevision==0 transaction; MockStore must match it so mock-backed
+// tests can't pass while relying on an overwrite that production rejects. This
+// is the store-layer backstop behind runner_id uniqueness at Join (MIR-1225):
+// two joins that resolve the same node/<runner_id> ident cannot clobber each
+// other.
+func TestStoreConformance_CreateRejectsDuplicateId(t *testing.T) {
+	runStoreConformance(t, func(t *testing.T, store Store) {
+		ctx := t.Context()
+		id := Id("conf-create-dup")
+
+		_, err := store.CreateEntity(ctx, New(
+			Ref(DBId, id),
+			Any(Doc, "first"),
+		))
+		require.NoError(t, err)
+
+		_, err = store.CreateEntity(ctx, New(
+			Ref(DBId, id),
+			Any(Doc, "second"),
+		))
+		require.Error(t, err, "create against an existing id must fail")
+		assert.True(t, errors.Is(err, cond.ErrConflict{}),
+			"duplicate create should report a conflict, got: %v", err)
+
+		// The original entity must be untouched by the rejected create.
+		got, err := store.GetEntity(ctx, id)
+		require.NoError(t, err)
+		doc, ok := got.Get(Doc)
+		require.True(t, ok)
+		assert.Equal(t, "first", doc.Value.String(),
+			"rejected create must not overwrite the existing entity")
+	})
+}
+
 // TestStoreConformance_EnsureEntity pins the create-if-absent contract that
 // saga storage depends on: the first Ensure creates and reports created=true;
 // a second Ensure with the same id returns the existing entity with

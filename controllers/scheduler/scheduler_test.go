@@ -272,10 +272,13 @@ func TestSchedulerMultipleNodes(t *testing.T) {
 	server, cleanup := testutils.NewInMemEntityServer(t)
 	defer cleanup()
 
-	// Create multiple ready nodes
+	// Create multiple ready nodes. Each needs a distinct name: Client.Create
+	// derives the entity id from node/<name>, so empty names would collapse all
+	// three onto the same id (and now conflict, since CreateEntity is
+	// put-if-absent on every backend).
 	nodeIDs := make(map[entity.Id]bool)
 	for i := 0; i < 3; i++ {
-		nodeID := createReadyNode(t, ctx, server.Client, "", &compute_v1alpha.Node{
+		nodeID := createReadyNode(t, ctx, server.Client, fmt.Sprintf("node-%d", i), &compute_v1alpha.Node{
 			Status: compute_v1alpha.READY,
 		})
 		nodeIDs[nodeID] = true
@@ -291,7 +294,7 @@ func TestSchedulerMultipleNodes(t *testing.T) {
 		sandbox := &compute_v1alpha.Sandbox{
 			Status: compute_v1alpha.PENDING,
 		}
-		sandboxID, err := server.Client.Create(ctx, "", sandbox)
+		sandboxID, err := server.Client.Create(ctx, fmt.Sprintf("sandbox-%d", i), sandbox)
 		require.NoError(t, err)
 
 		reconcileSandbox(t, ctx, server, scheduler, sandboxID)
@@ -378,10 +381,13 @@ func TestSchedulerStatelessSandboxPrefersRunners(t *testing.T) {
 		Constraints: types.LabelSet("role", "coordinator"),
 	})
 
-	// Create multiple runner nodes
+	// Create multiple runner nodes. Each needs a distinct name: Client.Create
+	// derives the entity id from node/<name>, so empty names would collapse all
+	// three onto the same id (and now conflict, since CreateEntity is
+	// put-if-absent on every backend).
 	runnerIDs := make(map[entity.Id]bool)
 	for i := 0; i < 3; i++ {
-		runnerID := createReadyNode(t, ctx, server.Client, "", &compute_v1alpha.Node{
+		runnerID := createReadyNode(t, ctx, server.Client, fmt.Sprintf("runner-%d", i), &compute_v1alpha.Node{
 			Status:   compute_v1alpha.READY,
 			RunnerId: "550e8400-e29b-41d4-a716-44665544000" + string(rune('0'+i)),
 		})
@@ -403,7 +409,7 @@ func TestSchedulerStatelessSandboxPrefersRunners(t *testing.T) {
 				},
 			},
 		}
-		sandboxID, err := server.Client.Create(ctx, "", sandbox)
+		sandboxID, err := server.Client.Create(ctx, fmt.Sprintf("sandbox-%d", i), sandbox)
 		require.NoError(t, err)
 
 		reconcileSandbox(t, ctx, server, scheduler, sandboxID)
