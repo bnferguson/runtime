@@ -8,6 +8,12 @@ keywords: [languages, ruby, node, python, go, rust, bun, framework, build]
 
 Miren automatically detects your application's language and configures the build environment. When you run `miren deploy`, your project files are analyzed to determine the appropriate build stack.
 
+:::tip[Looking for a step-by-step guide?]
+This page is the detection and build reference. For task-oriented walkthroughs of
+getting a specific language onto Miren — including Elixir and Gleam, which use a
+`Dockerfile.miren` — see the [Language Guides](/guides).
+:::
+
 ## Ruby
 
 **Detection:** Presence of `Gemfile`
