@@ -60,6 +60,7 @@ import (
 	"miren.dev/runtime/pkg/addon/valkey"
 	"miren.dev/runtime/pkg/caauth"
 	"miren.dev/runtime/pkg/cloudauth"
+	"miren.dev/runtime/pkg/containerenv"
 	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/schema"
@@ -1487,6 +1488,7 @@ func (c *Coordinator) ReportStartupStatus(ctx context.Context) error {
 		APIAddresses:      c.apiAddresses(),
 		CACertFingerprint: caFingerprint,
 		Reachability:      c.reachabilityVerdict(),
+		Containerized:     containerenv.InContainer(),
 	}
 
 	return c.authClient.ReportClusterStatus(ctx, status)
@@ -1535,6 +1537,7 @@ func (c *Coordinator) ReportStatus(ctx context.Context) error {
 		ResourceUsage: resourceUsage,
 		APIAddresses:  c.apiAddresses(),
 		Reachability:  c.reachabilityVerdict(),
+		Containerized: containerenv.InContainer(),
 	}
 
 	return c.authClient.ReportClusterStatus(ctx, status)
