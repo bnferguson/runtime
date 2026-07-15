@@ -1,6 +1,6 @@
 ---
 title: Language Guides
-description: Step-by-step guides for getting Python, JavaScript, Go, Ruby, Elixir, and Gleam apps running on Miren.
+description: Step-by-step deployment guides for 39 languages — Python, JavaScript, Go, Ruby, Rust, Elixir, Gleam, Swift, Kotlin, COBOL, and many more — on Miren.
 keywords: [guides, languages, python, javascript, node, bun, go, ruby, elixir, gleam, deploy]
 ---
 

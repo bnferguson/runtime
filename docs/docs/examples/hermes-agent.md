@@ -43,7 +43,7 @@ If the cluster isn't configured locally yet, list what your identity can see and
 miren cluster add -i cloud
 
 # Add it by name + public address (from the list above)
-miren cluster add -c hermes -a 165.227.103.152:8443 -i cloud
+miren cluster add -c hermes -a <your-cluster-ip>:8443 -i cloud
 
 miren whoami -C hermes
 ```
@@ -109,7 +109,7 @@ key = "HERMES_DASHBOARD_PORT"
 value = "9119"
 [[env]]
 key = "HERMES_DASHBOARD_BASIC_AUTH_USERNAME"
-value = "admin"
+value = "admin"  # change to any username you prefer
 [[env]]
 key = "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD"
 required = true
@@ -232,8 +232,8 @@ Healthy signs in the logs: `s6-rc: service main-hermes successfully started`,
 
 ## Connecting to the agent
 
-- **Dashboard:** `https://gw.hermes.clusters.miren.run` (user `admin` plus the password
-  from the deploy step).
+- **Dashboard:** `https://gw.hermes.clusters.miren.run` (the basic-auth username from
+  `app.toml` — `admin` unless you changed it — plus the password from the deploy step).
 - **CLI (no port needed):** `miren sandbox exec <sandbox-id> -C hermes`, then run the
   `hermes` CLI inside the container.
 - **Messaging platform (no inbound port):** set `TELEGRAM_BOT_TOKEN`; the agent dials out

@@ -103,6 +103,12 @@ CMD ["app"]
 
 Miren's cluster builds on `x86_64`, so the download URL and `-Dtarget` use `x86_64`.
 
+:::tip[Verify the tarball for production]
+This pipes the release tarball straight into `tar` without checking it. For images you'll
+run in production, verify the download against Zig's published SHA256 (listed alongside
+each release at [ziglang.org/download](https://ziglang.org/download)) before extracting it.
+:::
+
 ### .dockerignore
 
 ```text

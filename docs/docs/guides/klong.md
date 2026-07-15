@@ -54,6 +54,12 @@ The program doesn't bind a port — `socat` does. Miren injects `PORT`, and `soc
 web: socat TCP-LISTEN:$PORT,reuseaddr,fork EXEC:'kgpy /app/hello.kg'
 ```
 
+:::warning[Fine for demos, not production]
+`socat` forks a process per connection with no concurrency limit and does no parsing or
+validation of the incoming request before running your program. It's great for demos and
+personal tooling, but put a real HTTP server in front for production traffic.
+:::
+
 ## The Dockerfile
 
 Create `Dockerfile.miren` in your project root. KlongPy installs from PyPI (it also needs
