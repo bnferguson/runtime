@@ -80,14 +80,20 @@ traffic to it. A `Procfile` makes this explicit:
 # gunicorn (Flask / Django / WSGI)
 web: gunicorn app:app --bind 0.0.0.0:$PORT
 
-# uvicorn (FastAPI / Starlette / ASGI)
-web: uvicorn main:app --host 0.0.0.0 --port $PORT
-
-# uv
-web: uv run gunicorn app:app --bind 0.0.0.0:$PORT
-
 # Celery background worker
 worker: celery -A tasks worker --loglevel=info
+```
+
+Pick a single `web:` line for your app. For an ASGI app, use uvicorn instead:
+
+```procfile
+web: uvicorn main:app --host 0.0.0.0 --port $PORT
+```
+
+With uv, prefix the command:
+
+```procfile
+web: uv run gunicorn app:app --bind 0.0.0.0:$PORT
 ```
 
 See [Services](/services) for running a worker alongside your web process.
@@ -100,7 +106,7 @@ Set variables with `miren env set`. Use `-e` for plain values and `-s` for secre
 <CliCommand context="client">
 ```miren
 miren env set -e LOG_LEVEL=info
-miren env set -s DATABASE_URL=postgres://user:pass@host/db
+miren env set -s DATABASE_URL
 miren env set -s SECRET_KEY
 ```
 </CliCommand>

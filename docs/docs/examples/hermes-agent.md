@@ -30,7 +30,8 @@ For getting your own source code onto Miren, start with [Deployment](/deployment
 
 - `miren` CLI installed and authenticated (`miren whoami`).
 - Access to the target cluster and its org.
-- An Anthropic (or OpenAI) API key for the agent's LLM calls.
+- An Anthropic API key for the agent's LLM calls. (This example uses Anthropic; the
+  `OPENAI_API_KEY` in `app.toml` is optional — supply it too if your agent uses OpenAI.)
 
 ## Select the target cluster
 
@@ -161,7 +162,9 @@ access**. This config leaves it off. Enable it only deliberately and sandboxed
 (`terminal.backend: docker`) with the port firewalled.
 :::
 
-Add a `.dockerignore` so secrets and local config never enter the build context:
+Add a `.dockerignore` to keep your local `.env` and `.miren` directory out of the build
+context (secrets are passed with `miren env set -s` / `-s` deploy flags, never baked into
+the image). Extend it with any other local secret or config paths your project has:
 
 ```text
 .env

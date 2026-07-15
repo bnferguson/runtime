@@ -40,8 +40,10 @@ var port = Environment.GetEnvironmentVariable("PORT") ?? "8080";
 app.Run($"http://0.0.0.0:{port}");
 ```
 
-Alternatively, set `ASPNETCORE_URLS=http://0.0.0.0:$PORT` as an environment variable and
-let the framework pick it up.
+Reading `PORT` in code (as above) is the simplest approach. `ASPNETCORE_URLS` also works,
+but Miren stores env vars literally and does **not** shell-expand `$PORT`, so you can't set
+it to `http://0.0.0.0:$PORT` in `app.toml` — the app would receive that literal string. Use
+it only from a shell entrypoint that expands `PORT` at runtime.
 
 ## The Dockerfile
 
@@ -107,7 +109,7 @@ configuration system:
 <CliCommand context="client">
 ```miren
 miren env set -e ASPNETCORE_ENVIRONMENT=Production
-miren env set -s ConnectionStrings__Default="Host=...;Database=...;Username=...;Password=..."
+miren env set -s ConnectionStrings__Default
 ```
 </CliCommand>
 
@@ -128,7 +130,7 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 - **Detection:** none — requires `Dockerfile.miren`
 - **Build:** `dotnet publish -c Release -o /out` on the SDK image; run on `dotnet/aspnet`
 - **Service is required:** define a `Procfile` (`web: dotnet /app/<assembly>.dll`) — the image `CMD` is not used
-- **Port:** `app.Run($"http://0.0.0.0:{port}")` or `ASPNETCORE_URLS=http://0.0.0.0:$PORT`
+- **Port:** `app.Run($"http://0.0.0.0:{port}")` (reading `PORT` in code; `ASPNETCORE_URLS` is not shell-expanded)
 - **Env vars:** `miren env set -e/-s`; `__` maps to nested config keys
 - **Database:** optional `[addons.miren-postgresql]` injects `DATABASE_URL`
 

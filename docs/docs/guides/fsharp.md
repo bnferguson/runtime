@@ -123,7 +123,7 @@ output and logs):
 <CliCommand context="client">
 ```miren
 miren env set -e ASPNETCORE_ENVIRONMENT=Production
-miren env set -s ConnectionStrings__Default="Host=...;Database=...;Username=...;Password=..."
+miren env set -s ConnectionStrings__Default
 ```
 </CliCommand>
 
@@ -144,7 +144,7 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 - **Build:** `dotnet publish -c Release -o /out` on the SDK image; run on `dotnet/aspnet`
 - **fsproj:** use `Microsoft.NET.Sdk.Web`; list `<Compile Include>` files in dependency order
 - **Service is required:** `Procfile` `web: dotnet /app/<assembly>.dll` — the image `CMD` is not used
-- **Port:** `app.Run(sprintf "http://0.0.0.0:%s" port)` or `ASPNETCORE_URLS=http://0.0.0.0:$PORT`
+- **Port:** `app.Run(sprintf "http://0.0.0.0:%s" port)` (reading `PORT` in code; `ASPNETCORE_URLS` is not shell-expanded)
 - **Env vars:** `miren env set -e/-s`; `__` maps to nested config keys
 
 ## Next steps

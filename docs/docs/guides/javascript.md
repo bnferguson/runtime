@@ -117,7 +117,7 @@ in output and logs):
 <CliCommand context="client">
 ```miren
 miren env set -e NODE_ENV=production
-miren env set -s DATABASE_URL=postgres://user:pass@host/db
+miren env set -s DATABASE_URL
 miren env set -s SESSION_SECRET
 ```
 </CliCommand>

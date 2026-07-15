@@ -105,7 +105,7 @@ output and logs). Read them with `Deno.env.get("KEY")` (needs `--allow-env`):
 <CliCommand context="client">
 ```miren
 miren env set -e LOG_LEVEL=info
-miren env set -s DATABASE_URL=postgres://user:pass@host/db
+miren env set -s DATABASE_URL
 miren env set -s API_TOKEN
 ```
 </CliCommand>

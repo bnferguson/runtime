@@ -33,9 +33,17 @@ Miren detects services in this order:
 
 1. **`.miren/app.toml`** — Services defined in the `[services.*]` sections
 2. **`Procfile`** — Services inferred from Procfile entries
-3. **Dockerfile `CMD`/`ENTRYPOINT`** — If no services are defined above, but your image has a default command, Miren creates a `web` service using that command
+3. **Detected start command** — For an auto-detected language stack (Python, Node, Bun, Go, Ruby, Rust), Miren synthesizes a `web` service from the start command it detects for your framework
 
-If none of these provide a service definition, the deploy will fail with an error.
+If none of these provide a service definition, the deploy fails with
+`no services defined: please define at least one service in a Procfile or .miren/app.toml`.
+
+:::warning[A custom Dockerfile needs an explicit service]
+When you build from a `Dockerfile.miren` (or a `[build] dockerfile`), Miren does **not**
+use the image's `CMD`/`ENTRYPOINT` as the service command — you must define the service
+yourself in a `Procfile` or `[services.*]`. Only auto-detected stacks get a `web` service
+synthesized for them.
+:::
 
 ### Using a Procfile
 

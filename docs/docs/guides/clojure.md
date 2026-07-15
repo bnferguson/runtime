@@ -29,6 +29,7 @@ Miren builds from it instead of guessing the stack — see
 Miren injects `PORT` and routes traffic to it, so read `PORT` and bind `0.0.0.0`:
 
 ```clojure
+;; src/app.clj — deps.edn searches "src" and the Procfile runs the `app` namespace
 (ns app
   (:require [ring.adapter.jetty :as jetty]))
 
@@ -112,7 +113,7 @@ output and logs). Read them with `(System/getenv "KEY")`:
 <CliCommand context="client">
 ```miren
 miren env set -e LOG_LEVEL=info
-miren env set -s DATABASE_URL=postgres://user:pass@host/db
+miren env set -s DATABASE_URL
 ```
 </CliCommand>
 

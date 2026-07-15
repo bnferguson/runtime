@@ -45,14 +45,18 @@ For a Laravel or Composer app, install dependencies during the build:
 ```dockerfile
 FROM dunglas/frankenphp:1-php8.3
 
-WORKDIR /app
-COPY . /app
+# Composer from its official pinned image — no piping a remote installer into php
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+RUN install-php-extensions pdo_pgsql pdo_mysql zip
 
-# Composer + PHP extensions Laravel needs
-RUN apt-get update && apt-get install -y unzip \
-    && install-php-extensions pdo_pgsql pdo_mysql zip \
-    && curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer \
-    && composer install --no-dev --optimize-autoloader
+WORKDIR /app
+# Copy the manifests first so the install layer is deterministic and cache-friendly;
+# committing composer.lock pins exact dependency versions.
+COPY composer.json composer.lock ./
+RUN composer install --no-dev --optimize-autoloader --no-scripts --no-interaction
+
+COPY . /app
+RUN composer dump-autoload --optimize --no-interaction
 
 EXPOSE 8080
 ```
@@ -104,8 +108,8 @@ output and logs). Read them with `getenv()` or your framework's config (Laravel'
 <CliCommand context="client">
 ```miren
 miren env set -e APP_ENV=production
-miren env set -s APP_KEY=base64:...
-miren env set -s DATABASE_URL=postgres://user:pass@host/db
+miren env set -s APP_KEY
+miren env set -s DATABASE_URL
 ```
 </CliCommand>
 

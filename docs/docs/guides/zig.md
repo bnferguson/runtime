@@ -35,6 +35,7 @@ Miren injects `PORT` and routes traffic to it, so your server must read `PORT` a
 listen on `0.0.0.0`. A minimal listener using `std.net` (Zig 0.14):
 
 ```zig
+// src/main.zig — build.zig points root_source_file here
 const std = @import("std");
 
 pub fn main() !void {

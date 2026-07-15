@@ -77,11 +77,14 @@ Override with a `Procfile` to add workers or change the command:
 # Rails web server
 web: bundle exec rails server -b 0.0.0.0 -p $PORT
 
-# Puma with a config file
-web: bundle exec puma -C config/puma.rb
-
 # Sidekiq background worker
 worker: bundle exec sidekiq
+```
+
+Use a single `web:` line. To run Puma with a config file instead of the Rails command:
+
+```procfile
+web: bundle exec puma -C config/puma.rb
 ```
 
 See [Services](/services) for running Sidekiq or other workers alongside web.
@@ -98,7 +101,7 @@ Set anything else with `miren env set` — `-e` for plain values, `-s` for secre
 
 <CliCommand context="client">
 ```miren
-miren env set -s DATABASE_URL=postgres://user:pass@host/db
+miren env set -s DATABASE_URL
 miren env set -s RAILS_MASTER_KEY=@config/master.key
 miren env set -s SECRET_KEY_BASE
 ```

@@ -58,7 +58,8 @@ FROM crystallang/crystal:1.14.0-alpine AS builder
 
 WORKDIR /app
 COPY . .
-RUN shards build --release --static --no-debug
+# Build the named target; the binary lands at bin/<target>, copied below.
+RUN shards build crystal_bench --release --static --no-debug
 
 # ----- Runtime stage -----
 FROM alpine:3.20
@@ -127,7 +128,7 @@ output and logs). Read them in Crystal with `ENV["KEY"]`:
 
 <CliCommand context="client">
 ```miren
-miren env set -s DATABASE_URL=postgres://user:pass@host/db
+miren env set -s DATABASE_URL
 miren env set -s SECRET_KEY
 ```
 </CliCommand>

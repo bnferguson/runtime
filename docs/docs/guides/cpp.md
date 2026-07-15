@@ -39,7 +39,9 @@ int main() {
     });
     const char *p = std::getenv("PORT");
     int port = p ? std::atoi(p) : 8080;
-    svr.listen("0.0.0.0", port);
+    if (!svr.listen("0.0.0.0", port)) {
+        return 1;  // bind/startup failed — surface it to the deploy
+    }
     return 0;
 }
 ```
@@ -112,7 +114,7 @@ output and logs). Read them with `std::getenv("KEY")`:
 <CliCommand context="client">
 ```miren
 miren env set -e LOG_LEVEL=info
-miren env set -s DATABASE_URL=postgres://user:pass@host/db
+miren env set -s DATABASE_URL
 ```
 </CliCommand>
 

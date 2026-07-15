@@ -74,15 +74,19 @@ fn handle_request(_req: Request(Connection)) -> Response(ResponseData) {
 }
 ```
 
-The essentials are **bind `0.0.0.0`** and **use the `PORT` value** — an app that
-hardcodes a port or `localhost` won't receive traffic. The `mist` builder API changes
-between major versions; on older releases the final call is `mist.start_http` rather
-than `mist.start`. Add the dependencies with `gleam add mist envoy`.
+:::warning[Bind to the injected port]
+Bind `0.0.0.0` and use the `PORT` value — an app that hardcodes a port or `localhost`
+won't receive traffic.
+:::
+
+The `mist` builder API changes between major versions; on older releases the final call
+is `mist.start_http` rather than `mist.start`. Add the dependencies with
+`gleam add mist envoy`.
 
 ## The Dockerfile
 
-Create `Dockerfile.miren` in your project root. Replace `my_app` with the `name` from
-your `gleam.toml`:
+Create `Dockerfile.miren` in your project root. The erlang shipment is copied whole, so
+nothing here depends on your `gleam.toml` `name`:
 
 ```dockerfile
 ARG GLEAM_VERSION=v1.15.0
@@ -115,10 +119,10 @@ compiled app, its dependencies, and an `entrypoint.sh`. Running `./entrypoint.sh
 boots the release.
 
 :::warning[Match the runtime Erlang version to the builder]
-BEAM bytecode won't load on an older Erlang than it was compiled with. The
-`gleam-lang/gleam:*-erlang-alpine` image currently ships **OTP 28**, so the runtime
-stage uses `erlang:28-alpine`. If you pin a different Gleam image, check its OTP
-version (`docker run --rm ghcr.io/gleam-lang/gleam:<tag>-erlang-alpine erl -eval
+BEAM bytecode won't load on an older Erlang than it was compiled with. The pinned
+`gleam:v1.15.0-erlang-alpine` builder ships **OTP 28**, so the runtime stage uses
+`erlang:28-alpine`. Whenever you bump the Gleam image tag, check the OTP version it
+ships (`docker run --rm ghcr.io/gleam-lang/gleam:<tag>-erlang-alpine erl -eval
 'io:format("~s~n",[erlang:system_info(otp_release)]),halt().' -noshell`) and set the
 runtime image to the same major version.
 :::
@@ -172,7 +176,7 @@ in output and logs). Read them in Gleam with `envoy.get("KEY")`:
 
 <CliCommand context="client">
 ```miren
-miren env set -s DATABASE_URL=postgres://user:pass@host/db
+miren env set -s DATABASE_URL
 miren env set -s SECRET_KEY
 ```
 </CliCommand>
@@ -197,7 +201,7 @@ injects `DATABASE_URL` for you. See
 
 - **Detection:** none — requires `Dockerfile.miren` (Erlang shipment)
 - **Build:** `gleam export erlang-shipment` → `build/erlang-shipment/` with `entrypoint.sh`
-- **Runtime image:** Erlang major version **must match** the builder's OTP (currently OTP 28 → `erlang:28-alpine`)
+- **Runtime image:** Erlang major version **must match** the builder's OTP (the pinned v1.15.0 image ships OTP 28 → `erlang:28-alpine`)
 - **Service is required:** define a `Procfile` (`web: /app/entrypoint.sh run`) or `[services.web]` — the image `CMD` is not used
 - **Port:** read `PORT` via `envoy.get("PORT")`; bind `mist`/`wisp` to `0.0.0.0`
 - **mist API:** v6 ends the builder with `mist.start`; older versions use `mist.start_http`

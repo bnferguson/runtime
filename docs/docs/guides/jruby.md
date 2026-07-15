@@ -134,7 +134,7 @@ output and logs). Read them with `ENV['KEY']`:
 <CliCommand context="client">
 ```miren
 miren env set -e RACK_ENV=production
-miren env set -s DATABASE_URL=postgres://user:pass@host/db
+miren env set -s DATABASE_URL
 ```
 </CliCommand>
 

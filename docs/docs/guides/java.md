@@ -108,7 +108,7 @@ output and logs). Spring maps env vars to properties (`SPRING_DATASOURCE_URL` â†
 <CliCommand context="client">
 ```miren
 miren env set -e SPRING_PROFILES_ACTIVE=prod
-miren env set -s SPRING_DATASOURCE_URL=jdbc:postgresql://host:5432/db
+miren env set -s SPRING_DATASOURCE_URL
 ```
 </CliCommand>
 

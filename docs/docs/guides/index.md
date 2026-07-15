@@ -1,6 +1,6 @@
 ---
 title: Language Guides
-description: Step-by-step deployment guides for 39 languages — Python, JavaScript, Go, Ruby, Rust, Elixir, Gleam, Swift, Kotlin, COBOL, and many more — on Miren.
+description: Step-by-step deployment guides for a wide range of languages — Python, JavaScript, Go, Ruby, Rust, Elixir, Gleam, Swift, Kotlin, COBOL, and many more — on Miren.
 keywords: [guides, languages, python, javascript, node, bun, go, ruby, elixir, gleam, deploy]
 ---
 
@@ -74,17 +74,22 @@ can drop into your project. Miren builds from that Dockerfile instead of guessin
 is the same escape hatch available to every language when you need full control over the
 build — see [Using Dockerfile.miren](/languages#using-dockerfilemiren).
 
-Every Dockerfile-based guide also notes one Miren-specific rule: even with a
-`Dockerfile.miren`, you must define at least one service (a `Procfile` or a
-`[services.web]` block) — Miren doesn't use the image's `CMD` as the start command.
+:::info[Custom Dockerfiles need an explicit service]
+Even with a `Dockerfile.miren`, you must define at least one service — a `Procfile` or a
+`[services.web]` block. Miren does not use the image's `CMD`/`ENTRYPOINT` as the start
+command; that fallback applies only to auto-detected stacks.
+:::
 
 ## What every guide assumes
 
 - You've installed Miren and can reach a cluster. If not, start with
   [Getting Started](/getting-started).
-- Your web service **binds to `0.0.0.0` on the port in the `PORT` environment
-  variable**. Miren injects `PORT` at runtime and routes traffic to it. An app that
-  hardcodes `localhost` or a fixed port won't receive traffic.
+
+:::warning[Bind to the injected port]
+Your web service must bind to `0.0.0.0` on the port in the `PORT` environment variable.
+Miren injects `PORT` at runtime and routes traffic to it — an app that hardcodes
+`localhost` or a fixed port won't receive traffic.
+:::
 
 ## Next steps
 

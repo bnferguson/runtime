@@ -102,7 +102,7 @@ in output and logs):
 <CliCommand context="client">
 ```miren
 miren env set -e RUST_LOG=info
-miren env set -s DATABASE_URL=postgres://user:pass@host/db
+miren env set -s DATABASE_URL
 miren env set -s API_TOKEN
 ```
 </CliCommand>

@@ -101,7 +101,7 @@ output and logs). Read them with `ENV["KEY"]` or `get(ENV, "KEY", default)`:
 <CliCommand context="client">
 ```miren
 miren env set -e JULIA_NUM_THREADS=4
-miren env set -s DATABASE_URL=postgres://user:pass@host/db
+miren env set -s DATABASE_URL
 ```
 </CliCommand>
 
