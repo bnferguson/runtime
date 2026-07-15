@@ -25,6 +25,12 @@ Yes. Miren doesn't auto-detect Haskell, so add a `Dockerfile.miren` to your proj
 Miren builds from it instead of guessing the stack — see
 [Using Dockerfile.miren](/languages#using-dockerfilemiren).
 
+:::tip[Want native support?]
+Miren auto-detects and builds common stacks (Python, Node, Bun, Go, Ruby, Rust)
+without a Dockerfile. This language isn't one of them yet — if you'd like first-class
+support, [request it](https://linear.miren.garden/suggest).
+:::
+
 ## Bind to the injected port
 
 Miren injects `PORT` and routes traffic to it. Scotty (via Warp) binds to all interfaces

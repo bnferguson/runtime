@@ -26,6 +26,12 @@ Yes. Miren doesn't auto-detect PHP, so add a `Dockerfile.miren` to your project 
 Miren builds from it instead of guessing the stack — see
 [Using Dockerfile.miren](/languages#using-dockerfilemiren).
 
+:::tip[Want native support?]
+Miren auto-detects and builds common stacks (Python, Node, Bun, Go, Ruby, Rust)
+without a Dockerfile. This language isn't one of them yet — if you'd like first-class
+support, [request it](https://linear.miren.garden/suggest).
+:::
+
 ## The Dockerfile
 
 Create `Dockerfile.miren` in your project root. FrankenPHP serves your `public/`

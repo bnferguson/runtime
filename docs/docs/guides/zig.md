@@ -29,6 +29,12 @@ change between releases — if you pin a different Zig version, expect to adjust
 code.
 :::
 
+:::tip[Want native support?]
+Miren auto-detects and builds common stacks (Python, Node, Bun, Go, Ruby, Rust)
+without a Dockerfile. This language isn't one of them yet — if you'd like first-class
+support, [request it](https://linear.miren.garden/suggest).
+:::
+
 ## Bind to the injected port
 
 Miren injects `PORT` and routes traffic to it, so your server must read `PORT` and

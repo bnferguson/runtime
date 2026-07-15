@@ -25,6 +25,12 @@ Yes — to run on TruffleRuby specifically. (Miren's auto-detection would pick M
 Add a `Dockerfile.miren` built on the GraalVM TruffleRuby image. See
 [Using Dockerfile.miren](/languages#using-dockerfilemiren).
 
+:::tip[Want native support?]
+Miren auto-detects and builds common stacks (Python, Node, Bun, Go, Ruby, Rust)
+without a Dockerfile. This language isn't one of them yet — if you'd like first-class
+support, [request it](https://linear.miren.garden/suggest).
+:::
+
 ## The app
 
 A normal Sinatra app with a `Gemfile` — nothing TruffleRuby-specific:

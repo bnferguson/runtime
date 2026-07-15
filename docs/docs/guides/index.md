@@ -74,6 +74,12 @@ can drop into your project. Miren builds from that Dockerfile instead of guessin
 is the same escape hatch available to every language when you need full control over the
 build — see [Using Dockerfile.miren](/languages#using-dockerfilemiren).
 
+:::tip[Want native support?]
+Native builds cover the common stacks today (Python, Node, Bun, Go, Ruby, Rust). If you'd
+like Miren to detect and build another language first-class — no Dockerfile needed —
+[tell us what to build next](https://linear.miren.garden/suggest).
+:::
+
 :::info[Custom Dockerfiles need an explicit service]
 Even with a `Dockerfile.miren`, you must define at least one service — a `Procfile` or a
 `[services.web]` block. Miren does not use the image's `CMD`/`ENTRYPOINT` as the start

@@ -25,6 +25,12 @@ front-end, and deploys — using this page as its reference.
 Yes. Add a `Dockerfile.miren` to your project root. Miren builds from it instead of
 guessing the stack — see [Using Dockerfile.miren](/languages#using-dockerfilemiren).
 
+:::tip[Want native support?]
+Miren auto-detects and builds common stacks (Python, Node, Bun, Go, Ruby, Rust)
+without a Dockerfile. This language isn't one of them yet — if you'd like first-class
+support, [request it](https://linear.miren.garden/suggest).
+:::
+
 ## The program
 
 `.d` writes a string to standard output verbatim. Put a complete HTTP response —

@@ -81,10 +81,10 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: 'category',
-      label: 'Examples',
+      label: 'Recipes',
       collapsed: false,
       items: [
-        'examples/hermes-agent',
+        'recipes/hermes-agent',
       ],
     },
     {

@@ -34,6 +34,12 @@ for available tags, and keep the runtime Erlang version in sync with the builder
 the warning below the Dockerfile).
 :::
 
+:::tip[Want native support?]
+Miren auto-detects and builds common stacks (Python, Node, Bun, Go, Ruby, Rust)
+without a Dockerfile. This language isn't one of them yet — if you'd like first-class
+support, [request it](https://linear.miren.garden/suggest).
+:::
+
 ## Bind to the injected port
 
 Miren injects `PORT` and routes traffic to it, so your HTTP server must read `PORT`
