@@ -45,10 +45,12 @@ web: socat TCP-LISTEN:$PORT,reuseaddr,fork EXEC:/app/hello.sh
 This same `socat` pattern serves any program that writes an HTTP response to stdout —
 see the [COBOL guide](/guides/cobol) for another example.
 
-:::warning[Fine for demos, not production]
-`socat` forks a process per connection with no concurrency limit and does no parsing or
-validation of the incoming request before running your program. It's great for demos and
-personal tooling, but put a real HTTP server in front for production traffic.
+:::note[Behind Miren's ingress]
+Miren's HTTP ingress terminates TLS and handles the public HTTP layer in front of your
+app, so `socat` only needs to hand each accepted connection to your program — it isn't
+exposed to raw internet traffic. The one practical limit is that `fork` spawns a process
+per request, so this suits low-traffic endpoints and tooling rather than high-throughput
+services.
 :::
 
 ## The Dockerfile
