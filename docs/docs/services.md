@@ -193,7 +193,7 @@ Each service can configure:
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `command` | Command to run | Image's default entrypoint |
+| `command` | Command to run | For a service with an explicit `image`, the image's default entrypoint; for a service built from your own Dockerfile, there is no default — you must set a command (see the note above) |
 | `image` | Container image to use | App's built image |
 | `port` | Port the service listens on (single-port shorthand) | 3000 (web only) |
 | `ports` | Port configuration array (multi-port, see [Traffic Routing](/traffic-routing)) | (none) |
