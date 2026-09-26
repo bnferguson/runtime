@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"miren.dev/lbd"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
 )
 
@@ -90,6 +91,12 @@ func (w *LogWatcher) scanAndUpload(ctx context.Context) {
 			}
 			continue
 		}
+		horizon, err := readLogHorizon(vol.DiskPath)
+		if err != nil {
+			w.log.Warn("failed to read log horizon, pausing this volume's scan",
+				"path", vol.DiskPath, "error", err)
+			continue
+		}
 
 		for _, e := range entries {
 			if e.IsDir() {
@@ -104,6 +111,14 @@ func (w *LogWatcher) scanAndUpload(ctx context.Context) {
 			}
 
 			segPath := filepath.Join(logDir, name)
+			label := lbd.LabelFromLogPath(segPath)
+			if isValidTAI64NLabel(label) && label <= horizon {
+				// The horizon already covers this segment; only retry cleanup.
+				if err := os.Remove(segPath); err != nil {
+					w.log.Warn("failed to remove segment", "path", segPath, "error", err)
+				}
+				continue
+			}
 
 			if w.uploader != nil {
 				_, err := w.uploader.UploadSegment(ctx, vol.CloudVolumeId, segPath)
@@ -127,6 +142,9 @@ func (w *LogWatcher) scanAndUpload(ctx context.Context) {
 				w.log.Warn("failed to update log horizon, pausing this volume's scan",
 					"path", segPath, "error", err)
 				break
+			}
+			if isValidTAI64NLabel(label) && label > horizon {
+				horizon = label
 			}
 
 			if err := os.Remove(segPath); err != nil {
