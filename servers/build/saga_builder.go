@@ -290,6 +290,12 @@ func (s *SagaBuilder) startBuild(
 			if orgID, ok := identity.Metadata["organization_id"].(string); ok {
 				sb = sb.Input("deploy_organization_id", orgID)
 			}
+			if email, ok := identity.Metadata["email"].(string); ok && email != "" {
+				sb = sb.Input("deploy_email", email)
+			}
+			if name, ok := identity.Metadata["name"].(string); ok && name != "" {
+				sb = sb.Input("deploy_name", name)
+			}
 		}
 	}
 

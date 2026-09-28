@@ -115,14 +115,16 @@ func TestBeginRejectsOversizedDeploymentMessage(t *testing.T) {
 func TestBeginCapturesAuthenticatedIdentity(t *testing.T) {
 	tr, _ := newTestTracker(t)
 	ctx := rpc.ContextWithIdentity(context.Background(), &rpc.Identity{
-		Subject: "user-42", Method: rpc.AuthMethodOIDC,
-		Metadata: map[string]any{"organization_id": "org-42"},
+		Subject: "user-42", Method: rpc.AuthMethodJWT,
+		Metadata: map[string]any{"organization_id": "org-42", "email": "ada@example.com", "name": "Ada Lovelace"},
 	})
 	rec, err := tr.Begin(ctx, BeginParams{AppName: "web", Operation: OperationBuild})
 	require.NoError(t, err)
 	assert.Equal(t, "user-42", rec.Deployment.DeployedBy.Subject)
-	assert.Equal(t, "oidc", rec.Deployment.DeployedBy.AuthMethod)
+	assert.Equal(t, "jwt", rec.Deployment.DeployedBy.AuthMethod)
 	assert.Equal(t, "org-42", rec.Deployment.DeployedBy.OrganizationId)
+	assert.Equal(t, "ada@example.com", rec.Deployment.DeployedBy.Email)
+	assert.Equal(t, "Ada Lovelace", rec.Deployment.DeployedBy.Name)
 	stored, err := tr.Store().Get(ctx, rec.Deployment.ID.String())
 	require.NoError(t, err)
 	assert.Equal(t, rec.Deployment.DeployedBy, stored.Deployment.DeployedBy)
@@ -132,7 +134,7 @@ func TestBeginDoesNotBorrowOrganizationFromAnotherIdentity(t *testing.T) {
 	tr, _ := newTestTracker(t)
 	ctx := rpc.ContextWithIdentity(context.Background(), &rpc.Identity{
 		Subject: "recovery-worker", Method: rpc.AuthMethodSystem,
-		Metadata: map[string]any{"organization_id": "org-worker"},
+		Metadata: map[string]any{"organization_id": "org-worker", "email": "worker@example.com", "name": "Worker"},
 	})
 	rec, err := tr.Begin(ctx, BeginParams{
 		AppName: "web", Subject: "original-user", AuthMethod: "jwt",
@@ -140,6 +142,8 @@ func TestBeginDoesNotBorrowOrganizationFromAnotherIdentity(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "original-user", rec.Deployment.DeployedBy.Subject)
 	assert.Empty(t, rec.Deployment.DeployedBy.OrganizationId)
+	assert.Empty(t, rec.Deployment.DeployedBy.Email)
+	assert.Empty(t, rec.Deployment.DeployedBy.Name)
 }
 
 func TestBeginDoesNotCaptureAnonymousOrganization(t *testing.T) {
