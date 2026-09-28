@@ -1,6 +1,7 @@
 package diskio
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
 	"os"
@@ -325,7 +326,8 @@ func TestLogWatcherCleansUpSegmentsAtOrBeforeHorizon(t *testing.T) {
 		Mode:          storage_v1alpha.VM_ACCELERATOR,
 	})
 	uploader := &mockUploader{}
-	watcher := NewLogWatcher(slog.Default(), state, uploader, time.Second)
+	var logs bytes.Buffer
+	watcher := NewLogWatcher(slog.New(slog.NewTextHandler(&logs, nil)), state, uploader, time.Second)
 	watcher.scanAndUpload(context.Background())
 	require.Len(t, uploader.uploaded, 1)
 
@@ -346,6 +348,9 @@ func TestLogWatcherCleansUpSegmentsAtOrBeforeHorizon(t *testing.T) {
 	for _, name := range []string{older, first, newer} {
 		assert.NoFileExists(t, filepath.Join(logDir, name))
 	}
+	assert.Contains(t, logs.String(), "removed segment covered by log horizon without upload")
+	assert.Contains(t, logs.String(), older)
+	assert.Contains(t, logs.String(), first)
 	horizon, err = readLogHorizon(diskPath)
 	require.NoError(t, err)
 	assert.Equal(t, "40000000682f1a2c1dcd6502", horizon)
