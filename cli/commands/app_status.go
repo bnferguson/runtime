@@ -155,18 +155,7 @@ func AppStatus(ctx *Context, opts struct {
 		}
 
 		// Deployed info
-		user := deployment.DeployedByUserEmail()
-		// Replace placeholder emails with username or user ID as fallback
-		if user == "" || user == "unknown@example.com" || user == "user@example.com" {
-			if deployment.HasDeployedByUserName() && deployment.DeployedByUserName() != "" {
-				user = deployment.DeployedByUserName()
-			} else if deployment.HasDeployedByUserId() && deployment.DeployedByUserId() != "" {
-				user = deployment.DeployedByUserId()
-			} else {
-				user = "-"
-			}
-		}
-		if user != "-" {
+		if user := deployerOf(deployment); user != "" {
 			ctx.Printf("  Deployed By: %s\n", user)
 		}
 
@@ -318,14 +307,14 @@ func printAppStatusJSON(
 		Value string `json:"value,omitempty"`
 	}
 	type deploymentJSON struct {
-		ID           string   `json:"id"`
-		Status       string   `json:"status"`
-		AppVersionID string   `json:"app_version_id,omitempty"`
-		DeployedBy   string   `json:"deployed_by,omitempty"`
-		DeployedAt   string   `json:"deployed_at,omitempty"`
-		Phase        string   `json:"phase,omitempty"`
-		ErrorMessage string   `json:"error_message,omitempty"`
-		GitInfo      *gitInfo `json:"git_info,omitempty"`
+		ID           string          `json:"id"`
+		Status       string          `json:"status"`
+		AppVersionID string          `json:"app_version_id,omitempty"`
+		DeployedBy   *deployedByJSON `json:"deployed_by,omitempty"`
+		DeployedAt   string          `json:"deployed_at,omitempty"`
+		Phase        string          `json:"phase,omitempty"`
+		ErrorMessage string          `json:"error_message,omitempty"`
+		GitInfo      *gitInfo        `json:"git_info,omitempty"`
 	}
 
 	marshalDeployment := func(dep *deployment_v1alpha.DeploymentInfo) deploymentJSON {
@@ -335,15 +324,7 @@ func printAppStatusJSON(
 			AppVersionID: dep.AppVersionId(),
 		}
 
-		// Deployed by: prefer username, fall back to email, then user ID
-		if dep.HasDeployedByUserName() && dep.DeployedByUserName() != "" {
-			d.DeployedBy = dep.DeployedByUserName()
-		} else if dep.HasDeployedByUserEmail() && dep.DeployedByUserEmail() != "" &&
-			dep.DeployedByUserEmail() != "unknown@example.com" && dep.DeployedByUserEmail() != "user@example.com" {
-			d.DeployedBy = dep.DeployedByUserEmail()
-		} else if dep.HasDeployedByUserId() && dep.DeployedByUserId() != "" {
-			d.DeployedBy = dep.DeployedByUserId()
-		}
+		d.DeployedBy = deployedByOf(dep)
 
 		if dep.HasDeployedAt() && dep.DeployedAt() != nil {
 			d.DeployedAt = time.Unix(dep.DeployedAt().Seconds(), 0).UTC().Format(time.RFC3339)
