@@ -1,7 +1,9 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -95,19 +97,9 @@ func DebugDiskBackup(ctx *Context, opts struct {
 	if err != nil {
 		return fmt.Errorf("creating output file: %w", err)
 	}
-	// Set once the snapshot itself is written. A later step failing (the cloud
-	// upload) must not take a finished local backup down with it.
-	snapshotComplete := false
-
 	defer func() {
-		closeErr := outFile.Close()
-		if closeErr != nil && retErr == nil {
-			retErr = fmt.Errorf("closing output file: %w", closeErr)
-		}
-		// Only discard a snapshot that never finished, or one whose close
-		// failed and may therefore be truncated.
-		if retErr != nil && (!snapshotComplete || closeErr != nil) {
-			os.Remove(outputPath)
+		if outFile != nil {
+			retErr = closeDebugBackupOutput(outFile, outputPath, retErr)
 		}
 	}()
 
@@ -123,7 +115,11 @@ func DebugDiskBackup(ctx *Context, opts struct {
 		return fmt.Errorf("stat output file: %w", err)
 	}
 
-	snapshotComplete = true
+	closeErr := closeDebugBackupOutput(outFile, outputPath, nil)
+	outFile = nil
+	if closeErr != nil {
+		return closeErr
+	}
 
 	duration := time.Since(start)
 	ratio := float64(outInfo.Size()) / float64(imgInfo.Size()) * 100
@@ -144,8 +140,7 @@ func DebugDiskBackup(ctx *Context, opts struct {
 			CompressedSize: outInfo.Size(),
 		})
 		if err != nil {
-			// The local snapshot is finished and valid; say where it is rather
-			// than leaving the operator thinking they got nothing.
+			// The local snapshot has closed successfully; it survives an upload failure.
 			ctx.Warn("Upload failed, but the local snapshot is intact at %s", outputPath)
 			return fmt.Errorf("uploading snapshot to miren.cloud: %w", err)
 		}
@@ -153,6 +148,17 @@ func DebugDiskBackup(ctx *Context, opts struct {
 	}
 
 	return nil
+}
+
+// Close before reporting success or uploading; discard an unfinished or unclosed snapshot.
+func closeDebugBackupOutput(outFile io.Closer, outputPath string, backupErr error) error {
+	if closeErr := outFile.Close(); closeErr != nil {
+		backupErr = errors.Join(backupErr, fmt.Errorf("closing output file: %w", closeErr))
+	}
+	if backupErr != nil {
+		os.Remove(outputPath)
+	}
+	return backupErr
 }
 
 // cloudSnapshotDetails carries what the sidecar records about the image the
