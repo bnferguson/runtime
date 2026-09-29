@@ -474,6 +474,12 @@ kinds:
         organization_id:
           type: string
           doc: Organization from the initiating authenticated identity; not the cluster's ownership
+        email:
+          type: string
+          doc: Email from the initiating identity's verified cloud token, as of the deploy
+        name:
+          type: string
+          doc: Display name from the initiating identity's verified cloud token, as of the deploy
 
     error_message:
       type: string

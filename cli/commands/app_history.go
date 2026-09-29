@@ -10,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"miren.dev/runtime/api/deployment/deployment_v1alpha"
+	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/theme"
 	"miren.dev/runtime/pkg/ui"
 )
@@ -25,15 +26,15 @@ func printAppHistoryJSON(deployments []*deployment_v1alpha.DeploymentInfo, app, 
 		CommitAuthorEmail string `json:"commit_author_email,omitempty"`
 	}
 	type deploymentJSON struct {
-		ID                 string       `json:"id"`
-		Status             string       `json:"status"`
-		AppVersionID       string       `json:"app_version_id,omitempty"`
-		DeployedAt         string       `json:"deployed_at,omitempty"`
-		DeployedByUserName string       `json:"deployed_by_user_name,omitempty"`
-		Phase              string       `json:"phase,omitempty"`
-		ErrorMessage       string       `json:"error_message,omitempty"`
-		Message            string       `json:"message,omitempty"`
-		GitInfo            *gitInfoJSON `json:"git_info,omitempty"`
+		ID           string          `json:"id"`
+		Status       string          `json:"status"`
+		AppVersionID string          `json:"app_version_id,omitempty"`
+		DeployedAt   string          `json:"deployed_at,omitempty"`
+		DeployedBy   *deployedByJSON `json:"deployed_by,omitempty"`
+		Phase        string          `json:"phase,omitempty"`
+		ErrorMessage string          `json:"error_message,omitempty"`
+		Message      string          `json:"message,omitempty"`
+		GitInfo      *gitInfoJSON    `json:"git_info,omitempty"`
 	}
 
 	var deps []deploymentJSON
@@ -44,9 +45,7 @@ func printAppHistoryJSON(deployments []*deployment_v1alpha.DeploymentInfo, app, 
 			AppVersionID: dep.AppVersionId(),
 		}
 
-		if dep.HasDeployedByUserName() && dep.DeployedByUserName() != "" {
-			d.DeployedByUserName = dep.DeployedByUserName()
-		}
+		d.DeployedBy = deployedByOf(dep)
 
 		if dep.HasDeployedAt() && dep.DeployedAt() != nil {
 			d.DeployedAt = time.Unix(dep.DeployedAt().Seconds(), 0).UTC().Format(time.RFC3339)
@@ -322,10 +321,41 @@ func formatDeploymentTime(dep *deployment_v1alpha.DeploymentInfo) string {
 }
 
 func formatUser(dep *deployment_v1alpha.DeploymentInfo) string {
-	if dep.HasDeployedByUserName() && dep.DeployedByUserName() != "" {
-		return dep.DeployedByUserName()
+	if who := deployerOf(dep); who != "" {
+		return who
 	}
 	return "-"
+}
+
+// deployerOf names who started a deployment, or "" when nobody is recorded.
+func deployerOf(dep *deployment_v1alpha.DeploymentInfo) string {
+	return deploylifecycle.DescribeDeployer(
+		dep.DeployedByName(), dep.DeployedByEmail(), dep.DeployedBySubject(), dep.DeployedByAuthMethod())
+}
+
+// deployedByJSON is the deployer as app history and app status report it in
+// JSON: the recorded identity, plus the same rendering the tables show.
+type deployedByJSON struct {
+	Subject    string `json:"subject"`
+	AuthMethod string `json:"auth_method,omitempty"`
+	Email      string `json:"email,omitempty"`
+	Name       string `json:"name,omitempty"`
+	Display    string `json:"display"`
+}
+
+// deployedByOf returns nil when no deployer was recorded, so the key is
+// omitted rather than reported as an empty identity.
+func deployedByOf(dep *deployment_v1alpha.DeploymentInfo) *deployedByJSON {
+	if dep.DeployedBySubject() == "" {
+		return nil
+	}
+	return &deployedByJSON{
+		Subject:    dep.DeployedBySubject(),
+		AuthMethod: dep.DeployedByAuthMethod(),
+		Email:      dep.DeployedByEmail(),
+		Name:       dep.DeployedByName(),
+		Display:    deployerOf(dep),
+	}
 }
 
 func formatGitInfo(dep *deployment_v1alpha.DeploymentInfo) (sha, branch, message string) {

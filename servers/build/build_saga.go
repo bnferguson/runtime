@@ -813,6 +813,8 @@ type beginDeploymentIn struct {
 	Subject        string `json:"deploy_subject,omitempty" saga:"deploy_subject,optional"`
 	AuthMethod     string `json:"deploy_auth_method,omitempty" saga:"deploy_auth_method,optional"`
 	OrganizationID string `json:"deploy_organization_id,omitempty" saga:"deploy_organization_id,optional"`
+	Email          string `json:"deploy_email,omitempty" saga:"deploy_email,optional"`
+	Name           string `json:"deploy_name,omitempty" saga:"deploy_name,optional"`
 	EphemeralLabel string `json:"ephemeral_label,omitempty" saga:"ephemeral_label,optional"`
 }
 
@@ -845,6 +847,8 @@ func beginDeployment(ctx context.Context, in beginDeploymentIn) (beginDeployment
 		Subject:        in.Subject,
 		AuthMethod:     in.AuthMethod,
 		OrganizationID: in.OrganizationID,
+		Email:          in.Email,
+		Name:           in.Name,
 	})
 	if err != nil {
 		return beginDeploymentOut{}, fmt.Errorf("begin deployment for %s: %w", in.AppName, err)
