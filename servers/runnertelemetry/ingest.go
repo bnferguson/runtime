@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/pkg/workloadidentity"
 )
 
@@ -39,6 +40,23 @@ const (
 	// Authorization would turn an otherwise-valid mTLS request into a 401. A
 	// header the authenticator ignores keeps the two credentials independent.
 	TokenHeader = "Miren-Workload-Token"
+
+	// StreamHeader marks a metrics batch as the runner's own operational
+	// series (process memory and identity, host usage, controller queues)
+	// rather than per-sandbox usage. Operational series join the
+	// coordinator's, so they reach the embedded store and also leave the
+	// cluster through the managed-metrics shipping path; sandbox series stay
+	// in the embedded store, the same as the coordinator's own.
+	//
+	// A header on the existing route rather than a route of its own is what
+	// makes version skew free. A coordinator that predates it ignores the
+	// header and forwards the batch as it always has, so a runner upgraded
+	// first loses nothing, where a new route would answer 404 and leave the
+	// runner's writer retrying the batch until the coordinator caught up.
+	StreamHeader = "Miren-Telemetry-Stream"
+
+	// StreamOperational is the StreamHeader value for operational series.
+	StreamOperational = "operational"
 
 	// MetricsBasePath and LogsBasePath are what a runner points its writers at.
 	// Each writer appends its own backend-native suffix, so the bytes on the
@@ -89,12 +107,23 @@ type handler struct {
 	contentType string
 	client      *http.Client
 	kind        string
+
+	// operational receives batches marked with StreamOperational. Nil means
+	// every batch is forwarded to the backend unread.
+	operational metrics.PointWriter
 }
 
 // NewMetricsHandler forwards accepted batches to VictoriaMetrics' Prometheus
 // import endpoint. address is the backend's host:port, normally loopback.
-func NewMetricsHandler(log *slog.Logger, verifier Verifier, address string) http.Handler {
-	return newHandler(log, verifier, address, metricsImportPath, "text/plain", "metrics")
+//
+// Batches marked as operational go to operational instead, which is the
+// coordinator's own operational fanout: it already writes to the same
+// embedded store, and it is where the shipping sink attaches. A nil
+// operational forwards those batches to the backend like any other.
+func NewMetricsHandler(log *slog.Logger, verifier Verifier, address string, operational metrics.PointWriter) http.Handler {
+	h := newHandler(log, verifier, address, metricsImportPath, "text/plain", "metrics")
+	h.operational = operational
+	return h
 }
 
 // NewLogsHandler forwards accepted batches to VictoriaLogs' JSON-lines insert
@@ -103,7 +132,7 @@ func NewLogsHandler(log *slog.Logger, verifier Verifier, address string) http.Ha
 	return newHandler(log, verifier, address, logsInsertPath, "application/x-ndjson", "logs")
 }
 
-func newHandler(log *slog.Logger, verifier Verifier, address, path, contentType, kind string) http.Handler {
+func newHandler(log *slog.Logger, verifier Verifier, address, path, contentType, kind string) *handler {
 	return &handler{
 		log:         log.With("module", "runnertelemetry", "kind", kind),
 		verifier:    verifier,
@@ -146,6 +175,11 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body := http.MaxBytesReader(w, r.Body, maxIngestBytes)
+
+	if h.operational != nil && r.Header.Get(StreamHeader) == StreamOperational {
+		h.writeOperational(w, r, body)
+		return
+	}
 
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, h.targetURL, body)
 	if err != nil {
@@ -191,4 +225,105 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// silently discard whatever the backend actually said.
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(io.Discard, resp.Body)
+}
+
+// clusterLabel is the label the shipping path uses to tell clusters apart in
+// the shared store. The shipping sink only adds it when a point lacks it, so a
+// runner that supplied its own could file its series under another cluster;
+// stripping it here leaves the coordinator's stamp as the only source.
+const clusterLabel = "miren_cluster"
+
+const (
+	// maxOperationalPoints bounds what one operational batch may make the
+	// coordinator hold in memory. A runner emits a few dozen operational
+	// points per flush, and the coordinator's own writers hold at most ten
+	// thousand, so anything beyond this could not be kept anyway.
+	maxOperationalPoints = 10000
+
+	// operationalChunk is how much of a batch is handed to the sinks at once.
+	// A sink refuses a write that would overflow its buffer outright, so
+	// feeding a large batch in pieces lets it take as much as it has room for
+	// rather than all or nothing.
+	operationalChunk = 1000
+)
+
+func (h *handler) writeOperational(w http.ResponseWriter, r *http.Request, body io.Reader) {
+	data, err := io.ReadAll(body)
+	if err != nil {
+		http.Error(w, "reading telemetry failed", http.StatusBadRequest)
+		return
+	}
+
+	parsed, err := metrics.ParsePoints(data, maxOperationalPoints)
+	if err != nil {
+		http.Error(w, "reading telemetry failed", http.StatusBadRequest)
+		return
+	}
+
+	// Nothing here is refused back to the runner. Its writer keeps a refused
+	// batch and prepends it to the next one, so a refusal would be retried
+	// forever: one bad line would block every sample queued behind it, and
+	// after an outage a backlog could outgrow what the sinks here will ever
+	// take at once. Operational series are gauges re-sampled every few
+	// seconds, so shedding what cannot be used costs little and fresh samples
+	// flow again at once.
+	if parsed.Invalid > 0 {
+		h.log.Warn("operational metrics skipped", "reason", "unparseable line",
+			"lines", parsed.Invalid, "first_error", parsed.FirstInvalid)
+	}
+
+	points := make([]metrics.MetricPoint, 0, len(parsed.Points))
+	impersonating := 0
+	for _, point := range parsed.Points {
+		// The telemetry token proves the batch came from some runner in this
+		// cluster, not which one, so the labels identifying a runner are the
+		// runner's own claim. What this can enforce is that the claim is a
+		// runner's: the shipping sink fills in the coordinator's runner ID on
+		// a point that has none, so a point without one, or one naming the
+		// control process, would ship as the coordinator's own series and feed
+		// the coordinator's restart and build-skew rules.
+		if point.Labels["entity"] == metrics.EntityControl || point.Labels["miren_runner"] == "" {
+			impersonating++
+			continue
+		}
+		if _, ok := point.Labels[clusterLabel]; ok {
+			labels := make(map[string]string, len(point.Labels))
+			for name, value := range point.Labels {
+				if name != clusterLabel {
+					labels[name] = value
+				}
+			}
+			point.Labels = labels
+		}
+		points = append(points, point)
+	}
+	if impersonating > 0 {
+		h.log.Warn("operational metrics skipped", "reason", "not labeled as a runner",
+			"points", impersonating)
+	}
+	if parsed.OverLimit > 0 {
+		h.log.Warn("operational metrics skipped", "reason", "batch over limit",
+			"points", parsed.OverLimit, "limit", maxOperationalPoints)
+	}
+
+	// Every chunk goes to the fanout even after one is refused. The fanout
+	// reports any sink's refusal without saying which, and stopping would
+	// starve the sinks that still have room: a full shipping buffer would
+	// otherwise cost the embedded store its copy too.
+	refused := 0
+	var firstRefusal error
+	for start := 0; start < len(points); start += operationalChunk {
+		chunk := points[start:min(start+operationalChunk, len(points))]
+		if err := h.operational.WritePoints(r.Context(), chunk); err != nil {
+			if firstRefusal == nil {
+				firstRefusal = err
+			}
+			refused += len(chunk)
+		}
+	}
+	if refused > 0 {
+		h.log.Warn("operational metrics refused by a sink", "points", refused, "error", firstRefusal)
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }

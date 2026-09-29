@@ -161,6 +161,28 @@ type Client struct {
 	transport *http3.Transport
 }
 
+// Operational returns a client for the runner's operational metrics writer.
+// It shares this client's transport and credential and marks every request
+// with StreamOperational, so the coordinator can tell those batches from the
+// per-sandbox series sent through HTTP.
+func (c *Client) Operational() *http.Client {
+	return &http.Client{
+		Transport: &streamRoundTripper{base: c.HTTP.Transport, stream: StreamOperational},
+		Timeout:   c.HTTP.Timeout,
+	}
+}
+
+type streamRoundTripper struct {
+	base   http.RoundTripper
+	stream string
+}
+
+func (t *streamRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
+	clone := r.Clone(r.Context())
+	clone.Header.Set(StreamHeader, t.stream)
+	return t.base.RoundTrip(clone)
+}
+
 // Close tears down the underlying QUIC connections.
 func (c *Client) Close() error {
 	if c == nil || c.transport == nil {

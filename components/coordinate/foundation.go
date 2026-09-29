@@ -318,7 +318,7 @@ func (c *Foundation) runnerTelemetryOptions() []rpc.StateOption {
 
 	if c.VictoriametricsAddress != "" {
 		opts = append(opts, rpc.WithHTTPHandler(runnertelemetry.MetricsPattern,
-			runnertelemetry.NewMetricsHandler(c.Log, c.WorkloadIssuer, c.VictoriametricsAddress)))
+			runnertelemetry.NewMetricsHandler(c.Log, c.WorkloadIssuer, c.VictoriametricsAddress, c.MetricsWriter)))
 	} else {
 		c.Log.Warn("no victoriametrics address; runner metrics ingest disabled")
 	}
