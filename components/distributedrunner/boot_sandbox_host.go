@@ -4,6 +4,7 @@ package distributedrunner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -16,6 +17,7 @@ import (
 	"miren.dev/runtime/components/runner"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/boot"
+	"miren.dev/runtime/servers/metricspush"
 )
 
 type sandboxHostBootInputs struct {
@@ -32,10 +34,11 @@ type sandboxHostBootInputs struct {
 }
 
 type sandboxHostBoot struct {
-	component *boot.Component
-	inputs    sandboxHostBootInputs
-	value     *runner.SandboxHost
-	output    boot.Output[*runner.SandboxHost]
+	component  *boot.Component
+	inputs     sandboxHostBootInputs
+	value      *runner.SandboxHost
+	pushClient *metricspush.Client
+	output     boot.Output[*runner.SandboxHost]
 }
 
 // networkDepsBoot maps the cluster registry before storage can rebuild lbd,
@@ -118,6 +121,23 @@ func (b *sandboxHostBoot) start(
 	dependencies.MetricsWriter = telemetry.metricsWriter
 	dependencies.ServicePrefixes = b.inputs.servicePrefixes
 
+	// Sandboxes here push metrics to this runner's relay, which forwards them
+	// to the coordinator on the runner's own certificate.
+	if b.inputs.coordinator != "" && b.inputs.clientCert != "" {
+		client, err := metricspush.NewClient(metricspush.ClientConfig{
+			CoordinatorAddress: b.inputs.coordinator,
+			ClientCertPEM:      []byte(b.inputs.clientCert),
+			ClientKeyPEM:       []byte(b.inputs.clientKey),
+			CACertPEM:          []byte(b.inputs.caCert),
+		})
+		if err != nil {
+			b.inputs.log.Warn("metrics push relay disabled", "error", err)
+		} else {
+			b.pushClient = client
+			dependencies.MetricsPusher = client
+		}
+	}
+
 	var err error
 	b.value, err = runner.NewSandboxHost(access.access, storage, dependencies, access.config)
 	if err != nil {
@@ -183,10 +203,15 @@ func (i sandboxHostBootInputs) prepareNetworkDeps(deps *runner.RunnerDeps, coord
 }
 
 func (b *sandboxHostBoot) stop(context.Context) error {
-	if b.value == nil {
-		return nil
+	var errs []error
+	if b.value != nil {
+		errs = append(errs, b.value.Close())
 	}
-	return b.value.Close()
+	if b.pushClient != nil {
+		errs = append(errs, b.pushClient.Close())
+		b.pushClient = nil
+	}
+	return errors.Join(errs...)
 }
 
 func serviceNetworkPrefixes() []netip.Prefix {

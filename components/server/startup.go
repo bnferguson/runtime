@@ -149,6 +149,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 		containerd.Output,
 		network.output,
 		observability.output,
+		foundation.output,
 	)
 	storageAgent := runnercomp.NewStorageAgentBoot(nodeStorage.output, sandboxHost.component, componentStopTimeout)
 	applicationManagement := newApplicationManagementBoot(foundation.output, secretStore.output, appData.component, entitySyncDiagnostics)

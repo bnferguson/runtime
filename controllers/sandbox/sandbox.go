@@ -45,6 +45,7 @@ import (
 	"miren.dev/runtime/pkg/saga"
 	"miren.dev/runtime/pkg/secret"
 	"miren.dev/runtime/pkg/workloadidentity"
+	"miren.dev/runtime/servers/metricspush"
 
 	computeapi "miren.dev/runtime/api/compute"
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
@@ -125,6 +126,11 @@ type SandboxControllerDeps struct {
 	// SqliteDisks replicates sqlite-provider disks to the coordinator. Nil
 	// disables replication; the disks still mount.
 	SqliteDisks *sqlitedisk.Manager
+
+	// MetricsPusher delivers workload metric pushes to the coordinator. With
+	// it set, the token server also serves the metrics push relay and
+	// sandboxes are told where to find it. Nil leaves both out.
+	MetricsPusher metricspush.Pusher
 }
 
 type SandboxController struct {
@@ -154,6 +160,7 @@ type SandboxController struct {
 	WorkloadIssuer workloadidentity.TokenIssuer
 	ApiAddress     string
 	CACert         []byte
+	MetricsPusher  metricspush.Pusher
 
 	// Secrets materializes the secret references a sandbox spec carries, at the
 	// moment a container is created. Nil where no backend is reachable, in which
@@ -283,6 +290,7 @@ func NewSandboxController(cfg SandboxControllerDeps, sagaStorage saga.Storage) (
 		CACert:         cfg.CACert,
 		Secrets:        cfg.Secrets,
 		SqliteDisks:    cfg.SqliteDisks,
+		MetricsPusher:  cfg.MetricsPusher,
 
 		sagaStorage:  sagaStorage,
 		sagaRegistry: registry,
