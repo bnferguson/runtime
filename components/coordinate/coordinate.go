@@ -69,6 +69,10 @@ type CoordinatorConfig struct {
 	VictoriametricsAddress string
 	VictorialogsAddress    string
 
+	// ManagedMetricsEnabled is whether the cluster has a remote-write
+	// destination, and so whether workloads may push metrics.
+	ManagedMetricsEnabled bool
+
 	// BuildKit is the persistent BuildKit component for container image builds
 	BuildKit *buildkit.Component
 

@@ -135,5 +135,6 @@ func foundationConfig(options StartOptions, resolver netresolve.Resolver, secret
 		DeploymentRetentionCount:  config.Deployment.GetRetentionCount(),
 		DeploymentRetentionPeriod: deploymentRetentionPeriod,
 		SecretKeyRotationPeriod:   secretKeyRotationPeriod,
+		ManagedMetricsEnabled:     config.Metrics.RemoteWrite.GetURL() != "",
 	}
 }

@@ -59,6 +59,8 @@ require (
 	github.com/opencontainers/runtime-spec v1.2.0
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/pkg/errors v0.9.1
+	github.com/prometheus/client_model v0.6.2
+	github.com/prometheus/common v0.66.1
 	github.com/quic-go/quic-go v0.62.0
 	github.com/quic-go/webtransport-go v0.13.0
 	github.com/sirupsen/logrus v1.9.3
@@ -144,8 +146,6 @@ require (
 	github.com/petar-dambovaliev/aho-corasick v0.0.0-20250424160509-463d218d4745 // indirect
 	github.com/pierrec/lz4/v4 v4.1.25 // indirect
 	github.com/prometheus/client_golang v1.23.2 // indirect
-	github.com/prometheus/client_model v0.6.2 // indirect
-	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/psanford/sqlite3vfs v0.0.0-20260519004904-f9180fa2acc9 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect

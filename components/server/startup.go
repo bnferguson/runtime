@@ -131,6 +131,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 		workloadIdentity.output,
 		entityAccess.output,
 		observability.output,
+		foundation.output,
 	)
 	clusterAccess := newClusterAccessBoot(
 		clusterAccessBootInputs{config: options.Config.Server},

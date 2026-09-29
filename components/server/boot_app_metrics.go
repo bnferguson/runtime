@@ -9,6 +9,7 @@ import (
 	"miren.dev/runtime/components/appmetrics"
 	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/pkg/boot"
+	"miren.dev/runtime/servers/metricspush"
 )
 
 type appMetricsBootInputs struct {
@@ -29,6 +30,9 @@ type appMetricsBoot struct {
 	shipping    *metrics.Labeled
 	shipWriter  *metrics.VictoriaMetricsWriter
 	operational *metrics.Fanout
+
+	// push is the coordinator's metrics push ingest, armed while vmagent runs.
+	push *metricspush.Ingest
 }
 
 func appMetricsInputs(options StartOptions) appMetricsBootInputs {
@@ -50,17 +54,19 @@ func newAppMetricsBoot(
 	identity boot.Output[workloadIdentityBootOutput],
 	entityAccess boot.Output[entityAccessBootOutput],
 	observability boot.Output[observabilityBootOutput],
+	foundation boot.Output[foundationBootOutput],
 ) *appMetricsBoot {
 	b := &appMetricsBoot{
 		inputs: inputs,
 	}
-	b.component = boot.Run5(
+	b.component = boot.Run6(
 		"app-metrics",
 		containerd,
 		registration,
 		identity,
 		entityAccess,
 		observability,
+		foundation,
 		b.start,
 		boot.WithStop(b.stop, componentStopTimeout),
 	)
@@ -74,6 +80,7 @@ func (b *appMetricsBoot) start(
 	identity workloadIdentityBootOutput,
 	entityAccess entityAccessBootOutput,
 	observability observabilityBootOutput,
+	foundation foundationBootOutput,
 ) error {
 	log := observability.log
 	eac := entityAccess.access
@@ -99,6 +106,10 @@ func (b *appMetricsBoot) start(
 		// scraper must be visible, but must not take the application control
 		// plane down with it.
 		log.Error("managed application metrics failed to start", "error", err)
+		// Push was advertised from config; stop, since nothing will arm it.
+		if push := foundation.foundation.MetricsPush(); push != nil {
+			push.Fail()
+		}
 		return nil
 	}
 	b.managed = managed
@@ -119,6 +130,16 @@ func (b *appMetricsBoot) start(
 	b.attachShipping(ctx, log, observability, b.shipWriter, identityLabels)
 	log.Info("runtime operational metrics shipping through managed metrics",
 		"cluster", config.ClusterID, "runner", b.inputs.runnerID)
+
+	if push := foundation.foundation.MetricsPush(); push != nil {
+		push.Arm(metricspush.Backend{
+			ImportURL: managed.ImportURL(),
+			ClusterID: config.ClusterID,
+			Resolver:  metricspush.NewEntityResolver(eac),
+		})
+		b.push = push
+		log.Info("workload metrics push enabled", "cluster", config.ClusterID)
+	}
 	return nil
 }
 
@@ -144,6 +165,10 @@ func (b *appMetricsBoot) attachShipping(
 }
 
 func (b *appMetricsBoot) stop(ctx context.Context) error {
+	if b.push != nil {
+		b.push.Disarm()
+		b.push = nil
+	}
 	if b.disabledReporter != nil {
 		b.disabledReporter.Stop()
 		b.disabledReporter = nil

@@ -30,6 +30,7 @@ import (
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/workloadidentity"
 	"miren.dev/runtime/servers/entityserver"
+	"miren.dev/runtime/servers/metricspush"
 	"miren.dev/runtime/servers/runnertelemetry"
 )
 
@@ -60,6 +61,10 @@ type Foundation struct {
 
 	apiCert []byte
 	apiKey  []byte
+
+	// metricsPush accepts metrics pushed by workloads. It is mounted with the
+	// listener and armed later by managed metrics; nil without a workload issuer.
+	metricsPush *metricspush.Ingest
 
 	authClient        *cloudauth.AuthClient // For status reporting to cloud
 	oidcAuthenticator *oidcauth.OIDCAuthenticator
@@ -333,6 +338,29 @@ func (c *Foundation) runnerTelemetryOptions() []rpc.StateOption {
 	return opts
 }
 
+// metricsPushOptions mounts the endpoint node-local relays forward workload
+// metric pushes to. Like the telemetry ingest, it is not mounted without an
+// issuer, since the sandbox token it verifies is the only thing standing
+// between a push and another app's labels.
+func (c *Foundation) metricsPushOptions() []rpc.StateOption {
+	if c.WorkloadIssuer == nil {
+		c.Log.Warn("no workload identity issuer; metrics push disabled")
+		return nil
+	}
+	c.metricsPush = metricspush.NewIngest(c.Log, c.WorkloadIssuer, c.ManagedMetricsEnabled)
+	return []rpc.StateOption{
+		rpc.WithHTTPHandler(metricspush.IngestPattern, c.metricsPush.Handler()),
+		rpc.WithHTTPHandler(metricspush.StatusPattern, c.metricsPush.StatusHandler()),
+	}
+}
+
+// MetricsPush returns the ingest behind the metrics push endpoint, for managed
+// metrics to arm once vmagent is running, or for the local relay to hand pushes
+// to directly. It is nil when no workload issuer is configured.
+func (c *Foundation) MetricsPush() *metricspush.Ingest {
+	return c.metricsPush
+}
+
 // buildEtcdTLSConfig creates a tls.Config from the EtcdTLS configuration.
 func (c *Foundation) buildEtcdTLSConfig() (*tls.Config, error) {
 	if c.EtcdTLS == nil {
@@ -594,6 +622,7 @@ func (c *Foundation) Start(ctx context.Context) (retErr error) {
 	}
 
 	rpcOpts = append(rpcOpts, c.runnerTelemetryOptions()...)
+	rpcOpts = append(rpcOpts, c.metricsPushOptions()...)
 
 	// The boot graph cancels ctx before it enters reverse dependency order.
 	// Keep RPC alive across that cancellation so dependents can make their final
