@@ -50,6 +50,108 @@ This includes endpoint errors, invalid or oversized responses, authentication
 failures, and delivery retries. `miren logs app` includes only output written by
 the application itself.
 
+### Pushing metrics
+
+A service with nothing to scrape, like a background worker with no HTTP
+listener, can push its metrics instead. No `app.toml` setting is needed. On a
+cluster with a remote-write destination, every sandbox gets two URLs:
+
+| Variable | Scope |
+| --- | --- |
+| `MIREN_METRICS_PUSH_URL` | Sandbox: the same labels a scrape of this sandbox would carry |
+| `MIREN_METRICS_SHARED_PUSH_URL` | App: `miren_app`, `miren_service` and `miren_cluster` only. See [shared state](#metrics-from-shared-state) |
+
+Each URL is a [Pushgateway](https://github.com/prometheus/pushgateway) base, so
+the push helpers in Prometheus client libraries work as they are. Authenticate
+with the sandbox's `MIREN_IDENTITY_TOKEN_SECRET`, either as a Bearer token or as
+the password of Basic auth:
+
+```go
+pusher := push.New(os.Getenv("MIREN_METRICS_PUSH_URL"), "worker").
+	Header(http.Header{"Authorization": {"Bearer " + os.Getenv("MIREN_IDENTITY_TOKEN_SECRET")}}).
+	Gatherer(prometheus.DefaultGatherer)
+
+// Push on an interval, like a scrape would read.
+for range time.Tick(30 * time.Second) {
+	if err := pusher.Push(); err != nil {
+		log.Printf("pushing metrics: %v", err)
+	}
+}
+```
+
+```python
+from prometheus_client import push_to_gateway
+from prometheus_client.exposition import basic_auth_handler
+
+def auth(url, method, timeout, headers, data):
+    return basic_auth_handler(url, method, timeout, headers, data,
+                              "", os.environ["MIREN_IDENTITY_TOKEN_SECRET"])
+
+push_to_gateway(os.environ["MIREN_METRICS_PUSH_URL"], job="worker",
+                registry=registry, handler=auth)
+```
+
+Pushed samples travel the same pipeline as scraped ones, so they need the same
+remote-write destination. On a cluster without one, none of these variables are
+set, so an app can take their presence to mean pushing works.
+
+Each sandbox may push about once a second, with bursts of up to ten. Pushing
+faster gets a `429` with `Retry-After`. That is far more often than metrics
+need: a scrape reads every 15 to 60 seconds, and OTel exporters default to once
+a minute.
+
+Unlike a Pushgateway, nothing is stored between pushes. Each push is recorded
+when it arrives, so push on a regular interval rather than once. A series that
+stops being pushed goes stale the way a scraped one does when its target
+disappears.
+
+The runtime sets every `miren_*` label from the sandbox's identity, and a push
+that uses a `miren_*` label itself is refused with a `400` naming the label.
+The job and any other grouping labels in the URL are added to every sample.
+Timestamps are refused too: a pushed sample is stamped when it arrives.
+
+The URLs also accept OpenTelemetry metrics over OTLP/HTTP with protobuf, at the
+scope's URL plus `/otlp/v1/metrics`. An app already instrumented with an
+OpenTelemetry SDK needs no setup: Miren sets `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`,
+`OTEL_EXPORTER_OTLP_METRICS_PROTOCOL` and `OTEL_EXPORTER_OTLP_METRICS_HEADERS`
+to export at sandbox scope. It leaves all three unset if the app sets any
+`OTEL_EXPORTER_OTLP_*` variable of its own, so an app with its own collector
+keeps sending to it. To push shared-state gauges over OTLP, give that meter its
+own exporter pointed at `$MIREN_METRICS_SHARED_PUSH_URL/otlp/v1/metrics`.
+
+### Metrics from shared state
+
+Some values are the same no matter which replica reads them: a count of rows,
+the depth of a shared queue. If every replica of a service exports one, each
+lands in its own series, since each carries its own `miren_sandbox`. `sum()`
+across them returns the real value multiplied by the number of replicas, and the
+multiplier changes whenever the service scales.
+
+Push these at app scope, through `MIREN_METRICS_SHARED_PUSH_URL`, instead. App
+scope leaves off `miren_sandbox`, `miren_runner` and `miren_app_version`, so
+every writer lands on the same series and `sum()` reads the value once. That
+holds however many replicas push it, through a deploy, and when a different
+replica takes over. It keeps `miren_service`, though, so push a given value from
+one service: the same gauge pushed from two services is two series.
+
+That makes the natural home for a shared-state gauge a periodic job: most job
+systems can run something on a cadence at most once per tick, and it doesn't
+matter which worker picks it up. The number is still right without one. If
+every replica pushes, the series is correct and the only cost is each replica
+running the same query.
+
+App scope takes gauges only, and refuses counters, histograms and summaries.
+Counters from different processes can't share a series: each resets on its own
+schedule, so their interleaved values make `rate()` meaningless. Push those at
+sandbox scope and `sum()` them. For Prometheus pushes, an untyped metric whose
+name ends in `_total`, `_count`, `_sum`, `_bucket` or `_created` is treated as a
+counter. For OTLP, a non-monotonic cumulative sum (an `UpDownCounter`) counts as
+a gauge.
+
+The series goes stale if nothing pushes it for a few minutes, so whatever pushes
+it has to keep running. A job that only runs while there is work to do will
+leave gaps.
+
 ### Runtime operational metrics
 
 When a remote-write destination is configured, the coordinator also ships its
