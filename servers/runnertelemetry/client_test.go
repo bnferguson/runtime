@@ -2,6 +2,9 @@ package runnertelemetry_test
 
 import (
 	"errors"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -166,4 +169,31 @@ func TestClientRejectsUnparseableCA(t *testing.T) {
 		TokenSource:   src,
 	})
 	require.Error(t, err)
+}
+
+type recordingTransport struct {
+	gotStream []string
+}
+
+func (t *recordingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	t.gotStream = append(t.gotStream, r.Header.Get(runnertelemetry.StreamHeader))
+	return &http.Response{StatusCode: http.StatusNoContent, Body: io.NopCloser(strings.NewReader("")), Request: r}, nil
+}
+
+// The operational client is how the coordinator tells a runner's own series
+// from its sandboxes', so it has to mark every request, and the ordinary
+// client it was derived from must stay unmarked.
+func TestOperationalClientMarksItsRequests(t *testing.T) {
+	transport := &recordingTransport{}
+	client := &runnertelemetry.Client{HTTP: &http.Client{Transport: transport}}
+
+	resp, err := client.Operational().Post("https://coordinator.invalid/x", "text/plain", strings.NewReader("m 1 1\n"))
+	require.NoError(t, err)
+	resp.Body.Close()
+
+	resp, err = client.HTTP.Post("https://coordinator.invalid/x", "text/plain", strings.NewReader("m 1 1\n"))
+	require.NoError(t, err)
+	resp.Body.Close()
+
+	require.Equal(t, []string{runnertelemetry.StreamOperational, ""}, transport.gotStream)
 }

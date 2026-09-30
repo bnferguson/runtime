@@ -115,7 +115,7 @@ func (b *sandboxHostBoot) start(
 	dependencies.LogWriter = telemetry.logWriter
 	dependencies.StatusMon = observability.NewStatusMonitor(b.inputs.log)
 	dependencies.SandboxMetrics = telemetry.sandboxMetrics
-	dependencies.MetricsWriter = telemetry.metricsWriter
+	dependencies.MetricsWriter = telemetry.operationalMetrics
 	dependencies.ServicePrefixes = b.inputs.servicePrefixes
 
 	var err error

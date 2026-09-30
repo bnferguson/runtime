@@ -14,7 +14,8 @@ import (
 // needs no clock-tick arithmetic and works on every platform.
 var processStart = time.Now()
 
-// ProcessInfo publishes the identity of the miren control process: when it
+// ProcessInfo publishes the identity of a miren process (the coordinator's
+// control process, or a distributed runner under EntityRunner): when it
 // started and which build it is. Both are constants for the life of the
 // process, and that is the point. A restart shows up as a step in
 // process_start_time_seconds, an upgrade as a change in the commit label of
@@ -56,7 +57,7 @@ func NewProcessInfo(log *slog.Logger, writer PointWriter) *ProcessInfo {
 	return &ProcessInfo{
 		Log:       log,
 		Writer:    writer,
-		Entity:    "miren/control",
+		Entity:    EntityControl,
 		StartTime: processStart,
 		Version:   version.Version,
 		Commit:    version.Commit,
@@ -76,7 +77,7 @@ func (p *ProcessInfo) Monitor(ctx context.Context) {
 		return
 	}
 
-	p.Log.Info("control-process identity metrics started",
+	p.Log.Info("process identity metrics started",
 		"entity", p.Entity, "version", p.Version, "commit", p.Commit, "channel", p.Channel,
 		"started", p.StartTime.UTC().Format(time.RFC3339), "interval", defaultProcessInfoInterval)
 
@@ -85,7 +86,7 @@ func (p *ProcessInfo) Monitor(ctx context.Context) {
 
 	for {
 		if err := p.Emit(ctx); err != nil {
-			p.Log.Error("failed to record control-process identity", "err", err)
+			p.Log.Error("failed to record process identity", "entity", p.Entity, "err", err)
 		}
 		select {
 		case <-ticker.C:
