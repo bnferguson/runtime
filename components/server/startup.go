@@ -131,6 +131,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 		workloadIdentity.output,
 		entityAccess.output,
 		observability.output,
+		foundation.output,
 	)
 	clusterAccess := newClusterAccessBoot(
 		clusterAccessBootInputs{config: options.Config.Server},
@@ -148,6 +149,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 		containerd.Output,
 		network.output,
 		observability.output,
+		foundation.output,
 	)
 	storageAgent := runnercomp.NewStorageAgentBoot(nodeStorage.output, sandboxHost.component, componentStopTimeout)
 	applicationManagement := newApplicationManagementBoot(foundation.output, secretStore.output, appData.component, entitySyncDiagnostics)

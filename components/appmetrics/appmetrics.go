@@ -294,6 +294,11 @@ func vmagentArgs(remoteWriteURL string, httpPort int) []string {
 		"-remoteWrite.tmpDataPath=/vmagent-data/queue",
 		fmt.Sprintf("-httpListenAddr=127.0.0.1:%d", httpPort),
 		"-enableTCP6",
+		// Pushed OTLP metrics arrive with dotted names like queue.depth, which
+		// every PromQL query would otherwise have to quote. Converting them to
+		// Prometheus names makes a pushed series read like a scraped one. It
+		// touches only OTLP input, which nothing but metrics push sends.
+		"-opentelemetry.usePrometheusNaming",
 	}
 }
 

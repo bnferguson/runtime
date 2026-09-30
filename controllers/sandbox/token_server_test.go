@@ -546,3 +546,33 @@ func TestTokenServer_ConcurrentRequestsShareSecretRepair(t *testing.T) {
 		http.StatusOK, http.StatusOK, http.StatusOK, http.StatusOK,
 	}, statuses)
 }
+
+func TestOTLPMetricsEnv(t *testing.T) {
+	base := "http://10.8.0.1:7123/v1/metrics"
+
+	env := otlpMetricsEnv([]string{"PORT=3000", "OTEL_SERVICE_NAME=worker"}, base, "abc")
+	require.Equal(t, []string{
+		"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=http://10.8.0.1:7123/v1/metrics/sandbox/otlp/v1/metrics",
+		"OTEL_EXPORTER_OTLP_METRICS_PROTOCOL=http/protobuf",
+		"OTEL_EXPORTER_OTLP_METRICS_HEADERS=Authorization=Bearer%20abc",
+	}, env)
+
+	// Any OTLP exporter setting of the app's own means it has a destination in
+	// mind, including one that only configures traces, and including one baked
+	// into the image rather than set in app.toml. The caller passes both.
+	for _, own := range []string{
+		"OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4318",
+		"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://collector:4318/v1/traces",
+		"OTEL_EXPORTER_OTLP_HEADERS=x-api-key=k",
+	} {
+		require.Nil(t, otlpMetricsEnv([]string{"PORT=3000", own}, base, "abc"), own)
+	}
+}
+
+// An image that sets its own OTLP endpoint with ENV must be left alone even
+// though app.toml says nothing, since the image env is applied alongside ours.
+func TestOTLPMetricsEnvSeesImageEnv(t *testing.T) {
+	imageEnv := []string{"PATH=/usr/bin", "OTEL_EXPORTER_OTLP_ENDPOINT=https://collector.example:4318"}
+	appEnv := []string{"PORT=3000"}
+	require.Nil(t, otlpMetricsEnv(append(imageEnv, appEnv...), "http://10.8.0.1:7123/v1/metrics", "abc"))
+}

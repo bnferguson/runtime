@@ -45,6 +45,7 @@ import (
 	"miren.dev/runtime/pkg/saga"
 	"miren.dev/runtime/pkg/secret"
 	"miren.dev/runtime/pkg/workloadidentity"
+	"miren.dev/runtime/servers/metricspush"
 
 	computeapi "miren.dev/runtime/api/compute"
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
@@ -125,6 +126,11 @@ type SandboxControllerDeps struct {
 	// SqliteDisks replicates sqlite-provider disks to the coordinator. Nil
 	// disables replication; the disks still mount.
 	SqliteDisks *sqlitedisk.Manager
+
+	// MetricsPusher delivers workload metric pushes to the coordinator. With
+	// it set, the token server also serves the metrics push relay and
+	// sandboxes are told where to find it. Nil leaves both out.
+	MetricsPusher metricspush.Pusher
 }
 
 type SandboxController struct {
@@ -154,6 +160,7 @@ type SandboxController struct {
 	WorkloadIssuer workloadidentity.TokenIssuer
 	ApiAddress     string
 	CACert         []byte
+	MetricsPusher  metricspush.Pusher
 
 	// Secrets materializes the secret references a sandbox spec carries, at the
 	// moment a container is created. Nil where no backend is reachable, in which
@@ -283,6 +290,7 @@ func NewSandboxController(cfg SandboxControllerDeps, sagaStorage saga.Storage) (
 		CACert:         cfg.CACert,
 		Secrets:        cfg.Secrets,
 		SqliteDisks:    cfg.SqliteDisks,
+		MetricsPusher:  cfg.MetricsPusher,
 
 		sagaStorage:  sagaStorage,
 		sagaRegistry: registry,
@@ -2794,6 +2802,27 @@ func (c *SandboxController) buildSubContainerSpec(
 			} else {
 				c.tokenSecrets.register(sb.ID.String(), secret)
 				envVars = append(envVars, fmt.Sprintf("MIREN_IDENTITY_TOKEN_SECRET=%s", secret))
+
+				// The relay authenticates with the secret above, so it is only
+				// advertised where that secret exists, and only on a cluster
+				// that accepts pushes, so an app finding these can rely on
+				// them. Each URL is a complete Pushgateway base: a client
+				// appends /metrics/job/<name>.
+				if c.metricsPushEnabled() && c.MetricsPusher.Available(ctx) {
+					relay := fmt.Sprintf("http://%s:%d%s", c.Subnet.Router().Addr(), tokenServerPort, metricspush.RelayBasePath)
+					envVars = append(envVars,
+						fmt.Sprintf("MIREN_METRICS_PUSH_URL=%s/%s", relay, metricspush.ScopeSandbox),
+						fmt.Sprintf("MIREN_METRICS_SHARED_PUSH_URL=%s/%s", relay, metricspush.ScopeApp),
+					)
+					// The image's own ENV is applied separately from these, so the
+					// OTLP check has to see it too. If it cannot be read, standing
+					// aside is the safe answer.
+					if imageSpec, specErr := img.Spec(ctx); specErr != nil {
+						c.Log.Warn("reading image config for OTLP env; leaving OTLP unset", "sandbox", sb.ID, "error", specErr)
+					} else {
+						envVars = append(envVars, otlpMetricsEnv(append(imageSpec.Config.Env, envVars...), relay, secret)...)
+					}
+				}
 
 				// Persist the secret host-side so it can be re-registered after a
 				// controller/token-server restart. Without this the running sandbox's

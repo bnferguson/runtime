@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/workloadidentity"
+	"miren.dev/runtime/servers/metricspush"
 )
 
 const tokenServerPort = 7123
@@ -195,6 +197,10 @@ func (c *SandboxController) startTokenServer(ctx context.Context) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/token", c.handleTokenRequest)
+	if c.metricsPushEnabled() {
+		metricspush.NewRelay(c.Log, c.relayAuthenticator, c.WorkloadIssuer, c.MetricsPusher).Register(mux)
+		c.Log.Info("serving metrics push relay", "addr", listenAddr)
+	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeTokenError(w, http.StatusNotFound, "not found")
 	})
@@ -220,6 +226,18 @@ func (c *SandboxController) startTokenServer(ctx context.Context) {
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		c.Log.Error("token server failed", "error", err)
 	}
+}
+
+// metricsPushEnabled reports whether this node relays metric pushes. It needs
+// both something to deliver them to and an issuer to mint the token each one
+// carries; without either, the relay could only fail.
+func (c *SandboxController) metricsPushEnabled() bool {
+	return c.MetricsPusher != nil && c.WorkloadIssuer != nil && c.tokenSecrets != nil
+}
+
+func (c *SandboxController) relayAuthenticator(remoteHost, secret string) (string, string, bool) {
+	sandboxID, appName, err := c.authenticateSandbox(remoteHost, secret)
+	return sandboxID, appName, err == nil
 }
 
 func (c *SandboxController) verifyTokenSecret(sandboxID, secret string) bool {
@@ -259,6 +277,50 @@ func (c *SandboxController) refreshSandboxByIP(ip string) (sandboxID, appName st
 	return c.NetServ.RefreshSandboxByIP(ip)
 }
 
+var (
+	errUnknownSource = errors.New("unknown source address")
+	errBadSecret     = errors.New("secret does not match the calling sandbox")
+)
+
+// authenticateSandbox resolves the sandbox behind a request from its source
+// address and the per-sandbox secret it presented. Every endpoint on the bridge
+// router that acts for a sandbox goes through here, so they all get the same
+// stale-mapping recovery rather than each deciding identity its own way.
+func (c *SandboxController) authenticateSandbox(remoteHost, secret string) (sandboxID, appName string, err error) {
+	sandboxID, appName, ok := c.NetServ.LookupSandboxByIP(remoteHost)
+	if !ok {
+		return "", "", errUnknownSource
+	}
+
+	if !c.verifyTokenSecret(sandboxID, secret) {
+		c.repairTokenSecret(sandboxID)
+	}
+	if !c.verifyTokenSecret(sandboxID, secret) {
+		// The caller holds a secret the sandbox we resolved does not own. Either it is
+		// an impostor, or the address mapping is stale and named the sandbox that used
+		// to hold this address — which a sandbox on a recycled IP could never recover
+		// from, because nothing else would ever correct the mapping (MIR-1511). Re-derive
+		// the owner from the entity store and try once more, so a mapping that has gone
+		// wrong costs one rejected request instead of the life of the sandbox.
+		corrected, correctedApp, refreshed := c.refreshSandboxByIP(remoteHost)
+		if refreshed && corrected != sandboxID && !c.verifyTokenSecret(corrected, secret) {
+			c.repairTokenSecret(corrected)
+		}
+		if !refreshed || corrected == sandboxID || !c.verifyTokenSecret(corrected, secret) {
+			c.Log.Warn("sandbox request failed secret verification",
+				"source_ip", remoteHost, "resolved_sandbox", sandboxID, "resolved_app", appName)
+			return "", "", errBadSecret
+		}
+
+		c.Log.Warn("corrected stale sandbox address mapping",
+			"source_ip", remoteHost,
+			"stale_sandbox", sandboxID, "stale_app", appName,
+			"sandbox", corrected, "app", correctedApp)
+		sandboxID, appName = corrected, correctedApp
+	}
+	return sandboxID, appName, nil
+}
+
 func (c *SandboxController) handleTokenRequest(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeTokenError(w, http.StatusMethodNotAllowed, "only GET is allowed")
@@ -278,38 +340,14 @@ func (c *SandboxController) handleTokenRequest(w http.ResponseWriter, r *http.Re
 	}
 	bearerToken := strings.TrimPrefix(authHeader, "Bearer ")
 
-	sandboxID, appName, ok := c.NetServ.LookupSandboxByIP(remoteHost)
-	if !ok {
+	sandboxID, appName, err := c.authenticateSandbox(remoteHost, bearerToken)
+	switch {
+	case errors.Is(err, errUnknownSource):
 		writeTokenError(w, http.StatusForbidden, "unknown source address")
 		return
-	}
-
-	if !c.verifyTokenSecret(sandboxID, bearerToken) {
-		c.repairTokenSecret(sandboxID)
-	}
-	if !c.verifyTokenSecret(sandboxID, bearerToken) {
-		// The caller holds a secret the sandbox we resolved does not own. Either it is
-		// an impostor, or the address mapping is stale and named the sandbox that used
-		// to hold this address — which a sandbox on a recycled IP could never recover
-		// from, because nothing else would ever correct the mapping (MIR-1511). Re-derive
-		// the owner from the entity store and try once more, so a mapping that has gone
-		// wrong costs one rejected request instead of the life of the sandbox.
-		corrected, correctedApp, refreshed := c.refreshSandboxByIP(remoteHost)
-		if refreshed && corrected != sandboxID && !c.verifyTokenSecret(corrected, bearerToken) {
-			c.repairTokenSecret(corrected)
-		}
-		if !refreshed || corrected == sandboxID || !c.verifyTokenSecret(corrected, bearerToken) {
-			c.Log.Warn("workload token request failed verification",
-				"source_ip", remoteHost, "resolved_sandbox", sandboxID, "resolved_app", appName)
-			writeTokenError(w, http.StatusForbidden, "invalid token")
-			return
-		}
-
-		c.Log.Warn("corrected stale sandbox address mapping during token request",
-			"source_ip", remoteHost,
-			"stale_sandbox", sandboxID, "stale_app", appName,
-			"sandbox", corrected, "app", correctedApp)
-		sandboxID, appName = corrected, correctedApp
+	case err != nil:
+		writeTokenError(w, http.StatusForbidden, "invalid token")
+		return
 	}
 
 	opts := workloadidentity.TokenOptions{}
@@ -344,4 +382,26 @@ func writeTokenError(w http.ResponseWriter, code int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(tokenErrorResponse{Error: msg})
+}
+
+// otlpMetricsEnv points an OpenTelemetry SDK's metrics exporter at the relay,
+// so an app already instrumented with OTel exports metrics with no setup.
+//
+// It stands aside entirely when the app sets any OTEL_EXPORTER_OTLP_ variable,
+// in its config or in its image, so env has to include both.
+// An app configuring OTLP at all has somewhere in mind for it, and the
+// metrics-specific variables set here would outrank a general endpoint it set,
+// quietly taking its metrics away from its own collector.
+func otlpMetricsEnv(env []string, relayBase, secret string) []string {
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "OTEL_EXPORTER_OTLP_") {
+			return nil
+		}
+	}
+	return []string{
+		fmt.Sprintf("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=%s/%s/otlp/v1/metrics", relayBase, metricspush.ScopeSandbox),
+		"OTEL_EXPORTER_OTLP_METRICS_PROTOCOL=http/protobuf",
+		// Header values are percent-encoded in this variable, per the OTel spec.
+		"OTEL_EXPORTER_OTLP_METRICS_HEADERS=Authorization=Bearer%20" + secret,
+	}
 }

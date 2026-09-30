@@ -45,6 +45,7 @@ import (
 	remotesecret "miren.dev/runtime/pkg/secret/remote"
 	"miren.dev/runtime/pkg/workloadidentity"
 	"miren.dev/runtime/servers/exec"
+	"miren.dev/runtime/servers/metricspush"
 	"miren.dev/runtime/version"
 )
 
@@ -128,6 +129,11 @@ type RunnerDeps struct {
 	// CACert is the cluster CA in PEM form, mounted into sandboxes so they can
 	// verify the API certificate.
 	CACert []byte
+
+	// MetricsPusher delivers workload metric pushes to the coordinator: the
+	// coordinator's own ingest there, a network client on a distributed
+	// runner. Nil leaves the metrics push relay off.
+	MetricsPusher metricspush.Pusher
 
 	// Secrets materializes the secret references a sandbox spec carries, at
 	// container creation. On the coordinator this is the local backend
@@ -1036,6 +1042,7 @@ func (r *SandboxHost) SetupControllers(
 		CACert:         r.deps.CACert,
 		Secrets:        r.deps.Secrets,
 		SqliteDisks:    r.access.sqliteDisks,
+		MetricsPusher:  r.deps.MetricsPusher,
 	}
 
 	sbc, err := sandbox.NewSandboxController(sbcDeps, saga.NewEACStorage(eas, r.Log))
